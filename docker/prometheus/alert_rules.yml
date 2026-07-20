@@ -1,0 +1,131 @@
+groups:
+  - name: blockxone_alerts
+    interval: 30s
+    rules:
+      # High error rate alert (>5% of requests returning 5xx)
+      - alert: HighErrorRate
+        expr: |
+          (
+            sum(rate(blockxone_http_requests_total{status=~"5.."}[5m]))
+            /
+            sum(rate(blockxone_http_requests_total[5m]))
+          ) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+          service: blockxone-api
+        annotations:
+          summary: "High error rate detected on BlockXOne API"
+          description: "Error rate is {{ $value | humanizePercentage }} (threshold: 5%)"
+
+      # Slow API response alert (p95 latency > 1s)
+      - alert: SlowAPIResponse
+        expr: |
+          histogram_quantile(0.95, sum(rate(blockxone_http_request_duration_seconds_bucket[5m])) by (le)) > 1
+        for: 5m
+        labels:
+          severity: warning
+          service: blockxone-api
+        annotations:
+          summary: "Slow API responses detected"
+          description: "P95 latency is {{ $value }}s (threshold: 1s)"
+
+      # Database connection pool near exhaustion
+      - alert: DatabaseConnectionPoolExhaustion
+        expr: |
+          (
+            (sum(pg_stat_activity_count{datname!~"template.*"}) by (datname))
+            /
+            sum(pg_settings_max_connections) by (datname)
+          ) > 0.8
+        for: 5m
+        labels:
+          severity: warning
+          service: postgresql
+        annotations:
+          summary: "Database connection pool near exhaustion"
+          description: "Connection pool usage is {{ $value | humanizePercentage }}"
+
+      # PostgreSQL down
+      - alert: PostgreSQLDown
+        expr: |
+          pg_up == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: postgresql
+        annotations:
+          summary: "PostgreSQL is down"
+          description: "PostgreSQL has been unreachable for more than 1 minute"
+
+      # Redis down
+      - alert: RedisDown
+        expr: |
+          redis_up == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: redis
+        annotations:
+          summary: "Redis is down"
+          description: "Redis has been unreachable for more than 1 minute"
+
+      # High memory usage (>80%)
+      - alert: HighMemoryUsage
+        expr: |
+          (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) > 0.8
+        for: 5m
+        labels:
+          severity: warning
+          service: system
+        annotations:
+          summary: "High memory usage detected"
+          description: "Memory usage is {{ $value | humanizePercentage }}"
+
+      # High CPU usage (>80%)
+      - alert: HighCPUUsage
+        expr: |
+          (1 - avg(rate(node_cpu_seconds_total{mode="idle"}[5m]))) > 0.8
+        for: 5m
+        labels:
+          severity: warning
+          service: system
+        annotations:
+          summary: "High CPU usage detected"
+          description: "CPU usage is {{ $value | humanizePercentage }}"
+
+      # Too many active connections
+      - alert: TooManyActiveConnections
+        expr: |
+          blockxone_active_connections > 1000
+        for: 2m
+        labels:
+          severity: warning
+          service: blockxone-api
+        annotations:
+          summary: "Too many active connections"
+          description: "Active connections: {{ $value }}"
+
+      # High DB query latency
+      - alert: HighDBQueryLatency
+        expr: |
+          histogram_quantile(0.95, sum(rate(blockxone_db_query_duration_seconds_bucket[5m])) by (le)) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+          service: postgresql
+        annotations:
+          summary: "High database query latency"
+          description: "P95 query latency is {{ $value }}s (threshold: 500ms)"
+
+      # Disk space running low
+      - alert: LowDiskSpace
+        expr: |
+          (node_filesystem_avail_bytes{fstype!~"tmpfs|fuse.lxcfs"} / node_filesystem_size_bytes) < 0.1
+        for: 5m
+        labels:
+          severity: warning
+          service: system
+        annotations:
+          summary: "Low disk space"
+          description: "Available disk space is {{ $value | humanizePercentage }}"

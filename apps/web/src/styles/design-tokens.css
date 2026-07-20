@@ -1,0 +1,281 @@
+/**
+ * BlockXOne Institutional Design System
+ * Dark mode default with Bloomberg-meets-Stripe aesthetic
+ */
+
+:root {
+  /* Color Palette - Primary */
+  --bxo-bg-primary: #0B0F1A;
+  --bxo-surface: #111827;
+  --bxo-surface-secondary: #161f36;
+  --bxo-surface-elevated: #1F2937;
+
+  /* Color Palette - Accent */
+  --bxo-accent-primary: #3B82F6;
+  --bxo-accent-primary-dark: #2563EB;
+  --bxo-accent-primary-light: #60A5FA;
+
+  /* Color Palette - Semantic */
+  --bxo-success: #10B981;
+  --bxo-success-dark: #059669;
+  --bxo-success-light: #34D399;
+
+  --bxo-warning: #F59E0B;
+  --bxo-warning-dark: #D97706;
+  --bxo-warning-light: #FBBF24;
+
+  --bxo-danger: #EF4444;
+  --bxo-danger-dark: #DC2626;
+  --bxo-danger-light: #F87171;
+
+  --bxo-info: #06B6D4;
+  --bxo-info-dark: #0891B2;
+  --bxo-info-light: #22D3EE;
+
+  /* Color Palette - Text */
+  --bxo-text-primary: #F9FAFB;
+  --bxo-text-secondary: #9CA3AF;
+  --bxo-text-tertiary: #6B7280;
+  --bxo-text-disabled: #4B5563;
+
+  /* Color Palette - Borders & Dividers */
+  --bxo-border-subtle: #1F2937;
+  --bxo-border-default: #2D3748;
+  --bxo-border-strong: #4B5563;
+  --bxo-divider: rgba(255, 255, 255, 0.06);
+
+  /* Color Palette - Overlays */
+  --bxo-overlay-light: rgba(11, 15, 26, 0.5);
+  --bxo-overlay-medium: rgba(11, 15, 26, 0.7);
+  --bxo-overlay-dark: rgba(11, 15, 26, 0.9);
+
+  /* Spacing Scale (4px base) */
+  --bxo-space-0: 0;
+  --bxo-space-1: 4px;
+  --bxo-space-2: 8px;
+  --bxo-space-3: 12px;
+  --bxo-space-4: 16px;
+  --bxo-space-5: 20px;
+  --bxo-space-6: 24px;
+  --bxo-space-7: 28px;
+  --bxo-space-8: 32px;
+  --bxo-space-10: 40px;
+  --bxo-space-12: 48px;
+  --bxo-space-14: 56px;
+  --bxo-space-16: 64px;
+  --bxo-space-20: 80px;
+  --bxo-space-24: 96px;
+
+  /* Border Radius */
+  --bxo-radius-none: 0;
+  --bxo-radius-xs: 2px;
+  --bxo-radius-sm: 4px;
+  --bxo-radius-base: 6px;
+  --bxo-radius-md: 8px;
+  --bxo-radius-lg: 12px;
+  --bxo-radius-xl: 16px;
+  --bxo-radius-2xl: 20px;
+  --bxo-radius-full: 9999px;
+
+  /* Shadows */
+  --bxo-shadow-xs: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  --bxo-shadow-sm: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px -1px rgba(0, 0, 0, 0.1);
+  --bxo-shadow-base: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+  --bxo-shadow-md: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -4px rgba(0, 0, 0, 0.1);
+  --bxo-shadow-lg: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
+  --bxo-shadow-xl: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+
+  /* Accent emphasis — directional depth, no neon glow */
+  --bxo-shadow-accent-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.4), inset 0 0 0 1px rgba(59, 130, 246, 0.25);
+  --bxo-shadow-accent-md: 0 4px 10px -2px rgba(0, 0, 0, 0.45), inset 0 0 0 1px rgba(59, 130, 246, 0.3);
+  --bxo-shadow-accent-lg: 0 10px 24px -6px rgba(0, 0, 0, 0.55), inset 0 0 0 1px rgba(59, 130, 246, 0.35);
+
+  /* Transitions & Animations */
+  --bxo-duration-xfast: 75ms;
+  --bxo-duration-fast: 100ms;
+  --bxo-duration-base: 200ms;
+  --bxo-duration-slow: 300ms;
+  --bxo-duration-slower: 500ms;
+
+  --bxo-ease-linear: linear;
+  --bxo-ease-in: cubic-bezier(0.4, 0, 1, 1);
+  --bxo-ease-out: cubic-bezier(0, 0, 0.2, 1);
+  --bxo-ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+  --bxo-ease-bounce: cubic-bezier(0.68, -0.55, 0.265, 1.55);
+
+  /* Font Families */
+  --bxo-font-ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
+  --bxo-font-mono: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
+
+  /* Typography Scale */
+  --bxo-text-xs: 12px;
+  --bxo-text-sm: 14px;
+  --bxo-text-base: 16px;
+  --bxo-text-lg: 18px;
+  --bxo-text-xl: 20px;
+  --bxo-text-2xl: 24px;
+  --bxo-text-3xl: 30px;
+  --bxo-text-4xl: 36px;
+
+  /* Line Heights */
+  --bxo-line-height-tight: 1.2;
+  --bxo-line-height-snug: 1.375;
+  --bxo-line-height-normal: 1.5;
+  --bxo-line-height-relaxed: 1.625;
+  --bxo-line-height-loose: 2;
+
+  /* Z-Index Scale */
+  --bxo-z-hide: -1;
+  --bxo-z-auto: auto;
+  --bxo-z-0: 0;
+  --bxo-z-10: 10;
+  --bxo-z-20: 20;
+  --bxo-z-30: 30;
+  --bxo-z-40: 40;
+  --bxo-z-50: 50;
+  --bxo-z-dropdown: 1000;
+  --bxo-z-sticky: 1020;
+  --bxo-z-fixed: 1030;
+  --bxo-z-modal: 1040;
+  --bxo-z-popover: 1050;
+  --bxo-z-tooltip: 1060;
+}
+
+.dark {
+  /* Dark mode is default and uses the root token set. */
+}
+
+.bg-gradient-accent {
+  background: linear-gradient(135deg, var(--bxo-accent-primary) 0%, var(--bxo-accent-primary-dark) 100%);
+}
+
+.bg-gradient-success {
+  background: linear-gradient(135deg, var(--bxo-success) 0%, var(--bxo-success-dark) 100%);
+}
+
+.bg-gradient-warning {
+  background: linear-gradient(135deg, var(--bxo-warning) 0%, var(--bxo-warning-dark) 100%);
+}
+
+.bg-gradient-danger {
+  background: linear-gradient(135deg, var(--bxo-danger) 0%, var(--bxo-danger-dark) 100%);
+}
+
+.bg-gradient-dark {
+  background: linear-gradient(180deg, var(--bxo-surface) 0%, var(--bxo-bg-primary) 100%);
+}
+
+/* Solid institutional surfaces — no glass blur. Depth comes from
+   elevation + a hairline border, the way a trading terminal reads. */
+.glass-base {
+  background: var(--bxo-surface);
+  border: 1px solid var(--bxo-border-subtle);
+}
+
+.glass-elevated {
+  background: var(--bxo-surface-elevated);
+  border: 1px solid var(--bxo-border-default);
+}
+
+.focus-ring {
+  outline: none;
+}
+
+.focus-ring:focus-visible {
+  box-shadow: 0 0 0 2px var(--bxo-bg-primary), 0 0 0 4px var(--bxo-accent-primary);
+}
+
+.interactive {
+  transition: all var(--bxo-duration-base) var(--bxo-ease-out);
+}
+
+.interactive:hover {
+  transform: translateY(-1px);
+}
+
+.interactive:active {
+  transform: translateY(0);
+}
+
+.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--bxo-surface) 25%,
+    var(--bxo-surface-elevated) 50%,
+    var(--bxo-surface) 75%
+  );
+  background-size: 200% 100%;
+  animation: loading 1.5s infinite;
+}
+
+@keyframes loading {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+.pulse-subtle {
+  animation: pulse-subtle 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@keyframes pulse-subtle {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.85;
+  }
+}
+
+.scale-in {
+  animation: scale-in 0.2s var(--bxo-ease-out);
+}
+
+@keyframes scale-in {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.slide-up {
+  animation: slide-up 0.3s var(--bxo-ease-out);
+}
+
+@keyframes slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.fade-in {
+  animation: fade-in 0.3s var(--bxo-ease-out);
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}

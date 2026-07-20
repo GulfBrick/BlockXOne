@@ -1,0 +1,175 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 210 11% 15%;
+    --card: 0 0% 100%;
+    --card-foreground: 210 11% 15%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 210 11% 15%;
+    --primary: 188 100% 42%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 210 11% 27%;
+    --secondary-foreground: 0 0% 100%;
+    --muted: 210 40% 96.1%;
+    --muted-foreground: 215.4 16.3% 46.9%;
+    --accent: 188 100% 42%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 214.3 31.8% 91.4%;
+    --input: 214.3 31.8% 91.4%;
+    --ring: 188 100% 42%;
+    --radius: 1rem;
+    
+    --dur-xfast: 90ms;
+    --dur-fast: 140ms;
+    --dur-base: 200ms;
+    --dur-slow: 300ms;
+    --dur-xslow: 450ms;
+    --dur-long: 700ms;
+    --ease-std: cubic-bezier(0.2, 0, 0, 1);
+    --ease-emph: cubic-bezier(0.2, 0.8, 0.2, 1);
+    --ease-deco: cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .dark {
+    --background: 210 11% 5%;
+    --foreground: 0 0% 98%;
+    --card: 210 11% 7%;
+    --card-foreground: 0 0% 98%;
+    --popover: 210 11% 7%;
+    --popover-foreground: 0 0% 98%;
+    --primary: 188 100% 42%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 210 11% 27%;
+    --secondary-foreground: 0 0% 100%;
+    --muted: 210 11% 15%;
+    --muted-foreground: 215 20.2% 65.1%;
+    --accent: 188 100% 42%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 0 0% 100% / 0.1;
+    --input: 0 0% 100% / 0.1;
+    --ring: 188 100% 42%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+    background-image: radial-gradient(1200px 600px at 50% -20%, rgba(0, 188, 212, 0.08), transparent);
+  }
+  body.dark {
+    background-color: hsl(var(--background));
+    background-image: radial-gradient(1200px 600px at 50% -20%, rgba(0, 188, 212, 0.08), transparent);
+  }
+}
+
+@layer utilities {
+  .glass-surface {
+    @apply bg-white/5 border border-white/10 backdrop-blur-xl;
+  }
+  .glass-divider {
+    @apply border-white/[0.08];
+  }
+  .hover-elevate {
+    transition-property: transform;
+    transition-duration: 200ms;
+    transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
+  }
+  .hover-elevate:hover {
+    transform: scale(1.01);
+  }
+  .press-compress:active {
+    transform: scale(0.98);
+  }
+  .focus-ring {
+    @apply focus:outline-none focus:ring-2 focus:ring-primary/60 focus:ring-offset-2 focus:ring-offset-background;
+  }
+  .animate-shimmer {
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.05), transparent);
+    background-size: 200% 100%;
+    animation: shimmer 1.2s linear infinite;
+  }
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.holographic-card {
+  position: relative;
+  padding: 2rem;
+  background: #0F1420;
+  border: 1px solid #1A3A5A;
+  border-radius: 1rem;
+  transition: transform 0.3s ease, box-shadow 0.3s ease;
+  transform-style: preserve-3d;
+  overflow: hidden;
+}
+
+.holographic-card::before {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: 1rem;
+  background: conic-gradient(
+    from 0deg,
+    rgba(0, 182, 255, 0.15),
+    rgba(8, 148, 230, 0.15),
+    rgba(10, 111, 182, 0.15),
+    rgba(0, 182, 255, 0.15)
+  );
+  filter: blur(12px);
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  z-index: -1;
+}
+
+.holographic-card:hover::before {
+  opacity: 1;
+}
+
+.holographic-card:hover {
+  transform: translateY(-8px);
+  box-shadow: 0 20px 40px rgba(0, 182, 255, 0.2);
+}
+
+.glass-panel {
+  background: linear-gradient(
+    135deg,
+    rgba(13, 17, 26, 0.7),
+    rgba(13, 17, 26, 0.5)
+  );
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(26, 58, 90, 0.5);
+}
+
+.neon-glow {
+  filter: drop-shadow(0 0 8px rgba(0, 182, 255, 0.6))
+          drop-shadow(0 0 16px rgba(0, 182, 255, 0.4));
+}

@@ -1,0 +1,60 @@
+# BlockXOne
+# Runtime configuration and credential material. Keep reviewed examples only.
+.env
+.env.*
+!.env.example
+!.env.sample
+!.env.template
+!.env.*.example
+!.env.*.sample
+!.env.*.template
+*.pem
+*.key
+*.p12
+*.pfx
+*.log
+.DS_Store
+/tmp
+/.local
+
+# Dependency trees and package manager caches
+node_modules/
+.npm-cache/
+.npm-logs/
+contracts/.npm-cache/
+contracts/.npm-logs/
+apps/web/.next/
+
+# Build and test outputs
+bin/
+dist/
+coverage.out
+*.test
+*.prof
+contracts/artifacts/
+contracts/cache/
+contracts/.hardhat-cache/
+contracts/typechain-types/
+
+# Local Windows binaries produced by Go builds
+*.exe
+*.dll
+
+# Opaque archives do not belong in source history. Recovery archives are held
+# outside the repository under the controlled artifact policy.
+*.zip
+*.7z
+*.rar
+*.tar
+*.gz
+*.tgz
+*.bz2
+*.xz
+
+# Local agent, connector and machine-specific state
+.agents/
+.claude/
+.claude-flow/
+.codex/
+.mcp.json
+nul

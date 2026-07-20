@@ -1,0 +1,179 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  GO_VERSION: "1.26.5"
+  NODE_VERSION: "22.23.1"
+
+jobs:
+  planning:
+    name: Planning and production policy
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate planning truth
+        shell: pwsh
+        run: ./.planning/scripts/validate-planning.ps1
+      - name: Reject prohibited repository artifacts and contaminated branch history
+        shell: pwsh
+        run: ./.planning/scripts/validate-repository-artifacts.ps1
+      - name: Validate production Compose contract
+        shell: pwsh
+        run: ./.planning/scripts/validate-production-compose.ps1
+      - name: Validate mandatory CI and deployment failure policy
+        shell: pwsh
+        run: ./.planning/scripts/validate-ci-policy.ps1
+
+  go:
+    name: Go build, test, vet and lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: go.sum
+      - run: go mod download
+      - run: go test -race -coverprofile=coverage.out -covermode=atomic ./cmd/... ./internal/... ./scripts/...
+      - run: go vet ./cmd/... ./internal/... ./scripts/...
+      - name: Install pinned golangci-lint
+        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
+      - run: golangci-lint run --timeout 5m ./cmd/... ./internal/... ./scripts/...
+      - run: go build ./cmd/api ./cmd/worker ./cmd/migrate ./cmd/seed
+
+  migrations:
+    name: Clean and current-schema migration smoke tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: blockxone_ci
+          POSTGRES_PASSWORD: blockxone_ci
+          POSTGRES_DB: blockxone
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U blockxone_ci -d blockxone"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      APP_ENV: test
+      DATABASE_URL: postgres://blockxone_ci:blockxone_ci@127.0.0.1:5432/blockxone?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: go.sum
+      - name: Apply all migrations to a clean schema
+        run: go run ./cmd/migrate
+      - name: Re-run migrations against the current schema
+        run: go run ./cmd/migrate
+
+  web:
+    name: Web install, test, lint and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      NEXT_PUBLIC_API_URL: https://api.blockxone.example
+      SERVER_ACTION_ALLOWED_ORIGINS: app.blockxone.example
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - run: npm ci --prefix apps/web
+      - run: npm run test:preflight --prefix apps/web
+      - run: npm run test:config --prefix apps/web
+      - run: npm test --prefix apps/web -- --run
+      - run: npm run lint --prefix apps/web
+      - name: Prove production web config fails without its public API contract
+        shell: bash
+        run: |
+          if NODE_ENV=production NEXT_PUBLIC_API_URL= node -e "require('./apps/web/next.config.js')"; then
+            echo "Production web configuration accepted a missing NEXT_PUBLIC_API_URL"
+            exit 1
+          fi
+      - name: Prove production web config fails without server-action origins
+        shell: bash
+        run: |
+          if NODE_ENV=production NEXT_PUBLIC_API_URL=https://api.blockxone.example SERVER_ACTION_ALLOWED_ORIGINS= node -e "require('./apps/web/next.config.js')"; then
+            echo "Production web configuration accepted missing SERVER_ACTION_ALLOWED_ORIGINS"
+            exit 1
+          fi
+      - run: npm run build --prefix apps/web
+      - name: Probe production route containment and middleware-bypass regression
+        run: npm run test:production-containment --prefix apps/web
+
+  contracts:
+    name: Contract compile and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: contracts/package-lock.json
+      - run: npm ci --ignore-scripts --prefix contracts
+      - run: npm run test:preflight --prefix contracts
+      - run: npm run compile --prefix contracts
+      - run: npm run typecheck --prefix contracts
+      - run: npm test --prefix contracts
+
+  security:
+    name: Mandatory source and dependency security gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Install pinned gosec
+        run: go install github.com/securego/gosec/v2/cmd/gosec@v2.25.0
+      - name: Install pinned govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
+      - name: Run gosec and fail on findings
+        run: gosec -tests -severity medium -confidence medium ./cmd/... ./internal/...
+      - name: Scan reachable Go dependency vulnerabilities and fail on findings
+        run: govulncheck ./cmd/... ./internal/... ./scripts/...
+      - name: Audit web dependencies and fail at moderate severity
+        run: npm audit --prefix apps/web --audit-level=moderate
+      - name: Audit contract dependencies and fail at moderate severity
+        run: npm audit --prefix contracts --audit-level=moderate
+
+  images:
+    name: Build container candidates without publishing
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    needs: [planning, go, migrations, web, contracts, security]
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build --file Dockerfile.api --tag blockxone-api:${{ github.sha }} .
+      - run: docker build --file Dockerfile.worker --tag blockxone-worker:${{ github.sha }} .
+      - run: docker build --file Dockerfile.web --tag blockxone-web:${{ github.sha }} .

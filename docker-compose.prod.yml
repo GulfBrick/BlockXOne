@@ -1,0 +1,174 @@
+name: blockxone-production-reference
+
+# This file is a production configuration contract, not a self-contained demo
+# stack. Databases, queues, object storage, signing and regulated providers must
+# be externally managed and explicitly supplied. No data service is published
+# from this descriptor and no sensitive value has a fallback.
+
+x-runtime-environment: &runtime-environment
+  APP_ENV: production
+  AUTH_MODE: jwt
+  DEV_ALLOW_ROLE_OVERRIDE: "false"
+  JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must come from the deployment secret manager}
+  DATABASE_URL: ${DATABASE_URL:?DATABASE_URL must point to managed PostgreSQL with verified TLS}
+  NATS_URL: ${NATS_URL:?NATS_URL must point to the managed event bus}
+  REDIS_URL: ${REDIS_URL:?REDIS_URL must point to managed Redis}
+  S3_ENDPOINT: ${S3_ENDPOINT:?S3_ENDPOINT must use managed private HTTPS storage}
+  S3_ACCESS_KEY: ${S3_ACCESS_KEY:?S3_ACCESS_KEY must come from the deployment secret manager}
+  S3_SECRET_KEY: ${S3_SECRET_KEY:?S3_SECRET_KEY must come from the deployment secret manager}
+  S3_BUCKET: ${S3_BUCKET:?S3_BUCKET is required}
+  S3_REGION: ${S3_REGION:?S3_REGION is required}
+  S3_USE_SSL: "true"
+  CHAIN_MODE: evm
+  CHAIN_ID: ${CHAIN_ID:?CHAIN_ID is required}
+  APPROVED_CHAIN_ID: ${APPROVED_CHAIN_ID:?APPROVED_CHAIN_ID is required}
+  CHAIN_RPC_URL: ${CHAIN_RPC_URL:?CHAIN_RPC_URL must use a managed HTTPS or WSS endpoint}
+  CHAIN_SIGNER: kms
+  KMS_KEY_ARN: ${KMS_KEY_ARN:?KMS_KEY_ARN is required}
+  TOKEN_FACTORY_ADDRESS: ${TOKEN_FACTORY_ADDRESS:?TOKEN_FACTORY_ADDRESS is required}
+  ENABLE_MARKETPLACE: "false"
+  KYC_PROVIDER: sumsub
+  SUMSUB_APP_TOKEN: ${SUMSUB_APP_TOKEN:?SUMSUB_APP_TOKEN must come from the deployment secret manager}
+  SUMSUB_SECRET_KEY: ${SUMSUB_SECRET_KEY:?SUMSUB_SECRET_KEY must come from the deployment secret manager}
+  SUMSUB_BASE_URL: ${SUMSUB_BASE_URL:?SUMSUB_BASE_URL is required}
+  SUMSUB_WEBHOOK_SECRET: ${SUMSUB_WEBHOOK_SECRET:?SUMSUB_WEBHOOK_SECRET must come from the deployment secret manager}
+  CUSTODY_PROVIDER: fireblocks
+  FIREBLOCKS_API_KEY: ${FIREBLOCKS_API_KEY:?FIREBLOCKS_API_KEY must come from the deployment secret manager}
+  FIREBLOCKS_SECRET_KEY_PATH: ${FIREBLOCKS_SECRET_KEY_PATH:?FIREBLOCKS_SECRET_KEY_PATH is required}
+  FIREBLOCKS_BASE_URL: ${FIREBLOCKS_BASE_URL:?FIREBLOCKS_BASE_URL is required}
+  PAYMENT_PROVIDER: stripe
+  STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:?STRIPE_SECRET_KEY must come from the deployment secret manager}
+  STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:?STRIPE_WEBHOOK_SECRET must come from the deployment secret manager}
+  CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:?CORS_ALLOWED_ORIGINS is required}
+  RATE_LIMIT_API: ${RATE_LIMIT_API:?RATE_LIMIT_API is required}
+  RATE_LIMIT_AUTH: ${RATE_LIMIT_AUTH:?RATE_LIMIT_AUTH is required}
+
+x-service-hardening: &service-hardening
+  restart: unless-stopped
+  read_only: true
+  init: true
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,size=64m
+
+x-migration-environment: &migration-environment
+  APP_ENV: production
+  DATABASE_URL: ${DATABASE_URL:?DATABASE_URL must point to managed PostgreSQL with verified TLS}
+
+# The outbox worker only connects to PostgreSQL and NATS. It must not receive
+# API authentication, storage, signing, KYC, custody, payment or RPC secrets.
+x-worker-environment: &worker-environment
+  APP_ENV: production
+  DATABASE_URL: ${DATABASE_URL:?DATABASE_URL must point to managed PostgreSQL with verified TLS}
+  NATS_URL: ${NATS_URL:?NATS_URL must point to the managed event bus}
+
+services:
+  migrate:
+    <<: *service-hardening
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    image: blockxone-api:${IMAGE_TAG:?IMAGE_TAG must identify an immutable candidate}
+    entrypoint:
+      - /home/appuser/migrate
+    environment:
+      <<: *migration-environment
+    networks:
+      - application
+    restart: "no"
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+
+  api:
+    <<: *service-hardening
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    image: blockxone-api:${IMAGE_TAG:?IMAGE_TAG must identify an immutable candidate}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      <<: *runtime-environment
+      HTTP_ADDR: :8080
+    networks:
+      - application
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1G
+
+  worker:
+    <<: *service-hardening
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    image: blockxone-worker:${IMAGE_TAG:?IMAGE_TAG must identify an immutable candidate}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      <<: *worker-environment
+    networks:
+      - application
+    healthcheck:
+      test: ["CMD-SHELL", "kill -0 1"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+
+  web:
+    <<: *service-hardening
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:?NEXT_PUBLIC_API_URL is required at build time}
+        SERVER_ACTION_ALLOWED_ORIGINS: ${SERVER_ACTION_ALLOWED_ORIGINS:?SERVER_ACTION_ALLOWED_ORIGINS is required at build time}
+    image: blockxone-web:${IMAGE_TAG:?IMAGE_TAG must identify an immutable candidate}
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      APP_ENV: production
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:?NEXT_PUBLIC_API_URL is required}
+      SERVER_ACTION_ALLOWED_ORIGINS: ${SERVER_ACTION_ALLOWED_ORIGINS:?SERVER_ACTION_ALLOWED_ORIGINS is required}
+    ports:
+      - 127.0.0.1:${WEB_PORT:-3000}:3000
+    networks:
+      - application
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000', r => { if (r.statusCode !== 200) process.exit(1) }).on('error', () => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+
+networks:
+  application:
+    driver: bridge

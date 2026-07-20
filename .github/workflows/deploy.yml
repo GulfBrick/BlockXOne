@@ -1,0 +1,26 @@
+name: Deploy (blocked pending production gates)
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Requested deployment environment
+        required: true
+        type: choice
+        options: [staging, production]
+
+permissions:
+  contents: read
+
+jobs:
+  readiness-blocker:
+    name: Refuse unimplemented deployment
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: Fail closed until verified deployment controls exist
+        shell: bash
+        run: |
+          echo "Deployment is intentionally blocked."
+          echo "Required before enabling: immutable signed artifacts, real migration execution, platform deployment, rollback, verified health checks, approvals, and evidence capture."
+          exit 1
