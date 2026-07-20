@@ -50,6 +50,18 @@ Evidence must be preserved under the authorised incident-retention policy. Do no
 
 ## 4. Approved history response
 
+**Local technical-preparation authorisation:** On 2026-07-20 the user and repository decision owner authorised creation and validation of local Option A candidates only. No push was authorised. Generation 1 `C1` was rejected by the mandatory scanner. Generation 2 `R2` passed pre-metadata admission. This does not satisfy the formal selection below because credential action and named repository, Security and Legal/Privacy sign-offs remain pending.
+
+| Local generation 2 field | Record |
+| --- | --- |
+| Accepted plan SHA-256 | `C91001B50979FA87CB7BDB88E20AAF1FF51E18B57EB590F7B737DEC8824ACA7C` |
+| Rejected candidate (`C1`) | `38c23993ad866c1f95df192c4cb3075bf246218b`; safe rejected manifest preserved |
+| Generation 2 checkpoint (`Q2`) | `ecbe7f950d1945c5eb2dfaa767caa6aebb80353b` |
+| Parentless generation 2 root (`R2`) | `81e06c32976b3c15460c298bd453a1dfce20f3b9` |
+| Exact `Q2` / `R2` tree | `0ca7a6dca26d3abef859160a50b93710fc118ddf` |
+| Standalone local target | `C:\Users\danie\Documents\BlockXOne Production Clean v2`; `codex/production-clean-root-v2`; no remote |
+| External exact-candidate record | `C:\Users\danie\Documents\BlockXOne Phase0 Recovery 20260719\clean-root-20260720\CANDIDATE-MANIFEST-v2.md` |
+
 Select exactly one after credential action:
 
 - [ ] **Option A — new clean repository or clean-root production lineage (recommended).**
@@ -70,9 +82,9 @@ Select exactly one after credential action:
 
 | Required evidence | Exact target/result | Independent reviewer | Status |
 | --- | --- | --- | --- |
-| Full reachable-history artifact validator | Pending clean commit/ref | Pending | Pending |
-| Dedicated redacted secret scan of files and history | Pending clean commit/ref | Pending | Pending |
-| Old-to-new source manifest/diff | Pending | Pending | Pending |
+| Full reachable-history artifact validator | `R2` pre-metadata check passed locally; exact `C2` receipt must be recorded externally | Pending | Local technical evidence only |
+| Dedicated redacted secret scan of files and history | Gitleaks 8.30.1 safe wrapper passed `R2` with zero findings; exact `C2` scan remains | Pending | Pending exact candidate |
+| Old-to-new source manifest/diff | `Q2`/`R2` tree equality proved; generation 2 manifest path recorded above | Pending | Pending exact candidate |
 | Hosted CI, Linux race and migration matrix | Pending | Pending | Pending |
 | Immutable image, SBOM and provenance | Pending | Pending | Pending |
 | GitHub/cache/fork/clone closure evidence | Pending | Pending | Pending |

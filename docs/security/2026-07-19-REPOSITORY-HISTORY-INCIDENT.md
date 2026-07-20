@@ -1,7 +1,7 @@
 # Repository History Credential-Exposure Incident
 
 **Incident ID:** BX1-SEC-2026-07-19-01
-**Status:** Open — local working-tree containment applied; credential rotation and remote-history response require authorised humans
+**Status:** Open — local Option A generation 2 technical containment prepared; credential, hosted-distribution and formal incident approvals require authorised humans
 **Severity:** P0 for Phase 0 exit
 **First affected commit:** `df3e1698f28891e7d23489a144eae2733bc8b79d`
 **Affected remote ref confirmed 2026-07-19:** `origin/main` at `df3e1698f28891e7d23489a144eae2733bc8b79d`
@@ -30,6 +30,22 @@ The archive was 3,524,634 bytes with SHA-256 `3B3E28C60ECD0BF438C5D094F2278DFAF4
 - Kept deployment, remote push, production access, provider calls, wallet/RPC activity and history rewriting blocked.
 
 These controls prevent a clean replacement branch from silently reintroducing the contaminated ancestry. They do not remediate credentials or the existing remote.
+
+## Local Option A technical generations — 2026-07-20
+
+The user and repository decision owner authorised local technical preparation of Option A with no push. Generation 1 exact candidate `C1` `38c23993ad866c1f95df192c4cb3075bf246218b` was rejected by the mandatory Gitleaks gate and is preserved with a safe external rejection manifest.
+
+Generation 2 uses accepted plan SHA-256 `C91001B50979FA87CB7BDB88E20AAF1FF51E18B57EB590F7B737DEC8824ACA7C`:
+
+- Quarantine checkpoint `Q2`: `ecbe7f950d1945c5eb2dfaa767caa6aebb80353b`.
+- Parentless root `R2`: `81e06c32976b3c15460c298bd453a1dfce20f3b9`.
+- Exact shared tree: `0ca7a6dca26d3abef859160a50b93710fc118ddf`.
+- Standalone repository: `C:\Users\danie\Documents\BlockXOne Production Clean v2` on `codex/production-clean-root-v2`, with no configured remote.
+- Complete one-ref transfer bundle SHA-256: `4F6C25EFECC2270DEA835DF8975763676040E9572E184AD5C33D282B7BE5BE58`.
+- Pre-metadata `R2` Gitleaks report SHA-256: `FCCF6A8F1B03128FDB0ABAD1CAC7EB0D2D9CC6490987A996748AE71C201017E7`; zero findings.
+- Exact metadata candidate and post-commit receipts will be recorded in external `CANDIDATE-MANIFEST-v2.md` after that commit exists.
+
+This local preparation does not select the formal incident checkbox, rotate credentials, restrict or archive the old hosted repository, remove remote caches/refs/forks/clones, or supply Security, Legal/Privacy or Phase 0 approval.
 
 ## Immediate human actions — rotate before rewriting history
 

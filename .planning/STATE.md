@@ -33,8 +33,13 @@ Execution contract: `docs/BLOCKXONE_AGENT_EXECUTION_LOOP.md`
 - **Planning/evidence versioning:** enabled
 - **Reference baseline:** `108be19f56dbdf87fe01ec18110c460415baf227`
 - **Integration branch:** `codex/blockxone-production-v1`
-- **Active phase branch:** `codex/phase-00-rebaseline`
-- **Active worktree:** `C:\Users\danie\Documents\BlockXOne Production Rebuild`
+- **Rejected candidate (`C1`):** `38c23993ad866c1f95df192c4cb3075bf246218b`
+- **Generation 2 checkpoint (`Q2`):** `ecbe7f950d1945c5eb2dfaa767caa6aebb80353b`
+- **Parentless generation 2 root (`R2`):** `81e06c32976b3c15460c298bd453a1dfce20f3b9`
+- **Active phase branch:** `codex/production-clean-root-v2`
+- **Active clean repository:** `C:\Users\danie\Documents\BlockXOne Production Clean v2`
+- **Rejected generation 1 repository:** `C:\Users\danie\Documents\BlockXOne Production Clean`
+- **Quarantine worktree:** `C:\Users\danie\Documents\BlockXOne Production Rebuild`
 - **Original WIP/reference workspace:** `C:\Users\danie\Documents\BlockXOne Test`
 - **Recovery artifact:** `C:\Users\danie\Documents\BlockXOne Phase0 Recovery 20260719\blockxone-working-tree-source.zip`
 - **Recovery SHA-256:** `B9F0C62171F2B06F9EE47DB594FB09718792BB5E9B27856C85EB498C5BE0FF15`
@@ -42,7 +47,7 @@ Execution contract: `docs/BLOCKXONE_AGENT_EXECUTION_LOOP.md`
 ## Locked execution decisions
 
 - The original WIP workspace remains a reference source and is not reset, cleaned or bulk-promoted.
-- The active implementation uses a clean isolated worktree from the selective reference-baseline commit.
+- The active implementation uses the standalone parentless generation 2 lineage at `C:\Users\danie\Documents\BlockXOne Production Clean v2`; the selective-reference worktree is quarantined evidence only.
 - Stock unrestricted autonomous mode is not used.
 - Builders cannot verify their own work.
 - Missing evidence is failure.
@@ -82,15 +87,20 @@ These defaults permit planning but not legal, financial, provider or production 
 - The migration runtime now includes migration files; CI defines clean/current-schema smoke runs. The seed tool requires explicit local-only opt-in, and the worker receives only APP_ENV, DATABASE_URL and NATS_URL.
 - Workflow syntax, planning, CI-policy and Compose-policy validators pass; deployment and rollback remain intentionally blocked.
 - Docker Desktop is unavailable locally, so image builds and provenance are not reproduced.
-- Full-tree reconciliation found `BlockXOne-fullstack.zip`, `api.exe` and `bin/api.exe` in the inherited baseline. The ZIP name index includes an actual `.env.local` path. The working-tree copies are removed, but current ancestry and `origin/main` remain contaminated.
+- Full-tree reconciliation found `BlockXOne-fullstack.zip`, `api.exe` and `bin/api.exe` in the inherited baseline. The ZIP name index includes an actual `.env.local` path. The working-tree copies are removed, but quarantined ancestry and `origin/main` remain contaminated; neither is an ancestor of generation 2.
 - Focused independent re-review confirmed all identified migration, seed, Docker-context, admin-route, worker-secret, Go-vulnerability and planning-truth P1/P2 remediations are resolved in the working tree; the verdict remains P0 no-go.
 - A later independent contract re-review confirmed the exact override/lock resolution, 8 preflight tests, typecheck, 57 tests, offline zero audits and CI ordering; BLK-012 is locally remediated, not an exact-candidate pass.
 - The uncommitted remediation tree is preserved outside Git as a filtered 464-file snapshot, SHA-256 `1C0FFC0F35ED5D14C73EB4F2297BD785AD35BC4AF4D5167F3A60A665E691D1F7`; it excludes the three incident artifacts and remains non-production recovery evidence.
+- Generation 1 candidate `C1` was rejected by the unchanged Gitleaks gate and is preserved with its safe report; it is not a baseline or allowlist.
+- The reviewed generation 2 contract is frozen at SHA-256 `C91001B50979FA87CB7BDB88E20AAF1FF51E18B57EB590F7B737DEC8824ACA7C`.
+- Local generation 2 preparation created `Q2` and parentless `R2` with identical tree `0ca7a6dca26d3abef859160a50b93710fc118ddf`, then imported only `R2` through a complete one-ref bundle into the standalone v2 repository.
+- Pre-metadata `R2` checks found one expected branch, no remote/shared/partial Git state, 635 physical objects equal to 635 reachable objects, no known prohibited object IDs, empty strict-fsck diagnostics, a passing 465-path artifact validator and zero Gitleaks findings.
+- After this metadata packet creates exact `C2`, its identity and final local admission receipts will be written to `C:\Users\danie\Documents\BlockXOne Phase0 Recovery 20260719\clean-root-20260720\CANDIDATE-MANIFEST-v2.md`; that record will not close human or hosted gates.
 
 ## Known blockers and no-go conditions
 
 - Repository-history incident `BX1-SEC-2026-07-19-01` requires authorised credential assessment/rotation and a clean-history decision before Phase 0 exit.
-- The final exact clean-root commit does not yet exist and has not been independently verified.
+- `R2` passed pre-metadata admission, but exact metadata candidate `C2` still requires final local admission and independent verification; the broader incident remains open.
 - Section 29 legal/product/provider decisions are provisional, not professionally approved.
 - Contract developer-tool audit is remediated in the working tree with tested pinned overrides; exact-clean hosted reproduction and upstream replacement tracking remain required.
 - Docker image candidates, Linux race checks and a complete hosted CI run have not been reproduced against an exact clean commit.
@@ -110,10 +120,10 @@ These defaults permit planning but not legal, financial, provider or production 
 
 ## Next actions
 
-1. Obtain a named incident owner and rotate/revoke or prove non-secret every credential class that may have existed in the tracked `.env.local`.
-2. Obtain approval for a clean-root production lineage or coordinated remote-history rewrite; do not force-push autonomously.
-3. Create and independently scan the exact clean production root/ref so the repository-artifact validator passes across reachable history.
-4. Reproduce the contract clean install, generation/typecheck, tests and zero full audit in hosted CI on the exact clean commit; remove overrides only when upstream ranges are safe.
-5. Reproduce images, Linux race tests, migrations and full hosted CI against the exact clean commit.
-6. Complete independent verification and Phase 0 human approval.
+1. Complete exact-`C2` local admission and independent verification using the external generation 2 manifest; do not alter `00-VERIFICATION.md` or Phase 0 completion state outside the named gate process.
+2. Obtain named incident, repository, Security and Legal/Privacy owners and rotate/revoke or prove non-secret every credential class that may have existed in the tracked `.env.local`.
+3. Obtain the formal signed Option A incident decision, old-repository restriction/retention plan and hosted ref/cache/fork/clone closure evidence; no push is authorised.
+4. Reproduce the contract clean install, generation/typecheck, tests and zero full audit in hosted CI on exact `C2`; remove overrides only when upstream ranges are safe.
+5. Reproduce images, Linux race tests, migrations and full hosted CI against exact `C2`.
+6. Complete Phase 0 human approval.
 7. Only then prepare/execute the G1 human decision package before implementing the golden product.

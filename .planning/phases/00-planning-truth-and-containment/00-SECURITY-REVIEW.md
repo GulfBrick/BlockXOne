@@ -55,6 +55,14 @@ The following findings describe the starting reference baseline. Items 1–5 and
 
 Focused independent re-review completed 2026-07-19 and confirmed the migration, seed, Docker-context, admin-route, worker-secret, Go-vulnerability and planning-truth remediations. A later narrow independent re-review also confirmed the active contract overrides, lock resolution, preflight/typecheck/tests, offline zero audits and CI order. Exact-clean hosted reproduction remains required, so these changes do not overturn the P0 verdict.
 
+## Local clean-root technical containment — generation 2
+
+The user authorised local technical execution of Option A without remote action. Generation 1 `C1` was rejected by the unchanged redacted Gitleaks gate and is preserved unchanged. The accepted generation 2 proof contract is SHA-256 `C91001B50979FA87CB7BDB88E20AAF1FF51E18B57EB590F7B737DEC8824ACA7C`.
+
+Quarantine checkpoint `Q2` `ecbe7f950d1945c5eb2dfaa767caa6aebb80353b` and parentless root `R2` `81e06c32976b3c15460c298bd453a1dfce20f3b9` share exact tree `0ca7a6dca26d3abef859160a50b93710fc118ddf`. `R2` was transferred through a complete one-ref bundle into a newly initialised standalone repository. Before this bounded metadata packet, local checks found one branch, no remote/shared/partial Git state, equal physical/reachable object sets, no known prohibited object IDs, empty strict-fsck diagnostics, a passing reachable-history artifact gate and zero Gitleaks findings. Final gates must bind to exact metadata candidate `C2`; its identity and receipts will be written externally after that commit exists.
+
+This resolves neither possible credential exposure nor the contaminated remote, caches, forks or collaborator clones. It is not Security, Legal/Privacy, provider, hosted-CI or Phase 0 approval.
+
 ## No-go
 
 Phase 0 cannot pass while a production-labelled environment can accept mock providers, raw keys, default/blank critical values, hidden-but-callable excluded features or mandatory checks that return success after failure.

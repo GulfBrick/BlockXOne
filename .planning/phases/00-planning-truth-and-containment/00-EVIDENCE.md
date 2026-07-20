@@ -6,12 +6,15 @@ The canonical records are `EV-P0-001` onward in `.planning/EVIDENCE-REGISTER.md`
 
 | Canonical evidence | Current result |
 | --- | --- |
-| `EV-P0-012` repository full-tree/history scan | **Failed/P0:** tracked ZIP containing an `.env.local` path plus two executables remain reachable in current ancestry and `origin/main` |
+| `EV-P0-012` repository full-tree/history scan | **Failed/P0:** tracked ZIP containing an `.env.local` path plus two executables remain reachable in quarantined ancestry and `origin/main`; neither is an ancestor of generation 2 |
 | `EV-P0-015` Go quality/security | Working-tree tests, vet, lint and gosec pass; Linux race and exact-clean-commit reproduction pending |
 | `EV-P0-016..017` web | 4 preflight, 5 URL-policy, 38 unit tests, lint, build, live bypass containment and both audits pass locally |
 | `EV-P0-018..019` contracts | Clean install, compile/typecheck and 57 tests pass; tested patched overrides reduce full and runtime audits to zero locally |
 | `EV-P0-024` independent review | **FAIL/NO-GO**; P0 history and BASE-06 evidence prevent closure |
 | `EV-P0-025` human Phase 0 approval | Pending |
+| `EV-P0-032` rejected generation 1 | `C1` failed the unchanged redacted Gitleaks gate; safe evidence preserved and not treated as an allowlist |
+| `EV-P0-033` local generation 2 formation | `Q2`/parentless `R2` created with equal tree; bundle, standalone object/ref/fsck/artifact and zero-finding Gitleaks preflight passed |
+| `EV-P0-034` exact generation 2 candidate admission | External manifest path reserved; post-metadata scans and independent verdict must bind to exact `C2` |
 
 ## Superseded initial evidence snapshot
 
@@ -40,8 +43,8 @@ The canonical records are `EV-P0-001` onward in `.planning/EVIDENCE-REGISTER.md`
 ## Evidence still required for exit
 
 - Human credential classification/rotation or proof of non-secret placeholders.
-- Approved clean-root/new-repository or coordinated all-ref history response.
-- Dedicated redacted secret scan and repository-artifact validation across the complete reachable history of the exact clean commit.
+- Formal signed Option A incident response, old-repository restriction/retention plan and hosted ref/cache/fork/clone closure evidence. Local technical preparation alone is insufficient.
+- Dedicated redacted secret scan, repository-artifact validation and independent verification across the complete reachable history of exact metadata candidate `C2`.
 - Passing mandatory contract full audit reproduced in hosted CI on the exact clean candidate.
 - Hosted exact-commit Linux race, clean/current migration, image build, SBOM/provenance and complete CI evidence.
 - Independent re-verification of all post-review remediations.

@@ -3,6 +3,7 @@
 | Approval | Required owner(s) | Status | Evidence |
 | --- | --- | --- | --- |
 | Controlled agent-loop use | User | Approved 2026-07-19 | Current task instruction |
+| Local Option A clean-root generation 2 technical preparation | User and repository decision owner | Approved 2026-07-20 for local execution only; no push or incident closure | Accepted plan SHA-256 `C91001B50979FA87CB7BDB88E20AAF1FF51E18B57EB590F7B737DEC8824ACA7C`; rejected `C1` manifest; passing `R2` safe scan |
 | Selective reference baseline and isolated worktree | Program Controller; user oversight | Rejected as production lineage; inherited artifact/history incident open | `BASELINE.md`, `BX1-SEC-2026-07-19-01` |
 | Repository exposure incident response | Repository owner, CISO/incident lead, provider/account custodians, Legal/Privacy as applicable | Pending | `docs/security/2026-07-19-REPOSITORY-HISTORY-INCIDENT-ACTION-RECORD.md` plus secured external evidence |
 | v2.0 12-phase production rebaseline | Program Council | Provisional; independent verification pending | ROADMAP/REQUIREMENTS/STATE |

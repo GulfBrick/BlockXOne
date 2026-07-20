@@ -17,7 +17,9 @@ Phase 0 establishes a recoverable and versioned source baseline, reconciles prod
 
 - Preserve the original dirty workspace as WIP/reference.
 - Retain selective commit `108be19` only as a quarantined historical reference; it cannot be an ancestor of the production lineage.
-- Use `codex/phase-00-rebaseline` only as an isolated remediation worktree while the clean-root decision is pending.
+- Preserve `codex/phase-00-rebaseline` at generation 2 checkpoint `Q2` `ecbe7f950d1945c5eb2dfaa767caa6aebb80353b`; never merge or push it into the clean lineage.
+- Preserve rejected `C1` and its safe evidence unchanged. The user authorised local Option A technical execution on 2026-07-20; parentless `R2` `81e06c32976b3c15460c298bd453a1dfce20f3b9` is the first commit of standalone branch `codex/production-clean-root-v2` at `C:\Users\danie\Documents\BlockXOne Production Clean v2`.
+- Treat local clean-lineage formation as containment evidence only. Formal repository-owner, Security, Legal/Privacy, credential, hosted-distribution and Phase 0 approvals remain pending.
 - Do not reset, clean, stash, bulk-stage or delete the original WIP.
 - Archive legacy-cleanup deletions as a separate future decision.
 - Do not push, rewrite history, force-push, rotate credentials or destroy incident evidence without the named human owners.

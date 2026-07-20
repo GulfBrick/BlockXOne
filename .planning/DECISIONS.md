@@ -17,5 +17,6 @@
 | DEC-013 | Immutable double-entry ledger and reconciliation critical path | Mandatory | Controller/CTO | G3 |
 | DEC-014 | No secondary market in release one | Approved planning default | Board/Legal/Product | G1 |
 | DEC-015 | No remote push or production/mainnet action without explicit gate | Active control | User/Program Council | Continuous |
+| DEC-016 | Preserve rejected generation 1 and prepare generation 2 as a standalone local clean-root lineage | Approved for local technical execution only; formal incident, Security and Legal approval pending | User and repository decision owner; named human gates remain | Phase 0 |
 
 Open decisions permit design options but not regulated or production approval.
