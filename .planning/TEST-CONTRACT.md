@@ -32,14 +32,37 @@ npm run test:config --prefix apps/web
 npm run test:runner --prefix apps/web
 npm test --prefix apps/web -- --run
 
-Push-Location apps\web
-npm test -- --run
-npm run lint
-npm audit --audit-level=moderate
-npm audit --omit=dev --audit-level=moderate
-npm run build
-npm run test:production-containment
-Pop-Location
+$hadPriorNextPublicApiUrl = Test-Path -LiteralPath 'Env:NEXT_PUBLIC_API_URL'
+$priorNextPublicApiUrl = [System.Environment]::GetEnvironmentVariable('NEXT_PUBLIC_API_URL', 'Process')
+$hadPriorServerActionAllowedOrigins = Test-Path -LiteralPath 'Env:SERVER_ACTION_ALLOWED_ORIGINS'
+$priorServerActionAllowedOrigins = [System.Environment]::GetEnvironmentVariable('SERVER_ACTION_ALLOWED_ORIGINS', 'Process')
+$webLocationPushed = $false
+try {
+  [System.Environment]::SetEnvironmentVariable('NEXT_PUBLIC_API_URL', 'https://api.blockxone.example', 'Process')
+  [System.Environment]::SetEnvironmentVariable('SERVER_ACTION_ALLOWED_ORIGINS', 'app.blockxone.example', 'Process')
+  Push-Location apps\web
+  $webLocationPushed = $true
+  npm test -- --run
+  npm run lint
+  npm audit --audit-level=moderate
+  npm audit --omit=dev --audit-level=moderate
+  npm run build
+  npm run test:production-containment
+} finally {
+  if ($webLocationPushed) {
+    Pop-Location
+  }
+  if ($hadPriorNextPublicApiUrl) {
+    [System.Environment]::SetEnvironmentVariable('NEXT_PUBLIC_API_URL', $priorNextPublicApiUrl, 'Process')
+  } else {
+    Remove-Item -LiteralPath 'Env:NEXT_PUBLIC_API_URL' -ErrorAction SilentlyContinue
+  }
+  if ($hadPriorServerActionAllowedOrigins) {
+    [System.Environment]::SetEnvironmentVariable('SERVER_ACTION_ALLOWED_ORIGINS', $priorServerActionAllowedOrigins, 'Process')
+  } else {
+    Remove-Item -LiteralPath 'Env:SERVER_ACTION_ALLOWED_ORIGINS' -ErrorAction SilentlyContinue
+  }
+}
 
 $repoRoot = [System.IO.Path]::GetFullPath((Resolve-Path .).Path)
 $webRoot = [System.IO.Path]::GetFullPath((Resolve-Path .\apps\web).Path)
@@ -85,6 +108,8 @@ The repository-artifact validator fails by design on the contaminated lineage. T
 Contract overrides are temporary controlled pins, not audit waivers: `adm-zip` 0.6.0, `diff` 8.0.3 and `serialize-javascript` 7.0.7. CI installs with lifecycle scripts disabled, compiles before typecheck so generated types exist, then runs all tests and the mandatory full audit. Track upstream Hardhat/Mocha dependency ranges and remove an override only after the upstream graph resolves to a patched compatible version and this matrix passes again.
 
 The production network remains unselected. Named development networks in the current Hardhat configuration are not a production-network decision, provider approval or deployment authority.
+
+The `.example` API URL and allowed origin in the scoped web command block are fixed local/CI validation fixtures only; they are not production configuration, a production-network selection or provider approval.
 
 Web unit tests must enter through `scripts/run-hermetic-tests.mjs`. The runner fixes package-root discovery, the local Vitest executable, configuration, test include/exclude rules, process environment and per-run cache cleanup. Its setup guard blocks non-loopback HTTP(S) only at the global `fetch` API, including automatic redirect escape. It is not an OS firewall and does not cover `node:http`, `node:https`, `node:net`, DNS, WebSocket, child processes, configuration checks, lint, builds or the production-containment probe; test code can also deliberately replace `globalThis.fetch` after setup. The term controlled runner does not claim system-wide no-egress or network isolation.
 
