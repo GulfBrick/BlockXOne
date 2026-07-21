@@ -104,7 +104,12 @@ jobs:
       - run: npm ci --prefix apps/web
       - run: npm run test:preflight --prefix apps/web
       - run: npm run test:config --prefix apps/web
+      - name: Exercise the controlled web-test runner and its hostile-environment cases
+        run: npm run test:runner --prefix apps/web
       - run: npm test --prefix apps/web -- --run
+      - name: Re-run the same controlled test set from the package root
+        working-directory: apps/web
+        run: npm test -- --run
       - run: npm run lint --prefix apps/web
       - name: Prove production web config fails without its public API contract
         shell: bash

@@ -20,7 +20,8 @@
     "prelint": "npm run preflight",
     "lint": "next lint",
     "pretest": "npm run preflight",
-    "test": "vitest",
+    "test": "node scripts/run-hermetic-tests.mjs",
+    "test:runner": "node --test scripts/run-hermetic-tests.node-test.mjs",
     "test:production-containment": "npm run preflight && node scripts/test-production-containment.mjs"
   },
   "dependencies": {
