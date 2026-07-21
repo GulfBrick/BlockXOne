@@ -9,6 +9,10 @@ import test from 'node:test'
 const scriptDir = path.dirname(fileURLToPath(import.meta.url))
 const scriptPath = path.resolve(scriptDir, 'preflight.mjs')
 const deployScriptPath = path.resolve(scriptDir, 'deploy.ts')
+const contractsRoot = path.resolve(scriptDir, '..')
+const hardhatConfigPath = path.resolve(contractsRoot, 'hardhat.config.ts')
+const packageJsonPath = path.resolve(contractsRoot, 'package.json')
+const packageLockPath = path.resolve(contractsRoot, 'package-lock.json')
 const { evaluatePreflight } = await import(pathToFileURL(scriptPath))
 
 function withTempContractsPackage(setup, run) {
@@ -185,4 +189,19 @@ test('deployment script uses an explicit Hardhat 3 network connection', () => {
   assert.match(source, /import hre from ['"]hardhat['"]/)
   assert.match(source, /await hre\.network\.create\(\)/)
   assert.doesNotMatch(source, /import\s*{\s*ethers\s*}\s*from\s*['"]hardhat['"]/)
+})
+
+test('pins the exact compiler policy and Hardhat release used for evidence', () => {
+  const configSource = readFileSync(hardhatConfigPath, 'utf8')
+  const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf8'))
+  const packageLock = JSON.parse(readFileSync(packageLockPath, 'utf8'))
+
+  assert.match(
+    configSource,
+    /solidity:\s*\{\s*version:\s*['"]0\.8\.20['"],\s*settings:\s*\{\s*optimizer:\s*\{\s*enabled:\s*true,\s*runs:\s*200,?\s*},\s*evmVersion:\s*['"]shanghai['"],?\s*},?\s*},/s
+  )
+  assert.equal((configSource.match(/\bevmVersion\s*:/g) || []).length, 1)
+  assert.equal(packageJson.devDependencies?.hardhat, '3.10.0')
+  assert.equal(packageLock.packages?.['']?.devDependencies?.hardhat, '3.10.0')
+  assert.equal(packageLock.packages?.['node_modules/hardhat']?.version, '3.10.0')
 })
