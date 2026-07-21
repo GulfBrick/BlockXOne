@@ -1,0 +1,499 @@
+---
+phase: 0
+artifact: research
+topic: contract issuance containment and compiler truth
+status: complete
+researched_on: 2026-07-21
+baseline_commit: a88658ad82f3d22aaf26e10b9eab6389084e6dd3
+scope: early-fail-closed-containment-only
+---
+
+# Phase 0 Research: Contract Issuance Containment and Compiler Truth
+
+## Executive Conclusion
+
+Generation 3 should make two bounded Phase 0 remediations:
+
+1. Correct compiler truth without changing the compiler, optimizer policy, contract source or bytecode.
+2. Close the known standard-mint bypass and create a separate, fail-closed forced-issuance boundary under the user-approved policy.
+
+This is an early containment packet supporting BASE-04 and BASE-06. It is not an ERC-3643 conformance result, a smart-contract audit, a production deployment approval or a pass of CHAIN-01 through CHAIN-07. The controlling contract verdict remains NO-GO until later G5 assurance proves the complete canonical stack, interfaces, identity model, governance, deployment and chain operations.
+
+No production chain can be inferred from the repository. The Sepolia and Goerli entries in contracts/hardhat.config.ts are development/test network configuration, not a production-chain decision. Generation 3 must leave the production network open for the named human and G5 decision process.
+
+## Phase Boundary
+
+### In scope
+
+- Preserve Solidity 0.8.20.
+- Preserve optimizer enabled with 200 runs.
+- Explicitly set evmVersion to shanghai.
+- Prove that adding the explicit EVM target leaves every creation and deployed bytecode value unchanged.
+- Correct the Solidity/Hardhat row in .planning/TEST-CONTRACT.md.
+- Add or plan fail-closed standard-mint and forced-issuance containment with adversarial tests.
+- Keep every current Phase 0, legal, hosted-CI, audit and production gate open.
+
+### Controlling non-claim
+
+The packet may say that a specific bypass is contained and that compiler documentation is reconciled. It must not say that BXOSecurityToken is ERC-3643 compliant, production-safe, audited, deployable or approved for any network.
+
+## Standard Stack
+
+Use the repository's exact locked stack:
+
+| Component | Generation 3 policy | Evidence |
+| --- | --- | --- |
+| Node.js | 22.23.1 | contracts/package.json:6-9 |
+| npm | 10.9.8 | contracts/package.json:6-9 |
+| Hardhat | 3.10.0 | contracts/package.json:20-32 |
+| Solidity | 0.8.20; do not upgrade in this packet | contracts/hardhat.config.ts:20-22 |
+| Optimizer | enabled, 200 runs | contracts/hardhat.config.ts:22-26 |
+| EVM target | explicitly shanghai | target correction to contracts/hardhat.config.ts |
+| OpenZeppelin Contracts | 5.6.1 | contracts/package.json:20-32 |
+| Tests | Hardhat Mocha, Chai and existing TypeScript suite | contracts/package.json:13-18, 20-32 |
+
+Do not upgrade solc to 0.8.24 merely to make the existing test-contract prose true. Configuration documentation must describe the implementation, not cause an unreviewed compiler migration.
+
+## Primary-Source Findings
+
+### ERC-3643 and identity eligibility
+
+The final [ERC-3643 specification](https://eips.ethereum.org/EIPS/eip-3643) defines a permissioned token system using an identity registry, trusted issuers, claim topics and compliance. It states that a mint recipient must be whitelisted and verified and exposes mint, forced transfer, recovery, batch and compliance lifecycle interfaces.
+
+The [ERC-3643 Identity Registry documentation](https://docs.erc3643.org/erc-3643/smart-contracts-library/onchain-identities/identity-registry) describes isVerified as comparing required topics and trusted issuers and validating claim signatures against Claim Issuer contracts. Merely finding a claim from an address present in the trusted-issuer registry is insufficient.
+
+The user-approved BlockXOne policy is intentionally stricter than the minimum mint behavior described in EIP-3643: standard mint must require a registered, verified and compliance-eligible recipient. That stricter rule must be labeled as BlockXOne policy, not attributed to the standard.
+
+### Compiler and EVM target
+
+The [Hardhat configuration reference](https://hardhat.org/docs/reference/configuration) states that compiler settings use the Solidity standard-JSON settings schema and warns that the default EVM version changes with compiler version. Hardhat documents explicit evmVersion configuration as the way to remove that implicit dependency.
+
+The supplied [Solidity 0.8.24 compiler documentation](https://docs.soliditylang.org/en/v0.8.24/using-the-compiler.html#setting-the-evm-version-to-target) explains that evmVersion affects type checking and code generation and warns that a wrong target can cause failing behavior.
+
+For the compiler actually used here, the [Solidity 0.8.20 compiler documentation](https://docs.soliditylang.org/en/v0.8.20/using-the-compiler.html#setting-the-evm-version-to-target) identifies shanghai as the default target and documents optimizer runs of 200. Therefore making shanghai explicit should preserve generated bytecode, but that is a hypothesis to prove against exact artifacts, not an assumption to record as success.
+
+An EVM target is a code-generation compatibility choice. It does not select Ethereum mainnet, an L2, a private chain or any other production network.
+
+## Repository Findings
+
+### Compiler truth collision
+
+- .planning/TEST-CONTRACT.md:5-11 claims Solidity 0.8.24 and a pinned EVM target.
+- contracts/hardhat.config.ts:20-28 actually uses Solidity 0.8.20, optimizer enabled, 200 runs and no explicit evmVersion.
+- contracts/src/token/BXOSecurityToken.sol:1-2 declares pragma solidity ^0.8.20.
+- contracts/hardhat.config.ts:29-43 contains only Sepolia and Goerli HTTP configurations and provides no approved production chain, chain ID, finality policy, production RPC or governed production signer.
+
+### Standard mint and batch mint
+
+- contracts/src/token/BXOSecurityToken.sol:14 defines only AGENT_ROLE.
+- contracts/src/token/BXOSecurityToken.sol:60-76 authorizes mint and batchMint solely through AGENT_ROLE before calling _mint.
+- contracts/src/token/BXOSecurityToken.sol:156-169 executes compliance checks and transferred callbacks only when both endpoints are nonzero, so mint bypasses them.
+- contracts/test/BXOSecurityToken.test.ts:121-155 registers identities but does not establish valid claims in the shared fixture.
+- contracts/test/BXOSecurityToken.test.ts:313-348 expects mint and batch mint to succeed for those unverified fixtures.
+- contracts/test/BXOSecurityToken.test.ts:688-692 labels a case as minting to an unregistered address while its own comment and fixture show investor3 is registered.
+
+### Identity verification
+
+- contracts/src/identity/IdentityRegistry.sol:138-165 provides the existing isVerified API.
+- contracts/src/identity/IdentityRegistry.sol:152-159 reads scheme, signature and data but treats a topic as valid when the issuer address is merely trusted.
+- contracts/src/compliance/ITrustedIssuersRegistry.sol:43-53 already exposes trusted-issuer and issuer-topic APIs.
+- contracts/src/compliance/IClaimIssuer.sol:18-23 already exposes isClaimValid.
+- contracts/src/mocks/MockClaimIssuer.sol:23-39 always returns true and is test-only evidence, never production verification.
+
+### Compliance lifecycle
+
+- contracts/src/compliance/IModularCompliance.sol:24-47 exposes canTransfer and transferred but omits created and destroyed.
+- contracts/src/compliance/ModularCompliance.sol:73-102 loops through modules but does not bind callbacks to a token; any caller can invoke transferred.
+- contracts/src/compliance/modules/CountryRestrictionModule.sol:93-115 can evaluate the recipient side of a zero-address mint but deliberately ignores unregistered endpoints.
+- contracts/src/compliance/modules/MaxBalanceModule.sol:70-87 can evaluate a mint recipient's resulting balance.
+
+### Roles and exceptional paths
+
+- contracts/src/token/BXOSecurityToken.sol:60-153 gives AGENT_ROLE mint, burn, freeze, pause, forced-transfer, recovery, registry-replacement and compliance-replacement authority.
+- contracts/src/token/BXOSecurityToken.sol:130-140 and 172-174 implement forcedTransfer and recoveryAddress through raw ERC20._update, bypassing pause, freeze, compliance and callbacks.
+- contracts/test/BXOSecurityToken.test.ts:460-525 tests only success and AGENT_ROLE denial for forced transfer and recovery; it does not test eligible destinations, legal authority, second approval, case evidence or lifecycle callbacks.
+- contracts/src/token/BXOSecurityTokenFactory.sol:76-99 temporarily makes the factory administrator and agent, grants both roles to the caller, optionally mints initial supply to that caller and then renounces factory roles.
+
+## Architecture Patterns
+
+### 1. Fail-closed standard issuance
+
+Use one internal eligibility path for mint and every batchMint item:
+
+1. Verify the caller has a dedicated MINTER_ROLE.
+2. Reject zero recipient, zero amount and a paused token.
+3. Require identityRegistry.contains(recipient).
+4. Require a hardened identityRegistry.isVerified(recipient).
+5. Require BlockXOne mint compliance approval.
+6. Mint.
+7. Invoke the creation lifecycle callback.
+8. Emit an operator-attributed audit event in addition to the ERC-20 Transfer event.
+
+Batch processing must apply the same path sequentially and cap batch length. Solidity transaction atomicity then rolls back all prior loop effects if any later recipient fails.
+
+### 2. Harden identity verification before relying on it
+
+For every required topic, isVerified must:
+
+- find at least one claim for that topic;
+- require a trusted issuer authorized for that exact topic;
+- require an approved claim scheme;
+- invoke IClaimIssuer.isClaimValid with the identity, topic, signature and data;
+- fail closed on empty, malformed, expired, revoked, wrong-topic, wrong-identity or reverting claims.
+
+No production path may deploy or trust MockClaimIssuer.
+
+### 3. Explicit mint compliance lifecycle
+
+The smallest safe interface correction is to add explicit mint eligibility and creation lifecycle semantics rather than leaving them implicit:
+
+- canMint(address recipient, uint256 amount), or a documented zero-address canTransfer convention;
+- created(address recipient, uint256 amount);
+- token binding and an only-bound-token guard for state-changing callbacks.
+
+The EIP-3643 compliance interface includes bindToken, canTransfer, transferred, created and destroyed. Generation 3 may add the containment subset needed for mint, but complete interface and behavioral conformance remains G5 work.
+
+### 4. Separate forced issuance
+
+Add a distinct FORCED_ISSUER_ROLE and a separate entry point such as:
+
+    forcedIssue(
+        bytes32 operationId,
+        address recipient,
+        uint256 amount,
+        bytes32 evidenceHash
+    )
+
+Required containment properties:
+
+- Standard MINTER_ROLE cannot call forcedIssue.
+- FORCED_ISSUER_ROLE is not granted to an EOA, factory or general application signer.
+- The only intended holder is the approved multisig/governance contract.
+- operationId and evidenceHash are nonzero.
+- operationId is one-time to prevent replay or duplicate execution.
+- The event records operation ID, evidence hash, recipient, amount and operator.
+- The safest default is to retain registered, verified and compliance-eligible recipient checks.
+- No broad eligibility bypass is implemented without the explicit human/legal decision described below.
+
+A contract role proves only the caller address. Multisig threshold, signer composition, modules and transaction policy must be verified independently in the signed deployment manifest.
+
+### 5. Keep exceptional transfer/recovery blockers visible
+
+Closing mint does not make the contract production-ready. Existing forcedTransfer and recoveryAddress remain G5 no-go paths until they have dedicated permissions, verified destinations, case/evidence references, explicit pause/freeze/compliance semantics, lifecycle callbacks and adversarial tests.
+
+### 6. Deployment/factory containment
+
+The optional factory initial supply must either:
+
+- use the same standard-mint eligibility path for an explicitly eligible recipient; or
+- be disabled so deployment always begins at zero supply.
+
+Generation 3 must test that the factory has no residual admin, mint or forced-issuance authority. Final role topology, multisig threshold and timelock remain human-gated.
+
+## Recommended Implementation Sequence
+
+1. Capture exact-C2 compiler and bytecode baseline evidence before changing configuration.
+2. Add evmVersion: shanghai while preserving Solidity 0.8.20 and optimizer runs 200.
+3. Correct only the compiler policy prose in .planning/TEST-CONTRACT.md.
+4. Recompile from empty isolated cache/artifact directories and prove exact bytecode equality.
+5. Harden IdentityRegistry.isVerified using the already available issuer-topic and isClaimValid APIs.
+6. Add dedicated standard-minter and forced-issuer roles.
+7. Add standard-mint recipient and compliance checks to mint and batchMint.
+8. Add bound creation lifecycle handling and audit events.
+9. Add forcedIssue with operation/evidence identifiers and replay protection; keep its role unassigned until the human gate.
+10. Update the factory initial-supply path and role-residue assertions.
+11. Run fast, full and adversarial validation.
+12. Obtain independent verification bound to the exact candidate; retain all G5 and production no-go labels.
+
+## Compiler and Bytecode Equivalence Contract
+
+### Configuration target
+
+The only compiler-setting change is:
+
+    solidity: {
+      version: '0.8.20',
+      settings: {
+        optimizer: {
+          enabled: true,
+          runs: 200,
+        },
+        evmVersion: 'shanghai',
+      },
+    }
+
+Do not alter viaIR, metadata, remappings, libraries, source files, compiler version or optimizer details in the same compiler-truth packet.
+
+### Required proof
+
+Build two manifests:
+
+1. Baseline manifest from exact clean C2 with implicit compiler default.
+2. Candidate manifest from the exact proposed commit with explicit shanghai.
+
+Both builds must use:
+
+- Node 22.23.1 and npm 10.9.8;
+- the same package-lock.json and npm ci --ignore-scripts installation;
+- solc 0.8.20 and Hardhat 3.10.0;
+- identical contract sources;
+- empty, separate Hardhat cache and artifact directories;
+- no stale TypeChain or artifact reuse.
+
+For every fully qualified contract, record and compare:
+
+- source name and contract name;
+- complete creation bytecode;
+- complete deployed bytecode;
+- ABI;
+- link references and deployed link references;
+- immutable references;
+- solc version and long version;
+- SHA-256 of each manifest and of the exact source tree used.
+
+Bytecode comparison is byte-for-byte, including compiler metadata. Do not strip metadata to manufacture equality. Any missing contract, added contract or differing creation/deployed bytecode fails the packet and requires investigation or replanning.
+
+The standard-JSON compiler input is expected to differ by the explicit evmVersion field. That configuration difference is retained as evidence; it is not a permitted bytecode difference.
+
+## Don't Hand-Roll
+
+- Do not implement custom signature recovery in IdentityRegistry when the Claim Issuer interface is the trust boundary.
+- Do not invent a bespoke multisig; use an independently reviewed multisig/governance implementation selected at the human gate.
+- Do not compare disassembled opcodes while ignoring metadata; compare exact artifact bytecode.
+- Do not create a production network entry from Sepolia, Goerli, a provisional country or an assumed EVM chain.
+- Do not create a scanner exception, test waiver or narrative assertion to convert missing evidence into success.
+- Do not describe similar function names as ERC-3643 conformance.
+
+## Common Pitfalls
+
+- Upgrading to Solidity 0.8.24 because the test contract says 0.8.24.
+- Treating shanghai as a production-chain selection.
+- Reusing cached artifacts and then declaring bytecode unchanged.
+- Comparing only runtime bytecode while creation bytecode or metadata changed.
+- Adding explicit evmVersion and changing source/optimizer settings in the same proof packet.
+- Calling current isVerified sufficient despite unused signature and issuer-topic data.
+- Allowing MockClaimIssuer into any production manifest.
+- Reusing AGENT_ROLE for both normal and exceptional issuance.
+- Calling a role held by one EOA multisig-governed.
+- Adding an audit event without replay protection or an external evidence record.
+- Fixing mint while hiding the unresolved forced-transfer and recovery bypasses.
+- Marking Phase 0, G5 or CHAIN requirements complete from unit tests alone.
+
+## Code Examples
+
+The downstream plan should use these patterns as intent, not copy them blindly.
+
+Eligibility:
+
+    function _requireStandardMintEligible(address to, uint256 amount) internal view {
+        if (!identityRegistry.contains(to)) revert RecipientNotRegistered(to);
+        if (!identityRegistry.isVerified(to)) revert RecipientNotVerified(to);
+        if (!compliance.canMint(to, amount)) revert ComplianceCheckFailed();
+    }
+
+Standard mint:
+
+    function mint(address to, uint256 amount) external onlyRole(MINTER_ROLE) whenNotPaused {
+        _requireStandardMintEligible(to, amount);
+        _mint(to, amount);
+        compliance.created(to, amount);
+        emit MintExecuted(msg.sender, to, amount);
+    }
+
+Forced issuance:
+
+    function forcedIssue(
+        bytes32 operationId,
+        address to,
+        uint256 amount,
+        bytes32 evidenceHash
+    ) external onlyRole(FORCED_ISSUER_ROLE) whenNotPaused {
+        if (operationId == bytes32(0) || evidenceHash == bytes32(0)) revert InvalidEvidence();
+        if (forcedOperationUsed[operationId]) revert OperationAlreadyUsed(operationId);
+        _requireStandardMintEligible(to, amount);
+        forcedOperationUsed[operationId] = true;
+        _mint(to, amount);
+        compliance.created(to, amount);
+        emit ForcedIssuanceExecuted(operationId, evidenceHash, msg.sender, to, amount);
+    }
+
+If Legal later approves a forced-issuance eligibility exception, replace the shared helper with a separately named, narrowly scoped forced-policy function. Never silently omit checks.
+
+## Validation Architecture
+
+### Fast developer loop
+
+Run after each bounded implementation change with the exact Node/npm toolchain:
+
+~~~powershell
+pwsh -NoProfile -File .\.planning\scripts\validate-planning.ps1
+
+Push-Location contracts
+npm run test:preflight
+npm run compile
+npm run typecheck
+npm test -- --grep "BXOSecurityToken|IdentityRegistry|ModularCompliance|BXOSecurityTokenFactory"
+Pop-Location
+
+git diff --check
+~~~
+
+The targeted suite must contain real matching tests. A zero-test result is failure.
+
+### Bytecode-equivalence loop
+
+The implementation plan should add deterministic manifest commands with this interface:
+
+~~~powershell
+node .\contracts\scripts\capture-bytecode-manifest.mjs --artifacts <baseline-artifacts> --out <baseline-manifest>
+node .\contracts\scripts\capture-bytecode-manifest.mjs --artifacts <candidate-artifacts> --out <candidate-manifest>
+node .\contracts\scripts\compare-bytecode-manifests.mjs --baseline <baseline-manifest> --candidate <candidate-manifest>
+~~~
+
+The comparison command must exit nonzero on any missing, extra or different creation/deployed bytecode and emit only contract identities and hashes, never secret-bearing configuration.
+
+### Full local contract loop
+
+~~~powershell
+Push-Location contracts
+npm ci --ignore-scripts
+npm run test:preflight
+npm run compile
+npm run typecheck
+npm test
+npm audit --omit=dev --audit-level=moderate
+npm audit --audit-level=moderate
+Pop-Location
+
+pwsh -NoProfile -File .\.planning\scripts\validate-planning.ps1
+pwsh -NoProfile -File .\.planning\scripts\validate-ci-policy.ps1
+git diff --check
+~~~
+
+Full hosted CI on the exact candidate remains mandatory because local results cannot close BASE-06.
+
+### Required negative and adversarial tests
+
+Standard mint:
+
+- unauthorized minter;
+- unregistered recipient;
+- registered recipient with no claims;
+- missing each required claim topic;
+- trusted issuer not authorized for the topic;
+- empty, forged, malformed, wrong-topic and wrong-identity signatures;
+- revoked issuer and expired claim;
+- Claim Issuer revert or false result;
+- restricted country;
+- maximum-balance breach;
+- paused token;
+- zero recipient and zero amount;
+- callback false/revert and full rollback.
+
+Batch mint:
+
+- length mismatch;
+- empty batch;
+- oversized batch and gas bound;
+- one invalid recipient among valid recipients with complete rollback;
+- duplicate recipients whose aggregate exceeds a limit;
+- unauthorized caller;
+- exactly one creation callback and operator event per successful item.
+
+Forced issuance:
+
+- standard minter cannot call forcedIssue;
+- unauthorized EOA cannot call forcedIssue;
+- multisig address without the role cannot call;
+- zero or reused operation ID;
+- zero evidence hash;
+- ineligible recipient under the default no-bypass policy;
+- pause behavior;
+- event fields and replay protection;
+- below-threshold multisig transaction fails in integration;
+- approved threshold succeeds;
+- removed signer cannot authorize;
+- factory/deployer retains no forced role.
+
+Compliance and identity:
+
+- callback spoofing by an arbitrary caller;
+- malicious or reentrant module;
+- empty required-topic configuration fails closed unless explicitly approved;
+- MockClaimIssuer cannot appear in a production deployment manifest;
+- unverified addresses never receive through standard mint as a property invariant;
+- totalSupply equals successful mint effects minus burn effects.
+
+Adjacent blocker preservation:
+
+- force transfer to an ineligible destination remains a failing no-go test until remediated;
+- recovery to an ineligible or unrelated identity remains a failing no-go test until remediated;
+- existing raw bypasses cannot be reclassified as accepted behavior.
+
+### Evidence rules
+
+- Bind every command, manifest and verdict to the exact commit hash.
+- Start from a clean checkout and record git status before and after.
+- Record Node, npm, Hardhat, solc and dependency-lock identities.
+- Store baseline and candidate bytecode-manifest SHA-256 values outside generated artifact directories.
+- Retain the full exact-byte comparison result; do not accept normalized or metadata-stripped equality.
+- Separate builder, independent verifier and adversarial reviewer.
+- Missing, stale, cross-commit or wrong-toolchain evidence is failure.
+- Do not check BASE, CHAIN or Phase 0 requirements from this research or its local implementation alone.
+- No deployment, RPC, wallet, provider, real-money or production-key action is part of validation.
+
+### Human gates
+
+The following require named human decisions:
+
+1. Legal/Compliance: whether forced issuance may ever bypass registration, KYC/AML, sanctions, investor-class or product eligibility. Default until approval: no bypass.
+2. Governance/Security: multisig implementation, threshold, signers, timelock, transaction limits, emergency path and key recovery.
+3. Legal/Product/MLRO: required claim topics, approved issuers, claim schemes, expiry, revocation and refresh policy.
+4. Product/Legal/Technology: production chain, chain ID, execution-layer compatibility, finality policy and network limits.
+5. Legal/Privacy/Operations: evidence-hash schema, off-chain case record, retention, access and personal-data treatment.
+6. Release authority: acceptance of exact bytecode-equivalence and hosted-CI evidence.
+
+### Explicit out of scope
+
+- Choosing or configuring a production network.
+- Removing or repurposing current test-network entries.
+- Claiming official ERC-3643 interface or behavioral conformance.
+- Full role/governance redesign for burn, pause, freeze, registry administration, compliance administration, forced transfer and recovery.
+- Production claim issuer/provider selection.
+- Signer, nonce, receipt, confirmation, finality, replacement, drop or reorganisation implementation.
+- Mainnet/testnet deployment, source verification or network manifest approval.
+- External smart-contract audit or remediation sign-off.
+- Legal-register, token-subledger, ledger and supply reconciliation.
+- Changing Solidity, Hardhat, OpenZeppelin or dependency versions.
+- Closing Phase 0, G5 or any CHAIN requirement.
+
+## Confidence and Remaining Uncertainty
+
+| Finding | Confidence | Reason |
+| --- | --- | --- |
+| Compiler/test-contract mismatch | High | Direct repository configuration and documentation comparison |
+| Shanghai is the implicit solc 0.8.20 target | High | Solidity 0.8.20 primary documentation |
+| Explicit shanghai should preserve bytecode | Medium until proved | Same resolved compiler target, but exact artifact equality is mandatory |
+| Standard mint bypass exists | High | Direct mint and _update control flow |
+| Current isVerified is insufficient | High | Signature, scheme and issuer-topic validation are not enforced |
+| Forced issuance must default to no eligibility bypass | High as containment policy | User-approved policy plus unresolved legal exception scope |
+| Production chain | Unknown by design | Repository and planning contain no approved production-network decision |
+
+## Planning Handoff
+
+The downstream Phase 0 plan should split work into independently reviewable packets:
+
+1. Compiler truth plus bytecode-equivalence evidence.
+2. Identity verification and standard-mint containment.
+3. Separate forced-issuance role, evidence and factory containment.
+4. Independent verification and adversarial review.
+
+Every packet must preserve the early-containment label and carry forward the G5 no-go register.
+
+## Sources
+
+- [ERC-3643 final EIP](https://eips.ethereum.org/EIPS/eip-3643)
+- [ERC-3643 Identity Registry documentation](https://docs.erc3643.org/erc-3643/smart-contracts-library/onchain-identities/identity-registry)
+- [Hardhat 3 configuration reference](https://hardhat.org/docs/reference/configuration)
+- [Solidity 0.8.24 EVM target documentation](https://docs.soliditylang.org/en/v0.8.24/using-the-compiler.html#setting-the-evm-version-to-target)
+- [Solidity 0.8.20 EVM target documentation](https://docs.soliditylang.org/en/v0.8.20/using-the-compiler.html#setting-the-evm-version-to-target)
