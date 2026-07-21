@@ -4,6 +4,7 @@
 | --- | --- | --- | --- |
 | Controlled agent-loop use | User | Approved 2026-07-19 | Current task instruction |
 | Local Option A clean-root generation 2 technical preparation | User and repository decision owner | Approved 2026-07-20 for local execution only; no push or incident closure | Accepted plan SHA-256 `C91001B50979FA87CB7BDB88E20AAF1FF51E18B57EB590F7B737DEC8824ACA7C`; rejected `C1` manifest; passing `R2` safe scan |
+| Generation 3 identity and issuance containment | User | Approved 2026-07-21 as **local implementation authorization** only; **not Legal, CISO, G5 or production approval** | Plan commit `e00b5056c337b484ff11918dc3f7952c97cdfe64`; plan SHA-256 `DFFF8FDAD57A0A005E0B5720869FE25962E980E6964E2C84DACF5C1FAC42E095`; external `GEN3-PLAN-ACCEPTANCE.md` SHA-256 `879E5D146AB18D96610AA8F3C8929ECB91DE39C0D88EF56DC8D528EE6CB68D9B` |
 | Selective reference baseline and isolated worktree | Program Controller; user oversight | Rejected as production lineage; inherited artifact/history incident open | `BASELINE.md`, `BX1-SEC-2026-07-19-01` |
 | Repository exposure incident response | Repository owner, CISO/incident lead, provider/account custodians, Legal/Privacy as applicable | Pending | `docs/security/2026-07-19-REPOSITORY-HISTORY-INCIDENT-ACTION-RECORD.md` plus secured external evidence |
 | v2.0 12-phase production rebaseline | Program Council | Provisional; independent verification pending | ROADMAP/REQUIREMENTS/STATE |

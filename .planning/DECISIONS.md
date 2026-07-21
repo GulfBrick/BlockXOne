@@ -18,5 +18,9 @@
 | DEC-014 | No secondary market in release one | Approved planning default | Board/Legal/Product | G1 |
 | DEC-015 | No remote push or production/mainnet action without explicit gate | Active control | User/Program Council | Continuous |
 | DEC-016 | Preserve rejected generation 1 and prepare generation 2 as a standalone local clean-root lineage | Approved for local technical execution only; formal incident, Security and Legal approval pending | User and repository decision owner; named human gates remain | Phase 0 |
+| DEC-017 | Execute Generation 3 as an ordinary standalone descendant of admitted C2; do not create another parentless root | Implemented at P3 for local work only | Program Controller | Phase 0 |
+| DEC-018 | Keep Solidity 0.8.20 with optimizer enabled/200 and make Shanghai explicit only after configuration-only bytecode equivalence; production network remains unselected | Approved local containment policy; target-chain and compiler-provenance approval open | User for local implementation; Blockchain/CISO/Risk for G5 | G5 |
+| DEC-019 | Standard mint requires nonzero registered, cryptographically verified and configured-compliance-eligible recipients; forced issuance is separate, contract-held, evidence-bound, replay-resistant, non-reentrant and has no eligibility bypass | Approved as local implementation authorization; professional and production approval open | User for local implementation; Legal/Registrar/MLRO/CISO/Blockchain for G5 | G5 |
+| DEC-020 | Plan 00-04 uses controller-dispatched serial tasks and must not run the stock requirement/roadmap/phase completion finalizer | Active packet control | Program Controller | Plan 00-04 |
 
 Open decisions permit design options but not regulated or production approval.

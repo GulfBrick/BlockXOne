@@ -4,11 +4,11 @@ milestone: v2.0
 milestone_name: production-ready rebuild
 current_phase: 0 of 12 (planning truth and containment)
 status: in_progress
-last_updated: "2026-07-19T23:55:52+02:00"
+last_updated: "2026-07-21T03:07:07+02:00"
 progress:
   total_phases: 12
   completed_phases: 0
-  total_plans: 3
+  total_plans: 4
   completed_plans: 0
 ---
 
@@ -36,8 +36,13 @@ Execution contract: `docs/BLOCKXONE_AGENT_EXECUTION_LOOP.md`
 - **Rejected candidate (`C1`):** `38c23993ad866c1f95df192c4cb3075bf246218b`
 - **Generation 2 checkpoint (`Q2`):** `ecbe7f950d1945c5eb2dfaa767caa6aebb80353b`
 - **Parentless generation 2 root (`R2`):** `81e06c32976b3c15460c298bd453a1dfce20f3b9`
-- **Active phase branch:** `codex/production-clean-root-v2`
-- **Active clean repository:** `C:\Users\danie\Documents\BlockXOne Production Clean v2`
+- **Admitted immutable baseline (`C2`):** `a88658ad82f3d22aaf26e10b9eab6389084e6dd3`
+- **Generation 3 research commit (`D3`):** `d0c71d7919a6ffa4a18ef3e0fe62f41fb9867294`
+- **Generation 3 accepted-plan commit (`P3`):** `e00b5056c337b484ff11918dc3f7952c97cdfe64`
+- **Active phase branch:** `codex/phase-00-generation-3`
+- **Active working repository:** `C:\Users\danie\Documents\BlockXOne Production Gen3`
+- **Immutable C2 repository:** `C:\Users\danie\Documents\BlockXOne Production Clean v2`
+- **Generation 3 plan receipt:** `C:\Users\danie\Documents\BlockXOne Phase0 Recovery 20260719\clean-root-20260720\generation-3-20260721\GEN3-PLAN-ACCEPTANCE.md`, SHA-256 `879E5D146AB18D96610AA8F3C8929ECB91DE39C0D88EF56DC8D528EE6CB68D9B`
 - **Rejected generation 1 repository:** `C:\Users\danie\Documents\BlockXOne Production Clean`
 - **Quarantine worktree:** `C:\Users\danie\Documents\BlockXOne Production Rebuild`
 - **Original WIP/reference workspace:** `C:\Users\danie\Documents\BlockXOne Test`
@@ -56,6 +61,10 @@ Execution contract: `docs/BLOCKXONE_AGENT_EXECUTION_LOOP.md`
 - No remote push, production deployment, mainnet, real money, live identity document or production key action occurs without the applicable approval.
 - Planning and production evidence are version controlled.
 - Earlier Phase 1/2 work is reusable historical/prototype evidence, not a passed production phase.
+- Generation 3 is an ordinary descendant of admitted C2; C2 remains read-only evidence and no further parentless rewrite is introduced.
+- The user approved local implementation of fail-closed standard mint and separate no-bypass forced issuance. This is not Legal, CISO, G5 or production approval.
+- Solidity remains 0.8.20 with optimizer 200; Shanghai will be made explicit only with configuration-only bytecode proof. The production network remains unselected.
+- Plan 00-04 must not mark requirements, ROADMAP or Phase 0 complete and must not auto-advance.
 
 ## Provisional launch defaults awaiting domain approval
 
@@ -95,12 +104,13 @@ These defaults permit planning but not legal, financial, provider or production 
 - The reviewed generation 2 contract is frozen at SHA-256 `C91001B50979FA87CB7BDB88E20AAF1FF51E18B57EB590F7B737DEC8824ACA7C`.
 - Local generation 2 preparation created `Q2` and parentless `R2` with identical tree `0ca7a6dca26d3abef859160a50b93710fc118ddf`, then imported only `R2` through a complete one-ref bundle into the standalone v2 repository.
 - Pre-metadata `R2` checks found one expected branch, no remote/shared/partial Git state, 635 physical objects equal to 635 reachable objects, no known prohibited object IDs, empty strict-fsck diagnostics, a passing 465-path artifact validator and zero Gitleaks findings.
-- After this metadata packet creates exact `C2`, its identity and final local admission receipts will be written to `C:\Users\danie\Documents\BlockXOne Phase0 Recovery 20260719\clean-root-20260720\CANDIDATE-MANIFEST-v2.md`; that record will not close human or hosted gates.
+- Exact `C2` was independently locally admitted at `a88658ad82f3d22aaf26e10b9eab6389084e6dd3`; external `CANDIDATE-MANIFEST-v2.md` has SHA-256 `2229439499C55EBD086F5171DF375749B4931303931BF70C207138A0DA8DFE6A`. This does not close human, hosted, incident or production gates.
+- Generation 3 was initialized as a separate remote-free repository from the one-ref C2 bundle, researched at D3, and accepted at plan-only P3. Plan 00-04 has 9 serial role-separated tasks and 34 allowlisted paths.
 
 ## Known blockers and no-go conditions
 
 - Repository-history incident `BX1-SEC-2026-07-19-01` requires authorised credential assessment/rotation and a clean-history decision before Phase 0 exit.
-- `R2` passed pre-metadata admission, but exact metadata candidate `C2` still requires final local admission and independent verification; the broader incident remains open.
+- Exact `C2` passed final local admission and independent verification; the broader incident, hosted reproduction, professional approvals and Phase 0 exit remain open.
 - Section 29 legal/product/provider decisions are provisional, not professionally approved.
 - Contract developer-tool audit is remediated in the working tree with tested pinned overrides; exact-clean hosted reproduction and upstream replacement tracking remain required.
 - Docker image candidates, Linux race checks and a complete hosted CI run have not been reproduced against an exact clean commit.
@@ -120,10 +130,9 @@ These defaults permit planning but not legal, financial, provider or production 
 
 ## Next actions
 
-1. Complete exact-`C2` local admission and independent verification using the external generation 2 manifest; do not alter `00-VERIFICATION.md` or Phase 0 completion state outside the named gate process.
-2. Obtain named incident, repository, Security and Legal/Privacy owners and rotate/revoke or prove non-secret every credential class that may have existed in the tracked `.env.local`.
-3. Obtain the formal signed Option A incident decision, old-repository restriction/retention plan and hosted ref/cache/fork/clone closure evidence; no push is authorised.
-4. Reproduce the contract clean install, generation/typecheck, tests and zero full audit in hosted CI on exact `C2`; remove overrides only when upstream ranges are safe.
-5. Reproduce images, Linux race tests, migrations and full hosted CI against exact `C2`.
-6. Complete Phase 0 human approval.
-7. Only then prepare/execute the G1 human decision package before implementing the golden product.
+1. Execute accepted Plan 00-04 serially from P3: compiler proof, hermetic web tests, fail-closed identity, governed issuance, builder evidence, independent review, independent verification and exact local C3 admission.
+2. Keep C2 immutable and re-prove its snapshot before C3 admission; do not push, deploy, use RPC/provider/wallet/key access or move funds/assets.
+3. Obtain named incident, repository, Security and Legal/Privacy owners and rotate/revoke or prove non-secret every credential class that may have existed in the tracked `.env.local`.
+4. Obtain the formal signed Option A incident decision, old-repository restriction/retention plan and hosted ref/cache/fork/clone closure evidence; no push is authorised.
+5. Reproduce images, Linux race tests, migrations, contracts and full CI against the later exact admitted candidate in hosted infrastructure.
+6. Complete Phase 0 human approval and the separate G1/G5 professional decisions before any production or regulated release action.
