@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict'
+import { spawn, spawnSync } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import net from 'node:net'
 import path from 'node:path'
-import { spawnSync } from 'node:child_process'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 
@@ -14,6 +15,21 @@ import {
   vitestExecutable,
   webRoot,
 } from './run-hermetic-tests.mjs'
+import {
+  assertPortClosed,
+  captureRootPid,
+  completeContainmentCleanup,
+  forceTerminateServer,
+  posixGroupState,
+  probeLoopbackPort,
+  processState,
+  reservePort,
+  resolveTaskkillExecutable,
+  runTaskkill,
+  terminatePosixProcessGroup,
+  terminateServer,
+  terminateWindowsProcessTree,
+} from './test-production-containment.mjs'
 
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url))
 const runnerPath = path.join(scriptDirectory, 'run-hermetic-tests.mjs')
@@ -93,6 +109,83 @@ function assertCacheWasRemoved(result) {
   assert.equal(existsSync(cachePath), false, `Generated cache still exists: ${cachePath}`)
 }
 
+function errorWithCode(code, message = code) {
+  return Object.assign(new Error(message), { code })
+}
+
+function socketThat(outcome) {
+  const socket = new EventEmitter()
+  socket.destroy = () => {}
+  socket.setTimeout = (_timeoutMs, callback) => {
+    if (outcome === 'timeout') queueMicrotask(callback)
+  }
+  if (outcome === 'accepted') queueMicrotask(() => socket.emit('connect'))
+  if (outcome === 'refused') queueMicrotask(() => socket.emit('error', errorWithCode('ECONNREFUSED')))
+  if (outcome === 'reset') queueMicrotask(() => socket.emit('error', errorWithCode('ECONNRESET')))
+  return socket
+}
+
+function fakeClock() {
+  let time = 0
+  const delay = async (milliseconds) => { time += milliseconds }
+  return {
+    delay,
+    delayImplementation: delay,
+    now: () => time,
+  }
+}
+
+function helperThatCloses(code = 0, pid = 9001) {
+  const helper = new EventEmitter()
+  helper.pid = pid
+  helper.kill = () => true
+  queueMicrotask(() => helper.emit('close', code))
+  return helper
+}
+
+async function waitForLine(stream, timeoutMs = 10_000) {
+  return new Promise((resolve, reject) => {
+    let buffered = ''
+    const timeout = setTimeout(() => finish(new Error('Timed out waiting for a child-process line.')), timeoutMs)
+    const onData = (chunk) => {
+      buffered += chunk
+      const newline = buffered.indexOf('\n')
+      if (newline !== -1) finish(undefined, buffered.slice(0, newline))
+    }
+    const onError = (error) => finish(error)
+    const onEnd = () => finish(new Error(`Child output ended before a complete line: ${buffered}`))
+    const finish = (error, line) => {
+      clearTimeout(timeout)
+      stream.off('data', onData)
+      stream.off('error', onError)
+      stream.off('end', onEnd)
+      if (error) reject(error)
+      else resolve(line)
+    }
+    stream.on('data', onData)
+    stream.once('error', onError)
+    stream.once('end', onEnd)
+  })
+}
+
+async function waitForAcceptedPort(port, timeoutMs = 10_000) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if ((await probeLoopbackPort(port))?.outcome === 'accepted') return
+    await new Promise((resolve) => setTimeout(resolve, 50))
+  }
+  throw new Error(`Loopback port ${port} did not accept a connection within ${timeoutMs}ms.`)
+}
+
+async function waitForPidAbsent(pid, timeoutMs = 5_000) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (processState(pid) === 'absent') return
+    await new Promise((resolve) => setTimeout(resolve, 25))
+  }
+  throw new Error(`Exact PID ${pid} remained present after ${timeoutMs}ms.`)
+}
+
 test('derives the package root and exact local Vitest executable independent of cwd', () => {
   assert.equal(webRoot, fileURLToPath(new URL('..', import.meta.resolve('./run-hermetic-tests.mjs'))))
   assert.equal(vitestExecutable, path.join(webRoot, 'node_modules', 'vitest', 'vitest.mjs'))
@@ -156,14 +249,370 @@ test('runner source has no inherited-environment spread, npx, or download path',
   )
 })
 
-test('production probe captures spawn failure and always attempts bounded cleanup plus port refusal', () => {
+test('production containment module is import-safe and captures only a valid immutable root PID', () => {
   const source = readFileSync(containmentProbePath, 'utf8')
   assert.match(source, /child\.once\('error'/)
-  assert.match(source, /Number\.isInteger\(child\.pid\)/)
+  assert.match(source, /const rootPid = captureRootPid\(child\.pid\)/)
   assert.match(source, /detached:\s*process\.platform !== 'win32'/)
-  assert.match(source, /spawn\('taskkill', \['\/PID', String\(pid\), '\/T', '\/F'\]/)
-  assert.match(source, /signalPosixGroup\(child\.pid, 'SIGKILL'\)/)
-  assert.match(source, /await terminateServer[\s\S]+await assertPortClosed/)
+  assert.match(source, /if \(isDirectExecution\(\)\)/)
+  assert.equal(captureRootPid(42), 42)
+  for (const invalid of [undefined, null, 0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+    assert.equal(captureRootPid(invalid), undefined)
+  }
+})
+
+test('taskkill uses the absolute SystemRoot executable, exact PID tree args, and a minimal environment', async () => {
+  const calls = []
+  const childEnvironment = {
+    Path: 'C:\\hostile-path',
+    SECRET: 'must-not-propagate',
+    SystemRoot: 'C:\\Windows',
+  }
+  const spawnImplementation = (executable, arguments_, options) => {
+    calls.push({ arguments_, executable, options })
+    return helperThatCloses(0, 9100 + calls.length)
+  }
+
+  await runTaskkill(4321, childEnvironment, { spawnImplementation })
+  await runTaskkill(4321, childEnvironment, { force: true, spawnImplementation })
+
+  assert.equal(resolveTaskkillExecutable(childEnvironment), 'C:\\Windows\\System32\\taskkill.exe')
+  assert.deepEqual(calls.map(({ arguments_ }) => arguments_), [
+    ['/PID', '4321', '/T'],
+    ['/PID', '4321', '/T', '/F'],
+  ])
+  for (const call of calls) {
+    assert.equal(call.executable, 'C:\\Windows\\System32\\taskkill.exe')
+    assert.deepEqual(call.options, {
+      env: { SystemRoot: 'C:\\Windows' },
+      shell: false,
+      stdio: 'ignore',
+      windowsHide: true,
+    })
+  }
+})
+
+test('a timed-out taskkill helper is terminated and awaited by its exact captured PID', async () => {
+  let killedWith
+  const helper = new EventEmitter()
+  helper.pid = 9201
+  helper.kill = (signal) => {
+    killedWith = signal
+    queueMicrotask(() => helper.emit('close', 1))
+    return true
+  }
+
+  await assert.rejects(
+    runTaskkill(4321, { SystemRoot: 'C:\\Windows' }, {
+      force: true,
+      helperTimeoutMs: 2,
+      spawnImplementation: () => helper,
+    }),
+    /Bounded taskkill helper cleanup failed/
+  )
+  assert.equal(killedWith, 'SIGKILL')
+})
+
+test('Windows parent close never skips the first exact process-tree attempt', async () => {
+  const calls = []
+  let treeAttempted = false
+  const killImplementation = (pid, signal) => {
+    assert.equal(pid, 4401)
+    assert.equal(signal, 0)
+    if (treeAttempted) throw errorWithCode('ESRCH')
+  }
+
+  await terminateWindowsProcessTree({
+    childClosed: Promise.resolve(),
+    childEnvironment: { SystemRoot: 'C:\\Windows' },
+    gracefulTimeoutMs: 20,
+    killImplementation,
+    rootPid: 4401,
+    spawnImplementation: (executable, arguments_, options) => {
+      calls.push({ arguments_, executable, options })
+      treeAttempted = true
+      return helperThatCloses()
+    },
+  })
+
+  assert.deepEqual(calls.map(({ arguments_ }) => arguments_), [['/PID', '4401', '/T']])
+})
+
+test('Windows termination escalates the same exact root tree and fails closed if the root vanished first', async () => {
+  const clock = fakeClock()
+  const calls = []
+  let forcedStarted = false
+  let closeChild
+  const childClosed = new Promise((resolve) => { closeChild = resolve })
+  const killImplementation = (_pid, signal) => {
+    assert.equal(signal, 0)
+    if (forcedStarted) throw errorWithCode('ESRCH')
+  }
+  const spawnImplementation = (_executable, arguments_) => {
+    calls.push(arguments_)
+    if (arguments_.includes('/F')) {
+      forcedStarted = true
+      closeChild()
+    }
+    return helperThatCloses()
+  }
+
+  await terminateWindowsProcessTree({
+    childClosed,
+    childEnvironment: { SystemRoot: 'C:\\Windows' },
+    forcedTimeoutMs: 10,
+    gracefulTimeoutMs: 5,
+    killImplementation,
+    rootPid: 4402,
+    spawnImplementation,
+    waitOptions: clock,
+  })
+  assert.deepEqual(calls, [
+    ['/PID', '4402', '/T'],
+    ['/PID', '4402', '/T', '/F'],
+  ])
+
+  let spawnCalls = 0
+  await assert.rejects(
+    terminateWindowsProcessTree({
+      childClosed: Promise.resolve(),
+      childEnvironment: { SystemRoot: 'C:\\Windows' },
+      killImplementation: () => { throw errorWithCode('ESRCH') },
+      rootPid: 4403,
+      spawnImplementation: () => { spawnCalls += 1 },
+    }),
+    /vanished before the first exact taskkill tree attempt/
+  )
+  assert.equal(spawnCalls, 0)
+})
+
+test('POSIX group presence treats EPERM as present and escalates TERM to KILL on the same group', async () => {
+  assert.equal(posixGroupState(4501, () => { throw errorWithCode('EPERM') }), 'present')
+  assert.equal(posixGroupState(4501, () => { throw errorWithCode('ESRCH') }), 'absent')
+
+  const clock = fakeClock()
+  const signals = []
+  let killed = false
+  let closeChild
+  const childClosed = new Promise((resolve) => { closeChild = resolve })
+  const killImplementation = (target, signal) => {
+    assert.equal(target, -4501)
+    if (signal === 0) {
+      if (killed) throw errorWithCode('ESRCH')
+      return
+    }
+    signals.push(signal)
+    if (signal === 'SIGKILL') {
+      killed = true
+      closeChild()
+    }
+  }
+
+  await terminatePosixProcessGroup({
+    childClosed,
+    forcedTimeoutMs: 10,
+    gracefulTimeoutMs: 5,
+    killImplementation,
+    rootPid: 4501,
+    waitOptions: clock,
+  })
+  assert.deepEqual(signals, ['SIGTERM', 'SIGKILL'])
+})
+
+test('loopback socket probing distinguishes refusal from acceptance, reset, and timeout', async () => {
+  for (const [socketOutcome, expected] of [
+    ['accepted', 'accepted'],
+    ['refused', 'refused'],
+    ['reset', 'indeterminate'],
+    ['timeout', 'indeterminate'],
+  ]) {
+    const result = await probeLoopbackPort(65530, {
+      connectionFactory: () => socketThat(socketOutcome),
+      timeoutMs: 5,
+    })
+    assert.equal(result.outcome, expected, socketOutcome)
+  }
+})
+
+test('stable refusal proof rejects an early three-refusal window and resets when a listener reopens', async () => {
+  const clock = fakeClock()
+  const outcomes = ['refused', 'refused', 'refused', 'accepted']
+  let probes = 0
+  await assertPortClosed(65530, {
+    delayImplementation: clock.delay,
+    now: clock.now,
+    probeImplementation: async () => ({ outcome: outcomes[probes++] || 'refused' }),
+    probeIntervalMs: 100,
+    stableRefusalIntervalMs: 1_000,
+    timeoutMs: 3_000,
+  })
+  assert.equal(probes, 15)
+  assert.equal(clock.now(), 1_400)
+
+  const indeterminateClock = fakeClock()
+  await assert.rejects(
+    assertPortClosed(65530, {
+      delayImplementation: indeterminateClock.delay,
+      now: indeterminateClock.now,
+      probeImplementation: async () => ({ outcome: 'indeterminate', error: errorWithCode('ECONNRESET') }),
+      probeIntervalMs: 100,
+      stableRefusalIntervalMs: 200,
+      timeoutMs: 300,
+    }),
+    /did not produce three consecutive ECONNREFUSED/
+  )
+})
+
+test('cleanup retries exact forced termination and aggregates the original probe plus every cleanup error', async () => {
+  const failures = [
+    new Error('original probe failed'),
+    new Error('initial termination failed'),
+    new Error('first port proof failed'),
+    new Error('forced cleanup failed'),
+    new Error('second port proof failed'),
+  ]
+  let portProofs = 0
+  let forcedAttempts = 0
+  await assert.rejects(
+    completeContainmentCleanup({
+      assertPortClosedImplementation: async () => {
+        const error = portProofs++ === 0 ? failures[2] : failures[4]
+        throw error
+      },
+      forceTerminateImplementation: async () => { forcedAttempts += 1; throw failures[3] },
+      port: 65530,
+      probeError: failures[0],
+      terminateImplementation: async () => { throw failures[1] },
+      terminationOptions: {},
+    }),
+    (error) => {
+      assert.ok(error instanceof AggregateError)
+      assert.deepEqual(error.errors, failures)
+      return true
+    }
+  )
+  assert.equal(forcedAttempts, 1)
+  assert.equal(portProofs, 2)
+})
+
+test('an initial termination error forces an exact retry even when the first port proof passes', async () => {
+  let forcedAttempts = 0
+  let portProofs = 0
+  await assert.rejects(
+    completeContainmentCleanup({
+      assertPortClosedImplementation: async () => { portProofs += 1 },
+      forceTerminateImplementation: async () => { forcedAttempts += 1 },
+      port: 65530,
+      terminateImplementation: async () => { throw new Error('tree proof failed') },
+      terminationOptions: {},
+    }),
+    (error) => error instanceof AggregateError && error.errors[0]?.message === 'tree proof failed'
+  )
+  assert.equal(forcedAttempts, 1)
+  assert.equal(portProofs, 2)
+})
+
+test('missing PID performs bounded child close only and never signals or starts taskkill', async () => {
+  let unsafeCall = false
+  await terminateServer({
+    childClosed: Promise.resolve(),
+    killImplementation: () => { unsafeCall = true },
+    platform: 'win32',
+    rootPid: undefined,
+    spawnImplementation: () => { unsafeCall = true },
+  })
+  await forceTerminateServer({
+    childClosed: Promise.resolve(),
+    killImplementation: () => { unsafeCall = true },
+    platform: 'linux',
+    rootPid: 0,
+    spawnImplementation: () => { unsafeCall = true },
+  })
+  assert.equal(unsafeCall, false)
+})
+
+test('real coordinator removes the exact parent/listener tree or process group', { timeout: 30_000 }, async () => {
+  const port = await reservePort()
+  const listenerSource = [
+    "const net = require('node:net')",
+    'const port = Number(process.argv[1])',
+    "const server = net.createServer((socket) => socket.end())",
+    "server.listen(port, '127.0.0.1', () => process.stdout.write('ready\\n'))",
+  ].join('\n')
+  const parentSource = [
+    "const { spawn } = require('node:child_process')",
+    'const listenerSource = process.argv[1]',
+    'const port = process.argv[2]',
+    'const descendant = spawn(process.execPath, [\'-e\', listenerSource, port], {',
+    "  detached: false, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,",
+    '})',
+    "descendant.stderr.on('data', (chunk) => process.stderr.write(chunk))",
+    "descendant.stdout.once('data', () => process.stdout.write(`${descendant.pid}\\n`))",
+    'setInterval(() => {}, 1_000)',
+  ].join('\n')
+  const childEnvironment = createOperatingSystemEnvironment()
+  let parent
+  let rootPid
+  let descendantPid
+  let coordinatorPassed = false
+
+  try {
+    parent = spawn(process.execPath, ['-e', parentSource, listenerSource, String(port)], {
+      detached: process.platform !== 'win32',
+      env: childEnvironment,
+      shell: false,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+    })
+    rootPid = captureRootPid(parent.pid)
+    assert.ok(rootPid, 'Real containment parent must receive a valid captured root PID.')
+    const childClosed = new Promise((resolve, reject) => {
+      parent.once('error', reject)
+      parent.once('close', resolve)
+    })
+    parent.stderr.on('data', () => {})
+    descendantPid = captureRootPid(Number(await waitForLine(parent.stdout)))
+    assert.ok(descendantPid, 'Real containment listener must report a valid descendant PID.')
+    await waitForAcceptedPort(port)
+
+    await completeContainmentCleanup({
+      port,
+      terminationOptions: {
+        childClosed,
+        childEnvironment,
+        platform: process.platform,
+        rootPid,
+      },
+    })
+    await waitForPidAbsent(rootPid)
+    await waitForPidAbsent(descendantPid)
+    assert.equal((await probeLoopbackPort(port)).outcome, 'refused')
+    coordinatorPassed = true
+  } finally {
+    if (!coordinatorPassed) {
+      for (const exactPid of [rootPid, descendantPid]) {
+        if (!captureRootPid(exactPid)) continue
+        let stillPresent = false
+        try {
+          stillPresent = processState(exactPid) === 'present'
+        } catch {
+          stillPresent = true
+        }
+        if (!stillPresent) continue
+        try {
+          if (process.platform === 'win32') {
+            await runTaskkill(exactPid, childEnvironment, { force: true, helperTimeoutMs: 2_000 })
+          } else if (exactPid === rootPid) {
+            process.kill(-exactPid, 'SIGKILL')
+          } else {
+            process.kill(exactPid, 'SIGKILL')
+          }
+        } catch {
+          // Emergency cleanup remains limited to the captured exact PID/tree/group.
+        }
+      }
+    }
+  }
 })
 
 test('root and package-root invocations discover the same nonzero set twice and clean every cache', { timeout: 120_000 }, () => {
