@@ -15,6 +15,46 @@ const packageJsonPath = path.resolve(contractsRoot, 'package.json')
 const packageLockPath = path.resolve(contractsRoot, 'package-lock.json')
 const { evaluatePreflight } = await import(pathToFileURL(scriptPath))
 
+async function readActualCompilerPolicy() {
+  const importedConfig = await import(pathToFileURL(hardhatConfigPath))
+  return {
+    hardhatConfig: importedConfig.default,
+    packageJson: JSON.parse(readFileSync(packageJsonPath, 'utf8')),
+    packageLock: JSON.parse(readFileSync(packageLockPath, 'utf8')),
+  }
+}
+
+function compilerPolicyFailures({ hardhatConfig, packageJson, packageLock }) {
+  const failures = []
+  const solidity = hardhatConfig?.solidity
+  if (!solidity || Array.isArray(solidity) || typeof solidity !== 'object') {
+    failures.push('Hardhat must export one Solidity compiler configuration object.')
+    return failures
+  }
+  if (solidity.version !== '0.8.20') failures.push(`Solidity must be exactly 0.8.20; found ${solidity.version || 'missing'}.`)
+  if (solidity.settings?.optimizer?.enabled !== true) failures.push('Solidity optimizer must be enabled.')
+  if (solidity.settings?.optimizer?.runs !== 200) {
+    failures.push(`Solidity optimizer runs must be exactly 200; found ${solidity.settings?.optimizer?.runs ?? 'missing'}.`)
+  }
+  if (solidity.settings?.evmVersion !== 'shanghai') {
+    failures.push(`Solidity EVM target must be exactly shanghai; found ${solidity.settings?.evmVersion || 'missing'}.`)
+  }
+  if (packageJson?.devDependencies?.hardhat !== '3.10.0') {
+    failures.push(`package.json must pin Hardhat 3.10.0; found ${packageJson?.devDependencies?.hardhat || 'missing'}.`)
+  }
+  if (packageLock?.packages?.['']?.devDependencies?.hardhat !== '3.10.0') {
+    failures.push(
+      `package-lock.json root must pin Hardhat 3.10.0; found ${packageLock?.packages?.['']?.devDependencies?.hardhat || 'missing'}.`
+    )
+  }
+  if (packageLock?.packages?.['node_modules/hardhat']?.version !== '3.10.0') {
+    failures.push(
+      `package-lock.json installed Hardhat must be 3.10.0; found ${packageLock?.packages?.['node_modules/hardhat']?.version || 'missing'}.`
+    )
+  }
+  return failures
+}
+
 function withTempContractsPackage(setup, run) {
   const dir = path.join(tmpdir(), `bxo-contracts-preflight-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`)
   mkdirSync(dir, { recursive: true })
@@ -191,17 +231,81 @@ test('deployment script uses an explicit Hardhat 3 network connection', () => {
   assert.doesNotMatch(source, /import\s*{\s*ethers\s*}\s*from\s*['"]hardhat['"]/)
 })
 
-test('pins the exact compiler policy and Hardhat release used for evidence', () => {
-  const configSource = readFileSync(hardhatConfigPath, 'utf8')
-  const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf8'))
-  const packageLock = JSON.parse(readFileSync(packageLockPath, 'utf8'))
+test('inspects the actual exported Hardhat compiler policy and locked release', async () => {
+  assert.deepEqual(compilerPolicyFailures(await readActualCompilerPolicy()), [])
+})
 
-  assert.match(
-    configSource,
-    /solidity:\s*\{\s*version:\s*['"]0\.8\.20['"],\s*settings:\s*\{\s*optimizer:\s*\{\s*enabled:\s*true,\s*runs:\s*200,?\s*},\s*evmVersion:\s*['"]shanghai['"],?\s*},?\s*},/s
-  )
-  assert.equal((configSource.match(/\bevmVersion\s*:/g) || []).length, 1)
-  assert.equal(packageJson.devDependencies?.hardhat, '3.10.0')
-  assert.equal(packageLock.packages?.['']?.devDependencies?.hardhat, '3.10.0')
-  assert.equal(packageLock.packages?.['node_modules/hardhat']?.version, '3.10.0')
+test('fails closed on compiler and Hardhat policy drift', async () => {
+  const actual = await readActualCompilerPolicy()
+  const solidity = actual.hardhatConfig.solidity
+  const cases = [
+    ['compiler version', { ...actual, hardhatConfig: { ...actual.hardhatConfig, solidity: { ...solidity, version: '0.8.24' } } }],
+    [
+      'optimizer enabled',
+      {
+        ...actual,
+        hardhatConfig: {
+          ...actual.hardhatConfig,
+          solidity: { ...solidity, settings: { ...solidity.settings, optimizer: { ...solidity.settings.optimizer, enabled: false } } },
+        },
+      },
+    ],
+    [
+      'optimizer runs',
+      {
+        ...actual,
+        hardhatConfig: {
+          ...actual.hardhatConfig,
+          solidity: { ...solidity, settings: { ...solidity.settings, optimizer: { ...solidity.settings.optimizer, runs: 1 } } },
+        },
+      },
+    ],
+    [
+      'EVM target',
+      {
+        ...actual,
+        hardhatConfig: { ...actual.hardhatConfig, solidity: { ...solidity, settings: { ...solidity.settings, evmVersion: 'cancun' } } },
+      },
+    ],
+    [
+      'Hardhat package',
+      {
+        ...actual,
+        packageJson: { ...actual.packageJson, devDependencies: { ...actual.packageJson.devDependencies, hardhat: '3.9.0' } },
+      },
+    ],
+    [
+      'Hardhat lock root',
+      {
+        ...actual,
+        packageLock: {
+          ...actual.packageLock,
+          packages: {
+            ...actual.packageLock.packages,
+            '': {
+              ...actual.packageLock.packages[''],
+              devDependencies: { ...actual.packageLock.packages[''].devDependencies, hardhat: '3.9.0' },
+            },
+          },
+        },
+      },
+    ],
+    [
+      'Hardhat installed lock',
+      {
+        ...actual,
+        packageLock: {
+          ...actual.packageLock,
+          packages: {
+            ...actual.packageLock.packages,
+            'node_modules/hardhat': { ...actual.packageLock.packages['node_modules/hardhat'], version: '3.9.0' },
+          },
+        },
+      },
+    ],
+  ]
+
+  for (const [label, policy] of cases) {
+    assert.notDeepEqual(compilerPolicyFailures(policy), [], `${label} drift must fail`)
+  }
 })
