@@ -9,7 +9,25 @@ import "../compliance/IClaimIssuer.sol";
  * @dev Used in tests to simulate claim verification without actual cryptography
  */
 contract MockClaimIssuer is IClaimIssuer {
+    enum ValidationMode {
+        Valid,
+        Invalid,
+        RevertCall,
+        ShortReturn,
+        InvalidBool,
+        OversizedReturn
+    }
+
     address private issuerAddress;
+    ValidationMode public validationMode;
+
+    bool public exactArgumentsRequired;
+    address public expectedIdentity;
+    uint256 public expectedClaimTopic;
+    bytes32 public expectedSignatureHash;
+    bytes32 public expectedDataHash;
+
+    error MockValidationReverted();
 
     /**
      * @notice Initializes the mock claim issuer
@@ -20,21 +38,73 @@ contract MockClaimIssuer is IClaimIssuer {
         issuerAddress = _issuerAddress;
     }
 
+    function setValidationMode(ValidationMode mode) external {
+        validationMode = mode;
+    }
+
+    function setExpectedArguments(
+        bool required,
+        address identity,
+        uint256 claimTopic,
+        bytes calldata signature,
+        bytes calldata data
+    ) external {
+        exactArgumentsRequired = required;
+        expectedIdentity = identity;
+        expectedClaimTopic = claimTopic;
+        expectedSignatureHash = keccak256(signature);
+        expectedDataHash = keccak256(data);
+    }
+
     /**
-     * @notice Mock verification of a claim signature
-     * @param identity The identity contract address (unused in mock)
-     * @param claimTopic The claim topic (unused in mock)
-     * @param signature The signature to verify (unused in mock)
-     * @param data The signed data (unused in mock)
-     * @return isValid Always returns true for mock purposes
+     * @notice Returns the configured validation outcome for test claims.
+     * @dev Defaults to true for legacy fixtures. Optional argument matching binds all inputs.
+     * @param identity The identity contract address to match when matching is enabled
+     * @param claimTopic The claim topic to match when matching is enabled
+     * @param signature The signature whose hash is matched when matching is enabled
+     * @param data The claim data whose hash is matched when matching is enabled
+     * @return isValid The configured result, provided any exact-argument check passes
      */
     function isClaimValid(
         address identity,
         uint256 claimTopic,
         bytes memory signature,
         bytes memory data
-    ) external pure override returns (bool isValid) {
-        // Mock always returns true - real implementation would verify signature
+    ) external view override returns (bool isValid) {
+        if (
+            exactArgumentsRequired &&
+            (
+                identity != expectedIdentity ||
+                claimTopic != expectedClaimTopic ||
+                keccak256(signature) != expectedSignatureHash ||
+                keccak256(data) != expectedDataHash
+            )
+        ) {
+            return false;
+        }
+
+        ValidationMode mode = validationMode;
+        if (mode == ValidationMode.Invalid) return false;
+        if (mode == ValidationMode.RevertCall) revert MockValidationReverted();
+        if (mode == ValidationMode.ShortReturn) {
+            assembly ("memory-safe") {
+                mstore(0, 1)
+                return(31, 1)
+            }
+        }
+        if (mode == ValidationMode.InvalidBool) {
+            assembly ("memory-safe") {
+                mstore(0, 2)
+                return(0, 32)
+            }
+        }
+        if (mode == ValidationMode.OversizedReturn) {
+            assembly ("memory-safe") {
+                mstore(0, 1)
+                mstore(32, 0)
+                return(0, 64)
+            }
+        }
         return true;
     }
 
