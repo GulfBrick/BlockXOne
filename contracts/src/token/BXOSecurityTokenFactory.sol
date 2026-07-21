@@ -7,8 +7,8 @@ import "./BXOSecurityToken.sol";
 
 /**
  * @title BXOSecurityTokenFactory
- * @notice Factory contract for deploying ERC-3643 compliant security tokens
- * @dev Simplifies deployment of complete token ecosystems with all necessary registries
+ * @notice Factory for deploying the Generation 3 reviewed token prototype.
+ * @dev This factory does not establish ERC-3643 conformance or production readiness.
  */
 contract BXOSecurityTokenFactory {
     // Track deployed tokens
@@ -49,7 +49,7 @@ contract BXOSecurityTokenFactory {
     error InvalidInitialSupply();
 
     /**
-     * @notice Deploys a complete ERC-3643 token ecosystem
+     * @notice Deploys one token prototype against caller-supplied registries.
      * @param name Token name
      * @param symbol Token symbol
      * @param decimals Number of decimals
@@ -87,13 +87,16 @@ contract BXOSecurityTokenFactory {
 
         token.grantRole(token.DEFAULT_ADMIN_ROLE(), msg.sender);
         token.grantRole(token.AGENT_ROLE(), msg.sender);
+        token.grantRole(token.MINTER_ROLE(), msg.sender);
 
-        // Mint initial supply if specified
+        // The standard mint path enforces the same identity and compliance predicate as
+        // every later standard issuance. No forced-issuer authority is ever granted here.
         if (initialSupply > 0) {
             token.mint(msg.sender, initialSupply);
             emit TokenMinted(tokenAddress, msg.sender, initialSupply);
         }
 
+        token.renounceRole(token.MINTER_ROLE(), address(this));
         token.renounceRole(token.AGENT_ROLE(), address(this));
         token.renounceRole(token.DEFAULT_ADMIN_ROLE(), address(this));
 

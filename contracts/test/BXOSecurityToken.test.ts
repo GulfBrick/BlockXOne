@@ -1,869 +1,1011 @@
 import { expect } from "chai";
 import hre from "hardhat";
+import type { HardhatEthersSigner } from "@nomicfoundation/hardhat-ethers/types";
 import type {
   BXOSecurityToken,
+  ClaimTopicsRegistry,
+  CountryRestrictionModule,
   Identity,
   IdentityRegistry,
-  ClaimTopicsRegistry,
-  TrustedIssuersRegistry,
-  ModularCompliance,
-  CountryRestrictionModule,
   MaxBalanceModule,
-  BXOSecurityTokenFactory,
+  MockClaimIssuer,
+  MockGovernanceExecutor,
+  MockIssuanceCompliance,
+  MockIssuanceReentryClaimIssuer,
+  ModularCompliance,
+  TrustedIssuersRegistry,
 } from "../typechain-types/index.js";
-import type { HardhatEthersSigner } from "@nomicfoundation/hardhat-ethers/types";
 
 const { ethers } = await hre.network.create();
 
-describe("BXOSecurityToken - ERC-3643 Compliance", function () {
-  let token: BXOSecurityToken;
-  let identityRegistry: IdentityRegistry;
-  let claimTopicsRegistry: ClaimTopicsRegistry;
-  let trustedIssuersRegistry: TrustedIssuersRegistry;
-  let compliance: ModularCompliance;
-  let countryModule: CountryRestrictionModule;
-  let maxBalanceModule: MaxBalanceModule;
-  let factory: BXOSecurityTokenFactory;
+const TOPIC_KYC = 1n;
+const TOPIC_AML = 2n;
+const CLAIM_SCHEME = 1n;
+const COUNTRY_US = 840;
+const COUNTRY_UK = 826;
+const COUNTRY_RESTRICTED = 643;
+const SIGNATURE = "0x010203";
+const CLAIM_DATA = "0xa1b2c3";
 
-  let identity1: Identity;
-  let identity2: Identity;
+const MODULES_CONFIGURED = 0;
+const MODULES_EMPTY = 1;
+const MODULES_ZERO_ADDRESS = 2;
+const MODULES_REVERT = 3;
+const MODULES_SHORT = 4;
+const MODULES_WRONG_OFFSET = 5;
+const MODULES_OVERSIZED = 6;
+const MODULES_DIRTY_ADDRESS = 7;
 
-  let admin: HardhatEthersSigner;
-  let issuer: HardhatEthersSigner;
-  let investor1: HardhatEthersSigner;
-  let investor2: HardhatEthersSigner;
-  let investor3: HardhatEthersSigner;
-  let restrictedInvestor: HardhatEthersSigner;
+const DECISION_ALLOW = 0;
+const DECISION_REJECT = 1;
+const DECISION_REVERT = 2;
+const DECISION_SHORT = 3;
+const DECISION_INVALID_BOOL = 4;
+const DECISION_OVERSIZED = 5;
 
-  const CLAIM_TOPIC_KYC = 1;
-  const CLAIM_TOPIC_AML = 2;
-  const CLAIM_TOPIC_ACCREDITED = 3;
+const REENTRY_DISABLED = 0;
+const REENTRY_FORCE_FROM_MINT = 1;
+const REENTRY_MINT_FROM_FORCE = 2;
 
-  const COUNTRY_US = 840;
-  const COUNTRY_UK = 826;
-  const COUNTRY_RUSSIA = 643; // Restricted in many scenarios
+interface Fixture {
+  admin: HardhatEthersSigner;
+  agentOnly: HardhatEthersSigner;
+  forcedEoa: HardhatEthersSigner;
+  investor1: HardhatEthersSigner;
+  investor2: HardhatEthersSigner;
+  restrictedInvestor: HardhatEthersSigner;
+  unverifiedInvestor: HardhatEthersSigner;
+  unregisteredInvestor: HardhatEthersSigner;
+  reentryInvestor: HardhatEthersSigner;
+  identityRegistry: IdentityRegistry;
+  claimTopics: ClaimTopicsRegistry;
+  trustedIssuers: TrustedIssuersRegistry;
+  claimIssuer: MockClaimIssuer;
+  compliance: ModularCompliance;
+  countryModule: CountryRestrictionModule;
+  token: BXOSecurityToken;
+  unverifiedIdentity: Identity;
+}
+
+async function addClaims(
+  identity: Identity,
+  owner: HardhatEthersSigner,
+  issuer: string,
+): Promise<void> {
+  await identity
+    .connect(owner)
+    .addClaim(TOPIC_KYC, CLAIM_SCHEME, issuer, SIGNATURE, CLAIM_DATA, "kyc");
+  await identity
+    .connect(owner)
+    .addClaim(TOPIC_AML, CLAIM_SCHEME, issuer, "0x040506", "0xb1b2", "aml");
+}
+
+async function registerInvestor(
+  fixture: Pick<Fixture, "admin" | "identityRegistry">,
+  investor: HardhatEthersSigner,
+  country: number,
+  issuer?: string,
+): Promise<Identity> {
+  const identity = (await ethers.deployContract("Identity", [
+    investor.address,
+  ])) as Identity;
+  await identity.waitForDeployment();
+  await fixture.identityRegistry
+    .connect(fixture.admin)
+    .registerIdentity(investor.address, await identity.getAddress(), country);
+  if (issuer !== undefined) await addClaims(identity, investor, issuer);
+  return identity;
+}
+
+async function deployFixture(): Promise<Fixture> {
+  const [
+    admin,
+    agentOnly,
+    forcedEoa,
+    investor1,
+    investor2,
+    restrictedInvestor,
+    unverifiedInvestor,
+    unregisteredInvestor,
+    issuerOwner,
+    reentryInvestor,
+  ] = await ethers.getSigners();
+
+  const claimTopics = (await ethers.deployContract(
+    "ClaimTopicsRegistry",
+  )) as ClaimTopicsRegistry;
+  const trustedIssuers = (await ethers.deployContract(
+    "TrustedIssuersRegistry",
+  )) as TrustedIssuersRegistry;
+  const identityRegistry = (await ethers.deployContract(
+    "IdentityRegistry",
+  )) as IdentityRegistry;
+  const claimIssuer = (await ethers.deployContract("MockClaimIssuer", [
+    issuerOwner.address,
+  ])) as MockClaimIssuer;
+
+  await Promise.all([
+    claimTopics.waitForDeployment(),
+    trustedIssuers.waitForDeployment(),
+    identityRegistry.waitForDeployment(),
+    claimIssuer.waitForDeployment(),
+  ]);
+
+  await identityRegistry.initialize(
+    admin.address,
+    admin.address,
+    await trustedIssuers.getAddress(),
+    await claimTopics.getAddress(),
+  );
+  await trustedIssuers.addTrustedIssuer(await claimIssuer.getAddress(), [
+    TOPIC_KYC,
+    TOPIC_AML,
+  ]);
+
+  const partial = { admin, identityRegistry };
+  await registerInvestor(
+    partial,
+    investor1,
+    COUNTRY_US,
+    await claimIssuer.getAddress(),
+  );
+  await registerInvestor(
+    partial,
+    investor2,
+    COUNTRY_UK,
+    await claimIssuer.getAddress(),
+  );
+  await registerInvestor(
+    partial,
+    restrictedInvestor,
+    COUNTRY_RESTRICTED,
+    await claimIssuer.getAddress(),
+  );
+  const unverifiedIdentity = await registerInvestor(
+    partial,
+    unverifiedInvestor,
+    COUNTRY_US,
+  );
+
+  const compliance = (await ethers.deployContract(
+    "ModularCompliance",
+  )) as ModularCompliance;
+  const countryModule = (await ethers.deployContract(
+    "CountryRestrictionModule",
+    [await identityRegistry.getAddress()],
+  )) as CountryRestrictionModule;
+  await Promise.all([
+    compliance.waitForDeployment(),
+    countryModule.waitForDeployment(),
+  ]);
+  await compliance.addModule(await countryModule.getAddress());
+
+  const token = (await ethers.deployContract("BXOSecurityToken", [
+    "BlockXOne Security Token",
+    "BXO-T",
+    6,
+    admin.address,
+    await identityRegistry.getAddress(),
+    await compliance.getAddress(),
+  ])) as BXOSecurityToken;
+  await token.waitForDeployment();
+  await token.grantRole(await token.AGENT_ROLE(), agentOnly.address);
+
+  return {
+    admin,
+    agentOnly,
+    forcedEoa,
+    investor1,
+    investor2,
+    restrictedInvestor,
+    unverifiedInvestor,
+    unregisteredInvestor,
+    reentryInvestor,
+    identityRegistry,
+    claimTopics,
+    trustedIssuers,
+    claimIssuer,
+    compliance,
+    countryModule,
+    token,
+    unverifiedIdentity,
+  };
+}
+
+async function deployMockComplianceToken(fixture: Fixture): Promise<{
+  compliance: MockIssuanceCompliance;
+  token: BXOSecurityToken;
+}> {
+  const compliance = (await ethers.deployContract(
+    "MockIssuanceCompliance",
+  )) as MockIssuanceCompliance;
+  await compliance.waitForDeployment();
+  const token = (await ethers.deployContract("BXOSecurityToken", [
+    "Mock-compliance token",
+    "MCT",
+    6,
+    fixture.admin.address,
+    await fixture.identityRegistry.getAddress(),
+    await compliance.getAddress(),
+  ])) as BXOSecurityToken;
+  await token.waitForDeployment();
+  return { compliance, token };
+}
+
+async function deployGovernance(token: BXOSecurityToken): Promise<MockGovernanceExecutor> {
+  const governance = (await ethers.deployContract(
+    "MockGovernanceExecutor",
+  )) as MockGovernanceExecutor;
+  await governance.waitForDeployment();
+  await token.grantRole(await token.FORCED_ISSUER_ROLE(), await governance.getAddress());
+  return governance;
+}
+
+describe("BXOSecurityToken governed issuance containment", function () {
+  let fixture: Fixture;
 
   beforeEach(async function () {
-    [admin, issuer, investor1, investor2, investor3, restrictedInvestor] =
-      await ethers.getSigners();
-
-    // Deploy ClaimTopicsRegistry
-    const ClaimTopicsRegistryFactory = await ethers.getContractFactory(
-      "ClaimTopicsRegistry"
-    );
-    claimTopicsRegistry = await ClaimTopicsRegistryFactory.deploy();
-    await claimTopicsRegistry.waitForDeployment();
-
-    // Deploy TrustedIssuersRegistry
-    const TrustedIssuersRegistryFactory = await ethers.getContractFactory(
-      "TrustedIssuersRegistry"
-    );
-    trustedIssuersRegistry = await TrustedIssuersRegistryFactory.deploy();
-    await trustedIssuersRegistry.waitForDeployment();
-
-    // Deploy IdentityRegistry with proper initialization
-    const IdentityRegistryFactory = await ethers.getContractFactory(
-      "IdentityRegistry"
-    );
-    const identityRegistryImpl = await IdentityRegistryFactory.deploy();
-    await identityRegistryImpl.waitForDeployment();
-
-    // Initialize IdentityRegistry
-    identityRegistry = identityRegistryImpl as IdentityRegistry;
-    const initTx = await identityRegistry.initialize(
-      admin.address,
-      admin.address,
-      await trustedIssuersRegistry.getAddress(),
-      await claimTopicsRegistry.getAddress()
-    );
-    await initTx.wait();
-
-    // Deploy ModularCompliance
-    const ModularComplianceFactory = await ethers.getContractFactory(
-      "ModularCompliance"
-    );
-    compliance = await ModularComplianceFactory.deploy();
-    await compliance.waitForDeployment();
-
-    // Deploy CountryRestrictionModule
-    const CountryRestrictionModuleFactory = await ethers.getContractFactory(
-      "CountryRestrictionModule"
-    );
-    countryModule = await CountryRestrictionModuleFactory.deploy(
-      await identityRegistry.getAddress()
-    );
-    await countryModule.waitForDeployment();
-
-    // Deploy BXOSecurityToken
-    const BXOSecurityTokenFactory = await ethers.getContractFactory(
-      "BXOSecurityToken"
-    );
-    token = await BXOSecurityTokenFactory.deploy(
-      "BlockXOne Security Token",
-      "BXO-T",
-      18,
-      admin.address,
-      await identityRegistry.getAddress(),
-      await compliance.getAddress()
-    );
-    await token.waitForDeployment();
-
-    // Deploy MaxBalanceModule with reference to token
-    const MaxBalanceModuleFactory = await ethers.getContractFactory(
-      "MaxBalanceModule"
-    );
-    maxBalanceModule = await MaxBalanceModuleFactory.deploy(
-      ethers.parseEther("1000000"),
-      await token.getAddress()
-    );
-    await maxBalanceModule.waitForDeployment();
-
-    // Deploy identity contracts
-    const IdentityFactory = await ethers.getContractFactory("Identity");
-    identity1 = await IdentityFactory.deploy(investor1.address);
-    await identity1.waitForDeployment();
-
-    identity2 = await IdentityFactory.deploy(investor2.address);
-    await identity2.waitForDeployment();
-
-    // Register identities
-    await identityRegistry
-      .connect(admin)
-      .registerIdentity(investor1.address, identity1, COUNTRY_US);
-
-    await identityRegistry
-      .connect(admin)
-      .registerIdentity(investor2.address, identity2, COUNTRY_UK);
-
-    // Create an unverified identity for investor3
-    const Identity3 = await ethers.getContractFactory("Identity");
-    const identity3 = await Identity3.deploy(investor3.address);
-    await identity3.waitForDeployment();
-
-    await identityRegistry
-      .connect(admin)
-      .registerIdentity(investor3.address, identity3, COUNTRY_US);
-
-    // Create unregistered identity for restrictedInvestor
-    const identityRestricted = await Identity3.deploy(
-      restrictedInvestor.address
-    );
-    await identityRestricted.waitForDeployment();
-
-    await identityRegistry
-      .connect(admin)
-      .registerIdentity(restrictedInvestor.address, identityRestricted, COUNTRY_RUSSIA);
+    fixture = await deployFixture();
   });
 
-  describe("Deployment and Initialization", function () {
-    it("Should deploy token with correct parameters", async function () {
+  describe("roles and deployment", function () {
+    it("grants the admin standard authorities but no forced-issuer authority", async function () {
+      const { token, admin } = fixture;
       expect(await token.name()).to.equal("BlockXOne Security Token");
       expect(await token.symbol()).to.equal("BXO-T");
-      expect(await token.decimals()).to.equal(18);
-    });
-
-    it("Should grant admin roles correctly", async function () {
-      expect(
-        await token.hasRole(await token.DEFAULT_ADMIN_ROLE(), admin.address)
-      ).to.be.true;
-      expect(await token.hasRole(await token.AGENT_ROLE(), admin.address)).to
-        .be.true;
-    });
-
-    it("Should link IdentityRegistry and ModularCompliance", async function () {
-      expect(await token.identityRegistry()).to.equal(
-        await identityRegistry.getAddress()
+      expect(await token.decimals()).to.equal(6);
+      expect(await token.MAX_BATCH_MINT_SIZE()).to.equal(100n);
+      expect(await token.hasRole(await token.DEFAULT_ADMIN_ROLE(), admin.address)).to.equal(
+        true,
       );
-      expect(await token.compliance()).to.equal(await compliance.getAddress());
+      expect(await token.hasRole(await token.AGENT_ROLE(), admin.address)).to.equal(true);
+      expect(await token.hasRole(await token.MINTER_ROLE(), admin.address)).to.equal(true);
+      expect(await token.hasRole(await token.FORCED_ISSUER_ROLE(), admin.address)).to.equal(
+        false,
+      );
+    });
+
+    it("rejects public forced-role grants to EOAs and accepts deployed contracts", async function () {
+      const { token, forcedEoa } = fixture;
+      const forcedRole = await token.FORCED_ISSUER_ROLE();
+      await expect(token.grantRole(forcedRole, forcedEoa.address))
+        .to.be.revertedWithCustomError(token, "InvalidForcedIssuer")
+        .withArgs(forcedEoa.address);
+
+      const governance = (await ethers.deployContract(
+        "MockGovernanceExecutor",
+      )) as MockGovernanceExecutor;
+      await governance.waitForDeployment();
+      await expect(token.grantRole(forcedRole, await governance.getAddress())).to.not.revert(
+        ethers,
+      );
+      expect(await token.hasRole(forcedRole, await governance.getAddress())).to.equal(true);
+    });
+
+    it("keeps AGENT_ROLE separate from MINTER_ROLE", async function () {
+      const { token, agentOnly, investor1 } = fixture;
+      expect(await token.hasRole(await token.AGENT_ROLE(), agentOnly.address)).to.equal(true);
+      expect(await token.hasRole(await token.MINTER_ROLE(), agentOnly.address)).to.equal(false);
+      await expect(token.connect(agentOnly).mint(investor1.address, 1n)).to.be
+        .revertedWithCustomError(token, "AccessDenied");
     });
   });
 
-  describe("Identity Registry", function () {
-    it("Should register identity correctly", async function () {
-      expect(await identityRegistry.contains(investor1.address)).to.be.true;
-      expect(await identityRegistry.investorCountries(investor1.address)).to.equal(
-        COUNTRY_US
-      );
-    });
-
-    it("Should get identity contract", async function () {
-      const identity = await identityRegistry.getIdentity(investor1.address);
-      expect(identity).to.equal(await identity1.getAddress());
-    });
-
-    it("Should update country code", async function () {
-      await identityRegistry
-        .connect(admin)
-        .updateCountry(investor1.address, COUNTRY_UK);
-
-      expect(await identityRegistry.investorCountries(investor1.address)).to.equal(
-        COUNTRY_UK
-      );
-    });
-
-    it("Should delete identity", async function () {
-      await identityRegistry
-        .connect(admin)
-        .deleteIdentity(investor1.address);
-
-      expect(await identityRegistry.contains(investor1.address)).to.be.false;
-    });
-
-    it("Should verify identity with claims", async function () {
-      // Initially not verified (no claims)
-      const verified = await identityRegistry.isVerified(investor1.address);
-      expect(verified).to.be.false;
-    });
-  });
-
-  describe("Claim Topics Registry", function () {
-    it("Should initialize with default topics", async function () {
-      const topics = await claimTopicsRegistry.getClaimTopics();
-      expect(topics.length).to.equal(2); // KYC and AML
-    });
-
-    it("Should add new claim topic", async function () {
-      await claimTopicsRegistry
-        .connect(admin)
-        .addClaimTopic(CLAIM_TOPIC_ACCREDITED);
-
-      const topics = await claimTopicsRegistry.getClaimTopics();
-      expect(topics).to.include(BigInt(CLAIM_TOPIC_ACCREDITED));
-    });
-
-    it("Should remove claim topic", async function () {
-      await claimTopicsRegistry
-        .connect(admin)
-        .removeClaimTopic(CLAIM_TOPIC_KYC);
-
-      const topics = await claimTopicsRegistry.getClaimTopics();
-      expect(topics).to.not.include(BigInt(CLAIM_TOPIC_KYC));
-    });
-
-    it("Should prevent adding duplicate topic", async function () {
-      await expect(
-        claimTopicsRegistry.connect(admin).addClaimTopic(CLAIM_TOPIC_KYC)
-      ).to.be.revertedWithCustomError(
-        claimTopicsRegistry,
-        "TopicAlreadyAdded"
-      );
-    });
-  });
-
-  describe("Trusted Issuers Registry", function () {
-    it("Should add trusted issuer", async function () {
-      const mockIssuer = await ethers.deployContract("MockClaimIssuer", [
-        issuer.address,
-      ]);
-      await mockIssuer.waitForDeployment();
-
-      await trustedIssuersRegistry
-        .connect(admin)
-        .addTrustedIssuer(
-          mockIssuer,
-          [CLAIM_TOPIC_KYC, CLAIM_TOPIC_AML]
-        );
-
-      expect(
-        await trustedIssuersRegistry.isTrustedIssuer(await mockIssuer.getAddress())
-      ).to.be.true;
-    });
-
-    it("Should get trusted issuer claim topics", async function () {
-      const mockIssuer = await ethers.deployContract("MockClaimIssuer", [
-        issuer.address,
-      ]);
-      await mockIssuer.waitForDeployment();
-
-      const topics = [CLAIM_TOPIC_KYC, CLAIM_TOPIC_AML];
-      await trustedIssuersRegistry
-        .connect(admin)
-        .addTrustedIssuer(mockIssuer, topics);
-
-      const issuerTopics =
-        await trustedIssuersRegistry.getTrustedIssuerClaimTopics(
-          mockIssuer
-        );
-      expect(issuerTopics.length).to.equal(2);
-    });
-
-    it("Should remove trusted issuer", async function () {
-      const mockIssuer = await ethers.deployContract("MockClaimIssuer", [
-        issuer.address,
-      ]);
-      await mockIssuer.waitForDeployment();
-
-      await trustedIssuersRegistry
-        .connect(admin)
-        .addTrustedIssuer(
-          mockIssuer,
-          [CLAIM_TOPIC_KYC]
-        );
-
-      await trustedIssuersRegistry
-        .connect(admin)
-        .removeTrustedIssuer(mockIssuer);
-
-      expect(
-        await trustedIssuersRegistry.isTrustedIssuer(await mockIssuer.getAddress())
-      ).to.be.false;
-    });
-  });
-
-  describe("Token Minting and Burning", function () {
-    it("Should mint tokens with MINTER_ROLE", async function () {
-      const mintAmount = ethers.parseEther("1000");
-      await token.connect(admin).mint(investor1.address, mintAmount);
-
-      expect(await token.balanceOf(investor1.address)).to.equal(mintAmount);
-    });
-
-    it("Should prevent minting without MINTER_ROLE", async function () {
-      const mintAmount = ethers.parseEther("1000");
-      await expect(
-        token.connect(investor1).mint(investor1.address, mintAmount)
-      ).to.be.revertedWithCustomError(token, "AccessDenied");
-    });
-
-    it("Should burn tokens with BURNER_ROLE", async function () {
-      const mintAmount = ethers.parseEther("1000");
-      await token.connect(admin).mint(investor1.address, mintAmount);
-
-      const burnAmount = ethers.parseEther("500");
-      await token.connect(admin).burn(investor1.address, burnAmount);
-
-      expect(await token.balanceOf(investor1.address)).to.equal(
-        mintAmount - burnAmount
-      );
-    });
-
-    it("Should batch mint tokens", async function () {
-      const addresses = [investor1.address, investor2.address];
-      const amounts = [ethers.parseEther("1000"), ethers.parseEther("2000")];
-
-      await token.connect(admin).batchMint(addresses, amounts);
-
-      expect(await token.balanceOf(investor1.address)).to.equal(amounts[0]);
-      expect(await token.balanceOf(investor2.address)).to.equal(amounts[1]);
-    });
-
-    it("Should batch burn tokens", async function () {
-      // First mint
-      const mintAddresses = [investor1.address, investor2.address];
-      const mintAmounts = [
-        ethers.parseEther("2000"),
-        ethers.parseEther("2000"),
-      ];
-      await token.connect(admin).batchMint(mintAddresses, mintAmounts);
-
-      // Then burn
-      const burnAmounts = [
-        ethers.parseEther("500"),
-        ethers.parseEther("1000"),
-      ];
-      await token
-        .connect(admin)
-        .batchBurn(mintAddresses, burnAmounts);
-
-      expect(await token.balanceOf(investor1.address)).to.equal(
-        ethers.parseEther("1500")
-      );
-      expect(await token.balanceOf(investor2.address)).to.equal(
-        ethers.parseEther("1000")
-      );
-    });
-  });
-
-  describe("Freeze/Unfreeze Functionality", function () {
-    beforeEach(async function () {
-      // Mint some tokens first
-      const mintAmount = ethers.parseEther("1000");
-      await token.connect(admin).mint(investor1.address, mintAmount);
-      await token.connect(admin).mint(investor2.address, mintAmount);
-    });
-
-    it("Should freeze an address", async function () {
-      await token.connect(admin).freezeAddress(investor1.address);
-      expect(await token.isFrozen(investor1.address)).to.be.true;
-    });
-
-    it("Should unfreeze an address", async function () {
-      await token.connect(admin).freezeAddress(investor1.address);
-      await token.connect(admin).unfreezeAddress(investor1.address);
-      expect(await token.isFrozen(investor1.address)).to.be.false;
-    });
-
-    it("Should prevent transfers from frozen address", async function () {
-      await token.connect(admin).freezeAddress(investor1.address);
-
-      await expect(
-        token.connect(investor1).transfer(investor2.address, ethers.parseEther("100"))
-      ).to.be.revertedWithCustomError(token, "AccountFrozen");
-    });
-
-    it("Should prevent transfers to frozen address", async function () {
-      await token.connect(admin).freezeAddress(investor2.address);
-
-      await expect(
-        token
-          .connect(investor1)
-          .transfer(investor2.address, ethers.parseEther("100"))
-      ).to.be.revertedWithCustomError(token, "AccountFrozen");
-    });
-
-    it("Should batch freeze addresses", async function () {
-      const addresses = [investor1.address, investor2.address];
-      await token.connect(admin).batchFreezeAddress(addresses);
-
-      expect(await token.isFrozen(investor1.address)).to.be.true;
-      expect(await token.isFrozen(investor2.address)).to.be.true;
-    });
-
-    it("Should batch unfreeze addresses", async function () {
-      const addresses = [investor1.address, investor2.address];
-      await token.connect(admin).batchFreezeAddress(addresses);
-      await token.connect(admin).batchUnfreezeAddress(addresses);
-
-      expect(await token.isFrozen(investor1.address)).to.be.false;
-      expect(await token.isFrozen(investor2.address)).to.be.false;
-    });
-  });
-
-  describe("Pause/Unpause", function () {
-    beforeEach(async function () {
-      await token.connect(admin).mint(investor1.address, ethers.parseEther("1000"));
-      await token.connect(admin).mint(investor2.address, ethers.parseEther("1000"));
-    });
-
-    it("Should pause token transfers", async function () {
-      await token.connect(admin).pause();
-
-      await expect(
-        token
-          .connect(investor1)
-          .transfer(investor2.address, ethers.parseEther("100"))
-      ).to.be.revertedWithCustomError(token, "EnforcedPause");
-    });
-
-    it("Should unpause token transfers", async function () {
-      await token.connect(admin).pause();
-      await token.connect(admin).unpause();
-
-      await expect(
-        token
-          .connect(investor1)
-          .transfer(investor2.address, ethers.parseEther("100"))
-      ).to.not.revert(ethers);
-    });
-  });
-
-  describe("Forced Transfer", function () {
-    beforeEach(async function () {
-      await token
-        .connect(admin)
-        .mint(investor1.address, ethers.parseEther("1000"));
-    });
-
-    it("Should force transfer tokens", async function () {
-      const amount = ethers.parseEther("500");
-      const tx = await token
-        .connect(admin)
-        .forcedTransfer(investor1.address, investor2.address, amount);
-
-      expect(await token.balanceOf(investor1.address)).to.equal(
-        ethers.parseEther("500")
-      );
-      expect(await token.balanceOf(investor2.address)).to.equal(amount);
-
+  describe("standard mint eligibility", function () {
+    it("mints only to a registered, verified, compliance-eligible recipient", async function () {
+      const { token, admin, investor1 } = fixture;
+      const amount = 250n;
+      const tx = token.connect(admin).mint(investor1.address, amount);
       await expect(tx)
-        .to.emit(token, "ForcedTransfer")
-        .withArgs(investor1.address, investor2.address, amount, admin.address);
+        .to.emit(token, "MintExecuted")
+        .withArgs(admin.address, investor1.address, amount);
+      expect(await token.balanceOf(investor1.address)).to.equal(amount);
+      expect(await token.totalSupply()).to.equal(amount);
     });
 
-    it("Should prevent forced transfer without AGENT_ROLE", async function () {
-      const amount = ethers.parseEther("500");
-      await expect(
-        token
-          .connect(investor1)
-          .forcedTransfer(investor1.address, investor2.address, amount)
-      ).to.be.revertedWithCustomError(token, "AccessDenied");
+    it("rejects unauthorized, paused, zero-recipient, and zero-amount minting", async function () {
+      const { token, admin, investor1, investor2 } = fixture;
+      await expect(token.connect(investor2).mint(investor1.address, 1n)).to.be
+        .revertedWithCustomError(token, "AccessDenied");
+      await expect(token.connect(admin).mint(ethers.ZeroAddress, 1n)).to.be
+        .revertedWithCustomError(token, "InvalidIssuanceRecipient");
+      await expect(token.connect(admin).mint(investor1.address, 0n)).to.be
+        .revertedWithCustomError(token, "InvalidIssuanceAmount");
+
+      await token.pause();
+      await expect(token.connect(admin).mint(investor1.address, 1n)).to.be
+        .revertedWithCustomError(token, "EnforcedPause");
+    });
+
+    it("rejects unregistered and registered-but-unverified recipients", async function () {
+      const { token, admin, unregisteredInvestor, unverifiedInvestor } = fixture;
+      await expect(token.connect(admin).mint(unregisteredInvestor.address, 1n))
+        .to.be.revertedWithCustomError(token, "IdentityNotRegistered")
+        .withArgs(unregisteredInvestor.address);
+      await expect(token.connect(admin).mint(unverifiedInvestor.address, 1n))
+        .to.be.revertedWithCustomError(token, "IdentityNotVerified")
+        .withArgs(unverifiedInvestor.address);
+    });
+
+    it("rejects empty and restricted-country compliance", async function () {
+      const { token, admin, investor1, restrictedInvestor, compliance, countryModule } =
+        fixture;
+      await compliance.removeModule(await countryModule.getAddress());
+      await expect(token.connect(admin).mint(investor1.address, 1n)).to.be
+        .revertedWithCustomError(token, "ComplianceNotConfigured");
+
+      await compliance.addModule(await countryModule.getAddress());
+      await countryModule.addCountryRestriction(COUNTRY_RESTRICTED);
+      await expect(token.connect(admin).mint(restrictedInvestor.address, 1n)).to.be
+        .revertedWithCustomError(token, "ComplianceCheckFailed");
+    });
+
+    it("rejects an issuance that would exceed the configured maximum balance", async function () {
+      const { token, admin, investor1, compliance } = fixture;
+      const maxModule = (await ethers.deployContract("MaxBalanceModule", [
+        100n,
+        await token.getAddress(),
+      ])) as MaxBalanceModule;
+      await maxModule.waitForDeployment();
+      await compliance.addModule(await maxModule.getAddress());
+
+      await token.connect(admin).mint(investor1.address, 80n);
+      await expect(token.connect(admin).mint(investor1.address, 21n)).to.be
+        .revertedWithCustomError(token, "ComplianceCheckFailed");
+      expect(await token.balanceOf(investor1.address)).to.equal(80n);
+      expect(await token.totalSupply()).to.equal(80n);
+    });
+
+    it("fails closed for rejecting, reverting, short, invalid-bool, and oversized decisions", async function () {
+      const { token, compliance } = await deployMockComplianceToken(fixture);
+      expect(await compliance.modulesMode()).to.equal(BigInt(MODULES_CONFIGURED));
+      expect(await compliance.decisionMode()).to.equal(BigInt(DECISION_ALLOW));
+
+      for (const mode of [
+        DECISION_REJECT,
+        DECISION_REVERT,
+        DECISION_SHORT,
+        DECISION_INVALID_BOOL,
+        DECISION_OVERSIZED,
+      ]) {
+        await compliance.setDecisionMode(mode);
+        await expect(token.mint(fixture.investor1.address, 10n)).to.be
+          .revertedWithCustomError(token, "ComplianceCheckFailed");
+      }
+      expect(await token.totalSupply()).to.equal(0n);
+    });
+
+    it("calls compliance with the exact zero sender, recipient, and issuance amount", async function () {
+      const { token, compliance } = await deployMockComplianceToken(fixture);
+      await compliance.setExpectedDecisionArguments(
+        true,
+        ethers.ZeroAddress,
+        fixture.investor1.address,
+        37n,
+      );
+      await token.mint(fixture.investor1.address, 37n);
+      expect(await token.balanceOf(fixture.investor1.address)).to.equal(37n);
+
+      await expect(token.mint(fixture.investor1.address, 38n)).to.be
+        .revertedWithCustomError(token, "ComplianceCheckFailed");
+      expect(await token.totalSupply()).to.equal(37n);
+    });
+
+    it("rejects zero-address, reverting, and malformed module lists", async function () {
+      const { token, compliance } = await deployMockComplianceToken(fixture);
+
+      await compliance.setModulesMode(MODULES_ZERO_ADDRESS);
+      await expect(token.mint(fixture.investor1.address, 1n)).to.be
+        .revertedWithCustomError(token, "ComplianceCheckFailed");
+
+      for (const mode of [
+        MODULES_REVERT,
+        MODULES_SHORT,
+        MODULES_WRONG_OFFSET,
+        MODULES_OVERSIZED,
+        MODULES_DIRTY_ADDRESS,
+      ]) {
+        await compliance.setModulesMode(mode);
+        await expect(token.mint(fixture.investor1.address, 1n)).to.be
+          .revertedWithCustomError(token, "ComplianceCheckFailed");
+      }
+      await compliance.setModulesMode(MODULES_EMPTY);
+      await expect(token.mint(fixture.investor1.address, 1n)).to.be
+        .revertedWithCustomError(token, "ComplianceNotConfigured");
+      expect(await token.totalSupply()).to.equal(0n);
     });
   });
 
-  describe("Recovery Address", function () {
-    beforeEach(async function () {
-      await token
+  describe("batch minting", function () {
+    it("mints a valid bounded batch and emits one event per item", async function () {
+      const { token, admin, investor1, investor2 } = fixture;
+      const tx = token
         .connect(admin)
-        .mint(investor1.address, ethers.parseEther("1000"));
-    });
-
-    it("Should recover tokens from lost address", async function () {
-      const amount = ethers.parseEther("1000");
-      const tx = await token
-        .connect(admin)
-        .recoveryAddress(investor1.address, investor2.address, amount);
-
-      expect(await token.balanceOf(investor1.address)).to.equal(0);
-      expect(await token.balanceOf(investor2.address)).to.equal(amount);
-
+        .batchMint([investor1.address, investor2.address], [10n, 20n]);
       await expect(tx)
-        .to.emit(token, "RecoverySuccess")
-        .withArgs(investor1.address, investor2.address, amount);
+        .to.emit(token, "MintExecuted")
+        .withArgs(admin.address, investor1.address, 10n);
+      await expect(tx)
+        .to.emit(token, "MintExecuted")
+        .withArgs(admin.address, investor2.address, 20n);
+      expect(await token.balanceOf(investor1.address)).to.equal(10n);
+      expect(await token.balanceOf(investor2.address)).to.equal(20n);
+      expect(await token.totalSupply()).to.equal(30n);
     });
 
-    it("Should prevent recovery without AGENT_ROLE", async function () {
-      await expect(
-        token
-          .connect(investor1)
-          .recoveryAddress(
-            investor1.address,
-            investor2.address,
-            ethers.parseEther("100")
-          )
-      ).to.be.revertedWithCustomError(token, "AccessDenied");
-    });
-  });
-
-  describe("Modular Compliance", function () {
-    beforeEach(async function () {
-      await token.connect(admin).mint(investor1.address, ethers.parseEther("1000"));
-      await token.connect(admin).mint(investor2.address, ethers.parseEther("1000"));
-    });
-
-    it("Should add compliance module", async function () {
-      await compliance.connect(admin).addModule(countryModule);
-
-      const modules = await compliance.getModules();
-      expect(modules).to.include(await countryModule.getAddress());
-    });
-
-    it("Should remove compliance module", async function () {
-      await compliance.connect(admin).addModule(countryModule);
-      await compliance
-        .connect(admin)
-        .removeModule(await countryModule.getAddress());
-
-      const modules = await compliance.getModules();
-      expect(modules).to.not.include(await countryModule.getAddress());
-    });
-
-    it("Should check compliance on transfer", async function () {
-      // No modules added, so transfer should pass identity checks
-      await expect(
-        token
-          .connect(investor1)
-          .transfer(investor2.address, ethers.parseEther("100"))
-      ).to.not.revert(ethers);
-    });
-  });
-
-  describe("Country Restriction Module", function () {
-    beforeEach(async function () {
-      await token
-        .connect(admin)
-        .mint(investor1.address, ethers.parseEther("1000"));
-      await token
-        .connect(admin)
-        .mint(restrictedInvestor.address, ethers.parseEther("1000"));
-
-      // Add country restriction module to compliance
-      await compliance.connect(admin).addModule(countryModule);
-    });
-
-    it("Should allow transfer between non-restricted countries", async function () {
-      await expect(
-        token
-          .connect(investor1)
-          .transfer(investor2.address, ethers.parseEther("100"))
-      ).to.not.revert(ethers);
-    });
-
-    it("Should restrict transfer from restricted country", async function () {
-      // Add COUNTRY_RUSSIA to restricted list
-      await countryModule
-        .connect(admin)
-        .addCountryRestriction(COUNTRY_RUSSIA);
-
-      // Try to transfer from restrictedInvestor (COUNTRY_RUSSIA)
-      await expect(
-        token
-          .connect(restrictedInvestor)
-          .transfer(investor1.address, ethers.parseEther("100"))
-      ).to.be.revertedWithCustomError(token, "ComplianceCheckFailed");
-    });
-
-    it("Should restrict transfer to restricted country", async function () {
-      // Add COUNTRY_RUSSIA to restricted list
-      await countryModule
-        .connect(admin)
-        .addCountryRestriction(COUNTRY_RUSSIA);
-
-      // Try to transfer to restrictedInvestor (COUNTRY_RUSSIA)
-      await expect(
-        token
-          .connect(investor1)
-          .transfer(restrictedInvestor.address, ethers.parseEther("100"))
-      ).to.be.revertedWithCustomError(token, "ComplianceCheckFailed");
-    });
-
-    it("Should remove country restriction", async function () {
-      await countryModule
-        .connect(admin)
-        .addCountryRestriction(COUNTRY_RUSSIA);
-      await countryModule
-        .connect(admin)
-        .removeCountryRestriction(COUNTRY_RUSSIA);
-
-      // Should now allow transfer
-      await expect(
-        token
-          .connect(restrictedInvestor)
-          .transfer(investor1.address, ethers.parseEther("100"))
-      ).to.not.revert(ethers);
-    });
-  });
-
-  describe("Max Balance Module", function () {
-    beforeEach(async function () {
-      await token
-        .connect(admin)
-        .mint(investor1.address, ethers.parseEther("1000"));
-      await token
-        .connect(admin)
-        .mint(investor2.address, ethers.parseEther("100"));
-
-      // Add max balance module to compliance
-      await compliance.connect(admin).addModule(maxBalanceModule);
-    });
-
-    it("Should allow transfer within max balance", async function () {
-      await expect(
-        token
-          .connect(investor1)
-          .transfer(investor2.address, ethers.parseEther("100"))
-      ).to.not.revert(ethers);
-    });
-
-    it("Should restrict transfer exceeding max balance", async function () {
-      // Set max balance to 500
-      await maxBalanceModule
-        .connect(admin)
-        .setMaxBalance(ethers.parseEther("500"));
-
-      // investor2 has 100, trying to add 600 would exceed 500
-      await expect(
-        token
-          .connect(investor1)
-          .transfer(investor2.address, ethers.parseEther("600"))
-      ).to.be.revertedWithCustomError(token, "ComplianceCheckFailed");
-    });
-
-    it("Should update max balance", async function () {
-      const newMax = ethers.parseEther("10000");
-      await maxBalanceModule.connect(admin).setMaxBalance(newMax);
-
-      expect(await maxBalanceModule.getMaxBalance()).to.equal(newMax);
-    });
-  });
-
-  describe("Identity Verification on Transfer", function () {
-    it("Should prevent transfer from unverified sender", async function () {
-      // Create new identity without claims
-      const UnverifiedIdentity = await ethers.getContractFactory("Identity");
-      const unverifiedIdentity = await UnverifiedIdentity.deploy(
-        investor3.address
+    it("rejects empty, mismatched, oversized, and unauthorized batches", async function () {
+      const { token, admin, investor1, investor2 } = fixture;
+      await expect(token.connect(admin).batchMint([], [])).to.be.revertedWithCustomError(
+        token,
+        "InvalidBatch",
       );
-      await unverifiedIdentity.waitForDeployment();
+      await expect(token.connect(admin).batchMint([investor1.address], [])).to.be
+        .revertedWithCustomError(token, "InvalidBatch");
 
-      // Mint tokens to investor3
-      await token
-        .connect(admin)
-        .mint(investor3.address, ethers.parseEther("1000"));
-
-      // Try to transfer - should fail because investor3 has no claims
-      // Note: investor3 is registered but not verified (no claims matching required topics)
-      // This depends on whether the transfer requires full verification
+      const recipients = Array.from({ length: 101 }, () => investor1.address);
+      const amounts = Array.from({ length: 101 }, () => 1n);
+      await expect(token.connect(admin).batchMint(recipients, amounts))
+        .to.be.revertedWithCustomError(token, "TooManyBatchRecipients")
+        .withArgs(101n, 100n);
+      await expect(token.connect(investor2).batchMint([investor1.address], [1n])).to.be
+        .revertedWithCustomError(token, "AccessDenied");
     });
 
-    it("Should allow minting to unregistered addresses", async function () {
-      const mintAmount = ethers.parseEther("1000");
-      // investor3 is registered, so minting should work
-      await token.connect(admin).mint(investor3.address, mintAmount);
-      expect(await token.balanceOf(investor3.address)).to.equal(mintAmount);
-    });
-  });
-
-  describe("Registry Update", function () {
-    it("Should update identity registry", async function () {
-      const newRegistry = identityRegistry; // Same registry for this test
-      await token
-        .connect(admin)
-        .setIdentityRegistry(await newRegistry.getAddress());
-
-      expect(await token.identityRegistry()).to.equal(
-        await newRegistry.getAddress()
-      );
-    });
-
-    it("Should update compliance", async function () {
-      const newCompliance = compliance;
-      await token.connect(admin).setCompliance(await newCompliance.getAddress());
-
-      expect(await token.compliance()).to.equal(
-        await newCompliance.getAddress()
-      );
-    });
-
-    it("Should prevent invalid registry update", async function () {
-      await expect(
-        token.connect(admin).setIdentityRegistry(ethers.ZeroAddress)
-      ).to.be.revertedWithCustomError(token, "InvalidIdentityRegistry");
-    });
-  });
-
-  describe("Token Factory", function () {
-    it("Should deploy token via factory", async function () {
-      const BXOSecurityTokenFactoryFactory = await ethers.getContractFactory(
-        "BXOSecurityTokenFactory"
-      );
-      const factoryInstance =
-        await BXOSecurityTokenFactoryFactory.deploy();
-      await factoryInstance.waitForDeployment();
-
-      const deployTx = await factoryInstance
-        .connect(admin)
-        .deployToken(
-          "Test Token",
-          "TEST",
-          18,
-          await identityRegistry.getAddress(),
-          await compliance.getAddress(),
-          ethers.parseEther("1000000")
-        );
-
-      const receipt = await deployTx.wait();
-      expect(receipt?.status).to.equal(1);
-    });
-
-    it("Should track deployed tokens", async function () {
-      const BXOSecurityTokenFactoryFactory = await ethers.getContractFactory(
-        "BXOSecurityTokenFactory"
-      );
-      const factoryInstance =
-        await BXOSecurityTokenFactoryFactory.deploy();
-      await factoryInstance.waitForDeployment();
-
-      const initialCount =
-        await factoryInstance.getDeployedTokensCount();
-
-      await factoryInstance
-        .connect(admin)
-        .deployToken(
-          "Test Token 1",
-          "TEST1",
-          18,
-          await identityRegistry.getAddress(),
-          await compliance.getAddress(),
-          0
-        );
-
-      const newCount = await factoryInstance.getDeployedTokensCount();
-      expect(newCount).to.equal(initialCount + 1n);
-    });
-
-    it("Should retrieve token deployment info", async function () {
-      const BXOSecurityTokenFactoryFactory = await ethers.getContractFactory(
-        "BXOSecurityTokenFactory"
-      );
-      const factoryInstance =
-        await BXOSecurityTokenFactoryFactory.deploy();
-      await factoryInstance.waitForDeployment();
-
-      const deployTx = await factoryInstance
-        .connect(admin)
-        .deployToken(
-          "Info Test Token",
-          "INFO",
-          18,
-          await identityRegistry.getAddress(),
-          await compliance.getAddress(),
-          0
-        );
-
-      const receipt = await deployTx.wait();
-      const deployedTokens = await factoryInstance.getDeployedTokens();
-      const lastToken = deployedTokens[deployedTokens.length - 1];
-
-      const info = await factoryInstance.getTokenInfo(lastToken);
-      expect(info.name).to.equal("Info Test Token");
-      expect(info.symbol).to.equal("INFO");
-      expect(info.decimals).to.equal(18);
-    });
-  });
-
-  describe("Edge Cases and Security", function () {
-    beforeEach(async function () {
-      await token
-        .connect(admin)
-        .mint(investor1.address, ethers.parseEther("1000"));
-      await token
-        .connect(admin)
-        .mint(investor2.address, ethers.parseEther("1000"));
-    });
-
-    it("Should prevent double-freeze", async function () {
-      await token.connect(admin).freezeAddress(investor1.address);
-      // Freezing again should work but is idempotent
-      await token.connect(admin).freezeAddress(investor1.address);
-      expect(await token.isFrozen(investor1.address)).to.be.true;
-    });
-
-    it("Should handle zero address validation", async function () {
+    it("rolls back every item when a later recipient is ineligible", async function () {
+      const { token, admin, investor1, unverifiedInvestor } = fixture;
       await expect(
         token
           .connect(admin)
-          .setIdentityRegistry(ethers.ZeroAddress)
-      ).to.be.revertedWithCustomError(token, "InvalidIdentityRegistry");
+          .batchMint([investor1.address, unverifiedInvestor.address], [10n, 20n]),
+      ).to.be.revertedWithCustomError(token, "IdentityNotVerified");
+      expect(await token.balanceOf(investor1.address)).to.equal(0n);
+      expect(await token.balanceOf(unverifiedInvestor.address)).to.equal(0n);
+      expect(await token.totalSupply()).to.equal(0n);
     });
 
-    it("Should prevent batch operations with mismatched arrays", async function () {
-      const addresses = [investor1.address, investor2.address];
-      const amounts = [ethers.parseEther("100")]; // Wrong length
+    it("makes duplicate recipients observe updated balances and atomically rolls back aggregate excess", async function () {
+      const { token, admin, investor1, compliance } = fixture;
+      const maxModule = (await ethers.deployContract("MaxBalanceModule", [
+        100n,
+        await token.getAddress(),
+      ])) as MaxBalanceModule;
+      await maxModule.waitForDeployment();
+      await compliance.addModule(await maxModule.getAddress());
 
       await expect(
-        token.connect(admin).batchMint(addresses, amounts)
-      ).to.be.revertedWith("Array length mismatch");
+        token
+          .connect(admin)
+          .batchMint([investor1.address, investor1.address], [60n, 41n]),
+      ).to.be.revertedWithCustomError(token, "ComplianceCheckFailed");
+      expect(await token.balanceOf(investor1.address)).to.equal(0n);
+      expect(await token.totalSupply()).to.equal(0n);
     });
 
-    it("Should emit events on all major operations", async function () {
-      await expect(
-        token.connect(admin).freezeAddress(investor1.address)
-      ).to.emit(token, "AddressFrozen");
-
-      await expect(
-        token.connect(admin).unfreezeAddress(investor1.address)
-      ).to.emit(token, "AddressUnfrozen");
-
-      await expect(
-        token.connect(admin).pause()
-      ).to.emit(token, "Paused");
-
-      await expect(
-        token.connect(admin).unpause()
-      ).to.emit(token, "Unpaused");
+    it("checks pause before authorization inside the shared reentrancy boundary", async function () {
+      const { token, investor1, investor2 } = fixture;
+      await token.pause();
+      await expect(token.connect(investor2).batchMint([investor1.address], [1n])).to.be
+        .revertedWithCustomError(token, "EnforcedPause");
     });
   });
-});
 
-// Mock ClaimIssuer for testing
-describe("Mock Contracts", function () {
-  it("Should deploy MockClaimIssuer", async function () {
-    const [issuer] = await ethers.getSigners();
-    const mockIssuer = await ethers.deployContract("MockClaimIssuer", [
-      issuer.address,
-    ]);
-    await mockIssuer.waitForDeployment();
+  describe("forced issuance", function () {
+    it("requires a contract-held forced role and emits exact durable evidence", async function () {
+      const { token, investor1 } = fixture;
+      const governance = await deployGovernance(token);
+      const operationId = ethers.id("forced-issuance-1");
+      const evidenceHash = ethers.id("case-evidence-1");
+      const tx = governance.executeForcedIssue(
+        await token.getAddress(),
+        operationId,
+        investor1.address,
+        75n,
+        evidenceHash,
+      );
+      await expect(tx)
+        .to.emit(token, "ForcedIssuanceExecuted")
+        .withArgs(
+          operationId,
+          await governance.getAddress(),
+          investor1.address,
+          75n,
+          evidenceHash,
+        );
+      expect(await token.usedForcedIssuanceOperationIds(operationId)).to.equal(true);
+      expect(await token.balanceOf(investor1.address)).to.equal(75n);
+    });
 
-    expect(await mockIssuer.getIssuerAddress()).to.equal(issuer.address);
+    it("does not let MINTER_ROLE alone call forcedIssue", async function () {
+      const { token, admin, investor1 } = fixture;
+      await expect(
+        token
+          .connect(admin)
+          .forcedIssue(ethers.id("not-authorized"), investor1.address, 1n, ethers.id("evidence")),
+      ).to.be.revertedWithCustomError(token, "AccessDenied");
+    });
+
+    it("rejects zero operation IDs, zero evidence, reused IDs, and paused execution", async function () {
+      const { token, investor1 } = fixture;
+      const governance = await deployGovernance(token);
+      const evidenceHash = ethers.id("evidence");
+      await expect(
+        governance.executeForcedIssue(
+          await token.getAddress(),
+          ethers.ZeroHash,
+          investor1.address,
+          1n,
+          evidenceHash,
+        ),
+      ).to.be.revertedWithCustomError(token, "InvalidOperationId");
+      await expect(
+        governance.executeForcedIssue(
+          await token.getAddress(),
+          ethers.id("zero-evidence"),
+          investor1.address,
+          1n,
+          ethers.ZeroHash,
+        ),
+      ).to.be.revertedWithCustomError(token, "InvalidEvidenceHash");
+
+      const operationId = ethers.id("single-use");
+      await governance.executeForcedIssue(
+        await token.getAddress(),
+        operationId,
+        investor1.address,
+        1n,
+        evidenceHash,
+      );
+      await expect(
+        governance.executeForcedIssue(
+          await token.getAddress(),
+          operationId,
+          investor1.address,
+          1n,
+          evidenceHash,
+        ),
+      )
+        .to.be.revertedWithCustomError(token, "OperationAlreadyUsed")
+        .withArgs(operationId);
+
+      await token.pause();
+      await expect(
+        governance.executeForcedIssue(
+          await token.getAddress(),
+          ethers.id("paused"),
+          investor1.address,
+          1n,
+          evidenceHash,
+        ),
+      ).to.be.revertedWithCustomError(token, "EnforcedPause");
+    });
+
+    it("applies the same zero, registration, verification, and compliance policy", async function () {
+      const {
+        token,
+        investor1,
+        unregisteredInvestor,
+        unverifiedInvestor,
+        restrictedInvestor,
+        countryModule,
+      } = fixture;
+      const governance = await deployGovernance(token);
+      const target = await token.getAddress();
+      const evidence = ethers.id("shared-policy");
+
+      await expect(
+        governance.executeForcedIssue(target, ethers.id("zero-recipient"), ethers.ZeroAddress, 1n, evidence),
+      ).to.be.revertedWithCustomError(token, "InvalidIssuanceRecipient");
+      await expect(
+        governance.executeForcedIssue(target, ethers.id("zero-amount"), investor1.address, 0n, evidence),
+      ).to.be.revertedWithCustomError(token, "InvalidIssuanceAmount");
+      await expect(
+        governance.executeForcedIssue(
+          target,
+          ethers.id("unregistered"),
+          unregisteredInvestor.address,
+          1n,
+          evidence,
+        ),
+      ).to.be.revertedWithCustomError(token, "IdentityNotRegistered");
+      await expect(
+        governance.executeForcedIssue(
+          target,
+          ethers.id("unverified"),
+          unverifiedInvestor.address,
+          1n,
+          evidence,
+        ),
+      ).to.be.revertedWithCustomError(token, "IdentityNotVerified");
+
+      await countryModule.addCountryRestriction(COUNTRY_RESTRICTED);
+      await expect(
+        governance.executeForcedIssue(
+          target,
+          ethers.id("restricted"),
+          restrictedInvestor.address,
+          1n,
+          evidence,
+        ),
+      ).to.be.revertedWithCustomError(token, "ComplianceCheckFailed");
+    });
+
+    it("rolls back the operation ID on failed eligibility and permits a corrected retry", async function () {
+      const { token, unverifiedInvestor, unverifiedIdentity, claimIssuer } = fixture;
+      const governance = await deployGovernance(token);
+      const operationId = ethers.id("eligibility-retry");
+      const evidence = ethers.id("eligibility-evidence");
+      await expect(
+        governance.executeForcedIssue(
+          await token.getAddress(),
+          operationId,
+          unverifiedInvestor.address,
+          10n,
+          evidence,
+        ),
+      ).to.be.revertedWithCustomError(token, "IdentityNotVerified");
+      expect(await token.usedForcedIssuanceOperationIds(operationId)).to.equal(false);
+
+      await addClaims(
+        unverifiedIdentity,
+        unverifiedInvestor,
+        await claimIssuer.getAddress(),
+      );
+      await governance.executeForcedIssue(
+        await token.getAddress(),
+        operationId,
+        unverifiedInvestor.address,
+        10n,
+        evidence,
+      );
+      expect(await token.usedForcedIssuanceOperationIds(operationId)).to.equal(true);
+      expect(await token.balanceOf(unverifiedInvestor.address)).to.equal(10n);
+    });
+
+    it("has no forced-issuance bypass for empty, rejecting, or malformed compliance", async function () {
+      const { token, compliance } = await deployMockComplianceToken(fixture);
+      const governance = await deployGovernance(token);
+      const target = await token.getAddress();
+      const evidence = ethers.id("forced-compliance-evidence");
+
+      await compliance.setModulesMode(MODULES_EMPTY);
+      const emptyId = ethers.id("forced-empty-compliance");
+      await expect(
+        governance.executeForcedIssue(
+          target,
+          emptyId,
+          fixture.investor1.address,
+          1n,
+          evidence,
+        ),
+      ).to.be.revertedWithCustomError(token, "ComplianceNotConfigured");
+      expect(await token.usedForcedIssuanceOperationIds(emptyId)).to.equal(false);
+
+      await compliance.setModulesMode(MODULES_CONFIGURED);
+      for (const [label, mode] of [
+        ["reject", DECISION_REJECT],
+        ["revert", DECISION_REVERT],
+        ["short", DECISION_SHORT],
+        ["invalid-bool", DECISION_INVALID_BOOL],
+        ["oversized", DECISION_OVERSIZED],
+      ] as const) {
+        const operationId = ethers.id(`forced-compliance-${label}`);
+        await compliance.setDecisionMode(mode);
+        await expect(
+          governance.executeForcedIssue(
+            target,
+            operationId,
+            fixture.investor1.address,
+            1n,
+            evidence,
+          ),
+        ).to.be.revertedWithCustomError(token, "ComplianceCheckFailed");
+        expect(await token.usedForcedIssuanceOperationIds(operationId)).to.equal(false);
+      }
+      expect(await token.totalSupply()).to.equal(0n);
+    });
+  });
+
+  describe("shared reentrancy boundary", function () {
+    async function configureReentryIdentity(
+      mode: number,
+      nestedOperationId: string,
+    ): Promise<{
+      probe: MockIssuanceReentryClaimIssuer;
+      identity: Identity;
+    }> {
+      const { token, reentryInvestor, trustedIssuers, admin, identityRegistry } = fixture;
+      const probe = (await ethers.deployContract(
+        "MockIssuanceReentryClaimIssuer",
+      )) as MockIssuanceReentryClaimIssuer;
+      await probe.waitForDeployment();
+      await token.grantRole(await token.MINTER_ROLE(), await probe.getAddress());
+      await token.grantRole(await token.FORCED_ISSUER_ROLE(), await probe.getAddress());
+      await probe.configure(
+        mode,
+        await token.getAddress(),
+        reentryInvestor.address,
+        999n,
+        nestedOperationId,
+        ethers.id("nested-evidence"),
+      );
+      await trustedIssuers.addTrustedIssuer(await probe.getAddress(), [TOPIC_KYC, TOPIC_AML]);
+      const identity = await registerInvestor(
+        { admin, identityRegistry },
+        reentryInvestor,
+        COUNTRY_US,
+        await probe.getAddress(),
+      );
+      return { probe, identity };
+    }
+
+    it("recognizes only the exact four-byte ReentrancyGuard error", async function () {
+      const probe = (await ethers.deployContract(
+        "MockIssuanceReentryClaimIssuer",
+      )) as MockIssuanceReentryClaimIssuer;
+      await probe.waitForDeployment();
+      expect(await probe.matchesExpectedReentrancyFailure("0x3ee5aeb5")).to.equal(true);
+      expect(await probe.matchesExpectedReentrancyFailure("0x3ee5aeb500")).to.equal(false);
+      expect(await probe.matchesExpectedReentrancyFailure("0xdeadbeef")).to.equal(false);
+      expect(await probe.matchesExpectedReentrancyFailure("0x")).to.equal(false);
+    });
+
+    it("blocks a different-ID forced issue nested inside standard mint", async function () {
+      const { token, admin, reentryInvestor } = fixture;
+      const nestedOperationId = ethers.id("fresh-nested-force-id");
+      await configureReentryIdentity(REENTRY_FORCE_FROM_MINT, nestedOperationId);
+
+      await token.connect(admin).mint(reentryInvestor.address, 40n);
+      expect(await token.balanceOf(reentryInvestor.address)).to.equal(40n);
+      expect(await token.totalSupply()).to.equal(40n);
+      expect(await token.usedForcedIssuanceOperationIds(nestedOperationId)).to.equal(false);
+    });
+
+    it("blocks standard mint nested inside forced issuance", async function () {
+      const { token, reentryInvestor } = fixture;
+      await configureReentryIdentity(REENTRY_MINT_FROM_FORCE, ethers.id("unused-nested-id"));
+      const governance = await deployGovernance(token);
+      const outerOperationId = ethers.id("outer-forced-operation");
+
+      await governance.executeForcedIssue(
+        await token.getAddress(),
+        outerOperationId,
+        reentryInvestor.address,
+        55n,
+        ethers.id("outer-evidence"),
+      );
+      expect(await token.balanceOf(reentryInvestor.address)).to.equal(55n);
+      expect(await token.totalSupply()).to.equal(55n);
+      expect(await token.usedForcedIssuanceOperationIds(outerOperationId)).to.equal(true);
+    });
+
+    it("does not treat the disabled probe as valid reentrancy proof", async function () {
+      const { token, admin, reentryInvestor } = fixture;
+      await configureReentryIdentity(REENTRY_DISABLED, ethers.id("disabled"));
+      await expect(token.connect(admin).mint(reentryInvestor.address, 1n)).to.be
+        .revertedWithCustomError(token, "IdentityNotVerified");
+    });
+  });
+
+  describe("adjacent supply controls and accounting", function () {
+    it("cannot mint or burn through zero-endpoint forced transfer or recovery", async function () {
+      const { token, admin, investor1, investor2 } = fixture;
+      await token.connect(admin).mint(investor1.address, 100n);
+      const supplyBefore = await token.totalSupply();
+      const firstBalance = await token.balanceOf(investor1.address);
+
+      for (const makeCall of [
+        () => token.connect(admin).forcedTransfer(ethers.ZeroAddress, investor2.address, 1n),
+        () => token.connect(admin).forcedTransfer(investor1.address, ethers.ZeroAddress, 1n),
+        () => token.connect(admin).recoveryAddress(ethers.ZeroAddress, investor2.address, 1n),
+        () => token.connect(admin).recoveryAddress(investor1.address, ethers.ZeroAddress, 1n),
+      ]) {
+        await expect(makeCall()).to.be.revertedWithCustomError(
+          token,
+          "InvalidForcedTransferEndpoint",
+        );
+      }
+      expect(await token.totalSupply()).to.equal(supplyBefore);
+      expect(await token.balanceOf(investor1.address)).to.equal(firstBalance);
+      expect(await token.balanceOf(investor2.address)).to.equal(0n);
+    });
+
+    it("reconciles supply across standard, batch, forced issuance, and burns", async function () {
+      const { token, admin, investor1, investor2 } = fixture;
+      const governance = await deployGovernance(token);
+      await token.connect(admin).mint(investor1.address, 100n);
+      await token
+        .connect(admin)
+        .batchMint([investor1.address, investor2.address], [20n, 30n]);
+      await governance.executeForcedIssue(
+        await token.getAddress(),
+        ethers.id("supply-invariant"),
+        investor2.address,
+        40n,
+        ethers.id("supply-evidence"),
+      );
+      await token.connect(admin).burn(investor1.address, 25n);
+
+      const balance1 = await token.balanceOf(investor1.address);
+      const balance2 = await token.balanceOf(investor2.address);
+      expect(balance1).to.equal(95n);
+      expect(balance2).to.equal(70n);
+      expect(await token.totalSupply()).to.equal(165n);
+      expect(await token.totalSupply()).to.equal(balance1 + balance2);
+    });
+  });
+
+  describe("retained token lifecycle regressions", function () {
+    it("retains authorized single and batch burns with atomic supply accounting", async function () {
+      const { token, admin, investor1, investor2 } = fixture;
+      await token
+        .connect(admin)
+        .batchMint([investor1.address, investor2.address], [100n, 80n]);
+      await expect(token.connect(investor1).burn(investor1.address, 1n)).to.be
+        .revertedWithCustomError(token, "AccessDenied");
+
+      await token.connect(admin).burn(investor1.address, 10n);
+      await token
+        .connect(admin)
+        .batchBurn([investor1.address, investor2.address], [20n, 30n]);
+      expect(await token.balanceOf(investor1.address)).to.equal(70n);
+      expect(await token.balanceOf(investor2.address)).to.equal(50n);
+      expect(await token.totalSupply()).to.equal(120n);
+      await expect(
+        token.connect(admin).batchBurn([investor1.address], []),
+      ).to.be.revertedWith("Array length mismatch");
+      expect(await token.totalSupply()).to.equal(120n);
+    });
+
+    it("retains single and batch freeze controls and blocks frozen transfers", async function () {
+      const { token, admin, investor1, investor2 } = fixture;
+      await token.connect(admin).mint(investor1.address, 100n);
+      await token.connect(admin).freezeAddress(investor1.address);
+      expect(await token.isFrozen(investor1.address)).to.equal(true);
+      await expect(token.connect(investor1).transfer(investor2.address, 1n))
+        .to.be.revertedWithCustomError(token, "AccountFrozen")
+        .withArgs(investor1.address);
+
+      await token.connect(admin).unfreezeAddress(investor1.address);
+      await token.connect(admin).batchFreezeAddress([investor1.address, investor2.address]);
+      expect(await token.isFrozen(investor1.address)).to.equal(true);
+      expect(await token.isFrozen(investor2.address)).to.equal(true);
+      await token
+        .connect(admin)
+        .batchUnfreezeAddress([investor1.address, investor2.address]);
+      expect(await token.isFrozen(investor1.address)).to.equal(false);
+      expect(await token.isFrozen(investor2.address)).to.equal(false);
+      await expect(token.connect(investor1).transfer(investor2.address, 1n)).to.not.revert(
+        ethers,
+      );
+    });
+
+    it("retains pause/unpause behavior for transfers and burns", async function () {
+      const { token, admin, investor1, investor2 } = fixture;
+      await token.connect(admin).mint(investor1.address, 100n);
+      await token.connect(admin).pause();
+      await expect(token.connect(investor1).transfer(investor2.address, 1n)).to.be
+        .revertedWithCustomError(token, "EnforcedPause");
+      await expect(token.connect(admin).burn(investor1.address, 1n)).to.be
+        .revertedWithCustomError(token, "EnforcedPause");
+      await expect(token.connect(investor1).unpause()).to.be.revertedWithCustomError(
+        token,
+        "AccessDenied",
+      );
+
+      await token.connect(admin).unpause();
+      await token.connect(investor1).transfer(investor2.address, 1n);
+      expect(await token.balanceOf(investor2.address)).to.equal(1n);
+    });
+
+    it("retains normal and unauthorized forced-transfer behavior without changing supply", async function () {
+      const { token, admin, investor1, investor2 } = fixture;
+      await token.connect(admin).mint(investor1.address, 100n);
+      await expect(
+        token.connect(investor1).forcedTransfer(investor1.address, investor2.address, 1n),
+      ).to.be.revertedWithCustomError(token, "AccessDenied");
+
+      const tx = token
+        .connect(admin)
+        .forcedTransfer(investor1.address, investor2.address, 40n);
+      await expect(tx)
+        .to.emit(token, "ForcedTransfer")
+        .withArgs(investor1.address, investor2.address, 40n, admin.address);
+      expect(await token.balanceOf(investor1.address)).to.equal(60n);
+      expect(await token.balanceOf(investor2.address)).to.equal(40n);
+      expect(await token.totalSupply()).to.equal(100n);
+    });
+
+    it("retains normal and unauthorized recovery behavior without changing supply", async function () {
+      const { token, admin, investor1, investor2 } = fixture;
+      await token.connect(admin).mint(investor1.address, 100n);
+      await expect(
+        token.connect(investor1).recoveryAddress(investor1.address, investor2.address, 1n),
+      ).to.be.revertedWithCustomError(token, "AccessDenied");
+
+      const tx = token
+        .connect(admin)
+        .recoveryAddress(investor1.address, investor2.address, 100n);
+      await expect(tx)
+        .to.emit(token, "RecoverySuccess")
+        .withArgs(investor1.address, investor2.address, 100n);
+      expect(await token.balanceOf(investor1.address)).to.equal(0n);
+      expect(await token.balanceOf(investor2.address)).to.equal(100n);
+      expect(await token.totalSupply()).to.equal(100n);
+    });
+
+    it("retains country restriction checks in normal transfer flow", async function () {
+      const { token, admin, investor1, investor2, countryModule } = fixture;
+      await token.connect(admin).mint(investor1.address, 100n);
+      await countryModule.addCountryRestriction(COUNTRY_US);
+      await expect(token.connect(investor1).transfer(investor2.address, 1n)).to.be
+        .revertedWithCustomError(token, "ComplianceCheckFailed");
+
+      await countryModule.removeCountryRestriction(COUNTRY_US);
+      await countryModule.addCountryRestriction(COUNTRY_UK);
+      await expect(token.connect(investor1).transfer(investor2.address, 1n)).to.be
+        .revertedWithCustomError(token, "ComplianceCheckFailed");
+
+      await countryModule.removeCountryRestriction(COUNTRY_UK);
+      await token.connect(investor1).transfer(investor2.address, 1n);
+      expect(await token.balanceOf(investor2.address)).to.equal(1n);
+    });
+
+    it("retains maximum-balance checks in normal transfer flow", async function () {
+      const { token, admin, investor1, investor2, compliance } = fixture;
+      const maxModule = (await ethers.deployContract("MaxBalanceModule", [
+        100n,
+        await token.getAddress(),
+      ])) as MaxBalanceModule;
+      await maxModule.waitForDeployment();
+      await compliance.addModule(await maxModule.getAddress());
+      await token.connect(admin).mint(investor1.address, 100n);
+      await token.connect(admin).mint(investor2.address, 90n);
+
+      await expect(token.connect(investor1).transfer(investor2.address, 11n)).to.be
+        .revertedWithCustomError(token, "ComplianceCheckFailed");
+      await token.connect(investor1).transfer(investor2.address, 10n);
+      expect(await token.balanceOf(investor2.address)).to.equal(100n);
+    });
+
+    it("retains governed registry/compliance setters, events, and zero-address rejection", async function () {
+      const { token, admin, investor1, identityRegistry } = fixture;
+      const replacementRegistry = (await ethers.deployContract(
+        "IdentityRegistry",
+      )) as IdentityRegistry;
+      const replacementCompliance = (await ethers.deployContract(
+        "MockIssuanceCompliance",
+      )) as MockIssuanceCompliance;
+      await Promise.all([
+        replacementRegistry.waitForDeployment(),
+        replacementCompliance.waitForDeployment(),
+      ]);
+
+      await expect(
+        token.connect(investor1).setIdentityRegistry(await replacementRegistry.getAddress()),
+      ).to.be.revertedWithCustomError(token, "AccessDenied");
+      await expect(token.connect(admin).setIdentityRegistry(ethers.ZeroAddress)).to.be
+        .revertedWithCustomError(token, "InvalidIdentityRegistry");
+      await expect(
+        token.connect(admin).setIdentityRegistry(await replacementRegistry.getAddress()),
+      )
+        .to.emit(token, "IdentityRegistryUpdated")
+        .withArgs(await replacementRegistry.getAddress());
+      expect(await token.identityRegistry()).to.equal(await replacementRegistry.getAddress());
+
+      await expect(token.connect(investor1).setCompliance(await replacementCompliance.getAddress()))
+        .to.be.revertedWithCustomError(token, "AccessDenied");
+      await expect(token.connect(admin).setCompliance(ethers.ZeroAddress)).to.be
+        .revertedWithCustomError(token, "InvalidCompliance");
+      await expect(
+        token.connect(admin).setCompliance(await replacementCompliance.getAddress()),
+      )
+        .to.emit(token, "ComplianceUpdated")
+        .withArgs(await replacementCompliance.getAddress());
+      expect(await token.compliance()).to.equal(await replacementCompliance.getAddress());
+
+      await token.connect(admin).setIdentityRegistry(await identityRegistry.getAddress());
+      await token.connect(admin).mint(investor1.address, 1n);
+      expect(await token.balanceOf(investor1.address)).to.equal(1n);
+    });
   });
 });

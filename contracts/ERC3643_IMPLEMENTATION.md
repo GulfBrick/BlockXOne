@@ -1,381 +1,136 @@
-# ERC-3643 (T-REX) Implementation for BlockXOne
+# ERC-3643 Gap Notes and Generation 3 Issuance Prototype
 
-## Overview
+## Direct verdict
 
-This directory contains a complete, production-ready implementation of ERC-3643 (Token for Regulated EXchanges - T-REX) compliant smart contracts for BlockXOne's tokenization platform. The implementation provides institutional-grade security tokens with advanced identity verification, modular compliance, and regulatory controls.
+`BXOSecurityToken` is the only token contract reviewed as part of the bounded Generation 3 issuance packet. It is a local prototype under test, not a production contract, not the selected canonical BlockXOne token stack, and not an asserted ERC-3643 implementation.
 
-## Architecture
+The release verdict remains **NO-GO**. The target production network remains unselected. Legal, Registrar, MLRO, CISO, Blockchain, custody, external-audit, G5 and production approvals remain open.
 
-```
-BlockXOne Security Token Ecosystem
-├── Identity Layer
-│   ├── IIdentity.sol - Identity interface (ERC-734/735 based)
-│   ├── Identity.sol - Concrete identity implementation
-│   └── IdentityRegistry.sol - Wallet-to-identity mapping registry
-│
-├── Compliance Layer
-│   ├── Registries
-│   │   ├── ClaimTopicsRegistry.sol - Required claim topics manager
-│   │   └── TrustedIssuersRegistry.sol - Trusted claim issuers manager
-│   │
-│   ├── Modular Engine
-│   │   ├── IComplianceModule.sol - Compliance module interface
-│   │   ├── IModularCompliance.sol - Modular compliance engine interface
-│   │   └── ModularCompliance.sol - Pluggable compliance implementation
-│   │
-│   └── Compliance Modules
-│       ├── CountryRestrictionModule.sol - Country-based restrictions
-│       └── MaxBalanceModule.sol - Maximum balance enforcement
-│
-├── Token Layer
-│   ├── BXOSecurityToken.sol - ERC-3643 compliant security token
-│   └── BXOSecurityTokenFactory.sol - Token deployment factory
-│
-└── Test Suite
-    ├── BXOSecurityToken.test.ts - Comprehensive tests
-    └── Mocks
-        └── MockClaimIssuer.sol - Test claim issuer
-```
+The older `README.md` and `QUICK_START.md` descriptions that call this repository "Production Ready", a "Complete ERC-3643 Implementation", ERC-3643 compliant, audited, or ready for mainnet are stale and expressly superseded and disavowed by this document and `MANIFEST.md`. Those files are outside this packet's edit allowlist and are not release evidence.
 
-## File Structure
+## Bounded reviewed stack
 
-### Identity Management (src/identity/)
+The packet covers these production-shaped contracts only to the stated extent:
 
-#### IIdentity.sol
-- **Purpose**: Defines the interface for on-chain identity management
-- **Methods**:
-  - `getClaim(claimId)` - Retrieve a claim by ID
-  - `addClaim()` - Add a new claim to identity
-  - `removeClaim()` - Remove a claim
-  - `getClaimIdsByTopic()` - Get all claims for a topic
-  - `getClaimCount()` - Total number of claims
+- `src/token/BXOSecurityToken.sol`: reviewed issuance prototype.
+- `src/token/BXOSecurityTokenFactory.sol`: bounded deployment and role-handoff helper for the prototype.
+- `src/identity/IdentityRegistry.sol`: the fail-closed identity predicate delivered by the preceding Generation 3 task.
+- `src/compliance/IModularCompliance.sol` and `ModularCompliance.sol`: the existing compliance boundary used by the prototype; module governance and lifecycle callbacks are not closed here.
+- `src/mocks/MockGovernanceExecutor.sol`: test-only role holder, reentrancy probe and malicious-returndata compliance doubles. It is never a production component.
 
-#### Identity.sol
-- **Purpose**: Reference implementation of ERC-734/735 identity contract
-- **Features**:
-  - Claim-based identity management
-  - Multi-topic claim support
-  - Owner-controlled claim lifecycle
-  - Full NatSpec documentation
+`BXOAssetToken`, `RestrictedSecurityToken`, `TokenFactory`, every mock, and other parallel asset/token contracts are noncanonical and unapproved pending G5 canonical-stack selection and exact-release assurance.
 
-#### IdentityRegistry.sol
-- **Purpose**: On-chain registry mapping addresses to identity contracts
-- **Key Features**:
-  - Links wallets to identity contracts
-  - Tracks investor country codes
-  - Verifies identity compliance via claim checking
-  - Integrates with TrustedIssuersRegistry and ClaimTopicsRegistry
-  - Role-based access control (REGISTRAR_ROLE)
-- **Methods**:
-  - `registerIdentity()` - Register investor with identity
-  - `deleteIdentity()` - Remove investor from registry
-  - `updateCountry()` - Update country code
-  - `isVerified()` - Check if identity meets compliance requirements
-  - `getIdentity()` - Retrieve identity contract for address
-  - `getCountry()` - Get investor's country
+## Issuance controls implemented in this packet
 
-### Compliance Management (src/compliance/)
+### Shared eligibility predicate
 
-#### IClaimIssuer.sol
-- **Purpose**: Interface for trusted claim issuers
-- **Methods**:
-  - `isClaimValid()` - Verify claim signature
-  - `getIssuerAddress()` - Get issuer address
+Standard mint, every item in batch mint, and forced issuance use the same authorization-free internal predicate. A successful issuance requires all of the following:
 
-#### IClaimTopicsRegistry.sol
-- **Purpose**: Interface for managing required claim topics
-- **Methods**:
-  - `addClaimTopic()` - Add required topic
-  - `removeClaimTopic()` - Remove topic requirement
-  - `getClaimTopics()` - Get all required topics
-  - `isTopicRequired()` - Check if topic is required
+1. recipient is not the zero address;
+2. amount is nonzero;
+3. `IdentityRegistry.contains(recipient)` is true;
+4. the hardened `IdentityRegistry.isVerified(recipient)` predicate is true;
+5. `compliance.getModules()` returns an exact, canonical, nonempty address array containing no zero module address; and
+6. an exact 32-byte Boolean `true` is returned by `compliance.canTransfer(address(0), recipient, amount)`.
 
-#### ClaimTopicsRegistry.sol
-- **Purpose**: Manages required claim topics for compliance
-- **Features**:
-  - Owner-controlled topic management
-  - Standard topics defined: KYC (1), AML (2), ACCREDITED (3), COUNTRY (4)
-  - Initialize with KYC and AML topics by default
-  - Prevent duplicate topics
+Reverts, empty configuration, false decisions, short/oversized return data, invalid Boolean words, malformed array layouts, dirty address words and zero-address module entries fail closed.
 
-#### ITrustedIssuersRegistry.sol
-- **Purpose**: Interface for managing trusted claim issuers
-- **Methods**:
-  - `addTrustedIssuer()` - Add trusted issuer with topics
-  - `removeTrustedIssuer()` - Remove issuer from trust list
-  - `updateIssuerClaimTopics()` - Update issuer's topics
-  - `getTrustedIssuers()` - Get all trusted issuers
-  - `isTrustedIssuer()` - Check if address is trusted
-  - `getTrustedIssuerClaimTopics()` - Get issuer's topics
+This minimum-one-module rule prevents vacuous approval. It does not select or approve the eventual legal product, sanctions, investor-type, concentration, holding-period, jurisdiction or canonical G5 module set.
 
-#### TrustedIssuersRegistry.sol
-- **Purpose**: Registry for trusted claim issuers
-- **Features**:
-  - Owner-controlled issuer management
-  - Per-issuer topic whitelisting
-  - Add, remove, and update issuer roles
+### Standard issuance
 
-#### IComplianceModule.sol
-- **Purpose**: Interface for pluggable compliance modules
-- **Methods**:
-  - `canTransfer()` - Check if transfer is allowed
-  - `transferred()` - Post-transfer state update
-  - `name()` - Get module name
+- `MINTER_ROLE` is separate from `AGENT_ROLE`.
+- The constructor grants `MINTER_ROLE` to the named admin.
+- `mint` and `batchMint` are paused-state aware and share the same `ReentrancyGuard` boundary with forced issuance.
+- `batchMint` rejects empty arrays, length mismatches and more than 100 items.
+- Items are checked sequentially, so duplicate recipients observe balances created by earlier items.
+- Any later failure rolls back the entire batch.
+- Every successful standard issuance emits `MintExecuted`.
 
-#### IModularCompliance.sol
-- **Purpose**: Interface for the modular compliance engine
-- **Methods**:
-  - `addModule()` - Add compliance module
-  - `removeModule()` - Remove module
-  - `canTransfer()` - Aggregate check from all modules
-  - `transferred()` - Notify all modules of transfer
-  - `getModules()` - Get all active modules
+### Forced issuance
 
-#### ModularCompliance.sol
-- **Purpose**: Composition engine for compliance modules
-- **Features**:
-  - Add/remove compliance modules
-  - Iterate all modules for transfer validation
-  - Post-transfer callbacks for state updates
-  - Owner-controlled module management
+- `FORCED_ISSUER_ROLE` is not assigned by the constructor or factory.
+- The role can be granted only to an address with deployed code. This proves contract-held authority only; it does **not** prove multisig ownership, signer independence, approval thresholds, timelock policy, recovery quality or operating controls.
+- `forcedIssue` requires a nonzero, previously unused operation ID and nonzero evidence hash.
+- Replay state is marked before external eligibility calls and rolls back with any failed transaction.
+- Forced issuance has no identity or compliance bypass.
+- A success emits `ForcedIssuanceExecuted` with operation ID, operator, recipient, amount and evidence hash.
 
-#### CountryRestrictionModule.sol (src/compliance/modules/)
-- **Purpose**: Enforce country-based transfer restrictions
-- **Features**:
-  - Add/remove restricted countries
-  - Check sender and recipient countries
-  - Integrate with IdentityRegistry
-  - Flexible restriction management
-- **Methods**:
-  - `addCountryRestriction()` - Restrict a country
-  - `removeCountryRestriction()` - Allow a country
-  - `setIdentityRegistry()` - Link to identity registry
-  - `isCountryRestricted()` - Check restriction status
+### Reentrancy boundary
 
-#### MaxBalanceModule.sol (src/compliance/modules/)
-- **Purpose**: Enforce maximum token balance limits
-- **Features**:
-  - Configurable max balance per holder
-  - Prevent transfers exceeding limit
-  - Update-able balance limit
-- **Methods**:
-  - `setMaxBalance()` - Set new maximum balance
-  - `setToken()` - Link to token contract
-  - `getMaxBalance()` - Get current limit
+`nonReentrant` is the first modifier on `mint`, `batchMint` and `forcedIssue`, before pause and role checks. The test-only claim issuer attempts both cross-function directions:
 
-### Token Layer (src/token/)
+- standard mint to different-operation-ID forced issuance; and
+- forced issuance to standard mint.
 
-#### BXOSecurityToken.sol
-- **Purpose**: ERC-3643 compliant security token with all regulatory controls
-- **Features**:
-  - ERC-20 standard token
-  - Transfer restrictions based on:
-    - Identity verification via IdentityRegistry
-    - Compliance module checks
-    - Account freeze status
-    - Paused state
-  - Role-based access control:
-    - DEFAULT_ADMIN_ROLE - Overall admin
-    - AGENT_ROLE - Forced transfer, freeze, recovery
-    - MINTER_ROLE - Token minting
-    - BURNER_ROLE - Token burning
-    - PAUSER_ROLE - Pause/unpause
-  - Advanced features:
-    - `mint()` / `batchMint()` - Create tokens
-    - `burn()` / `batchBurn()` - Destroy tokens
-    - `freezeAddress()` / `unfreezeAddress()` - Account freeze control
-    - `forcedTransfer()` - Regulatory-mandated transfers
-    - `recoveryAddress()` - Token recovery for lost wallets
-    - `pause()` / `unpause()` - Global transfer pause
-    - `setIdentityRegistry()` - Update identity registry
-    - `setCompliance()` - Update compliance engine
+The probe accepts a claim only when the nested call reverts with the exact four-byte `ReentrancyGuardReentrantCall()` selector (`0x3ee5aeb5`). Arbitrary reverts are not accepted as proof.
 
-**Transfer Flow**:
-1. Check if contract is paused
-2. Check if sender/receiver is frozen
-3. Check if sender/receiver is registered in IdentityRegistry
-4. Run all compliance module checks
-5. Execute transfer
-6. Call post-transfer hooks on compliance modules
+### Factory handoff
 
-#### BXOSecurityTokenFactory.sol
-- **Purpose**: Factory contract for deploying complete token ecosystems
-- **Features**:
-  - Deploy new tokens with proper initialization
-  - Optionally mint initial supply
-  - Track all deployments
-  - Store deployment metadata
-- **Methods**:
-  - `deployToken()` - Deploy new token
-  - `getDeployedTokens()` - List all tokens
-  - `getDeployedTokensCount()` - Count tokens
-  - `getTokenInfo()` - Retrieve deployment info
+The prototype factory:
 
-### Mocks and Test Support (src/mocks/)
+- grants the caller default-admin, agent and minter roles;
+- uses the standard mint path for optional initial supply;
+- never grants forced-issuer authority;
+- renounces its own minter, agent and default-admin roles; and
+- records a deployment only after the entire deployment, optional issuance and handoff succeeds.
 
-#### MockClaimIssuer.sol
-- **Purpose**: Test helper for claim issuer verification
-- **Features**:
-  - Returns true for all claim validations (for testing)
-  - Tracks issuer address
+An ineligible initial recipient or empty compliance configuration reverts the transaction without recording a deployment.
 
-## Deployment Sequence
+### Adjacent supply hardening
 
-1. **Deploy Registries**:
-   ```solidity
-   claimTopicsRegistry = new ClaimTopicsRegistry()
-   trustedIssuersRegistry = new TrustedIssuersRegistry()
-   ```
+The legacy `forcedTransfer` and `recoveryAddress` paths call `ERC20._update` directly. OpenZeppelin interprets a zero sender as mint and a zero recipient as burn. This packet therefore rejects either zero endpoint before that call, preventing `AGENT_ROLE` from creating or destroying supply through those two functions.
 
-2. **Deploy IdentityRegistry**:
-   ```solidity
-   identityRegistry = new IdentityRegistry()
-   identityRegistry.initialize(admin, registrar, trustedIssuersRegistry, claimTopicsRegistry)
-   ```
+That correction does not make forced transfer or recovery production complete.
 
-3. **Deploy Compliance Engine and Modules**:
-   ```solidity
-   compliance = new ModularCompliance()
-   countryModule = new CountryRestrictionModule(identityRegistry)
-   maxBalanceModule = new MaxBalanceModule(maxBalance, token)
-   compliance.addModule(countryModule)
-   compliance.addModule(maxBalanceModule)
-   ```
+## Current role model
 
-4. **Deploy Token**:
-   ```solidity
-   token = new BXOSecurityToken(
-       "BlockXOne Security Token",
-       "BXO-T",
-       18,
-       admin,
-       identityRegistry,
-       compliance
-   )
-   ```
+| Role | Current prototype power | Packet status |
+| --- | --- | --- |
+| `DEFAULT_ADMIN_ROLE` | Grant and revoke roles | Present; real governance/timelock policy open |
+| `MINTER_ROLE` | Standard and batch issuance | Separated and eligibility-gated |
+| `FORCED_ISSUER_ROLE` | Evidence-bound forced issuance | Contract-only holder, unassigned by default |
+| `AGENT_ROLE` | Burn, pause, freeze, forced transfer, recovery, registry/compliance replacement | Over-broad legacy bundle; separation remains a G5 blocker |
 
-5. **Or use Factory** (simplified):
-   ```solidity
-   factory = new BXOSecurityTokenFactory()
-   token = factory.deployToken(
-       name, symbol, decimals,
-       identityRegistry, compliance,
-       initialSupply
-   )
-   ```
+No statement in this table approves an EOA, deployer, test executor, hot wallet or unaudited contract as a production role holder.
 
-## Integration Example
+## Explicitly open blockers
 
-```solidity
-// 1. Create identity for investor
-identity = new Identity(investorAddress)
+The following are not closed by this packet:
 
-// 2. Register investor
-identityRegistry.registerIdentity(investorAddress, identity, 840) // 840 = US
+- official ERC-3643 interface IDs, events, behavioral conformance and reference-suite testing;
+- canonical token, registry, identity, compliance and factory selection across parallel stacks;
+- transfer-time identity enforcement: the current normal transfer path checks pause, freeze and compliance but does not itself require registry verification;
+- creation/destruction and other compliance lifecycle callbacks, module-to-token binding and callback-spoof resistance;
+- canonical compliance-module selection and missing-data behavior for every legal/product rule;
+- gas/returndata availability bounds: ordinary Solidity/staticcall paths still forward and copy
+  unbounded gas/returndata, and registry/module arrays and loops are not gas-capped; adversarial
+  callees or large results can therefore cause out-of-gas or revert, while the bounded malformed-
+  returndata tests do not prove a gas or returndata cap;
+- separation of burn, pause, freeze, recovery, forced transfer, registry replacement and compliance replacement from the broad `AGENT_ROLE`;
+- multisig threshold, signer independence, timelock, transaction policy, HSM/MPC/KMS and maker-checker evidence;
+- forced-transfer and recovery identity/compliance eligibility, legal/case approval, evidence binding, pause/freeze semantics and recovery of the legal identity relationship;
+- governed and delayed registry/compliance replacement;
+- factory validation of canonical registries/modules and atomic production deployment manifests;
+- target chain, compiler provenance, verified bytecode, chain finality/reorg processing, indexer and reconciliation;
+- fuzz, invariant, gas-bound, fork/testnet, official-conformance and independent external-audit evidence; and
+- legal register, custody, accounting, tax, incident, operational and production approvals.
 
-// 3. Add KYC claim to identity
-identity.addClaim(
-    1,  // KYC topic
-    1,  // ECDSA scheme
-    issuerAddress,
-    signature,
-    kycData,
-    "https://kyc-provider.com/claim/123"
-)
+In particular, `forcedTransfer` and `recoveryAddress` still bypass ordinary transfer restrictions by design. Only the zero-endpoint supply vulnerability is contained here. They must not be represented as production-ready legal override workflows.
 
-// 4. Add trusted issuer for KYC topic
-trustedIssuersRegistry.addTrustedIssuer(issuer, [1])
+## Local verification contract
 
-// 5. Now investor can receive tokens
-token.mint(investorAddress, ethers.parseEther("1000"))
+The packet's tests cover direct and factory deployments; public role grants; unauthorized, paused, zero, unregistered, unverified, empty-compliance, restricted-country, maximum-balance, rejecting, reverting and malformed issuance; bounded/atomic batches; replay and evidence; cross-function reentrancy; factory role residue; zero-endpoint forced transfer/recovery; retained lifecycle regressions; and supply reconciliation.
 
-// 6. Investor can transfer tokens
-token.transfer(investor2Address, ethers.parseEther("100"))
-```
+The pinned local commands are:
 
-## Security Features
-
-1. **Identity Verification**: All transfers require verified identities
-2. **Claim-Based Compliance**: Identity verified via trusted issuer claims
-3. **Modular Restrictions**: Composable compliance rules
-4. **Freeze Mechanism**: Immediate account lockdown capability
-5. **Forced Transfer**: Regulatory override for compliance
-6. **Token Recovery**: Recovery mechanism for lost wallets
-7. **Role-Based Access**: Fine-grained permission control
-8. **Pausable**: Emergency pause mechanism
-9. **Country Restrictions**: Geographic compliance
-10. **Balance Caps**: Maximum holding limits
-
-## Testing
-
-Comprehensive test suite in `test/BXOSecurityToken.test.ts` covers:
-
-- Deployment and initialization
-- Identity registry operations
-- Claim topics management
-- Trusted issuers management
-- Token minting and burning (single and batch)
-- Freeze/unfreeze functionality
-- Pause/unpause operations
-- Forced transfers
-- Token recovery
-- Modular compliance engine
-- Country restrictions
-- Maximum balance enforcement
-- Edge cases and security scenarios
-- Factory deployment
-
-### Run Tests
-
-```bash
-cd contracts
-npm install
+```powershell
+npm run compile -- --force
+npm run typecheck
+npm test -- test/BXOSecurityToken.test.ts test/BXOSecurityTokenFactory.test.ts
 npm test
+npm audit --audit-level=low
+npm audit --omit=dev --audit-level=low
 ```
 
-## Solidity Version
-
-- **Pragma**: `^0.8.20`
-- **OpenZeppelin**: v5.x
-- **Hardhat**: Latest stable
-
-## Gas Optimization Considerations
-
-1. **Batch Operations**: Use batch mint/burn/freeze for efficiency
-2. **Module Optimization**: Minimize active compliance modules
-3. **Cache Registry References**: Store in contract state where possible
-4. **Claim Lookup**: Maintain indexed access to claims by topic
-
-## Future Enhancements
-
-1. **Oracle Integration**: Dynamic country restrictions via Chainlink
-2. **Advanced Claim Types**: Encrypted claims, temporal validity
-3. **Multi-Signature Control**: Require multiple signatures for sensitive operations
-4. **Token Transfer Hooks**: ERC-1155 style hooks for advanced DeFi
-5. **Governance**: DAO-controlled compliance updates
-6. **Dividend Distribution**: Integrated dividend mechanisms
-7. **Atomic Swaps**: P2P token exchange with identity verification
-
-## Compliance Standards
-
-- **ERC-20**: Full compatibility
-- **ERC-3643**: Complete implementation (T-REX)
-- **ERC-734/735**: Identity management foundation
-- **OpenZeppelin**: Best practices and audited code
-
-## License
-
-MIT License - See individual files for details
-
-## Support and Documentation
-
-- Detailed NatSpec comments in all contracts
-- Comprehensive test examples
-- Type-safe TypeScript tests
-- Full event logging for off-chain tracking
-
----
-
-**Implementation Date**: 2026-03-29
-**Status**: Production Ready
-**Audit Status**: Ready for external audit
+Passing local tests is necessary evidence for this bounded packet. It is not G5 approval, standard conformance, an external audit, a deployment authorization or production readiness.

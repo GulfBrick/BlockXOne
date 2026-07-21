@@ -1,429 +1,84 @@
-# ERC-3643 (T-REX) Implementation - File Manifest
+# Contracts Manifest — Generation 3 Issuance Packet
 
-## Deliverables Summary
+## Status
 
-### Contracts Directory Structure
-```
-src/
-├── identity/
-│   ├── IIdentity.sol                    (Interface)
-│   ├── Identity.sol                     (Implementation)
-│   └── IdentityRegistry.sol             (Registry)
-│
-├── compliance/
-│   ├── IClaimIssuer.sol                 (Interface)
-│   ├── IClaimTopicsRegistry.sol         (Interface)
-│   ├── IComplianceModule.sol            (Interface)
-│   ├── IModularCompliance.sol           (Interface)
-│   ├── ClaimTopicsRegistry.sol          (Implementation)
-│   ├── TrustedIssuersRegistry.sol       (Implementation)
-│   ├── ModularCompliance.sol            (Implementation)
-│   └── modules/
-│       ├── CountryRestrictionModule.sol (Module)
-│       └── MaxBalanceModule.sol         (Module)
-│
-├── token/
-│   ├── BXOSecurityToken.sol             (Main Token)
-│   └── BXOSecurityTokenFactory.sol      (Factory)
-│
-└── mocks/
-    └── MockClaimIssuer.sol              (Test Helper)
+**Release verdict: NO-GO.** `BXOSecurityToken` is the only token contract treated as this packet's reviewed prototype. No contract in this repository is designated canonical for production, approved for mainnet, or asserted to conform to ERC-3643.
 
-test/
-└── BXOSecurityToken.test.ts             (Test Suite)
+The production network remains unselected. G5 canonical-stack selection, professional approvals, exact-release assurance and independent audit/retest remain mandatory.
 
-Documentation/
-├── ERC3643_IMPLEMENTATION.md            (Architecture Guide)
-├── QUICK_START.md                       (Developer Guide)
-└── MANIFEST.md                          (This File)
-```
+Stale "Production Ready", "Complete ERC-3643 Implementation", compliance, audit and mainnet-readiness claims in `README.md` and `QUICK_START.md` are superseded and expressly disavowed. Those files were not allowlisted for this packet and are not release evidence.
 
-## Contract Files
+## Packet inventory
 
-### Identity Layer (3 contracts)
+| Path | Classification | Bounded purpose |
+| --- | --- | --- |
+| `src/token/BXOSecurityToken.sol` | Reviewed prototype only | Standard, batch and evidence-bound forced issuance containment |
+| `src/token/BXOSecurityTokenFactory.sol` | Supporting prototype helper | Atomic deployment, optional standard mint and role handoff |
+| `src/identity/IdentityRegistry.sol` | Upstream Generation 3 dependency | Fail-closed cryptographic identity predicate |
+| `src/compliance/IModularCompliance.sol` | Existing boundary | Module enumeration and issuance decision interface |
+| `src/compliance/ModularCompliance.sol` | Existing prototype dependency | Aggregates current test modules; governance/callback gaps remain |
+| `src/mocks/MockGovernanceExecutor.sol` | Test only, noncanonical | Contract role holder, exact-selector reentry issuer and malformed-compliance doubles |
+| `test/BXOSecurityToken.test.ts` | Local evidence | Issuance, reentrancy, lifecycle regression and supply tests |
+| `test/BXOSecurityTokenFactory.test.ts` | Local evidence | Factory atomicity and role-residue tests |
+| `ERC3643_IMPLEMENTATION.md` | Gap/status document | Accurate bounded controls and explicit open blockers |
 
-#### 1. src/identity/IIdentity.sol
-- **Type**: Interface
-- **Lines**: ~100
-- **Purpose**: Define identity interface based on ERC-734/735
-- **Key Methods**:
-  - getClaim(), addClaim(), removeClaim(), getClaimIdsByTopic(), getClaimCount()
+## Noncanonical parallel and test stacks
 
-#### 2. src/identity/Identity.sol
-- **Type**: Implementation
-- **Lines**: ~200
-- **Purpose**: Reference implementation of identity contract
-- **Features**:
-  - Full claim lifecycle management
-  - Topic-based claim indexing
-  - Claim validation and storage
+The following are explicitly noncanonical pending G5 and exact-release review:
 
-#### 3. src/identity/IdentityRegistry.sol
-- **Type**: Registry Contract
-- **Lines**: ~280
-- **Purpose**: Map wallet addresses to identity contracts
-- **Features**:
-  - Identity registration and deletion
-  - Country code tracking
-  - Verification checking against trusted issuers
-  - Links to compliance registries
+- `src/BXOAssetToken.sol`;
+- `src/RestrictedSecurityToken.sol`;
+- `src/TokenFactory.sol`;
+- `src/token/BXOSecurityTokenFactory.sol` beyond its bounded prototype tests;
+- every contract under `src/mocks/`, including `MockClaimIssuer`, `MockRegistryFailures`, `MockGovernanceExecutor`, `MockIssuanceReentryClaimIssuer` and `MockIssuanceCompliance`; and
+- other asset, sale, escrow, whitelist and registry contracts not admitted by a later canonical-stack decision.
 
-### Compliance Layer (8 contracts)
+Mocks must never appear in a production deployment manifest, production bytecode set, signer workflow or runtime dependency graph.
 
-#### 4. src/compliance/IClaimIssuer.sol
-- **Type**: Interface
-- **Lines**: ~50
-- **Purpose**: Define claim issuer interface
-- **Key Methods**: isClaimValid(), getIssuerAddress()
+## Enforced prototype invariants
 
-#### 5. src/compliance/IClaimTopicsRegistry.sol
-- **Type**: Interface
-- **Lines**: ~45
-- **Purpose**: Define claim topics registry interface
-- **Key Methods**: addClaimTopic(), removeClaimTopic(), getClaimTopics(), isTopicRequired()
+- Standard mint requires `MINTER_ROLE`.
+- Forced issuance requires the separate `FORCED_ISSUER_ROLE`, which starts unassigned and can only be granted to deployed code.
+- Mint, batch mint and forced issue share one first-executed `ReentrancyGuard` boundary.
+- All three routes require nonzero amount and recipient, registration, hardened identity verification, nonempty/nonzero exact module configuration and exact compliance approval for `(address(0), recipient, amount)`.
+- Forced issuance requires a nonzero one-time operation ID and nonzero evidence hash.
+- Batch mint is nonempty, length-matched, capped at 100 and transaction-atomic.
+- Factory initial supply uses standard mint and leaves the factory with no default-admin, agent, minter or forced-issuer role.
+- Forced transfer and recovery reject either zero endpoint, so those paths cannot mint or burn through `ERC20._update`.
+- Tested supply equals successful issuance minus burns across the covered sequences.
 
-#### 6. src/compliance/IComplianceModule.sol
-- **Type**: Interface
-- **Lines**: ~50
-- **Purpose**: Define compliance module interface
-- **Key Methods**: canTransfer(), transferred(), name()
+These invariants are bounded local implementation evidence only. Contract code at a forced-role holder proves neither multisig quality nor approval governance.
 
-#### 7. src/compliance/IModularCompliance.sol
-- **Type**: Interface
-- **Lines**: ~65
-- **Purpose**: Define modular compliance engine interface
-- **Key Methods**: addModule(), removeModule(), canTransfer(), transferred(), getModules()
+## Open release blockers
 
-#### 8. src/compliance/ClaimTopicsRegistry.sol
-- **Type**: Implementation
-- **Lines**: ~150
-- **Purpose**: Manage required claim topics
-- **Features**:
-  - Add/remove claim topics
-  - Standard topic constants (KYC=1, AML=2, ACCREDITED=3, COUNTRY=4)
-  - Initialize with KYC and AML by default
+- Official ERC-3643 interfaces and behavioral conformance are not proven.
+- Transfer identity checks and compliance lifecycle callbacks are incomplete.
+- Ordinary Solidity/staticcall paths still forward and copy unbounded gas/returndata, while
+  registry/module arrays and loops are not gas-capped; adversarial callees or large results can
+  cause out-of-gas or revert, and bounded malformed-return tests do not establish availability
+  caps.
+- `AGENT_ROLE` still combines burn, pause, freeze, forced transfer, recovery and registry/compliance replacement.
+- Forced transfer and recovery still lack ordinary identity/compliance enforcement, legal/case evidence, maker-checker approval and complete recovery semantics.
+- Registry and compliance replacement have no approved timelock/multisig policy.
+- The canonical compliance-module set and product/jurisdiction rules are unapproved.
+- No actual multisig/timelock/HSM/MPC/KMS configuration is selected or evidenced.
+- Production chain, finality/reorg model, deployment manifest and bytecode verification are absent.
+- Fuzz/invariant/gas/fork/testnet, independent audit/retest and human G5 approval remain absent.
+- Legal-register, custody, accounting and reconciliation controls remain outside this packet.
 
-#### 9. src/compliance/TrustedIssuersRegistry.sol
-- **Type**: Implementation
-- **Lines**: ~160
-- **Purpose**: Manage trusted claim issuers
-- **Features**:
-  - Add/remove trusted issuers
-  - Per-issuer topic whitelisting
-  - Verify issuer trust status
+Any one of these remains sufficient to prevent a production or ERC-3643-conformance claim.
 
-#### 10. src/compliance/ModularCompliance.sol
-- **Type**: Implementation
-- **Lines**: ~130
-- **Purpose**: Compose compliance modules
-- **Features**:
-  - Add/remove modules
-  - Aggregate canTransfer() checks
-  - Post-transfer callbacks
+## Admission checklist for a later G5 candidate
 
-#### 11. src/compliance/modules/CountryRestrictionModule.sol
-- **Type**: Compliance Module
-- **Lines**: ~180
-- **Purpose**: Country-based transfer restrictions
-- **Features**:
-  - Add/remove restricted countries
-  - Check sender/recipient countries
-  - Integrates with IdentityRegistry
+- [ ] Name one canonical token/identity/compliance/factory stack and remove parallel ambiguity.
+- [ ] Pin official standard/interface sources and pass conformance tests.
+- [ ] Close transfer, mint, burn, forced-transfer and recovery callbacks and eligibility invariants.
+- [ ] Separate privileged roles and bind them to approved governance controls.
+- [ ] Approve the legal product, jurisdiction, investor class and compliance modules.
+- [ ] Select the network and finality/reorg/reconciliation policies.
+- [ ] Produce reproducible bytecode and an immutable network/deployment manifest.
+- [ ] Run property, fuzz, invariant, gas-bound, malicious-contract and fork/testnet tests.
+- [ ] Complete external audit, remediation and exact-bytecode retest.
+- [ ] Obtain named Legal, Registrar, MLRO, CISO, Blockchain, custody, Risk and production approvals.
 
-#### 12. src/compliance/modules/MaxBalanceModule.sol
-- **Type**: Compliance Module
-- **Lines**: ~150
-- **Purpose**: Maximum token balance enforcement
-- **Features**:
-  - Configurable per-holder balance limit
-  - Prevent transfers exceeding limit
-  - Update-able limits
-
-### Token Layer (2 contracts)
-
-#### 13. src/token/BXOSecurityToken.sol
-- **Type**: Main Token
-- **Lines**: ~350
-- **Purpose**: ERC-3643 compliant security token
-- **Key Features**:
-  - ERC-20 standard
-  - Identity verification checks
-  - Modular compliance engine integration
-  - Freeze/unfreeze capability
-  - Forced transfer (AGENT_ROLE)
-  - Token recovery
-  - Pause/unpause
-  - Batch operations
-  - Full role-based access control
-
-#### 14. src/token/BXOSecurityTokenFactory.sol
-- **Type**: Factory
-- **Lines**: ~140
-- **Purpose**: Deploy security tokens
-- **Features**:
-  - Deploy complete token ecosystems
-  - Track deployments
-  - Store deployment metadata
-  - Optional initial minting
-
-### Mocks & Testing (1 contract)
-
-#### 15. src/mocks/MockClaimIssuer.sol
-- **Type**: Test Helper
-- **Lines**: ~50
-- **Purpose**: Mock claim issuer for testing
-- **Features**:
-  - Implements IClaimIssuer
-  - Returns true for all validations (for testing)
-
-### Test Suite (1 file)
-
-#### 16. test/BXOSecurityToken.test.ts
-- **Type**: Hardhat Test Suite
-- **Lines**: ~800
-- **Framework**: Chai + ethers.js v6
-- **Coverage**:
-  - 15+ test suites
-  - 60+ individual test cases
-  - Deployment & initialization
-  - Identity registry operations
-  - Claim management
-  - Trusted issuers
-  - Minting/burning (single & batch)
-  - Freeze/unfreeze
-  - Pause/unpause
-  - Forced transfers
-  - Recovery
-  - Modular compliance
-  - Country restrictions
-  - Max balance enforcement
-  - Factory deployment
-  - Edge cases & security
-
-### Documentation (3 files)
-
-#### 17. ERC3643_IMPLEMENTATION.md
-- **Purpose**: Complete architecture documentation
-- **Sections**:
-  - Overview
-  - Architecture diagram
-  - File structure details
-  - Method descriptions for all contracts
-  - Deployment sequence
-  - Integration examples
-  - Security features
-  - Testing instructions
-  - Gas optimization considerations
-  - Future enhancements
-  - Standards compliance
-  - ~450 lines
-
-#### 18. QUICK_START.md
-- **Purpose**: Developer quick reference
-- **Sections**:
-  - Deployment steps
-  - Investor onboarding flow
-  - Token operations (mint, transfer, freeze)
-  - Emergency controls
-  - Compliance management
-  - Testing instructions
-  - Key roles reference
-  - Access control examples
-  - Event monitoring
-  - Security checklist
-  - Troubleshooting
-  - ~300 lines
-
-#### 19. MANIFEST.md
-- **Purpose**: File inventory and specifications
-- **This file**
-
-## Code Statistics
-
-| Category | Count | Lines |
-|----------|-------|-------|
-| Interfaces | 5 | ~250 |
-| Implementations | 8 | ~1,200 |
-| Modules | 2 | ~330 |
-| Main Token | 1 | ~350 |
-| Factory | 1 | ~140 |
-| Test Helpers | 1 | ~50 |
-| **Solidity Total** | **18** | **~2,320** |
-| Test Suite | 1 | ~800 |
-| Documentation | 3 | ~1,050 |
-| **Grand Total** | **22** | **~4,170** |
-
-## Feature Coverage
-
-### Identity Management
-- [x] ERC-734/735 key management interface
-- [x] Claim-based identity
-- [x] Multi-topic claim support
-- [x] Claim lifecycle management
-- [x] Identity registration registry
-- [x] Country code tracking
-- [x] Verification against trusted issuers
-
-### Compliance Framework
-- [x] Claim topics registry
-- [x] Trusted issuers registry
-- [x] Modular compliance engine
-- [x] Pluggable compliance modules
-- [x] Module composition and aggregation
-- [x] Transfer validation pipeline
-- [x] Post-transfer callbacks
-
-### Compliance Modules
-- [x] Country restriction module
-- [x] Maximum balance module
-- [x] Module addition/removal
-- [x] Per-holder configuration
-
-### Token Features
-- [x] ERC-20 compliant
-- [x] Identity verification checks
-- [x] Compliance module integration
-- [x] Freeze/unfreeze functionality
-- [x] Account freezing
-- [x] Token pause/unpause
-- [x] Forced transfers (AGENT_ROLE)
-- [x] Token recovery for lost wallets
-- [x] Batch operations (mint/burn/freeze)
-- [x] Customizable decimals
-
-### Access Control
-- [x] DEFAULT_ADMIN_ROLE
-- [x] REGISTRAR_ROLE
-- [x] MINTER_ROLE
-- [x] BURNER_ROLE
-- [x] PAUSER_ROLE
-- [x] AGENT_ROLE
-- [x] Fine-grained permissions
-- [x] Role inheritance
-
-### Testing
-- [x] Deployment tests
-- [x] Identity registry tests
-- [x] Claim topics tests
-- [x] Trusted issuers tests
-- [x] Minting tests
-- [x] Burning tests
-- [x] Batch operation tests
-- [x] Freeze/unfreeze tests
-- [x] Pause/unpause tests
-- [x] Forced transfer tests
-- [x] Recovery tests
-- [x] Compliance module tests
-- [x] Country restriction tests
-- [x] Max balance tests
-- [x] Factory deployment tests
-- [x] Edge case tests
-- [x] Security tests
-
-## Standards Compliance
-
-- [x] ERC-20 (Token Standard)
-- [x] ERC-3643 (T-REX - Regulated Security Token)
-- [x] ERC-734 (Ethereum Identity Management)
-- [x] ERC-735 (Claim Management)
-- [x] OpenZeppelin v5 best practices
-- [x] Solidity ^0.8.20
-- [x] Full NatSpec documentation
-- [x] Hardhat compatible
-- [x] ethers.js v6 compatible
-
-## Security Features
-
-1. **Identity Verification**: All transfers require verified identities
-2. **Trusted Issuers**: Claims must come from trusted parties
-3. **Modular Compliance**: Composable, auditable rules
-4. **Freeze Mechanism**: Immediate account lockdown
-5. **Forced Transfer**: Regulatory override capability
-6. **Token Recovery**: Recover tokens from lost wallets
-7. **Role-Based Access**: Fine-grained permissions
-8. **Pausable**: Emergency pause capability
-9. **Country Controls**: Geographic restrictions
-10. **Balance Limits**: Maximum holding enforcement
-
-## Deployment Checklist
-
-- [ ] Review all contracts
-- [ ] Run test suite
-- [ ] Check gas optimization
-- [ ] Verify imports and dependencies
-- [ ] Validate access control
-- [ ] Test on testnet
-- [ ] Request security audit
-- [ ] Fix audit findings
-- [ ] Final mainnet deployment
-- [ ] Verify on-chain deployment
-- [ ] Set up monitoring
-
-## Future Enhancement Opportunities
-
-- Oracle integration for dynamic restrictions
-- Advanced claim types with encryption
-- Multi-signature controls
-- Enhanced token transfer hooks
-- DAO-controlled compliance
-- Dividend distribution
-- Atomic swaps with verification
-- Cross-chain interoperability
-
-## File Locations
-
-All files created in: `/sessions/charming-sweet-archimedes/mnt/BlockXOne Test/contracts/`
-
-### Directory Tree
-```
-/BlockXOne Test/contracts/
-├── src/
-│   ├── identity/
-│   │   ├── IIdentity.sol
-│   │   ├── Identity.sol
-│   │   └── IdentityRegistry.sol
-│   ├── compliance/
-│   │   ├── IClaimIssuer.sol
-│   │   ├── IClaimTopicsRegistry.sol
-│   │   ├── IComplianceModule.sol
-│   │   ├── IModularCompliance.sol
-│   │   ├── ITrustedIssuersRegistry.sol
-│   │   ├── ClaimTopicsRegistry.sol
-│   │   ├── TrustedIssuersRegistry.sol
-│   │   ├── ModularCompliance.sol
-│   │   └── modules/
-│   │       ├── CountryRestrictionModule.sol
-│   │       └── MaxBalanceModule.sol
-│   ├── token/
-│   │   ├── BXOSecurityToken.sol
-│   │   └── BXOSecurityTokenFactory.sol
-│   └── mocks/
-│       └── MockClaimIssuer.sol
-├── test/
-│   └── BXOSecurityToken.test.ts
-├── ERC3643_IMPLEMENTATION.md
-├── QUICK_START.md
-└── MANIFEST.md
-```
-
-## Version Information
-
-- **Solidity**: ^0.8.20
-- **OpenZeppelin**: v5.x
-- **Hardhat**: Latest
-- **ethers.js**: v6.x
-- **Node.js**: v18+ recommended
-- **Implementation Date**: 2026-03-29
-- **Status**: Production Ready
-
-## Support
-
-For detailed documentation: See `ERC3643_IMPLEMENTATION.md`
-For quick reference: See `QUICK_START.md`
-For testing: Run `npm test` in contracts directory
-
----
-
-**Complete ERC-3643 Implementation**
-Ready for production deployment and external audit
-All code fully documented with NatSpec comments
+Until every applicable item has evidence against the exact release, this repository remains a local prototype and **NO-GO**.
