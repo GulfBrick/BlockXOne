@@ -104,15 +104,17 @@ function Assert-ExactFrontMatterScalar {
 }
 
 $validatorRepoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
-$builderPathAllowlist = @(
-    '.planning/TEST-CONTRACT.md'
-    '.planning/scripts/validate-planning.ps1'
-    '.planning/BLOCKERS.md'
-    '.planning/EVIDENCE-REGISTER.md'
-    '.planning/STATE.md'
-    '.planning/phases/00-planning-truth-and-containment/00-04-SUMMARY.md'
-    '.planning/phases/00-planning-truth-and-containment/00-EVIDENCE.md'
-)
+$builderStatusContract = [ordered]@{
+    '.planning/scripts/invoke-phase0-matrix.ps1' = 'A '
+    '.planning/scripts/test-phase0-matrix-runner.ps1' = 'A '
+    '.planning/TEST-CONTRACT.md' = 'M '
+    '.planning/scripts/validate-planning.ps1' = 'M '
+    '.planning/BLOCKERS.md' = 'M '
+    '.planning/EVIDENCE-REGISTER.md' = 'M '
+    '.planning/STATE.md' = 'M '
+    '.planning/phases/00-planning-truth-and-containment/00-04-SUMMARY.md' = 'M '
+    '.planning/phases/00-planning-truth-and-containment/00-EVIDENCE.md' = 'M '
+}
 
 Push-Location $validatorRepoRoot
 try {
@@ -134,7 +136,7 @@ else {
     $allowedBuilderPaths = [System.Collections.Generic.HashSet[string]]::new(
         [System.StringComparer]::Ordinal
     )
-    foreach ($builderPath in $builderPathAllowlist) {
+    foreach ($builderPath in $builderStatusContract.Keys) {
         Assert-Condition (
             $allowedBuilderPaths.Add($builderPath)
         ) "Internal validator error: duplicate builder allowlist path '$builderPath'"
@@ -162,26 +164,20 @@ else {
         Assert-Condition (
             $seenBuilderPaths.Add($residuePath)
         ) "Builder-staged mode found duplicate tracked path '$residuePath'"
-        if ($residuePath -ceq '.planning/phases/00-planning-truth-and-containment/00-04-SUMMARY.md') {
-            Assert-Condition (
-                $statusCode -ceq 'M ' -or $statusCode -ceq 'D '
-            ) "Builder-staged summary must be index-only modified or deleted, got '$statusCode'"
-        }
-        else {
-            Assert-Condition (
-                $statusCode -ceq 'M '
-            ) "Builder-staged path '$residuePath' must be index-only modified, got '$statusCode'"
-        }
+        $expectedStatusCode = $builderStatusContract[$residuePath]
+        Assert-Condition (
+            $statusCode -ceq $expectedStatusCode
+        ) "Builder-staged path '$residuePath' must have status '$expectedStatusCode', got '$statusCode'"
     }
 
     $missingBuilderPaths = @(
-        $builderPathAllowlist |
+        $builderStatusContract.Keys |
             Where-Object { -not $seenBuilderPaths.Contains($_) }
     )
     Assert-Condition (
-        $seenBuilderPaths.Count -eq $builderPathAllowlist.Count -and
+        $seenBuilderPaths.Count -eq $builderStatusContract.Count -and
         $missingBuilderPaths.Count -eq 0
-    ) "Builder-staged mode requires the exact seven-path correction; missing=[$($missingBuilderPaths -join ', ')]"
+    ) "Builder-staged mode requires the exact nine-path correction; missing=[$($missingBuilderPaths -join ', ')]"
 }
 
 $phaseRelativePath = '.planning\phases\00-planning-truth-and-containment'
@@ -210,7 +206,7 @@ foreach ($candidate in @($planCandidates + $summaryCandidates)) {
 }
 
 $expectedPlanNames = @(
-    1..11 | ForEach-Object { '00-{0:D2}-PLAN.md' -f $_ }
+    1..12 | ForEach-Object { '00-{0:D2}-PLAN.md' -f $_ }
 )
 $actualPlanNames = @($planCandidates | ForEach-Object Name)
 Assert-OrdinalSetEqual $actualPlanNames $expectedPlanNames 'Phase 0 plan filenames'
@@ -224,7 +220,119 @@ if ($actualSummaryNames.Count -eq 1) {
 }
 $summaryPresent = [int]($actualSummaryNames.Count -eq 1)
 $expectedArtifactStatus = if ($summaryPresent -eq 1) { 'partial' } else { 'planned' }
-$expectedArtifactProgress = if ($summaryPresent -eq 1) { 9 } else { 0 }
+$expectedArtifactProgress = if ($summaryPresent -eq 1) { 8 } else { 0 }
+
+$currentTruthStatements = @(
+    "I4's aggregate matrix PASS is not accepted because mandatory native exits were maskable.",
+    "I4's individual command and mutation outputs remain narrow historical evidence only.",
+    'The attempted R4 produced only SECURITY-REVIEW-FAILURE-RECEIPT-v4.md; no R4, V4 or C4 exists.',
+    'The six recoverably moved .git/objects files were repository-metadata mutations, not tracked working-tree edits.',
+    'The v4 failure receipt SHA-256 is 0D9B3DF8697646FBB4747BD12B3521DA39E898C286593809CF9C3492176DD7B5.',
+    'P11 is 85964576707555b0b2ad3df6b297e1cb9a602d0a with Plan 00-12 SHA-256 A702B1F506E23FDF475702A76CB30041F295485DFE1BC922D00B19ADC0B439AC.',
+    'The Plan 00-12 task paths /root, /root/gen3_plan12_checker, /root/gen3_i5_builder, /root/gen3_r5_security_reviewer, /root/gen3_v5_verifier and /root/gen3_c5_admission_owner are pairwise distinct workflow provenance, not legal-person or professional independence.',
+    'Typed roots: TEST_CONTRACT_NATIVE_EXIT_MASKING, EVIDENCE_PROVENANCE_PATH_TRANSCRIPTION_ERROR, GENERATED_OUTPUT_ANCESTOR_REPARSE_ESCAPE, AGENT_ROLE_PROVENANCE_OMISSION and EVIDENCE_SCOPE_WORDING_OVERSTATEMENT.',
+    'Phase 0 remains in_progress, production completion remains zero, and release remains NO-GO.'
+)
+$currentTruthPaths = @(
+    '.planning/BLOCKERS.md',
+    '.planning/EVIDENCE-REGISTER.md',
+    '.planning/STATE.md',
+    '.planning/phases/00-planning-truth-and-containment/00-04-SUMMARY.md',
+    '.planning/phases/00-planning-truth-and-containment/00-EVIDENCE.md'
+)
+foreach ($currentTruthPath in $currentTruthPaths) {
+    if (
+        $currentTruthPath -ceq '.planning/phases/00-planning-truth-and-containment/00-04-SUMMARY.md' -and
+        $summaryPresent -eq 0
+    ) {
+        continue
+    }
+    $currentTruthText = Get-Content -Raw -LiteralPath $currentTruthPath
+    foreach ($currentTruthStatement in $currentTruthStatements) {
+        Assert-Condition (
+            $currentTruthText.Contains($currentTruthStatement)
+        ) "Current-truth contract missing from '$currentTruthPath': $currentTruthStatement"
+    }
+}
+
+$semanticEvidenceContracts = [ordered]@{
+    '.planning/TEST-CONTRACT.md' = @(
+        'Every result-bearing production label is statically mapped to one explicit',
+        'Go JSON discovery rejects duplicate or case-colliding properties',
+        'The exact 39',
+        '1,559 explicitly synthetic tested-package events',
+        'Both Vitest entries require exact 3/3 file',
+        'Every captured native string is scanned for U+FFFD and U+FEFF before raw',
+        'exact ordered 19-line raw npm/Next transcript'
+    )
+    '.planning/BLOCKERS.md' = @(
+        'Exact candidate `93f5e8652354163a2f12ab6b88601e6cbaf35e0f`',
+        '`96B1F854E0ABCDC49777C599F0C5BAD167359A41602745A21D735C23D4234110`',
+        '`70330636AB2A07912C920723A08E81B5596F2A1F1BE456833074406D8EB76CA0`',
+        '`3368C0F60999C3B3608A97BC68BEC88D24CFA96FDEBFE214991E3D46F352C643`',
+        '`C08FD0D7F1B9A02296BEF242436F9716C10FC73D8427ED4B6F8251382819FEB0`',
+        '`DF4E374F6B8EDEC5AC591516034D03551905A14EFA22E0749DD93C01D59D093D`',
+        '`FE88A21AAE71739E977CC95D9B28C8A64A2DD56000046634E699C9F5BF6754EB`',
+        '`F19734C253547834021544FF39F42FF4AA27BE5D57FD3D7FD547B8E9479CA421`',
+        '`A0D9F4661F1F6329E108CD5CD7BA36235AFBE57B8747A0909CC3BE9E9BB154BA`'
+    )
+    '.planning/EVIDENCE-REGISTER.md' = @(
+        '| EV-P0-051 |',
+        '`96B1F854E0ABCDC49777C599F0C5BAD167359A41602745A21D735C23D4234110`',
+        'This is parser-failure evidence only, not a matrix PASS',
+        '| EV-P0-052 |',
+        '| EV-P0-053 |',
+        '| EV-P0-054 |',
+        'This is web-path evidence only, not R5',
+        '| EV-P0-055 |',
+        '`FE88A21AAE71739E977CC95D9B28C8A64A2DD56000046634E699C9F5BF6754EB`',
+        '| EV-P0-056 |',
+        '`F19734C253547834021544FF39F42FF4AA27BE5D57FD3D7FD547B8E9479CA421`',
+        '| EV-P0-057 |',
+        '`A0D9F4661F1F6329E108CD5CD7BA36235AFBE57B8747A0909CC3BE9E9BB154BA`',
+        '| EV-P0-058 |',
+        '`37BCCFBA90997B77577D01E2F3E35621C48E85CD1C568FC23B5982C1E6F3C13C`'
+    )
+    '.planning/STATE.md' = @(
+        'The in-progress amended I5 parser contract removes the generic existence matcher',
+        'statically maps all 49 result-bearing labels',
+        'Run43 reached native-zero `web.lint` and then stopped fail closed',
+        'Pre-run57 runner/test hashes `C08FD0D7F1B9A02296BEF242436F9716C10FC73D8427ED4B6F8251382819FEB0`',
+        'Run57 on exact commit `457fb88e57c46d6a42add68b6fe96892e7e377b9`',
+        'Run58 tested the pre-run58 runner/test hashes',
+        'The repaired runner/test hashes are `F19734C253547834021544FF39F42FF4AA27BE5D57FD3D7FD547B8E9479CA421`'
+    )
+    '.planning/phases/00-planning-truth-and-containment/00-04-SUMMARY.md' = @(
+        'The amended I5 contract removes the generic existence matcher',
+        '49 label-to-parser removal/weakening mutations',
+        'Runs51a/51b then passed exactly two authorized clean-fixture eight-command web',
+        'Run57 under',
+        'Run58 under `i5-go-discovery-aggregate-run58-20260724`',
+        'The repaired runner/test SHA-256 values are'
+    )
+    '.planning/phases/00-planning-truth-and-containment/00-EVIDENCE.md' = @(
+        'The amended parser library now maps all 49 result-bearing production labels',
+        'discovery requires 357 unique pass identities',
+        'Exactly two authorized clean-fixture web-path repetitions then passed all eight',
+        'The exact 1,598 raw JSON payloads',
+        'Run58 under `i5-go-discovery-aggregate-run58-20260724`',
+        'The repaired runner SHA-256 is'
+    )
+}
+foreach ($contract in $semanticEvidenceContracts.GetEnumerator()) {
+    if (
+        $contract.Key -ceq '.planning/phases/00-planning-truth-and-containment/00-04-SUMMARY.md' -and
+        $summaryPresent -eq 0
+    ) {
+        continue
+    }
+    $contractText = Get-Content -Raw -LiteralPath $contract.Key
+    foreach ($requiredText in $contract.Value) {
+        Assert-Condition (
+            $contractText.Contains($requiredText)
+        ) "Semantic-parser evidence contract missing from '$($contract.Key)': $requiredText"
+    }
+}
 
 Push-Location $validatorRepoRoot
 try {
@@ -253,7 +361,7 @@ try {
     }
     Assert-Condition ([int]$roadmap.phase_count -eq 12) "Expected 12 roadmap phases, got $($roadmap.phase_count)"
     Assert-Condition ([int]$roadmap.completed_phases -eq 0) "Expected zero completed roadmap phases, got $($roadmap.completed_phases)"
-    Assert-Condition ([int]$roadmap.total_plans -eq 11) "Expected 11 GSD plan artifacts, got $($roadmap.total_plans)"
+    Assert-Condition ([int]$roadmap.total_plans -eq 12) "Expected 12 GSD plan artifacts, got $($roadmap.total_plans)"
     Assert-Condition (
         [int]$roadmap.total_summaries -eq $summaryPresent
     ) "Expected $summaryPresent GSD summary artifacts, got $($roadmap.total_summaries)"
@@ -299,7 +407,7 @@ try {
     foreach ($property in @('plan_count', 'summary_count', 'disk_status', 'roadmap_complete')) {
         Assert-HasProperty $phaseZero $property 'GSD Phase 0'
     }
-    Assert-Condition ([int]$phaseZero.plan_count -eq 11) "Expected Phase 0 plan_count=11, got $($phaseZero.plan_count)"
+    Assert-Condition ([int]$phaseZero.plan_count -eq 12) "Expected Phase 0 plan_count=12, got $($phaseZero.plan_count)"
     Assert-Condition (
         [int]$phaseZero.summary_count -eq $summaryPresent
     ) "Expected Phase 0 summary_count=$summaryPresent, got $($phaseZero.summary_count)"
@@ -314,7 +422,7 @@ try {
     Assert-ExactFrontMatterScalar $stateFrontMatter 'status' 'in_progress' 'STATE'
     Assert-ExactFrontMatterScalar $stateFrontMatter 'total_phases' '12' 'STATE'
     Assert-ExactFrontMatterScalar $stateFrontMatter 'completed_phases' '0' 'STATE'
-    Assert-ExactFrontMatterScalar $stateFrontMatter 'total_plans' '11' 'STATE'
+    Assert-ExactFrontMatterScalar $stateFrontMatter 'total_plans' '12' 'STATE'
     Assert-ExactFrontMatterScalar $stateFrontMatter 'completed_plans' '0' 'STATE'
 
     $roadmapText = Get-Content -Raw -LiteralPath '.planning\ROADMAP.md'
@@ -429,7 +537,7 @@ try {
     Write-Output 'PLANNING_VALIDATION=PASS'
     Write-Output 'MILESTONE=v2.0 Production-Ready Rebuild'
     Write-Output 'PHASES=12'
-    Write-Output 'PLANS=11'
+    Write-Output 'PLANS=12'
     Write-Output "GSD_ARTIFACT_STATE=$expectedArtifactStatus"
     Write-Output "GSD_ARTIFACT_PROGRESS=$expectedArtifactProgress%"
     Write-Output "REPOSITORY_RESIDUE_MODE=$ResidueMode"
