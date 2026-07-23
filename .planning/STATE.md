@@ -4,11 +4,11 @@ milestone: v2.0
 milestone_name: production-ready rebuild
 current_phase: 0 of 12 (planning truth and containment)
 status: in_progress
-last_updated: "2026-07-23T18:34:00+02:00"
+last_updated: "2026-07-23T21:19:17+02:00"
 progress:
   total_phases: 12
   completed_phases: 0
-  total_plans: 10
+  total_plans: 11
   completed_plans: 0
 ---
 
@@ -47,6 +47,10 @@ Execution contract: `docs/BLOCKXONE_AGENT_EXECUTION_LOOP.md`
 - **Canonical-lock plan (`P8`):** `ee017cd9b8ae2840dfee4d3053d714c6b10eedaa`
 - **Canonical web dependency commit (`W7`):** `059fc54c4d12b1d889a13d7295da7605006654c4`
 - **Evidence-staging correction (`P9`):** `08eeb7dc0475c311c35f3a5b5e54bc242b132a62`
+- **Generation 3 builder freeze (`I3`):** `6ba1d29cbf5e7a3cc805a96ec942364dde2497b9`
+- **Generation 3 adversarial review (`R3`):** `4b1eb982d1fefa2aed07d15b690480da0707a32a`
+- **Preserved, unadmitted Generation 3 verification (`V3`):** `37abb9517f86c79b541209bed66f622fae153b7f`
+- **Ignored-output correction plan (`P10`):** `76c8c7d07da2d7c13c7f57ce77a29bcd4615cd5f`
 - **Active phase branch:** `codex/phase-00-generation-3`
 - **Active working repository:** `C:\Users\danie\Documents\BlockXOne Production Gen3`
 - **Immutable C2 repository:** `C:\Users\danie\Documents\BlockXOne Production Clean v2`
@@ -72,8 +76,11 @@ Execution contract: `docs/BLOCKXONE_AGENT_EXECUTION_LOOP.md`
 - Generation 3 is an ordinary descendant of admitted C2; C2 remains read-only evidence and no further parentless rewrite is introduced.
 - The user approved local implementation of fail-closed standard mint and separate no-bypass forced issuance. This is not Legal, CISO, G5 or production approval.
 - Solidity remains 0.8.20 with optimizer 200; Shanghai is the controlled build target backed by configuration-only bytecode proof. The production network remains unselected.
-- Plans 00-04 through 00-10 must not mark requirements, ROADMAP or Phase 0 complete and must not auto-advance.
+- Plans 00-04 through 00-11 must not mark requirements, ROADMAP or Phase 0 complete and must not auto-advance.
 - GSD summary/plan ratios are artifact counters only. Authoritative production progress remains the zero completion values in STATE, ROADMAP and REQUIREMENTS.
+- Release-cleanliness evidence is ignored-aware. Ordinary `git status` is
+  insufficient, and generated output may be moved only by exact, recoverable,
+  no-overwrite quarantine before an ignored-aware clean-candidate assertion.
 
 ## Provisional launch defaults awaiting domain approval
 
@@ -114,20 +121,25 @@ These defaults permit planning but not legal, financial, provider or production 
 - Local generation 2 preparation created `Q2` and parentless `R2` with identical tree `0ca7a6dca26d3abef859160a50b93710fc118ddf`, then imported only `R2` through a complete one-ref bundle into the standalone v2 repository.
 - Pre-metadata `R2` checks found one expected branch, no remote/shared/partial Git state, 635 physical objects equal to 635 reachable objects, no known prohibited object IDs, empty strict-fsck diagnostics, a passing 465-path artifact validator and zero Gitleaks findings.
 - Exact `C2` was independently locally admitted at `a88658ad82f3d22aaf26e10b9eab6389084e6dd3`; external `CANDIDATE-MANIFEST-v2.md` has SHA-256 `2229439499C55EBD086F5171DF375749B4931303931BF70C207138A0DA8DFE6A`. This does not close human, hosted, incident or production gates.
-- Generation 3 was initialized as a separate remote-free repository from the one-ref C2 bundle, researched at D3 and implemented through the accepted Plan 00-04 through Plan 00-10 union. Exact P9 passes the complete local matrix with its committed legacy validator. The future validator is tested only against the staged no-summary and summary-bearing builder worktrees, then exact I3, never falsely against literal W7/P9.
+- Generation 3 was initialized as a separate remote-free repository from the one-ref C2 bundle, researched at D3 and implemented through the accepted Plan 00-04 through Plan 00-10 union. I3, R3 and V3 were created with distinct roles, but V3 was preserved and not admitted as C3 after exact Task 9 observed ignored `apps/web/next-env.d.ts`.
+- The V3 failure receipt has SHA-256 `83FA91B1EAB7492D5BB5E6DD8FB326CEC477DD068793C2394060C9BFAD908259`. No Task 9 matrix, scanner or manifest ran after the ignored-aware precondition failed. The 268-byte file, SHA-256 `F4E8976C19FC926644D72610BF1058BD6BF52ADD97E46A02BC0B912A751625C0`, is preserved at `C:\Users\danie\AppData\Local\Temp\blockxone-gen3-v3-next-env-f4e8044a037a4db7805c4dad546d0e99\apps-web-next-env.d.ts`.
+- P10 is the accepted plan-only corrective boundary at `76c8c7d07da2d7c13c7f57ce77a29bcd4615cd5f`, tree `3a29405e95c106cfbbf23d7d2abaa5e9c2d955a3`, parent V3. Its external acceptance receipt has SHA-256 `5363D742FAB0472A6874BE8ABD9649AB795D403223D57AEF1FA1BC11E71DC59A`.
+- The stale broad generated-cleanliness conclusions in I3/R3/V3 and their receipts are superseded. Their narrower Git, test, scanner and topology results remain historical evidence. The corrected artifact target is 11 plans, one permitted summary, GSD `partial`/9, while authoritative production completion remains zero.
+- The pre-I4 actual staged summary state passed `partial`/9, a disposable exact-seven no-summary state passed `planned`/0 and a missing-one-path staged fixture failed. Two clean-candidate suites passed 92 isolated fixtures (2 positives and 90 fail-closed negatives), including ignored `apps/web/next-env.d.ts` fail/remove-only restore in both states; repository planning originals remained byte-identical.
 
 ## Known blockers and no-go conditions
 
 - Repository-history incident `BX1-SEC-2026-07-19-01` requires authorised credential assessment/rotation and a clean-history decision before Phase 0 exit.
 - Exact `C2` passed final local admission and independent verification; the broader incident, hosted reproduction, professional approvals and Phase 0 exit remain open.
 - Section 29 legal/product/provider decisions are provisional, not professionally approved.
-- Contract developer-tool audit is locally remediated and reproduced at exact P9 with tested pinned overrides and zero full/runtime findings; exact-I3 and hosted reproduction plus upstream replacement tracking remain required.
+- Contract developer-tool audit is locally remediated and reproduced through exact V3 with tested pinned overrides and zero full/runtime findings; V3 was not admitted, so corrected exact-I4/R4/V4 and hosted reproduction plus upstream replacement tracking remain required.
 - Docker image candidates, Linux race checks and a complete hosted CI run have not been reproduced against an exact clean commit.
 - The new migration smoke job has only static local workflow evidence because the local Docker daemon is unavailable; hosted execution remains required.
 - Deployment and rollback are deliberately unavailable until immutable artifacts, migration/recovery, platform, health and approval controls exist.
 - Financial ledger, reservations and reconciliation are not production-grade.
 - Current compliance/payment/custody adapters include mock behavior.
-- Generation 3 identity and governed issuance containment passes 59 local contract tests at exact P9, but this does not prove official conformance, close G5 or replace independent/external review.
+- Generation 3 identity and governed issuance containment passed 59 local contract tests through exact V3, but V3 was not admitted and the result does not prove official conformance, close G5 or replace corrected independent/external review.
+- Ignored-output evidence remediation BLK-015 remains open until exact I4, R4 and V4 pass the corrected ignored-aware matrix and a distinct owner admits exact V4 as C4.
 - No external legal, accounting, tax, penetration or smart-contract audit evidence exists for the target release.
 
 ## Historical disposition
@@ -139,8 +151,8 @@ These defaults permit planning but not legal, financial, provider or production 
 
 ## Next actions
 
-1. Freeze I3 as exactly the six Plan 00-10 builder-evidence paths after the staged planned/0 and summary-bearing partial/10 validator/mutation proofs, then run the complete matrix, mutations and bytecode proof at exact I3 and bind them in the external builder receipt.
-2. Resume three distinct roles for exact-I3 adversarial review, exact-R3 independent verification and exact-V3 local-only admission. Keep C2 immutable and re-prove it before C3 admission.
+1. Freeze I4 as exactly the seven Plan 00-11 Task 2 paths after staged and disposable proofs of planned/0, summary-bearing partial/9 and fail-closed ignored residue; then run the complete exact-I4 matrix, mutations and bytecode proof and bind them in `TASK6-I4-BUILDER-RECEIPT.md`.
+2. Use three further distinct roles for exact-I4 adversarial review as R4, exact-R4 independent verification as V4 and exact-V4 local-only admission as C4. Keep C2, I3, R3, V3 and their receipts immutable.
 3. Obtain named incident, repository, Security and Legal/Privacy owners and rotate/revoke or prove non-secret every credential class that may have existed in the tracked `.env.local`.
 4. Obtain the formal signed Option A incident decision, old-repository restriction/retention plan and hosted ref/cache/fork/clone closure evidence; no push is authorised.
 5. Reproduce images, Linux race tests, migrations, contracts and full CI against the later exact admitted candidate in hosted infrastructure.

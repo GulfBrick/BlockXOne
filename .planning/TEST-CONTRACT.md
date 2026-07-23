@@ -14,7 +14,7 @@
 ## Required Phase 0 commands
 
 ```powershell
-pwsh -NoProfile -File .\.planning\scripts\validate-planning.ps1
+pwsh -NoProfile -File .\.planning\scripts\validate-planning.ps1 -ResidueMode CleanCandidate
 pwsh -NoProfile -File .\.planning\scripts\validate-repository-artifacts.ps1
 pwsh -NoProfile -File .\.planning\scripts\validate-ci-policy.ps1
 pwsh -NoProfile -File .\.planning\scripts\validate-production-compose.ps1
@@ -26,18 +26,104 @@ golangci-lint run --timeout 5m .\cmd\... .\internal\... .\scripts\...
 gosec -tests -severity medium -confidence medium .\cmd\... .\internal\...
 govulncheck .\cmd\... .\internal\... .\scripts\...
 
-npm ci --prefix apps/web
-npm run test:preflight --prefix apps/web
-npm run test:config --prefix apps/web
-npm run test:runner --prefix apps/web
-npm test --prefix apps/web -- --run
+$repoRoot = [System.IO.Path]::GetFullPath((Resolve-Path .).Path)
+$webRoot = [System.IO.Path]::GetFullPath((Resolve-Path .\apps\web).Path)
+$contractsRoot = [System.IO.Path]::GetFullPath((Resolve-Path .\contracts).Path)
+$resolvedTemporaryRoot = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath())
+$temporaryPrefix = $resolvedTemporaryRoot.TrimEnd([System.IO.Path]::DirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
+$generatedQuarantineCandidate = Join-Path $resolvedTemporaryRoot ('blockxone-test-contract-' + [Guid]::NewGuid().ToString('N'))
+if (Test-Path -LiteralPath $generatedQuarantineCandidate) {
+  throw "Generated-output quarantine already exists: $generatedQuarantineCandidate"
+}
+New-Item -ItemType Directory -Path $generatedQuarantineCandidate | Out-Null
+$generatedQuarantineRoot = [System.IO.Path]::GetFullPath((Resolve-Path -LiteralPath $generatedQuarantineCandidate).Path)
+if (-not $generatedQuarantineRoot.StartsWith($temporaryPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+  throw "Generated-output quarantine is outside the resolved OS temporary root: $generatedQuarantineRoot"
+}
+
+# Nested paths precede their parents so every moved source has a distinct,
+# recoverable destination rather than being hidden inside a parent move.
+$generatedPaths = @(
+  @{ Root = $webRoot; Relative = 'node_modules/.vite'; Destination = 'web-node-modules-vite' },
+  @{ Root = $repoRoot; Relative = 'node_modules'; Destination = 'root-node-modules' },
+  @{ Root = $repoRoot; Relative = '.npm-cache'; Destination = 'root-npm-cache' },
+  @{ Root = $webRoot; Relative = 'node_modules'; Destination = 'web-node-modules' },
+  @{ Root = $webRoot; Relative = '.next'; Destination = 'web-next' },
+  @{ Root = $webRoot; Relative = 'coverage'; Destination = 'web-coverage' },
+  @{ Root = $webRoot; Relative = '.vite'; Destination = 'web-vite' },
+  @{ Root = $webRoot; Relative = '.vitest'; Destination = 'web-vitest' },
+  @{ Root = $webRoot; Relative = '.npm-cache'; Destination = 'web-npm-cache' },
+  @{ Root = $webRoot; Relative = 'out'; Destination = 'web-out' },
+  @{ Root = $webRoot; Relative = 'build'; Destination = 'web-build' },
+  @{ Root = $webRoot; Relative = 'dist'; Destination = 'web-dist' },
+  @{ Root = $webRoot; Relative = 'tsconfig.tsbuildinfo'; Destination = 'web-tsconfig-tsbuildinfo' },
+  @{ Root = $webRoot; Relative = 'next-env.d.ts'; Destination = 'web-next-env.d.ts' },
+  @{ Root = $contractsRoot; Relative = 'node_modules'; Destination = 'contracts-node-modules' },
+  @{ Root = $contractsRoot; Relative = 'artifacts'; Destination = 'contracts-artifacts' },
+  @{ Root = $contractsRoot; Relative = '.hardhat-cache'; Destination = 'contracts-hardhat-cache' },
+  @{ Root = $contractsRoot; Relative = 'cache'; Destination = 'contracts-cache' },
+  @{ Root = $contractsRoot; Relative = 'typechain-types'; Destination = 'contracts-typechain-types' },
+  @{ Root = $contractsRoot; Relative = '.npm-cache'; Destination = 'contracts-npm-cache' },
+  @{ Root = $contractsRoot; Relative = 'coverage'; Destination = 'contracts-coverage' }
+)
+
+function Move-GeneratedPathToQuarantine {
+  param(
+    [Parameter(Mandatory = $true)][string]$Root,
+    [Parameter(Mandatory = $true)][string]$Relative,
+    [Parameter(Mandatory = $true)][string]$Destination
+  )
+
+  $resolvedRoot = [System.IO.Path]::GetFullPath($Root)
+  $sourcePrefix = $resolvedRoot.TrimEnd([System.IO.Path]::DirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
+  $source = [System.IO.Path]::GetFullPath((Join-Path $resolvedRoot $Relative))
+  if (-not $source.StartsWith($sourcePrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "Refusing generated-output move outside the exact component root: $source"
+  }
+  if (-not (Test-Path -LiteralPath $source)) {
+    return
+  }
+  $sourceEntry = Get-Item -LiteralPath $source -Force -ErrorAction Stop
+  if ($sourceEntry.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
+    throw "Refusing generated-output move through a reparse-point source: $source"
+  }
+  $source = [System.IO.Path]::GetFullPath((Resolve-Path -LiteralPath $source).Path)
+  if (-not $source.StartsWith($sourcePrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "Resolved generated-output source escaped the exact component root: $source"
+  }
+
+  $destinationPath = [System.IO.Path]::GetFullPath((Join-Path $generatedQuarantineRoot $Destination))
+  $quarantinePrefix = $generatedQuarantineRoot.TrimEnd([System.IO.Path]::DirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
+  if (-not $destinationPath.StartsWith($quarantinePrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "Refusing generated-output move outside the exact quarantine root: $destinationPath"
+  }
+  if (Test-Path -LiteralPath $destinationPath) {
+    throw "Generated-output quarantine destination already exists: $destinationPath"
+  }
+
+  Move-Item -LiteralPath $source -Destination $destinationPath
+  if (Test-Path -LiteralPath $source) {
+    throw "Generated source remains after recoverable quarantine move: $source"
+  }
+  if (-not (Test-Path -LiteralPath $destinationPath)) {
+    throw "Generated-output quarantine destination is missing after move: $destinationPath"
+  }
+  Write-Output "GENERATED_OUTPUT_QUARANTINED=$source -> $destinationPath"
+}
 
 $hadPriorNextPublicApiUrl = Test-Path -LiteralPath 'Env:NEXT_PUBLIC_API_URL'
 $priorNextPublicApiUrl = [System.Environment]::GetEnvironmentVariable('NEXT_PUBLIC_API_URL', 'Process')
 $hadPriorServerActionAllowedOrigins = Test-Path -LiteralPath 'Env:SERVER_ACTION_ALLOWED_ORIGINS'
 $priorServerActionAllowedOrigins = [System.Environment]::GetEnvironmentVariable('SERVER_ACTION_ALLOWED_ORIGINS', 'Process')
 $webLocationPushed = $false
+$contractsLocationPushed = $false
 try {
+  npm ci --prefix apps/web
+  npm run test:preflight --prefix apps/web
+  npm run test:config --prefix apps/web
+  npm run test:runner --prefix apps/web
+  npm test --prefix apps/web -- --run
+
   [System.Environment]::SetEnvironmentVariable('NEXT_PUBLIC_API_URL', 'https://api.blockxone.example', 'Process')
   [System.Environment]::SetEnvironmentVariable('SERVER_ACTION_ALLOWED_ORIGINS', 'app.blockxone.example', 'Process')
   Push-Location apps\web
@@ -48,7 +134,27 @@ try {
   npm audit --omit=dev --audit-level=moderate
   npm run build
   npm run test:production-containment
-} finally {
+  Pop-Location
+  $webLocationPushed = $false
+
+  Push-Location contracts
+  $contractsLocationPushed = $true
+  npm ci --ignore-scripts
+  npm run test:preflight
+  npm run compile
+  npm run typecheck
+  npm test
+  npm audit --omit=dev --audit-level=moderate
+  npm audit --audit-level=moderate
+  Pop-Location
+  $contractsLocationPushed = $false
+
+  docker compose --env-file config/production.env.example -f docker-compose.prod.yml config --quiet
+}
+finally {
+  if ($contractsLocationPushed) {
+    Pop-Location
+  }
   if ($webLocationPushed) {
     Pop-Location
   }
@@ -62,45 +168,23 @@ try {
   } else {
     Remove-Item -LiteralPath 'Env:SERVER_ACTION_ALLOWED_ORIGINS' -ErrorAction SilentlyContinue
   }
+
+  foreach ($entry in $generatedPaths) {
+    Move-GeneratedPathToQuarantine @entry
+  }
 }
 
-$repoRoot = [System.IO.Path]::GetFullPath((Resolve-Path .).Path)
-$webRoot = [System.IO.Path]::GetFullPath((Resolve-Path .\apps\web).Path)
-$generatedPaths = @(
-  @{ Root = $webRoot; Relative = '.next' },
-  @{ Root = $webRoot; Relative = 'coverage' },
-  @{ Root = $webRoot; Relative = '.vite' },
-  @{ Root = $webRoot; Relative = '.vitest' },
-  @{ Root = $webRoot; Relative = '.npm-cache' },
-  @{ Root = $webRoot; Relative = 'node_modules/.vite' },
-  @{ Root = $repoRoot; Relative = '.npm-cache' }
+$repositoryResidue = @(
+  git status --porcelain=v1 --untracked-files=all --ignored=matching
 )
-foreach ($entry in $generatedPaths) {
-  $root = [System.IO.Path]::GetFullPath($entry.Root)
-  $prefix = $root.TrimEnd([System.IO.Path]::DirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
-  $target = [System.IO.Path]::GetFullPath((Join-Path $root $entry.Relative))
-  if (-not $target.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) {
-    throw "Refusing generated-path cleanup outside the exact web root: $target"
-  }
-  if (Test-Path -LiteralPath $target) {
-    Remove-Item -LiteralPath $target -Recurse -Force
-  }
-  if (Test-Path -LiteralPath $target) {
-    throw "Generated web path remains after bounded cleanup: $target"
-  }
+if ($LASTEXITCODE -ne 0) {
+  throw 'Ignored-aware repository status command failed'
 }
-
-Push-Location contracts
-npm ci --ignore-scripts
-npm run test:preflight
-npm run compile
-npm run typecheck
-npm test
-npm audit --omit=dev --audit-level=moderate
-npm audit --audit-level=moderate
-Pop-Location
-
-docker compose --env-file config/production.env.example -f docker-compose.prod.yml config --quiet
+if ($repositoryResidue.Count -ne 0) {
+  throw "Repository is not fully clean after recoverable generated-output quarantine: $($repositoryResidue -join ', ')"
+}
+Write-Output "GENERATED_OUTPUT_QUARANTINE=$generatedQuarantineRoot"
+Write-Output 'IGNORED_AWARE_REPOSITORY_STATUS=EMPTY'
 ```
 
 The repository-artifact validator fails by design on the contaminated lineage. The Go dependency scan passes after upgrading `pgx/v5` to 5.9.2 and `go-ethereum` to 1.17.0. The contract full and runtime audits pass after explicit patched transitive overrides. Docker images, Linux race tests, hosted migration smoke tests and full hosted CI are outstanding. These conditions keep BASE-03/BASE-06 and Phase 0 open; they must not be suppressed or reclassified as success.
@@ -122,6 +206,15 @@ Web unit tests must enter through `scripts/run-hermetic-tests.mjs`. The runner f
 - Migrations must be tested from clean and current schemas, with rollback/forward-recovery strategy.
 - Production configuration must be tested with required values absent, mock values present and environment mismatches.
 - Release evidence must run from a clean checkout/worktree of the exact commit.
+- Clean-candidate assertions require
+  `git status --porcelain=v1 --untracked-files=all --ignored=matching` to
+  return no output after generated files are moved without overwrite to a
+  recoverable, uniquely named OS-temporary quarantine.
+- Ordinary `git status` is not sufficient release-cleanliness evidence because
+  it can omit ignored generated output.
+- A quarantine inventory is recoverability evidence only. It is not a clean
+  candidate assertion until the exact ignored-aware status command returns no
+  output.
 - The exact commit's complete reachable history must pass the repository-artifact policy; a clean working tree on contaminated ancestry is insufficient.
 
 ## Expansion by phase

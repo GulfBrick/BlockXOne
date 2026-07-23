@@ -1,6 +1,8 @@
 [CmdletBinding()]
 param(
-    [string]$GsdToolsPath = (Join-Path $env:USERPROFILE '.codex\get-shit-done\bin\gsd-tools.cjs')
+    [string]$GsdToolsPath = (Join-Path $env:USERPROFILE '.codex\get-shit-done\bin\gsd-tools.cjs'),
+    [ValidateSet('BuilderStaged', 'CleanCandidate')]
+    [string]$ResidueMode = 'BuilderStaged'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -102,6 +104,86 @@ function Assert-ExactFrontMatterScalar {
 }
 
 $validatorRepoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
+$builderPathAllowlist = @(
+    '.planning/TEST-CONTRACT.md'
+    '.planning/scripts/validate-planning.ps1'
+    '.planning/BLOCKERS.md'
+    '.planning/EVIDENCE-REGISTER.md'
+    '.planning/STATE.md'
+    '.planning/phases/00-planning-truth-and-containment/00-04-SUMMARY.md'
+    '.planning/phases/00-planning-truth-and-containment/00-EVIDENCE.md'
+)
+
+Push-Location $validatorRepoRoot
+try {
+    $repositoryResidue = @(
+        git status --porcelain=v1 --untracked-files=all --ignored=matching
+    )
+    Assert-Condition ($LASTEXITCODE -eq 0) 'Ignored-aware repository status command failed'
+}
+finally {
+    Pop-Location
+}
+
+if ($ResidueMode -ceq 'CleanCandidate') {
+    Assert-Condition (
+        $repositoryResidue.Count -eq 0
+    ) "Clean-candidate mode requires empty ignored-aware repository status; found=[$($repositoryResidue -join '; ')]"
+}
+else {
+    $allowedBuilderPaths = [System.Collections.Generic.HashSet[string]]::new(
+        [System.StringComparer]::Ordinal
+    )
+    foreach ($builderPath in $builderPathAllowlist) {
+        Assert-Condition (
+            $allowedBuilderPaths.Add($builderPath)
+        ) "Internal validator error: duplicate builder allowlist path '$builderPath'"
+    }
+
+    $seenBuilderPaths = [System.Collections.Generic.HashSet[string]]::new(
+        [System.StringComparer]::Ordinal
+    )
+    foreach ($residueLine in $repositoryResidue) {
+        Assert-Condition (
+            -not $residueLine.StartsWith('?? ', [System.StringComparison]::Ordinal)
+        ) "Builder-staged mode forbids ordinary untracked residue: $residueLine"
+        Assert-Condition (
+            -not $residueLine.StartsWith('!! ', [System.StringComparison]::Ordinal)
+        ) "Builder-staged mode forbids ignored residue: $residueLine"
+        Assert-Condition (
+            $residueLine.Length -ge 4 -and $residueLine[2] -ceq ' '
+        ) "Builder-staged mode cannot parse repository residue: $residueLine"
+
+        $statusCode = $residueLine.Substring(0, 2)
+        $residuePath = $residueLine.Substring(3)
+        Assert-Condition (
+            $allowedBuilderPaths.Contains($residuePath)
+        ) "Builder-staged mode forbids tracked path '$residuePath'"
+        Assert-Condition (
+            $seenBuilderPaths.Add($residuePath)
+        ) "Builder-staged mode found duplicate tracked path '$residuePath'"
+        if ($residuePath -ceq '.planning/phases/00-planning-truth-and-containment/00-04-SUMMARY.md') {
+            Assert-Condition (
+                $statusCode -ceq 'M ' -or $statusCode -ceq 'D '
+            ) "Builder-staged summary must be index-only modified or deleted, got '$statusCode'"
+        }
+        else {
+            Assert-Condition (
+                $statusCode -ceq 'M '
+            ) "Builder-staged path '$residuePath' must be index-only modified, got '$statusCode'"
+        }
+    }
+
+    $missingBuilderPaths = @(
+        $builderPathAllowlist |
+            Where-Object { -not $seenBuilderPaths.Contains($_) }
+    )
+    Assert-Condition (
+        $seenBuilderPaths.Count -eq $builderPathAllowlist.Count -and
+        $missingBuilderPaths.Count -eq 0
+    ) "Builder-staged mode requires the exact seven-path correction; missing=[$($missingBuilderPaths -join ', ')]"
+}
+
 $phaseRelativePath = '.planning\phases\00-planning-truth-and-containment'
 $phaseDirectory = [System.IO.Path]::GetFullPath((Join-Path $validatorRepoRoot $phaseRelativePath))
 $phaseEntry = Get-Item -LiteralPath $phaseDirectory -Force -ErrorAction Stop
@@ -128,7 +210,7 @@ foreach ($candidate in @($planCandidates + $summaryCandidates)) {
 }
 
 $expectedPlanNames = @(
-    1..10 | ForEach-Object { '00-{0:D2}-PLAN.md' -f $_ }
+    1..11 | ForEach-Object { '00-{0:D2}-PLAN.md' -f $_ }
 )
 $actualPlanNames = @($planCandidates | ForEach-Object Name)
 Assert-OrdinalSetEqual $actualPlanNames $expectedPlanNames 'Phase 0 plan filenames'
@@ -142,7 +224,7 @@ if ($actualSummaryNames.Count -eq 1) {
 }
 $summaryPresent = [int]($actualSummaryNames.Count -eq 1)
 $expectedArtifactStatus = if ($summaryPresent -eq 1) { 'partial' } else { 'planned' }
-$expectedArtifactProgress = if ($summaryPresent -eq 1) { 10 } else { 0 }
+$expectedArtifactProgress = if ($summaryPresent -eq 1) { 9 } else { 0 }
 
 Push-Location $validatorRepoRoot
 try {
@@ -171,7 +253,7 @@ try {
     }
     Assert-Condition ([int]$roadmap.phase_count -eq 12) "Expected 12 roadmap phases, got $($roadmap.phase_count)"
     Assert-Condition ([int]$roadmap.completed_phases -eq 0) "Expected zero completed roadmap phases, got $($roadmap.completed_phases)"
-    Assert-Condition ([int]$roadmap.total_plans -eq 10) "Expected 10 GSD plan artifacts, got $($roadmap.total_plans)"
+    Assert-Condition ([int]$roadmap.total_plans -eq 11) "Expected 11 GSD plan artifacts, got $($roadmap.total_plans)"
     Assert-Condition (
         [int]$roadmap.total_summaries -eq $summaryPresent
     ) "Expected $summaryPresent GSD summary artifacts, got $($roadmap.total_summaries)"
@@ -217,7 +299,7 @@ try {
     foreach ($property in @('plan_count', 'summary_count', 'disk_status', 'roadmap_complete')) {
         Assert-HasProperty $phaseZero $property 'GSD Phase 0'
     }
-    Assert-Condition ([int]$phaseZero.plan_count -eq 10) "Expected Phase 0 plan_count=10, got $($phaseZero.plan_count)"
+    Assert-Condition ([int]$phaseZero.plan_count -eq 11) "Expected Phase 0 plan_count=11, got $($phaseZero.plan_count)"
     Assert-Condition (
         [int]$phaseZero.summary_count -eq $summaryPresent
     ) "Expected Phase 0 summary_count=$summaryPresent, got $($phaseZero.summary_count)"
@@ -232,7 +314,7 @@ try {
     Assert-ExactFrontMatterScalar $stateFrontMatter 'status' 'in_progress' 'STATE'
     Assert-ExactFrontMatterScalar $stateFrontMatter 'total_phases' '12' 'STATE'
     Assert-ExactFrontMatterScalar $stateFrontMatter 'completed_phases' '0' 'STATE'
-    Assert-ExactFrontMatterScalar $stateFrontMatter 'total_plans' '10' 'STATE'
+    Assert-ExactFrontMatterScalar $stateFrontMatter 'total_plans' '11' 'STATE'
     Assert-ExactFrontMatterScalar $stateFrontMatter 'completed_plans' '0' 'STATE'
 
     $roadmapText = Get-Content -Raw -LiteralPath '.planning\ROADMAP.md'
@@ -321,13 +403,19 @@ try {
             $summaryText.Contains('This is builder evidence only.')
         ) 'Summary must state exactly that this is builder evidence only'
         Assert-Condition (
-            $summaryText.Contains('Tasks 7-9 remain mandatory.')
-        ) 'Summary must state exactly that Tasks 7-9 remain mandatory'
+            $summaryText.Contains('Tasks 3-5 remain mandatory.')
+        ) 'Summary must state exactly that Tasks 3-5 remain mandatory'
         Assert-Condition (
             $summaryText.Contains(
-                'This is not independent review, verification, Phase completion, requirement completion, or production approval.'
+                'This is not independent review, verification, Phase completion, requirement completion, local candidate admission, or production approval.'
             )
         ) 'Summary must retain the exact independent-review/completion/production non-claim'
+        Assert-Condition (
+            $summaryText.Contains('V3 is preserved but was not admitted as C3.')
+        ) 'Summary must state exactly that V3 was preserved but not admitted'
+        Assert-Condition (
+            $summaryText.Contains('The stale broad generated-cleanliness conclusions are superseded.')
+        ) 'Summary must state exactly that stale broad generated-cleanliness conclusions are superseded'
     }
 
     $health = Invoke-GsdJson @('validate', 'health') 'GSD planning health'
@@ -341,9 +429,10 @@ try {
     Write-Output 'PLANNING_VALIDATION=PASS'
     Write-Output 'MILESTONE=v2.0 Production-Ready Rebuild'
     Write-Output 'PHASES=12'
-    Write-Output 'PLANS=10'
+    Write-Output 'PLANS=11'
     Write-Output "GSD_ARTIFACT_STATE=$expectedArtifactStatus"
     Write-Output "GSD_ARTIFACT_PROGRESS=$expectedArtifactProgress%"
+    Write-Output "REPOSITORY_RESIDUE_MODE=$ResidueMode"
     Write-Output 'AUTHORITATIVE_PRODUCTION_PROGRESS=0%'
     Write-Output 'ACTIVE_REQUIREMENTS=89'
     Write-Output 'CHECKED_REQUIREMENTS=0'

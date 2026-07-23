@@ -6,129 +6,149 @@ release_status: NO-GO
 requirements-completed: []
 ---
 
-# Generation 3 Local Implementation Freeze
+# Generation 3 Corrected Local Implementation Freeze
 
 Phase 0 remains `in_progress`.
 
 This is builder evidence only.
 
-Tasks 7-9 remain mandatory.
+Tasks 3-5 remain mandatory.
 
-This is not independent review, verification, Phase completion, requirement completion, or production approval.
+This is not independent review, verification, Phase completion, requirement completion, local candidate admission, or production approval.
 
-## Freeze scope
+V3 is preserved but was not admitted as C3.
 
-The I3 evidence freeze is limited to:
+The stale broad generated-cleanliness conclusions are superseded.
 
-1. `.planning/scripts/validate-planning.ps1`
-2. `.planning/EVIDENCE-REGISTER.md`
-3. `.planning/phases/00-planning-truth-and-containment/00-EVIDENCE.md`
-4. `.planning/BLOCKERS.md`
+## Corrected freeze scope
+
+The future containing commit I4 is limited to the seven Plan 00-11 Task 2
+paths:
+
+1. `.planning/TEST-CONTRACT.md`
+2. `.planning/scripts/validate-planning.ps1`
+3. `.planning/BLOCKERS.md`
+4. `.planning/EVIDENCE-REGISTER.md`
 5. `.planning/STATE.md`
 6. `.planning/phases/00-planning-truth-and-containment/00-04-SUMMARY.md`
+7. `.planning/phases/00-planning-truth-and-containment/00-EVIDENCE.md`
 
-ROADMAP, REQUIREMENTS, TEST-CONTRACT, Plans 00-04 through 00-10,
-application/source/test/package/contract files, SECURITY-REVIEW, VERIFICATION
-and global GSD tooling are immutable at I3.
+ROADMAP, REQUIREMENTS, Plans 00-01 through 00-11, application source, tests,
+packages, contracts, CI, Compose, SECURITY-REVIEW and VERIFICATION are
+immutable at I4. I4's exact commit/tree and post-commit reproduction are
+recorded externally in `TASK6-I4-BUILDER-RECEIPT.md`; this summary does not
+self-assert a future commit identity.
 
-## Accepted ancestry before I3
+## Accepted boundary before I4
 
-- C2: `a88658ad82f3d22aaf26e10b9eab6389084e6dd3`
-- D3: `d0c71d7919a6ffa4a18ef3e0fe62f41fb9867294`
-- P3: `e00b5056c337b484ff11918dc3f7952c97cdfe64`
-- P4: `f081dfc211a767e660d93c0bd33f35b2f30a9803`
-- P5: `7d87ed6e8fb1a8c2ef5eb13853a39fc5f96992d2`
-- D5: `78084349ff8b6385cc33e95900db6fd1094d68a0`
-- P6: `5a489930296830d827ac56690c506714001e06a2`
-- P7: `c8c41dda2b5df129201a34b55c882743fa523b82`
-- P8: `ee017cd9b8ae2840dfee4d3053d714c6b10eedaa`
-- W7: `059fc54c4d12b1d889a13d7295da7605006654c4`
-- P9: `08eeb7dc0475c311c35f3a5b5e54bc242b132a62`
-- P9 tree: `cc9bbb20ad55ec1bccc8e5f9ad7d7b930445908e`
-- P9 acceptance receipt SHA-256:
-  `4894F21F6938DB6E7592E2D0C37C2DED18ACA9942CC6FD246A5B329A9F1341E2`
+- Preserved builder freeze I3:
+  `6ba1d29cbf5e7a3cc805a96ec942364dde2497b9`
+- Preserved adversarial review R3:
+  `4b1eb982d1fefa2aed07d15b690480da0707a32a`
+- Preserved, unadmitted verification V3:
+  `37abb9517f86c79b541209bed66f622fae153b7f`
+- Accepted correction plan P10:
+  `76c8c7d07da2d7c13c7f57ce77a29bcd4615cd5f`
+- P10 tree:
+  `3a29405e95c106cfbbf23d7d2abaa5e9c2d955a3`
+- P10 parent: exact V3
+- P10 acceptance receipt SHA-256:
+  `5363D742FAB0472A6874BE8ABD9649AB795D403223D57AEF1FA1BC11E71DC59A`
 
-I3 is this summary's future containing commit. Its exact commit/tree and
-post-commit reproduction are deliberately recorded in the external builder
-receipt rather than self-referentially inside I3.
+P10 is remote-free and clean under both ordinary and ignored-aware status. It
+changes only Plan 00-11. It is not I4, C4 or production approval.
 
-## Exact-P9 builder results
+## V3 admission stop and narrow supersession
 
-The complete TEST-CONTRACT passed at exact clean P9 with the committed legacy
-validator:
+At exact V3, the distinct Task 9 owner ran the ignored-aware precondition and
+observed `!! apps/web/next-env.d.ts`. The untracked ignored file was 268 bytes
+with SHA-256
+`F4E8976C19FC926644D72610BF1058BD6BF52ADD97E46A02BC0B912A751625C0`.
+No Task 9 matrix, scanner or manifest ran after that failure. C3 was never
+created.
 
-- planning, repository-artifact, CI-policy, Compose-policy and actionlint
-  gates passed;
-- repository validation covered 484 tracked paths and 20 reachable commits;
-- Go tests and vet passed with exact Go 1.26.5; golangci-lint reported zero
-  issues; gosec covered 85 files and 22,573 lines with zero issues;
-  govulncheck reported zero reachable vulnerabilities;
-- web preflight 4, configuration 5, runner 21 and both 92-test unit entries
-  passed;
-- Next/@next/env/SWC/eslint resolved to 15.5.21, exactly one Sharp resolved to
-  0.35.3 with libvips 8.18.3, root PostCSS resolved to 8.5.22 and nested Next
-  PostCSS was absent;
-- native Sharp image create/metadata, lint, production build and exact process
-  containment passed;
-- all four web audit invocations returned zero findings;
-- contract preflight 10, 27-file Solidity compile, typecheck and 59 Mocha
-  tests passed;
-- both contract audits returned zero findings;
-- raw production Compose rendering passed; and
-- bytecode validation compared 43 complete compiler outputs and 27 user
-  artifacts exactly, producing SHA-256
-  `9D75271BB9A9E87D410D98DC9EAE4F0ADAA8597B7D55E4A72324EC2BEA78AF62`.
+The failure receipt has SHA-256
+`83FA91B1EAB7492D5BB5E6DD8FB326CEC477DD068793C2394060C9BFAD908259`.
+The file was moved without overwrite to the recoverable destination:
 
-## Validator staging proof
+`C:\Users\danie\AppData\Local\Temp\blockxone-gen3-v3-next-env-f4e8044a037a4db7805c4dad546d0e99\apps-web-next-env.d.ts`
 
-The updated validator was not claimed against literal W7 or P9.
+The I3, R3 and V3 commits and their old external receipts remain immutable.
+Only their broad generated-cleanliness conclusion is superseded. Their
+recorded Git identities, topology checks, command results, scanner results and
+warnings remain bounded historical evidence, not C3 admission.
 
-Before this summary existed, the actual builder worktree passed:
+## Corrected release-cleanliness contract
 
-- exactly ten plans;
-- no current-phase summary;
-- GSD artifact state planned/0;
-- STATE `in_progress`, 10 total plans and zero completed plans/phases;
-- unchecked/in-progress ROADMAP Phase 0; and
-- exactly 89 expected, unique, unchecked requirements.
+Known generated web and contract dependencies, build output, caches, coverage,
+TypeChain output and `apps/web/next-env.d.ts` are moved only by literal,
+no-overwrite operations to distinct destinations beneath a fresh resolved
+OS-temporary quarantine. A quarantine inventory proves recoverability only.
 
-A 36-case isolated no-summary mutation suite rejected filename/case/reparse,
-GSD output/health, STATE, ROADMAP and requirement drift. Repository planning
-sources remained byte-identical after the isolated mutations.
+A clean-candidate assertion requires the exact command
+`git status --porcelain=v1 --untracked-files=all --ignored=matching` to return
+no output. Ordinary `git status` is not sufficient because ignored residue can
+be omitted. The planning validator is read-only:
 
-With this exact summary filename and metadata, the required GSD artifact state
-is partial/10. A 48-case isolated summary-state suite additionally rejected
-all no-summary mutations plus summary filename, multiplicity, metadata,
-duplicate-key and required-body-statement drift. Repository planning sources
-again remained byte-identical after the isolated mutations. That artifact
-ratio is not production progress.
+- `BuilderStaged` permits only index-only edits to the seven Task 2 paths and
+  rejects every ordinary untracked or ignored entry; and
+- `CleanCandidate` rejects every tracked, untracked or ignored entry.
 
-## Warnings and deviations retained
+The validator never moves, deletes or cleans residue.
 
-- Two initial Go invocations selected the 1.25.5 bootstrap under
-  `GOTOOLCHAIN=local` and failed before package loading. The builder selected
-  the already installed exact Go 1.26.5 binary and reran all required gates
-  successfully.
-- A controller timeout interrupted the first web build without a product
-  verdict. Its partial `.next` was quarantined recoverably; a clean retry
-  passed in 37.76 seconds.
-- npm reported upstream `inflight`/legacy `glob` deprecation notices.
-- Next lint reported its future CLI migration notice.
-- Browserslist data was reported as seven months old.
-- Solidity emitted three same-name declaration and two unused-parameter
-  warnings. Compile/typecheck/tests still passed; the warnings are not hidden
-  or treated as external assurance.
-- Docker image builds, Linux race, hosted migrations, immutable image
-  provenance and full hosted CI remain outstanding.
+## Corrected artifact semantics
 
-## Retained NO-GO boundary
+Plan 00-11 raises the exact Phase 0 plan set to 11. With no recognized summary,
+the disposable planning state is `planned`/0. With this one exact
+`00-04-SUMMARY.md`, the GSD artifact state is `partial`/9.
 
-Identity and governed issuance containment is locally implemented and tested,
-but G5, authoritative conformance, approved governance/network/provider
-decisions and independent/external retest remain open. Repository-incident,
-professional, hosted, financial-integrity, provider, resilience, external
-audit and human Phase 0 gates remain open.
+That ratio is filename-derived GSD artifact metadata, not completion.
+Authoritative production state remains:
 
-The exact-I3 matrix, external builder receipt, distinct Task 7 adversarial
-review, distinct Task 8 verification and distinct Task 9 local admission must
-all pass before Generation 3 can be admitted even as a local candidate.
+- Phase 0 `in_progress`;
+- 0 of 12 phases complete;
+- 0 of 11 plans complete;
+- all 89 requirements unchecked;
+- ROADMAP Phase 0 unchecked and `In progress`; and
+- release status NO-GO.
+
+Before I4 was committed, the actual seven-path staged summary-bearing state
+passed as `partial`/9. A disposable exact-seven staged no-summary state passed
+as `planned`/0, and a missing-one-path staged fixture failed with the expected
+exact-seven diagnostic.
+
+The clean-candidate mutation suites covered 92 isolated fixtures:
+
+- no-summary: 1 positive plus 38 fail-closed negatives; and
+- summary-bearing: 1 positive plus 52 fail-closed negatives.
+
+They rejected plan, summary, STATE, ROADMAP, requirement, GSD output/health,
+nonzero/malformed-tool, reparse, tracked, ordinary-untracked and ignored
+residue drift. In both states, exact ignored `apps/web/next-env.d.ts` failed;
+moving only that fixture to an absent destination restored a pass. Repository
+planning originals remained byte-identical. The suites are retained beneath:
+
+`C:\Users\danie\AppData\Local\Temp\blockxone-i4-staged-fixtures-be2445c0c6104e9ba79742e0e328d192`
+
+The exact-I4 post-commit matrix is frozen in the external builder receipt after
+it passes. Any failed mutation, ignored-residue escape, extra path or matrix
+failure is a hard stop before I4 handoff.
+
+## Retained warnings and NO-GO boundary
+
+Prior local matrices retained upstream npm deprecation notices, the Next lint
+migration notice, stale Browserslist data and Solidity declaration/unused
+parameter warnings. Docker image builds and provenance, Linux race, hosted
+migrations and full hosted CI remain outstanding.
+
+Identity and governed issuance containment does not close G5, authoritative
+conformance, governance, network or provider decisions, professional review
+or external retest. Repository-incident, financial-integrity, provider,
+resilience, legal, accounting, tax, privacy, penetration, smart-contract audit
+and human Phase 0 gates remain open.
+
+Exact I4 must pass the corrected full matrix and external builder receipt.
+Then distinct Task 3, Task 4 and Task 5 owners must create R4, V4 and local-only
+C4 in order. No remote, deployment, RPC, wallet, signing key, funds, real
+assets, production configuration or irreversible production action is
+authorised by this evidence.
