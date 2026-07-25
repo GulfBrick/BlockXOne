@@ -4,7 +4,7 @@ milestone: v2.0
 milestone_name: production-ready rebuild
 current_phase: 0 of 12 (planning truth and containment)
 status: in_progress
-last_updated: "2026-07-24T08:53:51+02:00"
+last_updated: "2026-07-25T14:02:18+02:00"
 progress:
   total_phases: 12
   completed_phases: 0
@@ -28,7 +28,7 @@ Execution contract: `docs/BLOCKXONE_AGENT_EXECUTION_LOOP.md`
 
 - **Milestone:** v2.0 Production-Ready Rebuild
 - **Production-gate progress:** 0 of 12 phases complete
-- **Execution mode:** controlled autonomous loop; one phase at a time
+- **Execution mode:** checkpointed manual rocks; autonomous/background retry loop retired by user direction on 2026-07-25
 - **Auto advance:** disabled
 - **Planning/evidence versioning:** enabled
 - **Reference baseline:** `108be19f56dbdf87fe01ec18110c460415baf227`
@@ -187,3 +187,14 @@ The Plan 00-12 task paths /root, /root/gen3_plan12_checker, /root/gen3_i5_builde
 Typed roots: TEST_CONTRACT_NATIVE_EXIT_MASKING, EVIDENCE_PROVENANCE_PATH_TRANSCRIPTION_ERROR, GENERATED_OUTPUT_ANCESTOR_REPARSE_ESCAPE, AGENT_ROLE_PROVENANCE_OMISSION and EVIDENCE_SCOPE_WORDING_OVERSTATEMENT.
 
 Phase 0 remains in_progress, production completion remains zero, and release remains NO-GO.
+
+## Session checkpoint — 2026-07-25
+
+- **Stopped at:** Delivery-loop forensic investigation complete.
+- **Resume file:** `.planning/forensics/report-20260725-140218.md`
+- **User direction:** Do not restart the autonomous/background retry loop.
+- **Recovery repository:** `C:\Users\danie\Documents\BlockXOne Test\work\blockxone-functional`
+- **Recovery branch:** `codex/functional-platform`
+- **Recovery commit:** `ff56617e4651a04e24acce053772f542eb31f130`
+- **Next bounded rock:** R-01 — verify, commit, and publish the functional baseline without replacing GitHub `main`.
+- **Release posture:** Local demonstration is recoverable; production remains NO-GO until mandatory technical, financial, security, compliance, operational, and external professional gates close.
