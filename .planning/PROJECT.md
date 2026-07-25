@@ -1,5 +1,22 @@
 # BlockXOne Production-Ready Rebuild
 
+## Current delivery authority
+
+**Authoritative delivery repository:** `work/blockxone-functional`
+
+**Authoritative delivery branch:** `codex/functional-platform`
+
+**Execution mode:** checkpointed finite rocks
+
+**Release posture:** production NO-GO
+
+- **Execution contract:** `.planning/CHECKPOINTED-DELIVERY-PLAN.md`, accepted SHA-256 `5443CA4DB90D005DBA6C7AD12060D2A19F039D78FE42F4F4D2BA8D21213CD53D`.
+- **GitHub target:** private `GulfBrick/BlockXOne` repository through `origin` at `https://github.com/GulfBrick/BlockXOne.git`.
+- **Published R-01 baseline:** `d4f3ccc442871c590cc39ec7967e0bca53739739` on `codex/functional-platform`.
+- **Protected default-branch invariant:** GitHub `main` remains unchanged at `df3e1698f28891e7d23489a144eae2733bc8b79d`.
+- **Current delivery sequence:** P0-A clean-candidate admission, R-02 completion, R-03 workflow closure, R-04 protected staging, then R-05 production release gates.
+- Generation 2, Generation 3, and `docs/BLOCKXONE_AGENT_EXECUTION_LOOP.md` are non-authoritative historical evidence only and must not be executed as the current delivery process.
+
 ## What This Is
 
 An evidence-gated rebuild of BlockXOne into a regulated multi-asset tokenization operating system, beginning with one narrowly approved private-market product and expanding only through later product approvals.
@@ -48,17 +65,20 @@ The first production milestone is complete only after independent assurance, a b
 
 ## Launch perimeter
 
-Recommended planning defaults, subject to qualified approval:
+Accepted technical planning defaults, all subject to the still-pending G1, G2, G3 and G5 professional gates:
 
-- one jurisdiction, initially assumed South Africa;
+- South African private debt as the first jurisdiction/instrument perimeter;
 - one issuer or issuing SPV;
-- one approved private debt note or closed-ended fund interest;
 - professional/institutional/otherwise eligible investors;
 - ZAR settlement;
-- one EVM network;
+- AWS `af-south-1` as the infrastructure planning region;
+- Polygon PoS mainnet (chain 137) and Amoy testnet as the chain planning targets;
+- a modular Go domain backend with PostgreSQL-native durable workflow, financial, audit and reconciliation state;
+- two-track demo/production delivery with synthetic, visibly labelled demo behavior isolated from fail-closed production behavior;
 - one KYC/KYB provider;
 - one bank/payment route;
-- one approved custody/signing model;
+- no client-fund or client-asset custody by BlockXOne; any external bank, custodian or signing model remains professionally selected and approved;
+- T-REX 4.1.3 as a reference/hardened-derivative direction only, contingent on a proprietary licence and the required Legal, Registrar, MLRO, CISO, Blockchain, Custody, Risk and external-audit approvals;
 - primary subscription, issuance, servicing, reporting and controlled redemption.
 
 Explicit release-one exclusions:
@@ -73,6 +93,8 @@ Explicit release-one exclusions:
 - uncontrolled self-custody;
 - DeFi composability;
 - anonymous or compliance-avoidant participation.
+
+These are implementation-planning boundaries, not legal conclusions, provider approvals, custody authority, G1/G2/G3/G5 closure or production authorization. No secondary market in release one is permitted.
 
 ## Non-negotiable invariants
 
@@ -102,9 +124,9 @@ Explicit release-one exclusions:
 
 ## Target architecture direction
 
-- TypeScript-first public/investor/operator web product.
-- Dedicated domain services and durable workflow orchestration; Next.js is not the sole backend.
-- PostgreSQL for canonical business, workflow, financial, audit and reconciliation records.
+- TypeScript public/investor/operator web product with Next.js limited to the UI/BFF boundary.
+- Strongly modular Go domain services; separate deployment is introduced only where scale or assurance boundaries justify it.
+- PostgreSQL-native durable workflow orchestration and canonical business, financial, audit and reconciliation records; workflow transitions, timers, claims and accepted source events remain transactionally bound to the database.
 - Immutable double-entry subledger with obligations and reservations.
 - Transactional audit and reliable outbox.
 - Permissioned EVM token stack tied to a pinned standard and signed deployment manifests.
@@ -116,23 +138,19 @@ Explicit release-one exclusions:
 ## Source-of-truth order
 
 1. Approved professional and governance decisions.
-2. Production master plan and active requirements.
-3. Phase context, plans, controls and ADRs.
-4. Exact code, tests, migrations and deployment manifests.
-5. Reproducible evidence and external assurance.
-6. Agent messages are coordination only and never authoritative by themselves.
+2. `.planning/CHECKPOINTED-DELIVERY-PLAN.md` for current delivery scope, branch, rock and stop conditions.
+3. Production master plan and active requirements for the downstream production-control perimeter.
+4. Phase context, plans, controls and ADRs that do not conflict with the checkpoint plan.
+5. Exact code, tests, migrations and deployment manifests.
+6. Reproducible evidence and external assurance.
+7. Historical Generation 2/Generation 3/controlled-loop material is evidence only.
+8. Agent messages are coordination only and never authoritative by themselves.
 
 ## Execution model
 
-Use `docs/BLOCKXONE_AGENT_EXECUTION_LOOP.md`:
+Use `.planning/CHECKPOINTED-DELIVERY-PLAN.md`. Each finite rock has a fixed scope, visible outcome, executable evidence, explicit stop and checkpoint handoff. A failed check stops the rock with its evidence; it cannot be converted into a pass or an unbounded retry loop.
 
-- one persistent Program Controller;
-- one bounded builder by default;
-- one independent verifier;
-- one rotating domain adversarial reviewer;
-- maximum two repair cycles;
-- one production phase active at a time;
-- explicit human gates for legal, financial, custody, provider, mainnet, real-money, migration and go-live decisions.
+The superseded `docs/BLOCKXONE_AGENT_EXECUTION_LOOP.md` remains historical only. Independent technical review may be required by a rock, but agents cannot supply legal, financial, custody, provider, mainnet, real-money, migration, external-audit or go-live approval.
 
 ## Success definition
 

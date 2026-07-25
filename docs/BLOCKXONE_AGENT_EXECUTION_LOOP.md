@@ -1,3 +1,7 @@
+> **SUPERSEDED / HISTORICAL — DO NOT EXECUTE**
+>
+> Current execution authority is `.planning/CHECKPOINTED-DELIVERY-PLAN.md`. The material below is retained only as historical evidence.
+
 # BlockXOne Controlled Autonomous Delivery Loop
 
 **Version:** 1.0 draft for approval

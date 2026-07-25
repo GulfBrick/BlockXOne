@@ -2,9 +2,10 @@ name: CI
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main, develop, codex/functional-platform]
   pull_request:
     branches: [main, develop]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -23,10 +24,22 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+      - name: Install and verify pinned actionlint
+        shell: pwsh
+        run: |
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+          $goBin = Join-Path (go env GOPATH) 'bin'
+          $env:PATH = "$goBin$([IO.Path]::PathSeparator)$env:PATH"
+          ./.planning/scripts/validate-ci-policy.ps1 -AssertActionlintVersion
+          actionlint .github/workflows/ci.yml .github/workflows/deploy.yml
       - name: Validate planning truth
         shell: pwsh
-        run: ./.planning/scripts/validate-planning.ps1
+        run: ./.planning/scripts/validate-planning.ps1 -ResidueMode CleanCandidate
       - name: Reject prohibited repository artifacts and contaminated branch history
         shell: pwsh
         run: ./.planning/scripts/validate-repository-artifacts.ps1
@@ -42,8 +55,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: ${{ env.GO_VERSION }}
           cache-dependency-path: go.sum
@@ -77,8 +90,8 @@ jobs:
       APP_ENV: test
       DATABASE_URL: postgres://blockxone_ci:blockxone_ci@127.0.0.1:5432/blockxone?sslmode=disable
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: ${{ env.GO_VERSION }}
           cache-dependency-path: go.sum
@@ -95,8 +108,8 @@ jobs:
       NEXT_PUBLIC_API_URL: https://api.blockxone.example
       SERVER_ACTION_ALLOWED_ORIGINS: app.blockxone.example
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
@@ -134,8 +147,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
@@ -151,12 +164,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: ${{ env.GO_VERSION }}
           cache-dependency-path: go.sum
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: ${{ env.NODE_VERSION }}
       - name: Install pinned gosec
@@ -178,7 +191,7 @@ jobs:
     timeout-minutes: 35
     needs: [planning, go, migrations, web, contracts, security]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - run: docker build --file Dockerfile.api --tag blockxone-api:${{ github.sha }} .
       - run: docker build --file Dockerfile.worker --tag blockxone-worker:${{ github.sha }} .
       - run: docker build --file Dockerfile.web --tag blockxone-web:${{ github.sha }} .

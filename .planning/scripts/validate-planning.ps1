@@ -1,11 +1,16 @@
 [CmdletBinding()]
 param(
-    [string]$GsdToolsPath = (Join-Path $env:USERPROFILE '.codex\get-shit-done\bin\gsd-tools.cjs'),
     [ValidateSet('BuilderStaged', 'CleanCandidate')]
-    [string]$ResidueMode = 'BuilderStaged'
+    [string]$ResidueMode = 'CleanCandidate',
+    [switch]$SelfTest
 )
 
 $ErrorActionPreference = 'Stop'
+$repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
+$acceptedPlanHash = '5443CA4DB90D005DBA6C7AD12060D2A19F039D78FE42F4F4D2BA8D21213CD53D'
+$publishedR01BaselineRule = '- **Published R-01 baseline:** `d4f3ccc442871c590cc39ec7967e0bca53739739` on `codex/functional-platform`.'
+$acceptedPlanSnapshotRule = '- **Accepted-plan evidence snapshot:** The R-01 line `GitHub publication: pending` in the accepted checkpoint plan is its pre-execution snapshot; EV-P0-060 and this STATE supersede only that status line. The accepted scope, constraints, acceptance criteria and plan hash remain authoritative.'
+$currentCheckpointR01Rule = '- **R-01:** published baseline `d4f3ccc442871c590cc39ec7967e0bca53739739`; GitHub `main` remains `df3e1698f28891e7d23489a144eae2733bc8b79d`.'
 
 function Assert-Condition {
     param(
@@ -18,17 +23,6 @@ function Assert-Condition {
     }
 }
 
-function Assert-HasProperty {
-    param(
-        [object]$Object,
-        [string]$Name,
-        [string]$Label
-    )
-
-    Assert-Condition ($null -ne $Object) "$Label is null"
-    Assert-Condition ($Object.PSObject.Properties.Name -ccontains $Name) "$Label is missing property '$Name'"
-}
-
 function Assert-OrdinalSetEqual {
     param(
         [string[]]$Actual,
@@ -36,16 +30,14 @@ function Assert-OrdinalSetEqual {
         [string]$Label
     )
 
-    $actualSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    $actualSet = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     foreach ($value in $Actual) {
-        Assert-Condition ($actualSet.Add($value)) "$Label contains duplicate ordinal value '$value'"
+        Assert-Condition ($actualSet.Add($value)) "$Label contains duplicate value '$value'"
     }
-
-    $expectedSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    $expectedSet = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     foreach ($value in $Expected) {
-        Assert-Condition ($expectedSet.Add($value)) "Internal validator error: duplicate expected $Label value '$value'"
+        Assert-Condition ($expectedSet.Add($value)) "validator contains duplicate expected $Label '$value'"
     }
-
     $missing = @($Expected | Where-Object { -not $actualSet.Contains($_) })
     $extra = @($Actual | Where-Object { -not $expectedSet.Contains($_) })
     Assert-Condition (
@@ -53,410 +45,389 @@ function Assert-OrdinalSetEqual {
     ) "$Label mismatch; missing=[$($missing -join ', ')]; extra=[$($extra -join ', ')]"
 }
 
-function Invoke-GsdJson {
-    param(
-        [string[]]$Arguments,
-        [string]$Label
-    )
-
-    $raw = & node $GsdToolsPath @Arguments
-    Assert-Condition ($LASTEXITCODE -eq 0) "$Label command failed"
-    try {
-        return (($raw -join "`n") | ConvertFrom-Json -ErrorAction Stop)
-    }
-    catch {
-        throw "$Label returned malformed JSON: $($_.Exception.Message)"
-    }
-}
-
-function Get-FrontMatter {
+function Assert-ExactlyOneCanonicalLine {
     param(
         [string]$Text,
+        [string]$CanonicalLine,
         [string]$Label
     )
 
-    $match = [regex]::Match(
-        $Text,
-        '\A---\r?\n(?<frontmatter>.*?)\r?\n---(?:\r?\n|\z)',
-        [System.Text.RegularExpressions.RegexOptions]::Singleline
-    )
-    Assert-Condition $match.Success "$Label has no exact leading frontmatter block"
-    return $match.Groups['frontmatter'].Value
-}
-
-function Assert-ExactFrontMatterScalar {
-    param(
-        [string]$FrontMatter,
-        [string]$Key,
-        [string]$Value,
-        [string]$Label
-    )
-
-    $keyPattern = [regex]::Escape($Key)
-    $matches = [regex]::Matches(
-        $FrontMatter,
-        "(?m)^[ \t]*$keyPattern[ \t]*:[ \t]*(?<value>.*?)[ \t]*$"
-    )
-    Assert-Condition ($matches.Count -eq 1) "$Label must contain exactly one '$Key' key"
-    Assert-Condition (
-        $matches[0].Groups['value'].Value -ceq $Value
-    ) "$Label '$Key' must be exactly '$Value', got '$($matches[0].Groups['value'].Value)'"
-}
-
-$validatorRepoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
-$builderStatusContract = [ordered]@{
-    '.planning/scripts/invoke-phase0-matrix.ps1' = 'A '
-    '.planning/scripts/test-phase0-matrix-runner.ps1' = 'A '
-    '.planning/TEST-CONTRACT.md' = 'M '
-    '.planning/scripts/validate-planning.ps1' = 'M '
-    '.planning/BLOCKERS.md' = 'M '
-    '.planning/EVIDENCE-REGISTER.md' = 'M '
-    '.planning/STATE.md' = 'M '
-    '.planning/phases/00-planning-truth-and-containment/00-04-SUMMARY.md' = 'M '
-    '.planning/phases/00-planning-truth-and-containment/00-EVIDENCE.md' = 'M '
-}
-
-Push-Location $validatorRepoRoot
-try {
-    $repositoryResidue = @(
-        git status --porcelain=v1 --untracked-files=all --ignored=matching
-    )
-    Assert-Condition ($LASTEXITCODE -eq 0) 'Ignored-aware repository status command failed'
-}
-finally {
-    Pop-Location
-}
-
-if ($ResidueMode -ceq 'CleanCandidate') {
-    Assert-Condition (
-        $repositoryResidue.Count -eq 0
-    ) "Clean-candidate mode requires empty ignored-aware repository status; found=[$($repositoryResidue -join '; ')]"
-}
-else {
-    $allowedBuilderPaths = [System.Collections.Generic.HashSet[string]]::new(
-        [System.StringComparer]::Ordinal
-    )
-    foreach ($builderPath in $builderStatusContract.Keys) {
-        Assert-Condition (
-            $allowedBuilderPaths.Add($builderPath)
-        ) "Internal validator error: duplicate builder allowlist path '$builderPath'"
-    }
-
-    $seenBuilderPaths = [System.Collections.Generic.HashSet[string]]::new(
-        [System.StringComparer]::Ordinal
-    )
-    foreach ($residueLine in $repositoryResidue) {
-        Assert-Condition (
-            -not $residueLine.StartsWith('?? ', [System.StringComparison]::Ordinal)
-        ) "Builder-staged mode forbids ordinary untracked residue: $residueLine"
-        Assert-Condition (
-            -not $residueLine.StartsWith('!! ', [System.StringComparison]::Ordinal)
-        ) "Builder-staged mode forbids ignored residue: $residueLine"
-        Assert-Condition (
-            $residueLine.Length -ge 4 -and $residueLine[2] -ceq ' '
-        ) "Builder-staged mode cannot parse repository residue: $residueLine"
-
-        $statusCode = $residueLine.Substring(0, 2)
-        $residuePath = $residueLine.Substring(3)
-        Assert-Condition (
-            $allowedBuilderPaths.Contains($residuePath)
-        ) "Builder-staged mode forbids tracked path '$residuePath'"
-        Assert-Condition (
-            $seenBuilderPaths.Add($residuePath)
-        ) "Builder-staged mode found duplicate tracked path '$residuePath'"
-        $expectedStatusCode = $builderStatusContract[$residuePath]
-        Assert-Condition (
-            $statusCode -ceq $expectedStatusCode
-        ) "Builder-staged path '$residuePath' must have status '$expectedStatusCode', got '$statusCode'"
-    }
-
-    $missingBuilderPaths = @(
-        $builderStatusContract.Keys |
-            Where-Object { -not $seenBuilderPaths.Contains($_) }
+    $matches = @(
+        $Text -split '\r?\n' |
+            Where-Object { $_ -ceq $CanonicalLine }
     )
     Assert-Condition (
-        $seenBuilderPaths.Count -eq $builderStatusContract.Count -and
-        $missingBuilderPaths.Count -eq 0
-    ) "Builder-staged mode requires the exact nine-path correction; missing=[$($missingBuilderPaths -join ', ')]"
+        $matches.Count -eq 1
+    ) "$Label must appear exactly once as the canonical line; found $($matches.Count)"
 }
 
-$phaseRelativePath = '.planning\phases\00-planning-truth-and-containment'
-$phaseDirectory = [System.IO.Path]::GetFullPath((Join-Path $validatorRepoRoot $phaseRelativePath))
-$phaseEntry = Get-Item -LiteralPath $phaseDirectory -Force -ErrorAction Stop
-Assert-Condition $phaseEntry.PSIsContainer "Phase 0 path is not a directory: $phaseDirectory"
-Assert-Condition (
-    -not ($phaseEntry.Attributes -band [System.IO.FileAttributes]::ReparsePoint)
-) "Phase 0 directory must not be a reparse point: $phaseDirectory"
-Assert-Condition (Test-Path -LiteralPath $GsdToolsPath -PathType Leaf) "GSD tools not found: $GsdToolsPath"
+function Get-MarkdownTableRows {
+    param([string]$Text)
 
-$phaseFiles = @(Get-ChildItem -LiteralPath $phaseDirectory -Force -File)
-$planCandidates = @(
-    $phaseFiles |
-        Where-Object { $_.Name -imatch '(^|-)PLAN\.md$' }
-)
-$summaryCandidates = @(
-    $phaseFiles |
-        Where-Object { $_.Name -imatch '(^|-)SUMMARY\.md$' }
-)
-
-foreach ($candidate in @($planCandidates + $summaryCandidates)) {
-    Assert-Condition (
-        -not ($candidate.Attributes -band [System.IO.FileAttributes]::ReparsePoint)
-    ) "Plan/summary candidate must be a regular non-reparse file: $($candidate.Name)"
-}
-
-$expectedPlanNames = @(
-    1..12 | ForEach-Object { '00-{0:D2}-PLAN.md' -f $_ }
-)
-$actualPlanNames = @($planCandidates | ForEach-Object Name)
-Assert-OrdinalSetEqual $actualPlanNames $expectedPlanNames 'Phase 0 plan filenames'
-
-$actualSummaryNames = @($summaryCandidates | ForEach-Object Name)
-Assert-Condition ($actualSummaryNames.Count -le 1) "Phase 0 contains more than one summary-like file: $($actualSummaryNames -join ', ')"
-if ($actualSummaryNames.Count -eq 1) {
-    Assert-Condition (
-        $actualSummaryNames[0] -ceq '00-04-SUMMARY.md'
-    ) "Only exact ordinal filename 00-04-SUMMARY.md is permitted; found $($actualSummaryNames[0])"
-}
-$summaryPresent = [int]($actualSummaryNames.Count -eq 1)
-$expectedArtifactStatus = if ($summaryPresent -eq 1) { 'partial' } else { 'planned' }
-$expectedArtifactProgress = if ($summaryPresent -eq 1) { 8 } else { 0 }
-
-$currentTruthStatements = @(
-    "I4's aggregate matrix PASS is not accepted because mandatory native exits were maskable.",
-    "I4's individual command and mutation outputs remain narrow historical evidence only.",
-    'The attempted R4 produced only SECURITY-REVIEW-FAILURE-RECEIPT-v4.md; no R4, V4 or C4 exists.',
-    'The six recoverably moved .git/objects files were repository-metadata mutations, not tracked working-tree edits.',
-    'The v4 failure receipt SHA-256 is 0D9B3DF8697646FBB4747BD12B3521DA39E898C286593809CF9C3492176DD7B5.',
-    'P11 is 85964576707555b0b2ad3df6b297e1cb9a602d0a with Plan 00-12 SHA-256 A702B1F506E23FDF475702A76CB30041F295485DFE1BC922D00B19ADC0B439AC.',
-    'The Plan 00-12 task paths /root, /root/gen3_plan12_checker, /root/gen3_i5_builder, /root/gen3_r5_security_reviewer, /root/gen3_v5_verifier and /root/gen3_c5_admission_owner are pairwise distinct workflow provenance, not legal-person or professional independence.',
-    'Typed roots: TEST_CONTRACT_NATIVE_EXIT_MASKING, EVIDENCE_PROVENANCE_PATH_TRANSCRIPTION_ERROR, GENERATED_OUTPUT_ANCESTOR_REPARSE_ESCAPE, AGENT_ROLE_PROVENANCE_OMISSION and EVIDENCE_SCOPE_WORDING_OVERSTATEMENT.',
-    'Phase 0 remains in_progress, production completion remains zero, and release remains NO-GO.'
-)
-$currentTruthPaths = @(
-    '.planning/BLOCKERS.md',
-    '.planning/EVIDENCE-REGISTER.md',
-    '.planning/STATE.md',
-    '.planning/phases/00-planning-truth-and-containment/00-04-SUMMARY.md',
-    '.planning/phases/00-planning-truth-and-containment/00-EVIDENCE.md'
-)
-foreach ($currentTruthPath in $currentTruthPaths) {
-    if (
-        $currentTruthPath -ceq '.planning/phases/00-planning-truth-and-containment/00-04-SUMMARY.md' -and
-        $summaryPresent -eq 0
-    ) {
-        continue
-    }
-    $currentTruthText = Get-Content -Raw -LiteralPath $currentTruthPath
-    foreach ($currentTruthStatement in $currentTruthStatements) {
-        Assert-Condition (
-            $currentTruthText.Contains($currentTruthStatement)
-        ) "Current-truth contract missing from '$currentTruthPath': $currentTruthStatement"
-    }
-}
-
-$semanticEvidenceContracts = [ordered]@{
-    '.planning/TEST-CONTRACT.md' = @(
-        'Every result-bearing production label is statically mapped to one explicit',
-        'Go JSON discovery rejects duplicate or case-colliding properties',
-        'The exact 39',
-        '1,559 explicitly synthetic tested-package events',
-        'Both Vitest entries require exact 3/3 file',
-        'Every captured native string is scanned for U+FFFD and U+FEFF before raw',
-        'exact ordered 19-line raw npm/Next transcript'
-    )
-    '.planning/BLOCKERS.md' = @(
-        'Exact candidate `93f5e8652354163a2f12ab6b88601e6cbaf35e0f`',
-        '`96B1F854E0ABCDC49777C599F0C5BAD167359A41602745A21D735C23D4234110`',
-        '`70330636AB2A07912C920723A08E81B5596F2A1F1BE456833074406D8EB76CA0`',
-        '`3368C0F60999C3B3608A97BC68BEC88D24CFA96FDEBFE214991E3D46F352C643`',
-        '`C08FD0D7F1B9A02296BEF242436F9716C10FC73D8427ED4B6F8251382819FEB0`',
-        '`DF4E374F6B8EDEC5AC591516034D03551905A14EFA22E0749DD93C01D59D093D`',
-        '`FE88A21AAE71739E977CC95D9B28C8A64A2DD56000046634E699C9F5BF6754EB`',
-        '`F19734C253547834021544FF39F42FF4AA27BE5D57FD3D7FD547B8E9479CA421`',
-        '`A0D9F4661F1F6329E108CD5CD7BA36235AFBE57B8747A0909CC3BE9E9BB154BA`'
-    )
-    '.planning/EVIDENCE-REGISTER.md' = @(
-        '| EV-P0-051 |',
-        '`96B1F854E0ABCDC49777C599F0C5BAD167359A41602745A21D735C23D4234110`',
-        'This is parser-failure evidence only, not a matrix PASS',
-        '| EV-P0-052 |',
-        '| EV-P0-053 |',
-        '| EV-P0-054 |',
-        'This is web-path evidence only, not R5',
-        '| EV-P0-055 |',
-        '`FE88A21AAE71739E977CC95D9B28C8A64A2DD56000046634E699C9F5BF6754EB`',
-        '| EV-P0-056 |',
-        '`F19734C253547834021544FF39F42FF4AA27BE5D57FD3D7FD547B8E9479CA421`',
-        '| EV-P0-057 |',
-        '`A0D9F4661F1F6329E108CD5CD7BA36235AFBE57B8747A0909CC3BE9E9BB154BA`',
-        '| EV-P0-058 |',
-        '`37BCCFBA90997B77577D01E2F3E35621C48E85CD1C568FC23B5982C1E6F3C13C`'
-    )
-    '.planning/STATE.md' = @(
-        'The in-progress amended I5 parser contract removes the generic existence matcher',
-        'statically maps all 49 result-bearing labels',
-        'Run43 reached native-zero `web.lint` and then stopped fail closed',
-        'Pre-run57 runner/test hashes `C08FD0D7F1B9A02296BEF242436F9716C10FC73D8427ED4B6F8251382819FEB0`',
-        'Run57 on exact commit `457fb88e57c46d6a42add68b6fe96892e7e377b9`',
-        'Run58 tested the pre-run58 runner/test hashes',
-        'The repaired runner/test hashes are `F19734C253547834021544FF39F42FF4AA27BE5D57FD3D7FD547B8E9479CA421`'
-    )
-    '.planning/phases/00-planning-truth-and-containment/00-04-SUMMARY.md' = @(
-        'The amended I5 contract removes the generic existence matcher',
-        '49 label-to-parser removal/weakening mutations',
-        'Runs51a/51b then passed exactly two authorized clean-fixture eight-command web',
-        'Run57 under',
-        'Run58 under `i5-go-discovery-aggregate-run58-20260724`',
-        'The repaired runner/test SHA-256 values are'
-    )
-    '.planning/phases/00-planning-truth-and-containment/00-EVIDENCE.md' = @(
-        'The amended parser library now maps all 49 result-bearing production labels',
-        'discovery requires 357 unique pass identities',
-        'Exactly two authorized clean-fixture web-path repetitions then passed all eight',
-        'The exact 1,598 raw JSON payloads',
-        'Run58 under `i5-go-discovery-aggregate-run58-20260724`',
-        'The repaired runner SHA-256 is'
-    )
-}
-foreach ($contract in $semanticEvidenceContracts.GetEnumerator()) {
-    if (
-        $contract.Key -ceq '.planning/phases/00-planning-truth-and-containment/00-04-SUMMARY.md' -and
-        $summaryPresent -eq 0
-    ) {
-        continue
-    }
-    $contractText = Get-Content -Raw -LiteralPath $contract.Key
-    foreach ($requiredText in $contract.Value) {
-        Assert-Condition (
-            $contractText.Contains($requiredText)
-        ) "Semantic-parser evidence contract missing from '$($contract.Key)': $requiredText"
-    }
-}
-
-Push-Location $validatorRepoRoot
-try {
-    $init = Invoke-GsdJson @('init', 'milestone-op') 'GSD milestone initialization'
-    foreach ($property in @(
-        'milestone_version', 'milestone_name', 'phase_count', 'completed_phases',
-        'all_phases_complete', 'commit_docs'
-    )) {
-        Assert-HasProperty $init $property 'GSD milestone initialization'
-    }
-    Assert-Condition ($init.milestone_version -ceq 'v2.0') "Expected milestone v2.0, got $($init.milestone_version)"
-    Assert-Condition ($init.milestone_name -ceq 'Production-Ready Rebuild') "Unexpected milestone name: $($init.milestone_name)"
-    Assert-Condition ([int]$init.phase_count -eq 12) "Expected 12 phase directories, got $($init.phase_count)"
-    Assert-Condition (
-        [int]$init.completed_phases -eq $summaryPresent
-    ) "GSD summary-bearing-phase counter must be $summaryPresent, got $($init.completed_phases)"
-    Assert-Condition (-not [bool]$init.all_phases_complete) 'GSD must not report all phases complete'
-    Assert-Condition ([bool]$init.commit_docs) 'Planning/evidence versioning must be enabled'
-
-    $roadmap = Invoke-GsdJson @('roadmap', 'analyze') 'GSD roadmap analysis'
-    foreach ($property in @(
-        'phases', 'phase_count', 'completed_phases', 'total_plans',
-        'total_summaries', 'progress_percent', 'current_phase'
-    )) {
-        Assert-HasProperty $roadmap $property 'GSD roadmap analysis'
-    }
-    Assert-Condition ([int]$roadmap.phase_count -eq 12) "Expected 12 roadmap phases, got $($roadmap.phase_count)"
-    Assert-Condition ([int]$roadmap.completed_phases -eq 0) "Expected zero completed roadmap phases, got $($roadmap.completed_phases)"
-    Assert-Condition ([int]$roadmap.total_plans -eq 12) "Expected 12 GSD plan artifacts, got $($roadmap.total_plans)"
-    Assert-Condition (
-        [int]$roadmap.total_summaries -eq $summaryPresent
-    ) "Expected $summaryPresent GSD summary artifacts, got $($roadmap.total_summaries)"
-    Assert-Condition (
-        [int]$roadmap.progress_percent -eq $expectedArtifactProgress
-    ) "Expected GSD artifact progress $expectedArtifactProgress%, got $($roadmap.progress_percent)%"
-    Assert-Condition ([string]$roadmap.current_phase -ceq '0') "Expected current phase 0, got $($roadmap.current_phase)"
-    Assert-Condition (@($roadmap.phases).Count -eq 12) "Expected 12 roadmap phase objects, got $(@($roadmap.phases).Count)"
-
-    $actualPhaseNumbers = @($roadmap.phases | ForEach-Object { [string]$_.number })
-    $expectedPhaseNumbers = @(0..11 | ForEach-Object { [string]$_ })
-    Assert-OrdinalSetEqual $actualPhaseNumbers $expectedPhaseNumbers 'GSD roadmap phase numbers'
-
-    $expectedDependencies = @{
-        '0' = 'Nothing'
-        '1' = 'Phase 0'
-        '2' = 'Phase 1'
-        '3' = 'Phase 2'
-        '4' = 'Phase 2'
-        '5' = 'Phases 3 and 4'
-        '6' = 'Phases 3, 4 and 5'
-        '7' = 'Phases 2 and 6'
-        '8' = 'Phases 3, 4, 5 and 6'
-        '9' = 'Phases 7 and 8'
-        '10' = 'Phase 9'
-        '11' = 'Phase 10'
-    }
-
-    foreach ($phase in $roadmap.phases) {
-        foreach ($property in @('number', 'depends_on')) {
-            Assert-HasProperty $phase $property "GSD roadmap phase object"
+    $rows = [Collections.Generic.List[object]]::new()
+    foreach ($line in ($Text -split '\r?\n')) {
+        $trimmed = $line.Trim()
+        if (-not $trimmed.StartsWith('|', [StringComparison]::Ordinal) -or
+            -not $trimmed.EndsWith('|', [StringComparison]::Ordinal)) {
+            continue
         }
-        $phaseNumber = [string]$phase.number
-        Assert-Condition $expectedDependencies.ContainsKey($phaseNumber) "Unexpected phase number: $phaseNumber"
+
+        $cells = @(
+            $trimmed.Trim('|') -split '\|' |
+                ForEach-Object { $_.Trim() }
+        )
+        [void]$rows.Add(
+            [pscustomobject]@{
+                Cells = $cells
+                Raw = $line
+            }
+        )
+    }
+
+    return @($rows)
+}
+
+function Test-CanonicalHistoricalHeadingTitle {
+    param([string]$Title)
+
+    return @(
+        'Historical lineage position — non-authoritative',
+        'Historical controlled-loop decisions — non-authoritative',
+        'Historical Phase 0/Generation 2/Generation 3 evidence — non-authoritative',
+        'Historical Generation 2/Generation 3 blocker detail — non-authoritative',
+        'Historical disposition',
+        'Historical Generation 3 next actions — non-authoritative; do not execute',
+        'Historical Plan 00-12 truth boundary — non-authoritative'
+    ) -ccontains $Title.Trim()
+}
+
+function Get-NonHistoricalPlanningLines {
+    param([string]$Text)
+
+    $lines = [Collections.Generic.List[string]]::new()
+    $sectionHistory = @{}
+    foreach ($line in ($Text -split '\r?\n')) {
+        if ($line -match '^(?<marks>#{1,6})\s+(?<title>.+?)\s*$') {
+            $level = $Matches.marks.Length
+            foreach ($existingLevel in @($sectionHistory.Keys)) {
+                if ([int]$existingLevel -ge $level) {
+                    $sectionHistory.Remove($existingLevel)
+                }
+            }
+            $parentIsHistorical = @(
+                $sectionHistory.Values |
+                    Where-Object { [bool]$_ }
+            ).Count -gt 0
+            $sectionHistory[$level] = (
+                $parentIsHistorical -or
+                (Test-CanonicalHistoricalHeadingTitle -Title $Matches.title)
+            )
+        }
+
+        $isHistorical = @(
+            $sectionHistory.Values |
+                Where-Object { [bool]$_ }
+        ).Count -gt 0
+        if (-not $isHistorical) {
+            [void]$lines.Add($line)
+        }
+    }
+    return @($lines)
+}
+
+function Assert-ExactCurrentAuthorityDeclarations {
+    param(
+        [string]$DocumentName,
+        [string]$Text,
+        [string[]]$Expected
+    )
+
+    $currentLines = @(Get-NonHistoricalPlanningLines -Text $Text)
+    $actual = @(
+        $currentLines |
+            Where-Object {
+                $line = $_
+                if ($line -match '(?i)^\s*[-*]?\s*\*\*historical\b') {
+                    return $false
+                }
+                $startsWithAuthority = (
+                    $line -match '(?i)^\s*(?:[-*#>]+\s*)?(?:\*\*)?(?:active|current(?:ly)?|authoritative|delivery|execution|release)\b'
+                )
+                $hasCurrentContext = (
+                    $line -match '(?i)\b(?:active|current(?:ly)?|authoritative)\b'
+                )
+                $hasAuthoritySubject = (
+                    $line -match '(?i)\b(?:delivery|execution|release|production|repository|branch|gate|G(?:1|2|3|5))\b'
+                )
+                $isStructuredDeclaration = (
+                    $line -match '^\s*(?:[-*]\s*)?(?:#{1,6}\s+|\*\*[^*]+:\*\*)'
+                )
+                $isBoldDeclaration = (
+                    $line -match '^\s*(?:[-*]\s*)?\*\*[^*]+:\*\*'
+                )
+                $subjectStartsLine = (
+                    $line -match '(?i)^\s*(?:[-*#>]+\s*)?(?:\*\*)?(?:delivery|execution|release|production|repository|branch|gate|G(?:1|2|3|5))\b'
+                )
+                $hasProfessionalGateSubject = (
+                    $line -match '(?i)\b(?:G(?:1|2|3|5)|professional\s+gate)\b'
+                )
+                $hasReleaseSubject = (
+                    $line -match '(?i)\b(?:production|release|go[- ]?live|live\s+customers?)\b'
+                )
+                $hasClosureStatus = (
+                    $line -match '(?i)\b(?:approved|authori[sz]ed|cleared|passed|closed|complete(?:d)?|ready|enabled|signed[ -]?off)\b'
+                )
+                $hasFailClosedQualifier = (
+                    $line -match '(?i)\bNO-GO\b|\b(?:not|never|pending|blocked|ineligible)\b|fail[- ]closed|only\s+(?:after|when|through)|\b(?:until|before)\b|\b(?:cannot|does\s+not|must\s+not)\b'
+                )
+                $conflictingStatusDeclaration = (
+                    ($hasProfessionalGateSubject -or $hasReleaseSubject) -and
+                    $hasClosureStatus -and
+                    -not $hasFailClosedQualifier
+                )
+                $conflictingCurrentAuthority = (
+                    $hasCurrentContext -and
+                    $hasAuthoritySubject -and
+                    -not $hasFailClosedQualifier
+                )
+                $startsWithAuthority -or
+                    $conflictingCurrentAuthority -or
+                    $conflictingStatusDeclaration
+            }
+    )
+    Assert-OrdinalSetEqual `
+        -Actual $actual `
+        -Expected $Expected `
+        -Label "$DocumentName nonhistorical current-authority declarations"
+}
+
+function Assert-PlanningDocuments {
+    param(
+        [hashtable]$Documents,
+        [string]$PlanHash
+    )
+
+    Assert-Condition (
+        $PlanHash -ceq $acceptedPlanHash
+    ) "checkpointed delivery plan hash mismatch: $PlanHash"
+
+    foreach ($requiredPlanLine in @(
+        '**Delivery repository:** `work/blockxone-functional`',
+        '**Delivery branch:** `codex/functional-platform`',
+        '**Release posture:** local demonstration recoverable; production NO-GO'
+    )) {
+        Assert-ExactlyOneCanonicalLine `
+            -Text $Documents.Plan `
+            -CanonicalLine $requiredPlanLine `
+            -Label "checkpoint plan authority '$requiredPlanLine'"
+    }
+    Assert-Condition (
+        [regex]::Matches(
+            $Documents.Plan,
+            [regex]::Escape('BlockXOne will be delivered through finite rocks.')
+        ).Count -eq 1
+    ) 'checkpoint plan delivery contract must appear exactly once'
+
+    $authorityMarkers = @(
+        '**Authoritative delivery repository:** `work/blockxone-functional`',
+        '**Authoritative delivery branch:** `codex/functional-platform`',
+        '**Execution mode:** checkpointed finite rocks',
+        '**Release posture:** production NO-GO'
+    )
+    foreach ($authorityDocument in @('State', 'Roadmap', 'Project')) {
+        foreach ($marker in $authorityMarkers) {
+            Assert-ExactlyOneCanonicalLine `
+                -Text $Documents[$authorityDocument] `
+                -CanonicalLine $marker `
+                -Label "$authorityDocument current authority marker '$marker'"
+        }
+    }
+
+    $expectedAuthorityDeclarations = [ordered]@{
+        Plan = @(
+            '**Delivery repository:** `work/blockxone-functional`',
+            '**Delivery branch:** `codex/functional-platform`',
+            '**Release posture:** local demonstration recoverable; production NO-GO',
+            '## Delivery contract',
+            '**Delivery owner:** Codex Integrator',
+            'current delivery source, make the planning contract truthful, and obtain one',
+            'The GitHub repository becomes the local remote named `origin`. The current',
+            '- active branch upstream: `origin/codex/functional-platform`.',
+            '- current recovery documentation and receipts;',
+            '### Current evidence',
+            '### Authoritative design inputs',
+            '### Release rule'
+        )
+        State = @(
+            'milestone_name: production-ready rebuild',
+            '# BlockXOne Production-Ready Rebuild State',
+            'Current execution contract: `.planning/CHECKPOINTED-DELIVERY-PLAN.md`',
+            '**Current focus:** P0-A — authoritative planning truth and exact clean-candidate hosted CI admission.',
+            '## Current delivery authority',
+            '**Authoritative delivery repository:** `work/blockxone-functional`',
+            '**Authoritative delivery branch:** `codex/functional-platform`',
+            '**Execution mode:** checkpointed finite rocks',
+            '**Release posture:** production NO-GO',
+            '- **Current P0-A gate:** one exact candidate must produce a named hosted `CI` run with nonzero mandatory jobs and overall `success`; no such success receipt is recorded yet.',
+            '- **Current dependency gate:** mandatory web and contract audits fail closed on high-severity `GHSA-mh99-v99m-4gvg` (`brace-expansion <=5.0.7`; patched release `5.0.8`). No audit threshold is lowered. Package remediation requires a separately accepted narrow scope because package and lock files are outside P0-A.',
+            '## Current blockers and no-go conditions',
+            '## Current next actions',
+            '## Current session checkpoint — 2026-07-25',
+            '- **Current repository:** `C:\Users\danie\Documents\BlockXOne Test\work\blockxone-functional`.',
+            '- **Current branch:** `codex/functional-platform`.',
+            '- **Release posture detail:** local demonstration is recoverable; production remains NO-GO until mandatory technical, financial, security, compliance, operational and external professional gates close.',
+            '- **Release posture:** This is a recoverable UI checkpoint, not a staging or production release. Production remains NO-GO.'
+        )
+        Roadmap = @(
+            '# BlockXOne Production-Ready Rebuild Roadmap',
+            '## Current delivery authority',
+            '**Authoritative delivery repository:** `work/blockxone-functional`',
+            '**Authoritative delivery branch:** `codex/functional-platform`',
+            '**Execution mode:** checkpointed finite rocks',
+            '**Release posture:** production NO-GO',
+            '- **Execution contract:** `.planning/CHECKPOINTED-DELIVERY-PLAN.md`, accepted SHA-256 `5443CA4DB90D005DBA6C7AD12060D2A19F039D78FE42F4F4D2BA8D21213CD53D`.',
+            '## Current checkpoint sequence',
+            '2. Production starts with approved customer, value, asset, currency, chain and provider limits.'
+        )
+        Project = @(
+            '# BlockXOne Production-Ready Rebuild',
+            '## Current delivery authority',
+            '**Authoritative delivery repository:** `work/blockxone-functional`',
+            '**Authoritative delivery branch:** `codex/functional-platform`',
+            '**Execution mode:** checkpointed finite rocks',
+            '**Release posture:** production NO-GO',
+            '- **Execution contract:** `.planning/CHECKPOINTED-DELIVERY-PLAN.md`, accepted SHA-256 `5443CA4DB90D005DBA6C7AD12060D2A19F039D78FE42F4F4D2BA8D21213CD53D`.',
+            '- **Current delivery sequence:** P0-A clean-candidate admission, R-02 completion, R-03 workflow closure, R-04 protected staging, then R-05 production release gates.',
+            '2. `.planning/CHECKPOINTED-DELIVERY-PLAN.md` for current delivery scope, branch, rock and stop conditions.',
+            '3. Production master plan and active requirements for the downstream production-control perimeter.',
+            '## Execution model'
+        )
+    }
+    foreach ($authorityDocument in $expectedAuthorityDeclarations.Keys) {
+        Assert-ExactCurrentAuthorityDeclarations `
+            -DocumentName $authorityDocument `
+            -Text $Documents[$authorityDocument] `
+            -Expected $expectedAuthorityDeclarations[$authorityDocument]
+    }
+
+    Assert-Condition (
+        $Documents.Decisions.Contains(
+            'Superseded 2026-07-25 by checkpointed finite-rock delivery'
+        )
+    ) 'DEC-001 must be explicitly superseded'
+    Assert-Condition (
+        $Documents.Approvals.Contains(
+            'Superseded 2026-07-25; historical only'
+        )
+    ) 'the prior controlled-loop approval must be explicitly superseded'
+    Assert-Condition (
+        $Documents.Loop.Contains('SUPERSEDED / HISTORICAL — DO NOT EXECUTE')
+    ) 'the retired loop document is missing its historical-only banner'
+
+    foreach ($planningDefault in @(
+        'South African private debt',
+        'ZAR',
+        'AWS af-south-1',
+        'Polygon PoS mainnet (chain 137) and Amoy testnet',
+        'PostgreSQL-native durable workflow',
+        'no client-fund or client-asset custody',
+        'No secondary market in release one',
+        'T-REX 4.1.3',
+        'proprietary licence'
+    )) {
         Assert-Condition (
-            [string]$phase.depends_on -ceq $expectedDependencies[$phaseNumber]
-        ) "Phase $phaseNumber dependency mismatch: $($phase.depends_on)"
+            $Documents.Decisions.Contains($planningDefault)
+        ) "decision register is missing accepted planning default: $planningDefault"
     }
 
-    $phaseZeroMatches = @($roadmap.phases | Where-Object { [string]$_.number -ceq '0' })
-    Assert-Condition ($phaseZeroMatches.Count -eq 1) "Expected exactly one GSD Phase 0 object, got $($phaseZeroMatches.Count)"
-    $phaseZero = $phaseZeroMatches[0]
-    foreach ($property in @('plan_count', 'summary_count', 'disk_status', 'roadmap_complete')) {
-        Assert-HasProperty $phaseZero $property 'GSD Phase 0'
+    $approvalRows = @(Get-MarkdownTableRows -Text $Documents.Approvals)
+    $pendingGates = [ordered]@{
+        G1 = 'G1 permitted perimeter'
+        G2 = 'G2 identity/tenancy'
+        G3 = 'G3 financial integrity'
+        G5 = 'G5 blockchain candidate'
     }
-    Assert-Condition ([int]$phaseZero.plan_count -eq 12) "Expected Phase 0 plan_count=12, got $($phaseZero.plan_count)"
-    Assert-Condition (
-        [int]$phaseZero.summary_count -eq $summaryPresent
-    ) "Expected Phase 0 summary_count=$summaryPresent, got $($phaseZero.summary_count)"
-    Assert-Condition (
-        [string]$phaseZero.disk_status -ceq $expectedArtifactStatus
-    ) "Expected Phase 0 artifact state '$expectedArtifactStatus', got '$($phaseZero.disk_status)'"
-    Assert-Condition (-not [bool]$phaseZero.roadmap_complete) 'GSD must not report Phase 0 roadmap completion'
+    foreach ($gateEntry in $pendingGates.GetEnumerator()) {
+        $gateRows = @(
+            $approvalRows |
+                Where-Object {
+                    $_.Cells.Count -gt 0 -and
+                    $_.Cells[0] -match "^$([regex]::Escape($gateEntry.Key))(?:\s|$)"
+                }
+        )
+        Assert-Condition (
+            $gateRows.Count -eq 1
+        ) "professional gate must have exactly one current approval row: $($gateEntry.Key)"
 
-    $stateText = Get-Content -Raw -LiteralPath '.planning\STATE.md'
-    $stateFrontMatter = Get-FrontMatter $stateText 'STATE'
-    Assert-ExactFrontMatterScalar $stateFrontMatter 'current_phase' '0 of 12 (planning truth and containment)' 'STATE'
-    Assert-ExactFrontMatterScalar $stateFrontMatter 'status' 'in_progress' 'STATE'
-    Assert-ExactFrontMatterScalar $stateFrontMatter 'total_phases' '12' 'STATE'
-    Assert-ExactFrontMatterScalar $stateFrontMatter 'completed_phases' '0' 'STATE'
-    Assert-ExactFrontMatterScalar $stateFrontMatter 'total_plans' '12' 'STATE'
-    Assert-ExactFrontMatterScalar $stateFrontMatter 'completed_plans' '0' 'STATE'
+        $gateRow = $gateRows[0]
+        Assert-Condition (
+            $gateRow.Cells.Count -eq 4
+        ) "professional gate row must contain exactly four cells: $($gateEntry.Key)"
+        Assert-Condition (
+            $gateRow.Cells[0] -ceq $gateEntry.Value
+        ) "professional gate row must use the canonical identity: $($gateEntry.Value)"
+        Assert-Condition (
+            $gateRow.Cells[2] -ceq 'Pending'
+        ) "professional gate must remain exactly Pending: $($gateEntry.Value)"
+    }
 
-    $roadmapText = Get-Content -Raw -LiteralPath '.planning\ROADMAP.md'
-    $phaseZeroChecklistMatches = [regex]::Matches(
-        $roadmapText,
-        '(?m)^- \[(?<mark>[ xX])\] \*\*Phase 0: Planning Truth and Containment\*\*\s*$'
+    Assert-Condition (
+        $Documents.State.Contains('d4f3ccc442871c590cc39ec7967e0bca53739739')
+    ) 'STATE must record the exact published R-01 baseline'
+    Assert-Condition (
+        $Documents.State.Contains($acceptedPlanSnapshotRule)
+    ) 'STATE must explicitly supersede the accepted plan pre-execution R-01 publication snapshot'
+    $nonHistoricalR01PublicationLines = @(
+        Get-NonHistoricalPlanningLines -Text $Documents.State |
+            Where-Object {
+                $_ -match '(?i)\bR-01\b' -and
+                $_ -match '(?i)\b(?:publication|published)\b'
+            }
+    )
+    Assert-OrdinalSetEqual `
+        -Actual $nonHistoricalR01PublicationLines `
+        -Expected @(
+            $publishedR01BaselineRule,
+            $acceptedPlanSnapshotRule,
+            $currentCheckpointR01Rule
+        ) `
+        -Label 'STATE nonhistorical R-01 publication-status declarations'
+    Assert-Condition (
+        $Documents.State.Contains('R-02 remains in progress')
+    ) 'STATE must state that R-02 remains in progress'
+    Assert-Condition (
+        $Documents.State.Contains('df3e1698f28891e7d23489a144eae2733bc8b79d')
+    ) 'STATE must freeze the unchanged GitHub main SHA'
+
+    foreach ($stateContract in @(
+        '(?m)^[ \t]*current_phase:\s*0 of 12\b',
+        '(?m)^[ \t]*status:\s*in_progress[ \t]*$',
+        '(?m)^[ \t]*total_phases:\s*12[ \t]*$',
+        '(?m)^[ \t]*completed_phases:\s*0[ \t]*$'
+    )) {
+        Assert-Condition (
+            [regex]::IsMatch($Documents.State, $stateContract)
+        ) "STATE frontmatter invariant failed: $stateContract"
+    }
+
+    $phaseMatches = [regex]::Matches(
+        $Documents.Roadmap,
+        '(?m)^- \[(?<mark>[ xX])\] \*\*Phase (?<number>[0-9]+):'
     )
     Assert-Condition (
-        $phaseZeroChecklistMatches.Count -eq 1
-    ) "ROADMAP must contain exactly one Phase 0 checklist entry, got $($phaseZeroChecklistMatches.Count)"
-    Assert-Condition (
-        $phaseZeroChecklistMatches[0].Groups['mark'].Value -ceq ' '
-    ) 'ROADMAP Phase 0 checklist must remain unchecked'
-    $phaseZeroSectionMatches = [regex]::Matches(
-        $roadmapText,
-        '(?ms)^### Phase 0: Planning Truth and Containment\s*(?<body>.*?)(?=^### Phase 1:|\z)'
+        $phaseMatches.Count -eq 12
+    ) "ROADMAP must contain exactly 12 phase checklist entries; found $($phaseMatches.Count)"
+    $phaseNumbers = @($phaseMatches | ForEach-Object { $_.Groups['number'].Value })
+    Assert-OrdinalSetEqual $phaseNumbers @(0..11 | ForEach-Object { [string]$_ }) 'ROADMAP phase numbers'
+    $checkedPhases = @(
+        $phaseMatches | Where-Object { $_.Groups['mark'].Value -cne ' ' }
     )
     Assert-Condition (
-        $phaseZeroSectionMatches.Count -eq 1
-    ) "ROADMAP must contain exactly one Phase 0 details section, got $($phaseZeroSectionMatches.Count)"
-    $phaseZeroStatusMatches = [regex]::Matches(
-        $phaseZeroSectionMatches[0].Groups['body'].Value,
-        '(?m)^\*\*Status:\*\*\s*(?<status>.*?)\s*$'
-    )
-    Assert-Condition (
-        $phaseZeroStatusMatches.Count -eq 1
-    ) "ROADMAP Phase 0 must contain exactly one status, got $($phaseZeroStatusMatches.Count)"
-    Assert-Condition (
-        $phaseZeroStatusMatches[0].Groups['status'].Value -ceq 'In progress'
-    ) "ROADMAP Phase 0 status must be exactly 'In progress'"
+        $checkedPhases.Count -eq 0
+    ) 'ROADMAP must retain authoritative production progress at 0/12'
 
-    $requirementsText = Get-Content -Raw -LiteralPath '.planning\REQUIREMENTS.md'
     $declaredRequirementMatches = [regex]::Matches(
-        $requirementsText,
+        $Documents.Requirements,
         '(?m)^\*\*Active requirements:\*\*\s*(?<count>[0-9]+)\s*$'
     )
     Assert-Condition (
@@ -464,87 +435,417 @@ try {
         [int]$declaredRequirementMatches[0].Groups['count'].Value -eq 89
     ) 'REQUIREMENTS must declare exactly 89 active requirements'
     $requirementMatches = [regex]::Matches(
-        $requirementsText,
+        $Documents.Requirements,
         '(?m)^- \[(?<mark>[ xX])\] \*\*(?<id>[A-Z]+-[0-9]{2}):\*\*'
     )
-    $requirementIds = @($requirementMatches | ForEach-Object { $_.Groups['id'].Value })
-    $uncheckedRequirementIds = @(
-        $requirementMatches |
-            Where-Object { $_.Groups['mark'].Value -ceq ' ' } |
-            ForEach-Object { $_.Groups['id'].Value }
+    Assert-Condition (
+        $requirementMatches.Count -eq 89
+    ) "expected 89 active requirement entries; found $($requirementMatches.Count)"
+    $checkedRequirements = @(
+        $requirementMatches | Where-Object { $_.Groups['mark'].Value -cne ' ' }
     )
-    $checkedRequirementIds = @(
-        $requirementMatches |
-            Where-Object { $_.Groups['mark'].Value -cne ' ' } |
-            ForEach-Object { $_.Groups['id'].Value }
-    )
-    $expectedRequirementGroups = [ordered]@{
-        'ARCH' = 1; 'ASSURE' = 8; 'AUD' = 1; 'BASE' = 7; 'CHAIN' = 7
-        'COMM' = 2; 'COMP' = 3; 'DOC' = 1; 'DOMAIN' = 1; 'FIN' = 5
-        'IAM' = 5; 'LAUNCH' = 6; 'LEGAL' = 5; 'LIFE' = 8; 'OPS' = 3
-        'PILOT' = 8; 'PROD' = 2; 'PROV' = 3; 'REL' = 5; 'REP' = 1
-        'UX' = 7
+    Assert-Condition (
+        $checkedRequirements.Count -eq 0
+    ) 'all 89 active requirements must remain unchecked'
+}
+
+function Copy-DocumentMap {
+    param([hashtable]$Documents)
+
+    $copy = @{}
+    foreach ($key in $Documents.Keys) {
+        $copy[$key] = $Documents[$key]
     }
-    $expectedRequirementIds = @(
-        foreach ($group in $expectedRequirementGroups.GetEnumerator()) {
-            1..$group.Value | ForEach-Object { '{0}-{1:D2}' -f $group.Key, $_ }
+    return $copy
+}
+
+function Assert-TextMutationRejected {
+    param(
+        [hashtable]$Documents,
+        [string]$PlanHash,
+        [string]$Key,
+        [string]$OldText,
+        [string]$NewText,
+        [string]$Label
+    )
+
+    Assert-Condition (
+        $Documents[$Key].Contains($OldText)
+    ) "self-test fixture is missing mutation source for $Label"
+    $mutated = Copy-DocumentMap $Documents
+    $mutated[$Key] = $mutated[$Key].Replace($OldText, $NewText)
+    $rejected = $false
+    try {
+        Assert-PlanningDocuments -Documents $mutated -PlanHash $PlanHash
+    }
+    catch {
+        $rejected = $true
+    }
+    Assert-Condition $rejected "self-test mutation was not rejected: $Label"
+}
+
+function Assert-AppendedTextRejected {
+    param(
+        [hashtable]$Documents,
+        [string]$PlanHash,
+        [string]$Key,
+        [string]$AppendedText,
+        [string]$Label
+    )
+
+    $mutated = Copy-DocumentMap $Documents
+    $mutated[$Key] += [Environment]::NewLine + $AppendedText
+    $rejected = $false
+    try {
+        Assert-PlanningDocuments -Documents $mutated -PlanHash $PlanHash
+    }
+    catch {
+        $rejected = $true
+    }
+    Assert-Condition $rejected "self-test appended mutation was not rejected: $Label"
+}
+
+function Assert-CurrentTextRejected {
+    param(
+        [hashtable]$Documents,
+        [string]$PlanHash,
+        [string]$Key,
+        [string]$InsertedText,
+        [string]$Label
+    )
+
+    $mutated = Copy-DocumentMap $Documents
+    $historicalHeading = $null
+    foreach ($headingMatch in [regex]::Matches(
+        $mutated[$Key],
+        '(?m)^#{1,6}\s+(?<title>.+?)\s*$'
+    )) {
+        if (Test-CanonicalHistoricalHeadingTitle -Title $headingMatch.Groups['title'].Value) {
+            $historicalHeading = $headingMatch
+            break
         }
-    )
-    Assert-Condition ($requirementIds.Count -eq 89) "Expected 89 active requirement occurrences, got $($requirementIds.Count)"
-    Assert-Condition ($uncheckedRequirementIds.Count -eq 89) "Expected 89 unchecked requirements, got $($uncheckedRequirementIds.Count)"
-    Assert-Condition ($checkedRequirementIds.Count -eq 0) "Checked requirements are forbidden: $($checkedRequirementIds -join ', ')"
-    Assert-OrdinalSetEqual $requirementIds $expectedRequirementIds 'Active requirement IDs'
-
-    if ($summaryPresent -eq 1) {
-        $summaryPath = Join-Path $phaseDirectory '00-04-SUMMARY.md'
-        $summaryText = Get-Content -Raw -LiteralPath $summaryPath
-        $summaryFrontMatter = Get-FrontMatter $summaryText '00-04-SUMMARY.md'
-        Assert-ExactFrontMatterScalar $summaryFrontMatter 'phase' '00-planning-truth-and-containment' '00-04-SUMMARY.md'
-        Assert-ExactFrontMatterScalar $summaryFrontMatter 'plan' '04' '00-04-SUMMARY.md'
-        Assert-ExactFrontMatterScalar $summaryFrontMatter 'status' 'implementation_frozen_for_independent_review' '00-04-SUMMARY.md'
-        Assert-ExactFrontMatterScalar $summaryFrontMatter 'release_status' 'NO-GO' '00-04-SUMMARY.md'
-        Assert-ExactFrontMatterScalar $summaryFrontMatter 'requirements-completed' '[]' '00-04-SUMMARY.md'
-        Assert-Condition (
-            $summaryText.Contains('Phase 0 remains `in_progress`.')
-        ) 'Summary must state exactly that Phase 0 remains in_progress'
-        Assert-Condition (
-            $summaryText.Contains('This is builder evidence only.')
-        ) 'Summary must state exactly that this is builder evidence only'
-        Assert-Condition (
-            $summaryText.Contains('Tasks 3-5 remain mandatory.')
-        ) 'Summary must state exactly that Tasks 3-5 remain mandatory'
-        Assert-Condition (
-            $summaryText.Contains(
-                'This is not independent review, verification, Phase completion, requirement completion, local candidate admission, or production approval.'
-            )
-        ) 'Summary must retain the exact independent-review/completion/production non-claim'
-        Assert-Condition (
-            $summaryText.Contains('V3 is preserved but was not admitted as C3.')
-        ) 'Summary must state exactly that V3 was preserved but not admitted'
-        Assert-Condition (
-            $summaryText.Contains('The stale broad generated-cleanliness conclusions are superseded.')
-        ) 'Summary must state exactly that stale broad generated-cleanliness conclusions are superseded'
+    }
+    if ($null -ne $historicalHeading) {
+        $mutated[$Key] = $mutated[$Key].Insert(
+            $historicalHeading.Index,
+            $InsertedText + [Environment]::NewLine + [Environment]::NewLine
+        )
+    }
+    else {
+        $mutated[$Key] += [Environment]::NewLine + $InsertedText
     }
 
-    $health = Invoke-GsdJson @('validate', 'health') 'GSD planning health'
-    foreach ($property in @('status', 'errors', 'warnings')) {
-        Assert-HasProperty $health $property 'GSD planning health'
+    $rejected = $false
+    try {
+        Assert-PlanningDocuments -Documents $mutated -PlanHash $PlanHash
     }
-    Assert-Condition ([string]$health.status -ceq 'healthy') "Expected healthy planning state, got $($health.status)"
-    Assert-Condition (@($health.errors).Count -eq 0) "Planning health errors: $($health.errors.message -join '; ')"
-    Assert-Condition (@($health.warnings).Count -eq 0) "Planning health warnings: $($health.warnings.message -join '; ')"
+    catch {
+        $rejected = $true
+    }
+    Assert-Condition $rejected "self-test current-section mutation was not rejected: $Label"
+}
 
-    Write-Output 'PLANNING_VALIDATION=PASS'
-    Write-Output 'MILESTONE=v2.0 Production-Ready Rebuild'
-    Write-Output 'PHASES=12'
-    Write-Output 'PLANS=12'
-    Write-Output "GSD_ARTIFACT_STATE=$expectedArtifactStatus"
-    Write-Output "GSD_ARTIFACT_PROGRESS=$expectedArtifactProgress%"
-    Write-Output "REPOSITORY_RESIDUE_MODE=$ResidueMode"
-    Write-Output 'AUTHORITATIVE_PRODUCTION_PROGRESS=0%'
-    Write-Output 'ACTIVE_REQUIREMENTS=89'
-    Write-Output 'CHECKED_REQUIREMENTS=0'
+function Assert-PlanHashMutationRejected {
+    param([hashtable]$Documents)
+
+    $rejected = $false
+    try {
+        Assert-PlanningDocuments -Documents $Documents -PlanHash ('0' * 64)
+    }
+    catch {
+        $rejected = $true
+    }
+    Assert-Condition $rejected 'self-test wrong plan hash was not rejected'
 }
-finally {
-    Pop-Location
+
+function Assert-RepositoryResidue {
+    param([string]$Mode)
+
+    Push-Location $repoRoot
+    try {
+        $status = @(git status --porcelain=v1 --untracked-files=all --ignored=matching)
+        Assert-Condition ($LASTEXITCODE -eq 0) 'ignored-aware repository status command failed'
+    }
+    finally {
+        Pop-Location
+    }
+
+    if ($Mode -ceq 'CleanCandidate') {
+        Assert-Condition (
+            $status.Count -eq 0
+        ) "CleanCandidate requires empty ignored-aware status; found=[$($status -join '; ')]"
+        return
+    }
+
+    $allowedPaths = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($path in @(
+        '.planning/CHECKPOINTED-DELIVERY-PLAN.md',
+        '.planning/STATE.md',
+        '.planning/ROADMAP.md',
+        '.planning/PROJECT.md',
+        '.planning/DECISIONS.md',
+        '.planning/APPROVALS.md',
+        '.planning/BLOCKERS.md',
+        '.planning/EVIDENCE-REGISTER.md',
+        '.planning/scripts/validate-planning.ps1',
+        '.planning/scripts/validate-ci-policy.ps1',
+        '.planning/scripts/verify-p0a-hosted.ps1',
+        '.github/workflows/ci.yml',
+        '.github/CODEOWNERS',
+        '.github/dependabot.yml',
+        'docs/BLOCKXONE_AGENT_EXECUTION_LOOP.md',
+        'docs/BLOCKXONE_PRODUCTION_MASTER_PLAN.md'
+    )) {
+        [void]$allowedPaths.Add($path)
+    }
+
+    foreach ($line in $status) {
+        Assert-Condition (
+            -not $line.StartsWith('?? ', [StringComparison]::Ordinal)
+        ) "BuilderStaged forbids untracked residue: $line"
+        Assert-Condition (
+            -not $line.StartsWith('!! ', [StringComparison]::Ordinal)
+        ) "BuilderStaged forbids ignored residue: $line"
+        Assert-Condition (
+            $line.Length -ge 4 -and $line[2] -ceq ' '
+        ) "BuilderStaged cannot parse repository status: $line"
+        $path = $line.Substring(3).Replace('\', '/')
+        Assert-Condition (
+            $allowedPaths.Contains($path)
+        ) "BuilderStaged forbids tracked path: $path"
+    }
 }
+
+$documentPaths = [ordered]@{
+    Plan = '.planning\CHECKPOINTED-DELIVERY-PLAN.md'
+    State = '.planning\STATE.md'
+    Roadmap = '.planning\ROADMAP.md'
+    Project = '.planning\PROJECT.md'
+    Decisions = '.planning\DECISIONS.md'
+    Approvals = '.planning\APPROVALS.md'
+    Loop = 'docs\BLOCKXONE_AGENT_EXECUTION_LOOP.md'
+    Requirements = '.planning\REQUIREMENTS.md'
+}
+$documents = @{}
+foreach ($entry in $documentPaths.GetEnumerator()) {
+    $fullPath = Join-Path $repoRoot $entry.Value
+    Assert-Condition (Test-Path -LiteralPath $fullPath -PathType Leaf) "missing planning input: $($entry.Value)"
+    $documents[$entry.Key] = Get-Content -LiteralPath $fullPath -Raw
+}
+$actualPlanHash = (Get-FileHash -LiteralPath (
+    Join-Path $repoRoot $documentPaths.Plan
+) -Algorithm SHA256).Hash.ToUpperInvariant()
+
+Assert-PlanningDocuments -Documents $documents -PlanHash $actualPlanHash
+
+if ($SelfTest) {
+    foreach ($authorityDocument in @('State', 'Roadmap', 'Project')) {
+        Assert-TextMutationRejected $documents $actualPlanHash $authorityDocument `
+            '**Authoritative delivery repository:** `work/blockxone-functional`' `
+            '**Authoritative delivery repository:** `work/another-repository`' `
+            "$authorityDocument repository authority"
+        Assert-TextMutationRejected $documents $actualPlanHash $authorityDocument `
+            '**Authoritative delivery branch:** `codex/functional-platform`' `
+            '**Authoritative delivery branch:** `main`' `
+            "$authorityDocument branch authority"
+        Assert-TextMutationRejected $documents $actualPlanHash $authorityDocument `
+            '**Execution mode:** checkpointed finite rocks' `
+            '**Execution mode:** controlled autonomous loop' `
+            "$authorityDocument execution authority"
+        Assert-TextMutationRejected $documents $actualPlanHash $authorityDocument `
+            '**Release posture:** production NO-GO' `
+            '**Release posture:** production ready' `
+            "$authorityDocument release posture"
+
+        foreach ($canonicalMarker in @(
+            '**Authoritative delivery repository:** `work/blockxone-functional`',
+            '**Authoritative delivery branch:** `codex/functional-platform`',
+            '**Execution mode:** checkpointed finite rocks',
+            '**Release posture:** production NO-GO'
+        )) {
+            Assert-AppendedTextRejected `
+                -Documents $documents `
+                -PlanHash $actualPlanHash `
+                -Key $authorityDocument `
+                -AppendedText $canonicalMarker `
+                -Label "$authorityDocument duplicate canonical marker '$canonicalMarker'"
+        }
+    }
+
+    Assert-TextMutationRejected $documents $actualPlanHash Plan `
+        '**Delivery repository:** `work/blockxone-functional`' `
+        '**Delivery repository:** `work/another-repository`' `
+        'checkpoint repository authority'
+    Assert-TextMutationRejected $documents $actualPlanHash Plan `
+        '**Delivery branch:** `codex/functional-platform`' `
+        '**Delivery branch:** `main`' `
+        'checkpoint branch authority'
+    foreach ($canonicalPlanLine in @(
+        '**Delivery repository:** `work/blockxone-functional`',
+        '**Delivery branch:** `codex/functional-platform`',
+        '**Release posture:** local demonstration recoverable; production NO-GO',
+        'BlockXOne will be delivered through finite rocks.'
+    )) {
+        Assert-AppendedTextRejected `
+            -Documents $documents `
+            -PlanHash $actualPlanHash `
+            -Key Plan `
+            -AppendedText $canonicalPlanLine `
+            -Label "checkpoint plan duplicate canonical line '$canonicalPlanLine'"
+    }
+    Assert-TextMutationRejected $documents $actualPlanHash Decisions `
+        'Superseded 2026-07-25 by checkpointed finite-rock delivery' `
+        'Approved by user' `
+        'DEC-001 supersession'
+    Assert-TextMutationRejected $documents $actualPlanHash Approvals `
+        'Superseded 2026-07-25; historical only' `
+        'Approved' `
+        'loop approval supersession'
+    Assert-TextMutationRejected $documents $actualPlanHash Loop `
+        'SUPERSEDED / HISTORICAL — DO NOT EXECUTE' `
+        'ACTIVE EXECUTION PROCEDURE' `
+        'historical loop banner'
+    Assert-TextMutationRejected $documents $actualPlanHash State `
+        'R-02 remains in progress' `
+        'R-02 is complete' `
+        'R-02 current state'
+    Assert-TextMutationRejected $documents $actualPlanHash State `
+        $acceptedPlanSnapshotRule `
+        '- **Accepted-plan evidence snapshot:** GitHub publication remains pending.' `
+        'accepted-plan R-01 evidence snapshot supersession'
+    Assert-CurrentTextRejected $documents $actualPlanHash State `
+        'R-01 GitHub publication remains pending.' `
+        'contradictory current R-01 publication status'
+    Assert-TextMutationRejected $documents $actualPlanHash Requirements `
+        '**Active requirements:** 89' `
+        '**Active requirements:** 88' `
+        'active requirement count'
+    Assert-TextMutationRejected $documents $actualPlanHash Requirements `
+        '- [ ] **BASE-01:**' `
+        '- [x] **BASE-01:**' `
+        'checked requirement'
+    Assert-TextMutationRejected $documents $actualPlanHash Roadmap `
+        '- [ ] **Phase 0:' `
+        '- [x] **Phase 0:' `
+        'checked roadmap phase'
+    Assert-TextMutationRejected $documents $actualPlanHash Decisions `
+        'South African private debt' `
+        'unselected product' `
+        'accepted product planning default'
+    Assert-TextMutationRejected $documents $actualPlanHash Approvals `
+        'G3 financial integrity' `
+        'G3 financial integrity closed' `
+        'financial gate identity'
+
+    Assert-AppendedTextRejected $documents $actualPlanHash State `
+        '**Release posture:** production READY' `
+        'appended contradictory release posture'
+    Assert-AppendedTextRejected $documents $actualPlanHash Project `
+        '**Current production status:** GO' `
+        'appended current production GO claim'
+    Assert-CurrentTextRejected $documents $actualPlanHash Roadmap `
+        '**Authoritative release decision:** approved' `
+        'appended authoritative release approval'
+    Assert-AppendedTextRejected $documents $actualPlanHash State `
+        '**Current financial gate:** G3 closed' `
+        'appended current G3 closure'
+    Assert-AppendedTextRejected $documents $actualPlanHash Project `
+        '**Current blockchain gate:** G5 passed' `
+        'appended current G5 pass'
+    Assert-CurrentTextRejected $documents $actualPlanHash State `
+        '**Current production decision:** launch authorized for live customers' `
+        'current live-customer launch authorization'
+    Assert-CurrentTextRejected $documents $actualPlanHash Roadmap `
+        '**Current G5 decision:** external audit signed off' `
+        'current G5 external-audit sign-off'
+    Assert-CurrentTextRejected $documents $actualPlanHash State `
+        '**Current gate status:** closed — G3 financial integrity' `
+        'current closed-before-G3 gate claim'
+    Assert-CurrentTextRejected $documents $actualPlanHash Project `
+        '**Active delivery branch:** main' `
+        'conflicting active delivery branch'
+    Assert-CurrentTextRejected $documents $actualPlanHash State `
+        '**Current production decision:** live customers authorized for launch' `
+        'reordered current production authorization'
+    Assert-CurrentTextRejected $documents $actualPlanHash Roadmap `
+        '**G5 decision (current):** signed off by the external auditor' `
+        'reordered current G5 sign-off'
+    Assert-CurrentTextRejected $documents $actualPlanHash State `
+        '**Gate status currently:** closed — G3 financial integrity' `
+        'reordered currently closed G3 gate'
+    Assert-CurrentTextRejected $documents $actualPlanHash Project `
+        '**Branch selected as active:** main' `
+        'reordered active branch authority'
+    Assert-CurrentTextRejected $documents $actualPlanHash Roadmap `
+        '**G5 decision:** signed off by the external auditor' `
+        'implicit-current G5 sign-off declaration'
+    Assert-CurrentTextRejected $documents $actualPlanHash Project `
+        '**Production decision:** live-customer launch authorized' `
+        'implicit-current production authorization declaration'
+    Assert-CurrentTextRejected $documents $actualPlanHash State `
+        '**Gate status:** closed — G3 financial integrity' `
+        'implicit-current closed G3 declaration'
+    Assert-CurrentTextRejected $documents $actualPlanHash Project `
+        'The platform is ready for production.' `
+        'plain-prose production-ready claim'
+    Assert-CurrentTextRejected $documents $actualPlanHash State `
+        'Sign-off has closed G3.' `
+        'closed-before-G3 plain-prose claim'
+    Assert-CurrentTextRejected $documents $actualPlanHash Roadmap `
+        'External auditors signed off G5.' `
+        'external-auditor-sign-off-before-G5 claim'
+    Assert-CurrentTextRejected $documents $actualPlanHash Project `
+        'Main is the active delivery branch.' `
+        'main-before-active-delivery-branch claim'
+    Assert-CurrentTextRejected $documents $actualPlanHash State `
+        'The active repository is BlockXOne Production Gen3.' `
+        'active Gen3 repository plain-prose claim'
+    Assert-CurrentTextRejected $documents $actualPlanHash Roadmap `
+        "## Not historical — current production authority`n**Current production status:** READY" `
+        'negated-historical heading cannot hide current production readiness'
+
+    $historicalAuthorityFixture = Copy-DocumentMap $documents
+    $historicalAuthorityFixture.Roadmap += [Environment]::NewLine +
+        '**Current G5 decision:** historical evidence says an earlier audit signed off; non-authoritative only'
+    Assert-PlanningDocuments `
+        -Documents $historicalAuthorityFixture `
+        -PlanHash $actualPlanHash
+
+    Assert-AppendedTextRejected $documents $actualPlanHash Approvals `
+        '| G3 financial integrity | CFO | Approved | synthetic conflict |' `
+        'duplicate Approved G3 approval row'
+    Assert-AppendedTextRejected $documents $actualPlanHash Approvals `
+        '| G1 permitted perimeter | Board delegate | Pending | synthetic duplicate |' `
+        'duplicate Pending G1 approval row'
+    Assert-AppendedTextRejected $documents $actualPlanHash Approvals `
+        '| g2 identity/tenancy | CTO | Pending | noncanonical duplicate |' `
+        'case-variant duplicate G2 approval row'
+
+    Assert-PlanHashMutationRejected $documents
+
+    $stale = Copy-DocumentMap $documents
+    $stale.State += [Environment]::NewLine +
+        '**Current repository:** `C:\Users\danie\Documents\BlockXOne Production Gen3`'
+    $rejected = $false
+    try {
+        Assert-PlanningDocuments -Documents $stale -PlanHash $actualPlanHash
+    }
+    catch {
+        $rejected = $true
+    }
+    Assert-Condition $rejected 'self-test active Gen3 authority was not rejected'
+
+    Write-Output 'PLANNING_SELF_TEST=PASS'
+}
+else {
+    Assert-RepositoryResidue -Mode $ResidueMode
+}
+
+Write-Output 'PLANNING_VALIDATION=PASS'
+Write-Output "CHECKPOINT_PLAN_SHA256=$actualPlanHash"
+Write-Output 'AUTHORITATIVE_REPOSITORY=work/blockxone-functional'
+Write-Output 'AUTHORITATIVE_BRANCH=codex/functional-platform'
+Write-Output 'PHASES=12'
+Write-Output 'ACTIVE_REQUIREMENTS=89'
+Write-Output 'CHECKED_REQUIREMENTS=0'
+Write-Output 'RELEASE_POSTURE=production NO-GO'

@@ -4,7 +4,7 @@ milestone: v2.0
 milestone_name: production-ready rebuild
 current_phase: 0 of 12 (planning truth and containment)
 status: in_progress
-last_updated: "2026-07-25T14:02:18+02:00"
+last_updated: "2026-07-25T17:27:22+02:00"
 progress:
   total_phases: 12
   completed_phases: 0
@@ -18,21 +18,47 @@ progress:
 
 Primary program plan: `docs/BLOCKXONE_PRODUCTION_MASTER_PLAN.md`
 
-Execution contract: `docs/BLOCKXONE_AGENT_EXECUTION_LOOP.md`
+Current execution contract: `.planning/CHECKPOINTED-DELIVERY-PLAN.md`
 
 **Core value:** BlockXOne gives regulated private-market participants one governed operating system for qualification, subscription, reconciled settlement, token issuance, register control, servicing, reporting and redemption.
 
-**Current focus:** Phase 0 — recoverable baseline, planning truth, feature containment, test contract and evidence policy.
+**Current focus:** P0-A — authoritative planning truth and exact clean-candidate hosted CI admission.
 
-## Current position
+## Current delivery authority
+
+**Authoritative delivery repository:** `work/blockxone-functional`
+
+**Authoritative delivery branch:** `codex/functional-platform`
+
+**Execution mode:** checkpointed finite rocks
+
+**Release posture:** production NO-GO
+
+- **Accepted execution plan:** `.planning/CHECKPOINTED-DELIVERY-PLAN.md`, SHA-256 `5443CA4DB90D005DBA6C7AD12060D2A19F039D78FE42F4F4D2BA8D21213CD53D`.
+- **GitHub target:** private `GulfBrick/BlockXOne` repository.
+- **Origin:** fetch/push `https://github.com/GulfBrick/BlockXOne.git`; no embedded credentials.
+- **Published R-01 baseline:** `d4f3ccc442871c590cc39ec7967e0bca53739739` on `codex/functional-platform`.
+- **Accepted-plan evidence snapshot:** The R-01 line `GitHub publication: pending` in the accepted checkpoint plan is its pre-execution snapshot; EV-P0-060 and this STATE supersede only that status line. The accepted scope, constraints, acceptance criteria and plan hash remain authoritative.
+- **Unchanged GitHub default branch:** `main` at `df3e1698f28891e7d23489a144eae2733bc8b79d`.
+- **Current P0-A gate:** one exact candidate must produce a named hosted `CI` run with nonzero mandatory jobs and overall `success`; no such success receipt is recorded yet.
+- **Prior hosted run:** `30159010530` was `BuildFailed` / `startup_failure`, with a blank workflow name and zero jobs; it is failure evidence only.
+- **Remote normalization:** exactly `origin` and `legacy-gen3`; `legacy-gen3` fetches the historical local repository and its push URL is `disabled://blockxone/legacy-gen3-read-only`.
+- **Legacy integrity:** legacy HEAD `ff56617e4651a04e24acce053772f542eb31f130` remained unchanged during remote normalization.
+- **Residue quarantine:** `C:\Users\danie\Documents\BlockXOne Test\work\blockxone-p0a-quarantine-20260725-170522-ac60a19dee8e`; the four bounded residue receipts are recorded in `EVIDENCE-REGISTER.md`, and all recursive reparse counts were zero.
+- **Audit-cache quarantine:** the dependency diagnostic recreated `.npm-cache`; its 148 files (50,602,766 bytes; composite SHA-256 `746258e70e132c6bb7e0673fe50588b31932738d2b2a89b87cf672491c340d19`) were recoverably moved to `C:\Users\danie\Documents\BlockXOne Test\work\blockxone-p0a-quarantine-20260725-audit-cache-609077ff1eca`, with recursive reparse count zero.
+- **Current dependency gate:** mandatory web and contract audits fail closed on high-severity `GHSA-mh99-v99m-4gvg` (`brace-expansion <=5.0.7`; patched release `5.0.8`). No audit threshold is lowered. Package remediation requires a separately accepted narrow scope because package and lock files are outside P0-A.
+- **R-02 status:** R-02 remains in progress.
+- Generation 2, Generation 3 and `docs/BLOCKXONE_AGENT_EXECUTION_LOOP.md` are preserved as non-authoritative historical evidence only; they are not current repositories, branches, plans, gates or retry instructions.
+
+## Historical lineage position — non-authoritative
 
 - **Milestone:** v2.0 Production-Ready Rebuild
 - **Production-gate progress:** 0 of 12 phases complete
-- **Execution mode:** checkpointed manual rocks; autonomous/background retry loop retired by user direction on 2026-07-25
+- **Historical mode disposition:** autonomous/background retry loop retired by user direction on 2026-07-25
 - **Auto advance:** disabled
 - **Planning/evidence versioning:** enabled
 - **Reference baseline:** `108be19f56dbdf87fe01ec18110c460415baf227`
-- **Integration branch:** `codex/blockxone-production-v1`
+- **Historical integration branch:** `codex/blockxone-production-v1`
 - **Rejected candidate (`C1`):** `38c23993ad866c1f95df192c4cb3075bf246218b`
 - **Generation 2 checkpoint (`Q2`):** `ecbe7f950d1945c5eb2dfaa767caa6aebb80353b`
 - **Parentless generation 2 root (`R2`):** `81e06c32976b3c15460c298bd453a1dfce20f3b9`
@@ -53,8 +79,8 @@ Execution contract: `docs/BLOCKXONE_AGENT_EXECUTION_LOOP.md`
 - **Ignored-output correction plan (`P10`):** `76c8c7d07da2d7c13c7f57ce77a29bcd4615cd5f`
 - **Preserved stopped-review input (`I4`):** `ff24f9d79f4a02e3cac054283140a2ed3226d5c5`
 - **Native-exit correction plan (`P11`):** `85964576707555b0b2ad3df6b297e1cb9a602d0a`
-- **Active phase branch:** `codex/phase-00-generation-3`
-- **Active working repository:** `C:\Users\danie\Documents\BlockXOne Production Gen3`
+- **Historical phase branch:** `codex/phase-00-generation-3`
+- **Historical working repository:** `C:\Users\danie\Documents\BlockXOne Production Gen3`
 - **Immutable C2 repository:** `C:\Users\danie\Documents\BlockXOne Production Clean v2`
 - **Generation 3 plan receipt:** `C:\Users\danie\Documents\BlockXOne Phase0 Recovery 20260719\clean-root-20260720\generation-3-20260721\GEN3-PLAN-ACCEPTANCE.md`, SHA-256 `879E5D146AB18D96610AA8F3C8929ECB91DE39C0D88EF56DC8D528EE6CB68D9B`
 - **Rejected generation 1 repository:** `C:\Users\danie\Documents\BlockXOne Production Clean`
@@ -63,10 +89,10 @@ Execution contract: `docs/BLOCKXONE_AGENT_EXECUTION_LOOP.md`
 - **Recovery artifact:** `C:\Users\danie\Documents\BlockXOne Phase0 Recovery 20260719\blockxone-working-tree-source.zip`
 - **Recovery SHA-256:** `B9F0C62171F2B06F9EE47DB594FB09718792BB5E9B27856C85EB498C5BE0FF15`
 
-## Locked execution decisions
+## Historical controlled-loop decisions — non-authoritative
 
 - The original WIP workspace remains a reference source and is not reset, cleaned or bulk-promoted.
-- The active implementation uses the standalone parentless generation 2 lineage at `C:\Users\danie\Documents\BlockXOne Production Clean v2`; the selective-reference worktree is quarantined evidence only.
+- The former implementation used the standalone parentless generation 2 lineage at `C:\Users\danie\Documents\BlockXOne Production Clean v2`; the selective-reference worktree is quarantined evidence only.
 - Stock unrestricted autonomous mode is not used.
 - Builders cannot verify their own work.
 - Missing evidence is failure.
@@ -84,21 +110,25 @@ Execution contract: `docs/BLOCKXONE_AGENT_EXECUTION_LOOP.md`
   insufficient, and generated output may be moved only by exact, recoverable,
   no-overwrite quarantine before an ignored-aware clean-candidate assertion.
 
-## Provisional launch defaults awaiting domain approval
+## Accepted technical planning defaults; professional gates remain pending
 
-- South Africa as first jurisdiction.
+- South African private debt as the first jurisdiction/instrument perimeter.
 - One issuer or issuing SPV.
-- Private debt note or closed-ended fund interest as the golden instrument; choose after counsel/accounting review.
 - Professional/institutional/otherwise eligible investors only.
 - ZAR settlement.
-- One EVM network.
+- AWS `af-south-1` as the infrastructure planning region.
+- Polygon PoS mainnet (chain 137) and Amoy testnet as chain planning targets.
+- Modular Go services with PostgreSQL-native durable workflow, financial, audit and reconciliation state.
+- Two-track demo/production delivery with synthetic, explicitly labelled demo behavior isolated from fail-closed production behavior.
 - One approved KYC/KYB provider, bank/payment route and custody/signing model.
 - Primary issuance, servicing, reporting and controlled redemption only.
-- No secondary market, retail, cross-border, FX or multi-chain release-one scope.
+- No client-fund or client-asset custody by BlockXOne.
+- No secondary market in release one; retail, cross-border, FX and multi-chain scope are also excluded.
+- T-REX 4.1.3 is a reference/hardened-derivative direction only, contingent on a proprietary licence and the required professional approvals.
 
-These defaults permit planning but not legal, financial, provider or production approval.
+These defaults permit technical planning only. They do not close G1, G2, G3 or G5 and do not supply legal, financial, accounting, tax, regulatory, custody, provider, security, external-audit or production approval.
 
-## Phase 0 local evidence captured
+## Historical Phase 0/Generation 2/Generation 3 evidence — non-authoritative
 
 - Dirty worktree independently inventoried: 627 paths across product, planning, archive removal, agent tooling and generated/anomalous files.
 - Non-secret source snapshot created and hash verified with 3,254 entries.
@@ -129,7 +159,16 @@ These defaults permit planning but not legal, financial, provider or production 
 - The stale broad generated-cleanliness conclusions in I3/R3/V3 and the aggregate PASS implication in I4 are superseded. Narrow individual outputs remain historical evidence. The corrected artifact target is 12 plans, one permitted summary, GSD `partial`/8, while authoritative production completion remains zero.
 - The Plan 00-12 isolated suite proves actual/disposable exact-nine staging, `planned`/0 without the summary, `partial`/8 with it, 45 statement mutations, 12 staged-status negatives and ignored `apps/web/next-env.d.ts` fail/delete-only restoration; repository originals and status are preserved.
 
-## Known blockers and no-go conditions
+## Current blockers and no-go conditions
+
+- P0-A remains open until an exact clean candidate passes every local proof and a named hosted `CI` run succeeds with nonzero mandatory jobs.
+- The hosted exact-candidate receipt is pending. Prior run `30159010530` is failure evidence and cannot satisfy admission.
+- GitHub `main` must remain exactly `df3e1698f28891e7d23489a144eae2733bc8b79d`; any change is a fail-closed stop.
+- G1, G2, G3 and G5 remain pending. Accepted technical planning defaults are not professional approval.
+- No external legal, accounting, tax, penetration or smart-contract audit evidence exists for the target release.
+- Production remains NO-GO.
+
+### Historical Generation 2/Generation 3 blocker detail — non-authoritative
 
 - Repository-history incident `BX1-SEC-2026-07-19-01` requires authorised credential assessment/rotation and a clean-history decision before Phase 0 exit.
 - Exact `C2` passed final local admission and independent verification; the broader incident, hosted reproduction, professional approvals and Phase 0 exit remain open.
@@ -159,7 +198,17 @@ These defaults permit planning but not legal, financial, provider or production 
 - Premature investor/operator portal plans are preserved under the same historical directory and retired from execution.
 - Pre-rebuild readiness phases remain under `.planning/milestones/pre-rebuild-readiness-phases/`.
 
-## Next actions
+## Current next actions
+
+1. Finish P0-A planning and validator truth without modifying the accepted checkpoint plan.
+2. Produce a clean candidate, run the exact local proof contract, and push only `codex/functional-platform`; capture the hosted job evidence without converting BLK-018 into a pass.
+3. Freeze and independently accept a separate narrow dependency-remediation scope before changing either package manifest or lockfile.
+4. Remediate the advisory without lowering severity, reproduce clean installs and all web/contract gates, then push the new exact candidate and require the complete hosted `CI` success receipt.
+5. Prove GitHub `main` is still `df3e1698f28891e7d23489a144eae2733bc8b79d`, then stop P0-A with the checkpoint handoff.
+6. Continue R-02 only at its bounded checkpoint; do not infer staging or production readiness.
+7. Keep every professional and production gate pending until signed, exact-release evidence exists.
+
+## Historical Generation 3 next actions — non-authoritative; do not execute
 
 1. Freeze I5 as exactly the nine Plan 00-12 Task 2 paths after staged and disposable proofs of planned/0, summary-bearing partial/8, immediate native-exit failure, ancestor-reparse containment and fail-closed ignored residue; then run the exact-I5 matrix and independent checks and bind them in `TASK6-I5-BUILDER-RECEIPT.md`.
 2. Use three further pairwise-distinct task paths for exact-I5 adversarial review as R5, exact-R5 independent verification as V5 and exact-V5 local-only admission as C5. Keep C2, I3, R3, V3, P10 and I4 and their receipts immutable.
@@ -168,7 +217,7 @@ These defaults permit planning but not legal, financial, provider or production 
 5. Reproduce images, Linux race tests, migrations, contracts and full CI against the later exact admitted candidate in hosted infrastructure.
 6. Complete Phase 0 human approval and the separate G1/G5 professional decisions before any production or regulated release action.
 
-## Plan 00-12 current-truth boundary
+## Historical Plan 00-12 truth boundary — non-authoritative
 
 I4's aggregate matrix PASS is not accepted because mandatory native exits were maskable.
 
@@ -188,16 +237,15 @@ Typed roots: TEST_CONTRACT_NATIVE_EXIT_MASKING, EVIDENCE_PROVENANCE_PATH_TRANSCR
 
 Phase 0 remains in_progress, production completion remains zero, and release remains NO-GO.
 
-## Session checkpoint — 2026-07-25
+## Current session checkpoint — 2026-07-25
 
-- **Stopped at:** Delivery-loop forensic investigation complete.
-- **Resume file:** `.planning/forensics/report-20260725-140218.md`
-- **User direction:** Do not restart the autonomous/background retry loop.
-- **Recovery repository:** `C:\Users\danie\Documents\BlockXOne Test\work\blockxone-functional`
-- **Recovery branch:** `codex/functional-platform`
-- **Recovery commit:** `ff56617e4651a04e24acce053772f542eb31f130`
-- **Next bounded rock:** R-01 — verify, commit, and publish the functional baseline without replacing GitHub `main`.
-- **Release posture:** Local demonstration is recoverable; production remains NO-GO until mandatory technical, financial, security, compliance, operational, and external professional gates close.
+- **Current repository:** `C:\Users\danie\Documents\BlockXOne Test\work\blockxone-functional`.
+- **Current branch:** `codex/functional-platform`.
+- **R-01:** published baseline `d4f3ccc442871c590cc39ec7967e0bca53739739`; GitHub `main` remains `df3e1698f28891e7d23489a144eae2733bc8b79d`.
+- **P0-A:** in progress; the hosted exact-candidate `success` receipt remains pending.
+- **R-02:** remains in progress.
+- **Historical recovery receipt:** `ff56617e4651a04e24acce053772f542eb31f130`; evidence only, not current HEAD authority.
+- **Release posture detail:** local demonstration is recoverable; production remains NO-GO until mandatory technical, financial, security, compliance, operational and external professional gates close.
 
 ## R-02 brand checkpoint — 2026-07-25
 

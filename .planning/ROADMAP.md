@@ -1,16 +1,43 @@
 # BlockXOne Production-Ready Rebuild Roadmap
 
-## Roadmap v2.0: Production-Ready Rebuild
+## Current delivery authority
+
+**Authoritative delivery repository:** `work/blockxone-functional`
+
+**Authoritative delivery branch:** `codex/functional-platform`
+
+**Execution mode:** checkpointed finite rocks
+
+**Release posture:** production NO-GO
+
+- **Execution contract:** `.planning/CHECKPOINTED-DELIVERY-PLAN.md`, accepted SHA-256 `5443CA4DB90D005DBA6C7AD12060D2A19F039D78FE42F4F4D2BA8D21213CD53D`.
+- **GitHub target:** private `GulfBrick/BlockXOne` repository through `origin` at `https://github.com/GulfBrick/BlockXOne.git`.
+- **Default-branch invariant:** GitHub `main` remains unchanged at `df3e1698f28891e7d23489a144eae2733bc8b79d`.
+- **Historical boundary:** Generation 2, Generation 3 and the controlled autonomous loop are retained as non-authoritative evidence only.
+
+## Current checkpoint sequence
+
+| Checkpoint | Status | Current truth | Stop condition |
+| --- | --- | --- | --- |
+| P0-A | In progress | Make the functional repository/branch the single delivery source and admit one exact clean candidate through a successful named hosted `CI` run with nonzero mandatory jobs | Stop on any planning, repository, CI, workflow, Compose, Go, routing, default-main or hosted-job failure |
+| R-01 | Published | Functional baseline `d4f3ccc442871c590cc39ec7967e0bca53739739` is published on `codex/functional-platform`; `main` was not replaced | Reopen only if the exact baseline or private branch receipt is disproved |
+| R-02 | In progress | Canonical institutional UI/motion implementation exists, but protected surfaces, intermediate widths, keyboard flows, reduced-motion parity and complete state coverage remain open | Do not call R-02 complete before every acceptance item has evidence |
+| R-03 | Pending | API-backed demonstration workflow closure | Begins only at an explicit checkpoint after R-02 |
+| R-04 | Pending | Protected HTTPS staging with managed secrets, recovery and rollback | Begins only after R-03 acceptance |
+| R-05 | Pending | Production release gates | Production remains NO-GO until every technical and professional gate closes |
+
+## Downstream production gate map
+
+This v2.0 phase map defines the full production-control perimeter. It is not a second execution loop: the checkpoint plan above is the sole current scheduler, and the phase gates remain fail-closed release obligations.
 
 **Created:** 2026-07-19
 **Profile:** quality and evidence first
-**Execution mode:** controlled autonomous loop with human-owned regulated gates
 **Objective:** deliver a bounded, legally permitted, financially reconcilable and operationally defensible multi-asset tokenization platform
 
 ## Program rules
 
 - Production-gate progress starts at zero; earlier work remains reusable evidence or prototype code, not a passed production phase.
-- Only one production phase is active at a time unless the dependency graph and Program Controller explicitly permit parallel work.
+- Only work expressly included in the active finite rock may be executed.
 - Missing evidence is failure. Builders cannot verify their own changes.
 - Critical/high security, financial-integrity, tenant-isolation, contract-safety and false-success findings cannot be deferred.
 - Every phase requires matching plan summaries, independent verification and any named human gate approval.
@@ -25,7 +52,7 @@
 | 2 | Architecture, Identity and Tenancy | Trusted architecture, identity, authorization and segregation of duties | G2 |
 | 3 | Instrument and Financial Core | Typed instrument model, ledger, reservations and reconciliation | G3 |
 | 4 | Compliance, Documents and Providers | Defensible compliance evidence and certified provider boundaries | G4 |
-| 5 | Contracts and Chain Control Plane | Conformant governed contracts and reliable chain operations | G5 |
+| 5 | Contracts and Chain Control Plane | Conformant governed contracts and reliable chain operations | G5A/G5B |
 | 6 | Primary Issuance and Servicing | Complete golden subscription, issuance, servicing and redemption lifecycle | Golden lifecycle |
 | 7 | Public, Investor and Operator Products | Accessible authoritative product surfaces and commercial readiness | G6/G7 |
 | 8 | Reporting, Reliability and Operating Model | Reports, observability, recovery and trained operations | G8/G9 |
@@ -136,7 +163,7 @@ Success criteria:
 **Goal:** deliver a pinned, conformant permissioned-token stack plus governed signing, deployment, indexing, finality and reorganisation behavior.
 **Requirements:** CHAIN-01 through CHAIN-07
 **Depends on:** Phases 3 and 4
-**Gate:** G5 — blockchain release candidate
+**Gate:** G5A — exact candidate freeze; G5B — external audit and retest
 **Status:** Pending
 
 Success criteria:
@@ -147,7 +174,8 @@ Success criteria:
 4. HSM/MPC/KMS signing and durable nonce control replace raw production keys.
 5. Receipt, confirmation, finality, replacement, drop and reorganisation states are reliable.
 6. ABI, bytecode, source, compiler, addresses and governance match signed manifests.
-7. Exact release candidate receives independent audit and supply/register/ledger reconciliation.
+7. G5A freezes the exact source, dependencies, compiler settings, bytecode, ABI, manifests, threat model and test evidence.
+8. G5B requires an external specialist audit of that exact candidate, remediation of every accepted finding, auditor retest and supply/register/ledger reconciliation.
 
 ### Phase 6: Primary Issuance and Servicing
 

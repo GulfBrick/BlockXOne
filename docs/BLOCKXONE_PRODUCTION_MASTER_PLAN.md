@@ -1,8 +1,9 @@
 # BlockXOne Production, Product, UI/UX and Commercial Master Plan
 
-**Version:** 1.0 draft for approval
-**Date:** 2026-07-19
-**Program posture:** controlled rebuild with evidence-gated release
+**Version:** 2.0 implementation plan
+**Date:** 2026-07-25
+**Current delivery authority:** `.planning/CHECKPOINTED-DELIVERY-PLAN.md` in `work/blockxone-functional` on `codex/functional-platform`
+**Program posture:** checkpointed finite rocks with evidence-gated release
 **Production verdict at plan start:** no-go for real money, real identity documents, legally effective issuance, custody, payouts or secondary trading
 
 ## 1. Executive decision
@@ -30,7 +31,9 @@ With a dedicated multidisciplinary team, providers, counsel and independent audi
 
 This plan:
 
-- preserves the existing decision in `.planning/PROJECT.md` to use the current repository as reference rather than as the product definition;
+- is a production-control and professional-gate plan beneath the current execution authority in `.planning/CHECKPOINTED-DELIVERY-PLAN.md`, accepted at SHA-256 `5443CA4DB90D005DBA6C7AD12060D2A19F039D78FE42F4F4D2BA8D21213CD53D`;
+- recognizes `work/blockxone-functional` on `codex/functional-platform` as the sole current delivery source and the private `GulfBrick/BlockXOne` repository as the GitHub target;
+- treats Generation 2, Generation 3 and `docs/BLOCKXONE_AGENT_EXECUTION_LOOP.md` as non-authoritative historical evidence only;
 - expands `.planning/ROADMAP.md` into a production operating plan with financial, legal, security, UX, commercial and evidence gates;
 - supersedes production-readiness claims in earlier narrative reports when those claims conflict with executable code or verified evidence;
 - does not automatically rewrite existing GSD phase files; approved portions can be mapped into them deliberately;
@@ -40,20 +43,24 @@ This plan:
 
 | Decision | Recommended default | Status | Decision owner | Must be resolved by |
 | --- | --- | --- | --- | --- |
-| First jurisdiction | South Africa | Assumption | Board, General Counsel, MLRO | Phase 1 gate |
-| First instrument | Closed-ended private-market fund interest or private debt note; choose the cleaner perimeter after counsel review | Decision required | Product Approval Committee | Phase 1 gate |
+| First jurisdiction | South Africa | Accepted technical planning default only | Board, General Counsel, MLRO | G1 |
+| First instrument | South African private debt | Accepted technical planning default only | Product Approval Committee, Legal, Controller | G1 |
 | Investor segment | Professional/institutional/eligible investors only | Assumption | Legal, Compliance, Commercial | Phase 1 gate |
-| Settlement currency | ZAR only | Assumption | CFO/Treasury | Phase 1 gate |
-| Chain | One EVM network | Confirm network later | CTO, Blockchain Lead, Risk | Phase 2 gate |
-| Custody | Regulated custody or tightly governed hybrid model | Decision required | Legal, CISO, Custody Lead | Phase 2 gate |
+| Settlement currency | ZAR only | Accepted technical planning default only | CFO/Treasury | G1 |
+| Infrastructure region | AWS `af-south-1` | Accepted technical planning default only | CTO, CISO, SRE, Risk | G2/G8 |
+| Chain | Polygon PoS mainnet (chain 137) and Amoy testnet | Accepted technical planning default only | CTO, Blockchain Lead, Risk | G5 |
+| Platform custody role | no client-fund or client-asset custody by BlockXOne; external bank/custodian/signer arrangements remain professionally selected | Accepted technical release-one boundary only | Legal, CISO, Custody Lead | G1/G2 |
 | Operator identity | Enterprise OIDC with organisation-scoped roles | Recommended | CTO/CISO | Phase 2 gate |
 | Investor identity | Email/passkey first; wallet linking second; step-up MFA for risk actions | Recommended | Product/CISO/MLRO | Phase 2 gate |
-| Core backend | Dedicated domain services plus durable workflow engine; Next.js remains UI/BFF only | Recommended | Architecture Council | Phase 2 gate |
+| Core backend | Strongly modular Go domain services with PostgreSQL-native durable workflow; Next.js remains UI/BFF only | Accepted technical planning default only | Architecture Council | G2/G3 |
+| Delivery tracks | Synthetic, visibly labelled demo track isolated from fail-closed production track | Accepted technical planning default only | Product, Architecture, CISO | Continuous |
 | Ledger | Immutable double-entry subledger with reservations, obligations and reconciliation | Mandatory | CFO/Controller/CTO | Phase 2 gate |
-| Token standard | Officially conformant ERC-3643 implementation or explicitly named alternative | Decision required | Legal, Transfer Agent, Blockchain Lead | Phase 3 gate |
-| Secondary market | Excluded from first launch | Recommended | Board, Legal, Commercial | Reconsider after stable primary operations |
+| Token standard | T-REX 4.1.3 reference/hardened-derivative direction, contingent on a proprietary licence | Accepted technical planning reference only; conformance and professional approvals pending | Legal, Registrar, MLRO, CISO, Blockchain, Custody, Risk, external auditor | G5A/G5B |
+| Secondary market | No secondary market in release one | Accepted technical planning default only | Board, Legal, Commercial | G1 and any later separately licensed program |
 
 If a recommended default is rejected, the program must document the alternative, consequences, new dependencies and changed acceptance gates.
+
+These accepted technical planning defaults do not close G1, G2, G3 or G5 and do not constitute legal, regulatory, accounting, tax, custody, provider, security, external-audit or production approval.
 
 ## 4. Non-negotiable operating principles
 
@@ -116,7 +123,7 @@ flowchart TB
 
     Edge --> InvestorIAM["Investor Identity and Sessions"]
     Edge --> OperatorIAM["Operator OIDC, Organisations and MFA"]
-    Edge --> API["Domain API"]
+    Edge --> API["Modular Go Domain API"]
 
     API --> Authz["Tenant and Resource Authorization"]
     API --> Product["Issuers, Instruments and Offerings"]
@@ -126,13 +133,13 @@ flowchart TB
     API --> TokenOps["Governed Token Operations"]
     API --> Reporting["Statements, Reporting and Audit Export"]
 
-    Product --> Workflow["Durable Workflow Engine"]
+    Product --> Workflow["PostgreSQL-Native Durable Workflow"]
     Compliance --> Workflow
     Orders --> Workflow
     Ledger --> Workflow
     TokenOps --> Workflow
 
-    Workflow --> DB["PostgreSQL Operational and Financial Truth"]
+    Workflow --> DB["PostgreSQL Operational, Workflow and Financial Truth"]
     Workflow --> Events["Transactional Outbox and Durable Event Bus"]
     Workflow --> KYC["KYC, KYB and Screening Provider"]
     Workflow --> Bank["Bank and Payment Provider"]
@@ -186,7 +193,7 @@ flowchart TB
 - Reporting, statements and regulatory export service.
 - Audit and evidence service.
 
-Begin as a strongly modular system unless scale or assurance boundaries justify separate deployment. Avoid premature microservices, but keep transactional ownership explicit.
+Begin as a strongly modular Go system unless scale or assurance boundaries justify separate deployment. Keep durable workflow transitions, timers, claims, accepted source events, business state, outbox records and audit evidence PostgreSQL-native and transactionally bound. Avoid premature microservices, but keep module and transactional ownership explicit.
 
 ## 7. Program workstreams
 
@@ -544,6 +551,12 @@ Choose exactly one production stack containing:
 
 Legacy and experimental stacks must be unreachable in production builds and documentation.
 
+The accepted technical reference is T-REX 4.1.3 or a documented hardened
+derivative. It is contingent on obtaining the proprietary licence and on the
+required Legal, Registrar, MLRO, CISO, Blockchain, Custody, Risk and external
+audit approvals. The reference direction is not an ERC-3643 conformance claim
+or G5 approval.
+
 ### 13.2 Required contract invariants
 
 - Required claims are issued by authorized issuers for the exact topic and are cryptographically valid, current and not revoked.
@@ -580,7 +593,7 @@ Record chain ID, contract, selector, transaction hash, nonce, block number/hash,
 
 The Architecture/Risk Council must explicitly approve:
 
-- exact official ERC-3643/T-REX version, interface repository and pinned interface IDs;
+- exact T-REX 4.1.3 licensed source or approved hardened derivative, interface repository and pinned interface IDs;
 - supported network and L1/L2/sequencer/bridge risk criteria;
 - confirmation/finality depths by action type;
 - multisig thresholds and timelock delays;
@@ -590,7 +603,7 @@ The Architecture/Risk Council must explicitly approve:
 - RTO/RPO, incident exercise cadence and residual-risk authority;
 - oracle/NAV/stablecoin/cross-chain exclusions or designs where relevant.
 
-### 13.6 Gate G5 — blockchain release candidate
+### 13.6 Gate G5A — exact candidate freeze
 
 - Official interface and behavioral conformance suite passes.
 - Invariant, fuzz, malicious-contract, gas-bound and integration suites pass.
@@ -598,8 +611,29 @@ The Architecture/Risk Council must explicitly approve:
 - Testnet rehearsal covers initialization, role handoff, identity, mint, transfer, freeze, recovery, burn and reconciliation.
 - Dropped, replaced, reverted, unknown and reorg scenarios produce correct state.
 - No raw key, mock adapter or legacy deployment path can run in production.
-- External specialist audit covers the exact release; findings are remediated and retested.
 - Supply, balance, legal-register and ledger reconciliation passes.
+- The exact source commit, dependency lock, compiler/settings, bytecode, ABI,
+  network manifest, role/governance configuration, threat model, invariant
+  register, test output and known findings are frozen as one audit candidate.
+
+G5A freezes a candidate for independent review. It does not authorize
+deployment and does not close G5.
+
+### 13.7 Gate G5B — external audit and retest
+
+- An external specialist audits the exact G5A candidate, including contracts,
+  deployment, initialization, roles, upgrade/migration controls, signer,
+  indexer/finality/reorg handling and critical off-chain authorization.
+- Every finding records severity, affected exact version, remediation commit,
+  regression test and disposition.
+- Remediated findings are retested by the external auditor against the new exact
+  candidate; any bytecode-affecting remediation produces a new G5A freeze.
+- Authorized human owners record any defensible residual-risk acceptance.
+- The final audit/retest scope, compiler output, bytecode, ABI, manifest and
+  proposed deployment candidate match exactly.
+
+G5 closes only when both G5A exact candidate freeze and G5B external audit-retest
+pass with signed professional approvals.
 
 ## 14. Primary lifecycle plan
 
@@ -1180,7 +1214,10 @@ Targets beyond the mandatory trust/safety gates remain provisional until product
 
 ### 18.1 Rebuild and migration strategy
 
-Use the current repository as a domain reference and test oracle, not as an unchecked migration source.
+Use `work/blockxone-functional` on `codex/functional-platform` as the current
+delivery source. Use the Generation 2/Generation 3 and earlier repositories only
+as historical domain references and test oracles, never as current execution
+authority or unchecked migration sources.
 
 1. Freeze and tag an evidence baseline; inventory which behaviors are retained, replaced or prohibited.
 2. Approve target monorepo/service boundaries, runtime and hosting ADRs.
@@ -1194,17 +1231,22 @@ Do not maintain two independently authoritative financial systems longer than th
 
 ### 18.2 Environment model
 
-- Local development with synthetic data and explicit visual demo marking.
+- Demo track with synthetic data, explicit visual demo marking and mock/provider
+  behavior that cannot be promoted into production.
 - Ephemeral pull-request environments without production data.
 - Shared integration environment for real service contracts/sandboxes.
 - Security/performance environment mirroring production topology.
 - UAT/pilot environment with production controls and bounded approved data.
-- Production with private networks, least privilege, HA and audited access.
+- Production track planned for AWS `af-south-1`, with private networks, least
+  privilege, HA, audited access and fail-closed rejection of demo behavior.
 
 Production startup must fail when it detects mock providers, development auth/role headers, default credentials, raw signer keys, unsupported network, missing secrets, schema drift, unverified contract manifest or public KYC storage.
 
 ### 18.3 Infrastructure controls
 
+- AWS `af-south-1` is the accepted technical planning region only; architecture,
+  data-residency, resilience, security, cost and provider approvals remain
+  pending.
 - Infrastructure as code with peer review, policy checks and environment drift detection.
 - Private database, cache, event bus, object store, exporters and admin endpoints.
 - TLS in transit and managed encryption at rest.
@@ -1424,7 +1466,7 @@ flowchart LR
 | 2. Architecture, identity and tenancy | Weeks 3-14 | Target repo/runtime ADRs; organisation/issuer/resource model; OIDC/investor session architecture; SoD; RLS/authorization; environment/IaC foundation | Gate G2; cross-tenant suite passes |
 | 3. Instrument and financial core | Weeks 6-20 | Typed instrument schemas; lifecycle catalogue; double-entry ledger; obligations/reservations; posting rules; reconciliation engine; audit/evidence model | Gate G3; finance/controller sign-off |
 | 4. Compliance, documents and providers | Weeks 6-22 | KYC/KYB/UBO, screening, risk/EDD, monitoring, secure documents, payment/custody adapters, webhook/event controls | Gate G4; provider and MLRO/DPO sign-off |
-| 5. Contracts and chain control plane | Weeks 8-24 | Canonical ERC-3643 stack; Foundry suites; governed roles/upgrades; signer/nonce queue; indexer/finality/reorg; deployment manifests | Gate G5 and external-audit candidate freeze |
+| 5. Contracts and chain control plane | Weeks 8-24 | Canonical licensed token stack; conformance/invariant suites; governed roles/upgrades; signer/nonce queue; indexer/finality/reorg; deployment manifests | G5A exact candidate freeze and G5B external audit-retest |
 | 6. Primary issuance and servicing | Weeks 18-30 | Offering approval, subscription, allocation, reconciled cash, mint/register, statements, distribution/coupon, redemption/payout and exceptions | Full golden lifecycle and failure matrix pass |
 | 7. Product surfaces and UI/UX | Weeks 12-30 | Public trust/conversion site; investor portal; operator console; design system; content/legal; accessibility and E2E | Gate G6 and G7 |
 | 8. Reliability and operating model | Weeks 20-34 | Production IaC; HA, security, observability; reporting; runbooks; training; backup/DR/failover; support and close procedures | Gate G8 and G9 |
@@ -1664,20 +1706,24 @@ Anything less may be a demo, development environment or controlled test—but mu
 
 ## 29. Immediate approval decisions
 
-The Program Council should approve or change these defaults first:
+The user has accepted the following as technical planning defaults only:
 
-1. South Africa as first jurisdiction.
-2. Private debt note versus closed-ended fund interest as the golden instrument.
-3. Professional/eligible investors only.
-4. ZAR, one EVM network and no secondary market for release one.
-5. Controlled rebuild and migration rather than promotion of the current code.
-6. Dedicated domain backend and durable workflow engine.
-7. Immutable double-entry ledger and reconciliation as critical-path scope.
-8. Regulated custody/hybrid decision and provider shortlist.
-9. Exact ERC-3643 implementation strategy and governance model.
-10. Indicative team/capacity and 9-12 month gated program.
+1. South African private debt for the first perimeter.
+2. Professional/eligible investors only and ZAR settlement.
+3. AWS `af-south-1`.
+4. Polygon PoS mainnet (chain 137) and Amoy testnet.
+5. Strongly modular Go services with PostgreSQL-native durable workflow.
+6. Two-track demo/production isolation.
+7. No client-fund or client-asset custody by BlockXOne.
+8. No secondary market in release one.
+9. T-REX 4.1.3 as a reference/hardened-derivative direction contingent on a proprietary licence and professional approval.
 
-After those decisions, convert Phase 0 and Phase 1 into ticket-level implementation plans and begin no other production feature until their exit criteria are owned.
+The named professional owners must still approve or change the legal/activity
+perimeter, issuer/SPV and terms, accounting/tax treatment, investor eligibility,
+provider/custody/signing responsibilities, architecture/security controls,
+financial-control design, licensed contract source, network/governance
+parameters and exact-release audit evidence. The technical defaults do not close
+G1, G2, G3 or G5.
 
 ## 30. Confidence, evidence boundaries and remaining unknowns
 
@@ -1714,4 +1760,4 @@ Resolve these through primary legal/accounting opinions, provider diligence and 
 - **Medium confidence:** the proposed architecture, workstream sequence, team shape and 9-12 month range are appropriate for the assumed launch; capacity and provider choices may change timing.
 - **Low until validated:** exact commercial pricing, ROI, asset/jurisdiction fit and customer conversion assumptions.
 
-The single next transition is approval of the ten decisions in Section 29, followed by ticket-level planning for Phases 0 and 1 and the 10-15-customer validation sprint in parallel.
+The current scheduler is `.planning/CHECKPOINTED-DELIVERY-PLAN.md`: first complete P0-A exact-candidate admission, then accept and execute the separate dependency-remediation rock before later delivery rocks. Section 29 contains nine technical planning defaults, not professional approvals; G1, G2, G3 and G5 remain pending, and customer validation cannot authorize production.

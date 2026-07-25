@@ -1,0 +1,15 @@
+# Preparatory ownership map for the private BlockXOne repository.
+# Enforcement requires a protected branch and an eligible independent reviewer.
+
+* @GulfBrick
+
+/.github/ @GulfBrick
+/.planning/ @GulfBrick
+/cmd/ @GulfBrick
+/internal/ @GulfBrick
+/migrations/ @GulfBrick
+/contracts/ @GulfBrick
+/deploy/ @GulfBrick
+/Dockerfile* @GulfBrick
+/docker-compose*.yml @GulfBrick
+/Makefile @GulfBrick
