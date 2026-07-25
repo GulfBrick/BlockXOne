@@ -16,9 +16,9 @@ Create a design contract for the rebuild that preserves the current BlockXOne id
 
 ### Keep
 
-- BlockXOne logo mark
+- user-supplied BX1 hex mark and metallic BLOCKXONE wordmark
 - dark graphite foundation
-- cyan-to-blue accent range
+- electric-cyan to deep-cyan accent range
 - geometric and hexagonal cues
 
 ### Remove
@@ -31,8 +31,8 @@ Create a design contract for the rebuild that preserves the current BlockXOne id
 
 ### Font stack
 
-- Display: `Sora`
-- Body: `IBM Plex Sans`
+- Display: `Orbitron`
+- Body: `Inter`
 - Data: `JetBrains Mono`
 
 ### Usage
@@ -45,16 +45,16 @@ Create a design contract for the rebuild that preserves the current BlockXOne id
 
 ### Base tokens
 
-- `bg-canvas`: `#0B0F1A`
-- `bg-surface`: `#111827`
-- `bg-surface-2`: `#161F36`
-- `line-subtle`: `#1F2937`
-- `line-strong`: `#2D3748`
-- `text-primary`: `#F9FAFB`
-- `text-secondary`: `#9CA3AF`
-- `text-tertiary`: `#6B7280`
-- `accent-primary`: `#3B82F6`
-- `accent-info`: `#06B6D4`
+- `bg-canvas`: `#0B131B`
+- `bg-surface`: `#0F1E28`
+- `bg-surface-2`: `#132733`
+- `line-subtle`: `rgba(123, 142, 162, 0.18)`
+- `line-strong`: `rgba(39, 208, 247, 0.38)`
+- `text-primary`: `#EAF6FF`
+- `text-secondary`: `#B8C9D8`
+- `text-tertiary`: `#7B8EA2`
+- `accent-primary`: `#27D0F7`
+- `accent-deep`: `#00B8E6`
 - `success`: `#10B981`
 - `warning`: `#F59E0B`
 - `danger`: `#EF4444`
@@ -144,5 +144,7 @@ Create a design contract for the rebuild that preserves the current BlockXOne id
 - Use shared design tokens in one package
 - Use Lucide or equivalent SVG icon set
 - Use section diagrams and product cards instead of heavy decorative effects
-- Keep the current logo visible in the navbar and hero
-- Use subtle cyan and blue glow only where it helps hierarchy
+- Keep the supplied brand mark visible in the navbar and hero
+- Use subtle cyan illumination only where it helps hierarchy
+- Treat `docs/brand/blockxone-brand-guide.png` as the visual authority
+- Use the deterministic transparent derivatives in `apps/web/public/brand/`

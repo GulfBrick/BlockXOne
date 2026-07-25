@@ -3,6 +3,7 @@
 import React, { useState, ReactNode } from 'react'
 import Link from 'next/link'
 import { ChevronRight, Bell, Search, LogOut, Settings } from 'lucide-react'
+import { BrandLockup } from '@/components/brand/brand-mark'
 import { SidebarNav, type NavItem } from '../ui/sidebar-nav'
 
 export interface DashboardLayoutProps {
@@ -47,7 +48,13 @@ export function DashboardLayout({
             items={navItems}
             userRole={userRole}
             logo={
-              <div className="text-lg font-bold text-bxo-accent-primary">BlockXOne</div>
+              <Link
+                href="/"
+                aria-label="BlockXOne home"
+                className="flex min-h-11 items-center rounded-lg transition-opacity duration-200 hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bxo-accent-primary"
+              >
+                <BrandLockup compact markSize="sm" priority />
+              </Link>
             }
           />
         </div>
@@ -101,7 +108,7 @@ export function DashboardLayout({
                   style={{ backgroundImage: `url(${userAvatar})` }}
                 />
               ) : (
-                <div className="w-6 h-6 rounded-full bg-bxo-accent-primary flex items-center justify-center text-xs font-bold text-white">
+                <div className="flex h-6 w-6 items-center justify-center rounded-full bg-bxo-accent-primary text-xs font-bold text-bxo-bg-primary">
                   {userName.charAt(0).toUpperCase()}
                 </div>
               )}

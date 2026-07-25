@@ -1,24 +1,64 @@
 import Link from 'next/link'
+import {
+  ArrowRight,
+  BadgeCheck,
+  Building2,
+  FileCheck2,
+  Fingerprint,
+  Landmark,
+  Layers3,
+  Network,
+  ShieldCheck,
+  Workflow,
+} from 'lucide-react'
 
+import { BrandMark } from '@/components/brand/brand-mark'
 import { PublicShell } from '@/components/public/public-shell'
 import { Button } from '@/components/ui/button'
+
+const operatingLayers = [
+  {
+    title: 'Identity',
+    text: 'Investor onboarding, qualification, and organization context.',
+    icon: Fingerprint,
+  },
+  {
+    title: 'Eligibility',
+    text: 'Policy-driven access and transfer-control workflows.',
+    icon: ShieldCheck,
+  },
+  {
+    title: 'Issuance',
+    text: 'Controlled token lifecycle instructions with operator separation.',
+    icon: Layers3,
+  },
+  {
+    title: 'Servicing',
+    text: 'Reporting, distributions, transfers, and redemption operations.',
+    icon: Workflow,
+  },
+]
 
 const assetClasses = [
   {
     title: 'Private funds',
-    text: 'Launch and service controlled fund vehicles with investor onboarding, subscription workflows, and lifecycle reporting.',
+    text: 'Controlled fund vehicles with investor onboarding, subscriptions, servicing, and lifecycle reporting.',
+    icon: Landmark,
   },
   {
     title: 'Private credit',
-    text: 'Structure debt programs with controlled issuance, eligibility rules, payout events, and transparent servicing.',
+    text: 'Debt programs with governed issuance, eligibility, payout events, and transparent servicing.',
+    icon: FileCheck2,
   },
   {
     title: 'Real-estate vehicles',
-    text: 'Manage investor access, issuance, documents, and redemption workflows for property-backed structures.',
+    text: 'Investor access, documents, issuance, and redemption workflows for property-backed structures.',
+    icon: Building2,
   },
   {
     title: 'Structured products',
-    text: 'Support cash-equivalent and structured debt programs with clear controls around issuance and settlement.',
+    text: 'Clear controls around issuance, settlement, cash-equivalent instruments, and structured debt.',
+    icon: Network,
   },
 ]
 
@@ -31,69 +71,93 @@ const lifecycle = [
   'Redeem or transfer under eligibility and audit controls.',
 ]
 
-const pillars = [
-  'Investor onboarding and qualification',
-  'Eligibility and transfer controls',
-  'Token lifecycle operations',
-  'Treasury and servicing workflows',
-  'Audit-ready reporting and operator traceability',
-  'Separate investor and operator access boundaries',
+const trustSignals = [
+  'Role-separated access',
+  'Eligibility workflows',
+  'Lifecycle traceability',
 ]
 
 export default function HomePage() {
   return (
     <PublicShell>
-      <main className="mx-auto max-w-7xl px-4 py-12 sm:px-6 sm:py-16 lg:px-8 lg:py-20">
-        <section className="grid gap-10 lg:grid-cols-[1.15fr_0.85fr] lg:items-center">
-          <div className="space-y-8">
-            <div className="inline-flex rounded-md border border-[#3B82F6]/25 bg-[#3B82F6]/10 px-4 py-1 text-xs font-semibold uppercase tracking-[0.22em] text-[#60A5FA]">
-              Multi-asset tokenization platform
-            </div>
-            <div className="space-y-5">
-              <h1 className="font-[family:var(--font-display)] max-w-4xl text-4xl font-semibold leading-tight text-white sm:text-5xl lg:text-6xl">
-                Tokenize and operate private-market assets with institutional control.
+      <main id="main-content">
+        <section className="mx-auto grid min-h-[calc(100dvh-5rem)] max-w-7xl gap-12 px-4 py-14 sm:px-6 sm:py-20 lg:grid-cols-[1.08fr_0.92fr] lg:items-center lg:px-8 lg:py-24">
+          <div className="bxo-hero-enter space-y-8">
+            <div className="bxo-kicker">Multi-asset tokenization platform</div>
+
+            <div className="space-y-6">
+              <h1 className="max-w-4xl font-display text-4xl font-semibold leading-[1.12] tracking-[-0.025em] text-bxo-text-primary sm:text-5xl lg:text-[3.65rem]">
+                Institutional control for tokenized private markets.
               </h1>
-              <p className="max-w-3xl text-base leading-8 text-white/65 sm:text-lg">
-                BlockXOne combines investor onboarding, compliance controls, issuance, servicing, and reporting into one
-                operating system for tokenized funds, private credit, real-estate vehicles, and structured products.
+              <p className="max-w-3xl text-base leading-8 text-bxo-text-secondary sm:text-lg">
+                BlockXOne brings investor onboarding, compliance controls, issuance, servicing, and reporting into one
+                governed operating system for tokenized assets.
               </p>
             </div>
 
-            <div className="flex flex-wrap gap-3">
-              <Button asChild size="lg" className="rounded-md bg-gradient-to-r from-[#2563EB] via-[#3B82F6] to-[#60A5FA] px-7 text-white shadow-lg shadow-[#3B82F6]/15">
-                <Link href="/request-demo">Request demo</Link>
+            <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap">
+              <Button asChild size="lg" className="bxo-primary-cta h-12 rounded-xl px-7 font-semibold">
+                <Link href="/request-demo">
+                  Request a demonstration
+                  <ArrowRight className="ml-2 h-4 w-4" aria-hidden="true" />
+                </Link>
               </Button>
-              <Button asChild size="lg" variant="outline" className="rounded-md border-white/12 bg-white/5 px-7 text-white hover:bg-white/10">
+              <Button asChild size="lg" variant="outline" className="bxo-secondary-cta h-12 rounded-xl px-7">
                 <Link href="/investor/login">Investor login</Link>
               </Button>
-              <Button asChild size="lg" variant="ghost" className="rounded-md px-7 text-white/80 hover:bg-white/8 hover:text-white">
+              <Button asChild size="lg" variant="ghost" className="h-12 rounded-xl px-7 text-bxo-text-secondary hover:bg-bxo-accent-soft hover:text-bxo-text-primary">
                 <Link href="/operator/login">Operator login</Link>
               </Button>
             </div>
 
-            <div className="grid gap-3 text-sm text-white/55 sm:grid-cols-3">
-              <div className="rounded-2xl border border-white/8 bg-white/5 px-4 py-4">Built for regulated private-market assets</div>
-              <div className="rounded-2xl border border-white/8 bg-white/5 px-4 py-4">Designed for investor and operator separation</div>
-              <div className="rounded-2xl border border-white/8 bg-white/5 px-4 py-4">Centered on auditable servicing and controls</div>
+            <div className="grid gap-3 sm:grid-cols-3">
+              {trustSignals.map((signal) => (
+                <div
+                  key={signal}
+                  className="flex min-h-14 items-center gap-3 rounded-xl border border-bxo-border-subtle bg-bxo-surface px-4 py-3 text-sm text-bxo-text-secondary"
+                >
+                  <BadgeCheck className="h-4 w-4 shrink-0 text-bxo-accent-primary" aria-hidden="true" />
+                  {signal}
+                </div>
+              ))}
             </div>
           </div>
 
-          <div className="rounded-[2rem] border border-[#3B82F6]/15 bg-[linear-gradient(180deg,rgba(9,14,24,0.96),rgba(9,16,29,0.88))] p-6 shadow-[0_30px_120px_rgba(59,130,246,0.14)]">
-            <div className="rounded-[1.5rem] border border-white/8 bg-white/[0.04] p-6">
-              <div className="text-xs font-semibold uppercase tracking-[0.2em] text-[#60A5FA]/80">Operating model</div>
-              <h2 className="font-[family:var(--font-display)] mt-4 text-2xl font-semibold text-white">A token is only one layer.</h2>
-              <p className="mt-3 text-sm leading-7 text-white/60">
-                BlockXOne is designed around the full lifecycle: onboarding, eligibility, issuance, settlement,
-                servicing, transfers, reporting, and redemption.
-              </p>
+          <div className="bxo-hero-enter bxo-panel relative overflow-hidden p-5 [animation-delay:80ms] sm:p-7">
+            <div
+              className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_36%,var(--bxo-accent-muted),transparent_42%)]"
+              aria-hidden="true"
+            />
+            <div className="relative flex min-h-[34rem] flex-col">
+              <div className="flex items-center justify-between gap-4 border-b border-bxo-border-subtle pb-4">
+                <div>
+                  <div className="font-display text-xs font-semibold uppercase tracking-[0.16em] text-bxo-accent-primary">
+                    Control plane
+                  </div>
+                  <div className="mt-1 text-sm text-bxo-text-tertiary">One governed lifecycle</div>
+                </div>
+                <div className="flex items-center gap-2 text-xs font-medium text-bxo-text-secondary">
+                  <span className="h-2 w-2 rounded-full bg-bxo-success" aria-hidden="true" />
+                  Local demonstration
+                </div>
+              </div>
 
-              <div className="mt-8 grid gap-4">
-                {pillars.map((pillar, index) => (
-                  <div key={pillar} className="flex gap-4 rounded-2xl border border-white/8 bg-[#111827] px-4 py-4">
-                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#3B82F6]/12 text-sm font-semibold text-[#60A5FA]">
-                      {index + 1}
-                    </div>
-                    <div className="text-sm leading-6 text-white/68">{pillar}</div>
+              <div className="flex flex-1 items-center justify-center py-5">
+                <BrandMark size="hero" priority alt="BlockXOne BX1 emblem" />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                {operatingLayers.map(({ title, icon: Icon }) => (
+                  <div
+                    key={title}
+                    className="flex min-h-14 items-center gap-3 rounded-xl border border-bxo-border-subtle bg-bxo-bg-primary px-4 py-3"
+                  >
+                    <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-bxo-accent-soft text-bxo-accent-primary">
+                      <Icon className="h-4 w-4" aria-hidden="true" />
+                    </span>
+                    <span className="font-display text-xs font-semibold uppercase tracking-[0.1em] text-bxo-text-primary">
+                      {title}
+                    </span>
                   </div>
                 ))}
               </div>
@@ -101,122 +165,153 @@ export default function HomePage() {
           </div>
         </section>
 
-        <section className="mt-20 space-y-8">
-          <div className="max-w-3xl space-y-4">
-            <div className="text-xs font-semibold uppercase tracking-[0.2em] text-[#60A5FA]/80">What tokenization means</div>
-            <h2 className="font-[family:var(--font-display)] text-3xl font-semibold text-white sm:text-4xl">BlockXOne treats tokenization as an operating system, not a wallet demo.</h2>
-            <p className="text-base leading-8 text-white/62">
-              The platform is designed to coordinate legal structure, investor identity, eligibility, issuance, settlement,
-              servicing, and audit around the token. That is the difference between a product that can survive institutional
-              scrutiny and one that cannot.
-            </p>
-          </div>
-
-          <div className="grid gap-5 lg:grid-cols-4">
-            {assetClasses.map((item) => (
-              <div key={item.title} className="rounded-[1.75rem] border border-white/8 bg-white/[0.04] p-6">
-                <div className="text-sm font-semibold uppercase tracking-[0.14em] text-[#60A5FA]/80">{item.title}</div>
-                <p className="mt-4 text-sm leading-7 text-white/62">{item.text}</p>
+        <section className="border-y border-bxo-border-subtle bg-bxo-bg-secondary">
+          <div className="mx-auto max-w-7xl px-4 py-20 sm:px-6 lg:px-8">
+            <div className="grid gap-10 lg:grid-cols-[0.8fr_1.2fr] lg:items-end">
+              <div className="space-y-4">
+                <div className="bxo-kicker">Operating model</div>
+                <h2 className="font-display text-3xl font-semibold leading-tight text-bxo-text-primary sm:text-4xl">
+                  A token is only one layer.
+                </h2>
               </div>
-            ))}
+              <p className="max-w-3xl text-base leading-8 text-bxo-text-secondary">
+                BlockXOne is designed around the full private-market lifecycle. Identity, eligibility, settlement,
+                issuance, servicing, reporting, and redemption stay connected to the same controlled operating record.
+              </p>
+            </div>
+
+            <div className="mt-10 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+              {operatingLayers.map(({ title, text, icon: Icon }) => (
+                <article key={title} className="bxo-card p-6">
+                  <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-bxo-accent-soft text-bxo-accent-primary">
+                    <Icon className="h-5 w-5" aria-hidden="true" />
+                  </span>
+                  <h3 className="mt-6 font-display text-base font-semibold uppercase tracking-[0.08em] text-bxo-text-primary">
+                    {title}
+                  </h3>
+                  <p className="mt-3 text-sm leading-7 text-bxo-text-secondary">{text}</p>
+                </article>
+              ))}
+            </div>
           </div>
         </section>
 
-        <section className="mt-20 grid gap-8 lg:grid-cols-[0.9fr_1.1fr]">
-          <div className="space-y-4">
-            <div className="text-xs font-semibold uppercase tracking-[0.2em] text-[#60A5FA]/80">How BlockXOne works</div>
-            <h2 className="font-[family:var(--font-display)] text-3xl font-semibold text-white sm:text-4xl">From asset setup to redemption, one controlled lifecycle.</h2>
-            <p className="text-base leading-8 text-white/62">
-              The public experience should make the process legible: issuers and operators configure the asset, investors
-              qualify and subscribe, and the platform coordinates issuance and servicing with clear controls and reporting.
-            </p>
-          </div>
+        <section className="mx-auto max-w-7xl px-4 py-20 sm:px-6 lg:px-8">
+          <div className="grid gap-12 lg:grid-cols-[0.78fr_1.22fr]">
+            <div className="space-y-5 lg:sticky lg:top-28 lg:self-start">
+              <div className="bxo-kicker">Controlled lifecycle</div>
+              <h2 className="font-display text-3xl font-semibold leading-tight text-bxo-text-primary sm:text-4xl">
+                From asset setup to redemption, one traceable path.
+              </h2>
+              <p className="text-base leading-8 text-bxo-text-secondary">
+                The public experience makes the operating model legible without overstating certifications or release
+                readiness that the platform has not yet earned.
+              </p>
+            </div>
 
-          <div className="grid gap-4">
-            {lifecycle.map((step, index) => (
-              <div key={step} className="rounded-[1.5rem] border border-white/8 bg-[#111827]/85 px-5 py-5">
-                <div className="flex items-start gap-4">
-                  <div className="mt-1 flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-[#60A5FA]/20 bg-[#3B82F6]/10 text-sm font-semibold text-[#93C5FD]">
-                    {index + 1}
+            <ol className="grid gap-4">
+              {lifecycle.map((step, index) => (
+                <li key={step} className="bxo-card flex items-start gap-5 p-5 sm:p-6">
+                  <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-bxo-accent-border bg-bxo-accent-soft font-mono text-sm font-semibold text-bxo-accent-primary">
+                    {String(index + 1).padStart(2, '0')}
+                  </span>
+                  <div>
+                    <div className="font-display text-xs font-semibold uppercase tracking-[0.12em] text-bxo-accent-primary">
+                      Lifecycle stage
+                    </div>
+                    <p className="mt-2 text-base leading-7 text-bxo-text-secondary">{step}</p>
                   </div>
-                  <p className="text-sm leading-7 text-white/68">{step}</p>
-                </div>
-              </div>
-            ))}
+                </li>
+              ))}
+            </ol>
           </div>
         </section>
 
-        <section className="mt-20 grid gap-6 lg:grid-cols-2">
-          <div className="rounded-[1.75rem] border border-white/8 bg-white/[0.04] p-7">
-            <div className="text-xs font-semibold uppercase tracking-[0.2em] text-[#60A5FA]/80">Investor experience</div>
-            <h3 className="font-[family:var(--font-display)] mt-4 text-2xl font-semibold text-white">Calm onboarding, qualification, and reporting.</h3>
-            <p className="mt-3 text-sm leading-7 text-white/62">
-              Investor access should start with clear onboarding, qualification status, asset discovery, portfolio visibility,
-              documents, and redemption workflows. Wallet linking is additive, not the whole product.
-            </p>
-            <div className="mt-6">
-              <Button asChild variant="outline" className="rounded-md border-white/12 bg-white/5 text-white hover:bg-white/10">
-                <Link href="/for-investors">See investor model</Link>
-              </Button>
+        <section className="border-y border-bxo-border-subtle bg-bxo-bg-secondary">
+          <div className="mx-auto max-w-7xl px-4 py-20 sm:px-6 lg:px-8">
+            <div className="max-w-3xl space-y-5">
+              <div className="bxo-kicker">Multi-asset by design</div>
+              <h2 className="font-display text-3xl font-semibold leading-tight text-bxo-text-primary sm:text-4xl">
+                One operating foundation across private-market structures.
+              </h2>
+              <p className="text-base leading-8 text-bxo-text-secondary">
+                Different assets require different rules. The operating foundation remains consistent: identity,
+                approvals, controlled issuance, servicing, and auditability.
+              </p>
             </div>
-          </div>
 
-          <div className="rounded-[1.75rem] border border-white/8 bg-white/[0.04] p-7">
-            <div className="text-xs font-semibold uppercase tracking-[0.2em] text-[#60A5FA]/80">Operator experience</div>
-            <h3 className="font-[family:var(--font-display)] mt-4 text-2xl font-semibold text-white">Issuance, compliance, treasury, and token ops in one control plane.</h3>
-            <p className="mt-3 text-sm leading-7 text-white/62">
-              Operators need structured queues, role-based controls, audit trails, and servicing visibility. That experience
-              should be separate from investor access from the first screen onward.
-            </p>
-            <div className="mt-6">
-              <Button asChild variant="outline" className="rounded-md border-white/12 bg-white/5 text-white hover:bg-white/10">
-                <Link href="/for-operators">See operator model</Link>
-              </Button>
+            <div className="mt-10 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+              {assetClasses.map(({ title, text, icon: Icon }) => (
+                <article key={title} className="bxo-card p-6">
+                  <Icon className="h-6 w-6 text-bxo-accent-primary" aria-hidden="true" />
+                  <h3 className="mt-6 font-display text-base font-semibold uppercase tracking-[0.07em] text-bxo-text-primary">
+                    {title}
+                  </h3>
+                  <p className="mt-3 text-sm leading-7 text-bxo-text-secondary">{text}</p>
+                </article>
+              ))}
             </div>
           </div>
         </section>
 
-        <section className="mt-20 rounded-[2rem] border border-white/8 bg-[linear-gradient(180deg,rgba(8,15,28,0.98),rgba(4,9,18,0.92))] p-8 sm:p-10">
-          <div className="max-w-3xl space-y-5">
-            <div className="text-xs font-semibold uppercase tracking-[0.2em] text-[#60A5FA]/80">Controls and trust</div>
-            <h2 className="font-[family:var(--font-display)] text-3xl font-semibold text-white sm:text-4xl">Built to make controlled asset operations legible.</h2>
-            <p className="text-base leading-8 text-white/62">
-              Public messaging should describe the intended control posture without claiming certifications the platform has
-              not yet earned. The important story is operational clarity: eligibility, auditability, role-based access, and
-              lifecycle traceability.
-            </p>
-          </div>
+        <section className="mx-auto max-w-7xl px-4 py-20 sm:px-6 lg:px-8">
+          <div className="grid gap-5 lg:grid-cols-2">
+            <article className="bxo-panel p-7 sm:p-8">
+              <div className="bxo-kicker">Investor experience</div>
+              <h2 className="mt-6 font-display text-2xl font-semibold leading-tight text-bxo-text-primary">
+                Calm onboarding, qualification, and portfolio visibility.
+              </h2>
+              <p className="mt-4 text-sm leading-7 text-bxo-text-secondary">
+                Investor access starts with understandable status, relevant opportunities, documents, orders, and
+                lifecycle reporting. Wallet linking is additive, not the whole product.
+              </p>
+              <Button asChild variant="outline" className="bxo-secondary-cta mt-7 h-11 rounded-xl">
+                <Link href="/for-investors">
+                  Explore the investor model
+                  <ArrowRight className="ml-2 h-4 w-4" aria-hidden="true" />
+                </Link>
+              </Button>
+            </article>
 
-          <div className="mt-10 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-            {[
-              'Role-based access and operator separation',
-              'Eligibility and transfer-control workflows',
-              'Auditable servicing and operational history',
-              'Clear investor and operator route boundaries',
-            ].map((item) => (
-              <div key={item} className="rounded-2xl border border-white/8 bg-white/[0.04] px-5 py-5 text-sm leading-7 text-white/65">
-                {item}
-              </div>
-            ))}
+            <article className="bxo-panel p-7 sm:p-8">
+              <div className="bxo-kicker">Operator experience</div>
+              <h2 className="mt-6 font-display text-2xl font-semibold leading-tight text-bxo-text-primary">
+                Issuance, compliance, treasury, and token operations.
+              </h2>
+              <p className="mt-4 text-sm leading-7 text-bxo-text-secondary">
+                Operators work from structured queues, role-based controls, audit context, and servicing visibility,
+                separate from investor access from the first screen onward.
+              </p>
+              <Button asChild variant="outline" className="bxo-secondary-cta mt-7 h-11 rounded-xl">
+                <Link href="/for-operators">
+                  Explore the operator model
+                  <ArrowRight className="ml-2 h-4 w-4" aria-hidden="true" />
+                </Link>
+              </Button>
+            </article>
           </div>
         </section>
 
-        <section className="mt-20 rounded-[2rem] border border-[#3B82F6]/12 bg-[#3B82F6]/[0.06] p-8 text-center sm:p-10">
-          <div className="mx-auto max-w-3xl space-y-4">
-            <div className="text-xs font-semibold uppercase tracking-[0.2em] text-[#60A5FA]/80">Next step</div>
-            <h2 className="font-[family:var(--font-display)] text-3xl font-semibold text-white sm:text-4xl">Choose the right BlockXOne entry point.</h2>
-            <p className="text-base leading-8 text-white/62">
-              Existing investors and platform operators should no longer share one generic login. Start with the surface that
-              matches your role.
-            </p>
-          </div>
-          <div className="mt-8 flex flex-wrap justify-center gap-3">
-            <Button asChild size="lg" className="rounded-md bg-gradient-to-r from-[#2563EB] via-[#3B82F6] to-[#60A5FA] px-7 text-white">
-              <Link href="/investor/login">Investor login</Link>
-            </Button>
-            <Button asChild size="lg" variant="outline" className="rounded-md border-white/12 bg-white/5 px-7 text-white hover:bg-white/10">
-              <Link href="/operator/login">Operator login</Link>
-            </Button>
+        <section className="mx-auto max-w-7xl px-4 pb-20 sm:px-6 lg:px-8">
+          <div className="bxo-panel overflow-hidden p-8 text-center sm:p-12">
+            <div className="mx-auto max-w-3xl space-y-5">
+              <div className="bxo-kicker justify-center">Choose the right entry point</div>
+              <h2 className="font-display text-3xl font-semibold leading-tight text-bxo-text-primary sm:text-4xl">
+                See BlockXOne through the role you operate.
+              </h2>
+              <p className="text-base leading-8 text-bxo-text-secondary">
+                Existing investors and platform operators use separate access boundaries. New partners can request a
+                guided demonstration of the current functional platform.
+              </p>
+            </div>
+            <div className="mt-8 flex flex-col justify-center gap-3 sm:flex-row sm:flex-wrap">
+              <Button asChild size="lg" className="bxo-primary-cta h-12 rounded-xl px-7 font-semibold">
+                <Link href="/request-demo">Request a demonstration</Link>
+              </Button>
+              <Button asChild size="lg" variant="outline" className="bxo-secondary-cta h-12 rounded-xl px-7">
+                <Link href="/login">Choose a portal</Link>
+              </Button>
+            </div>
           </div>
         </section>
       </main>

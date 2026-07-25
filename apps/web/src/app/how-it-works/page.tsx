@@ -18,9 +18,9 @@ export default function HowItWorksPage() {
     >
       <div className="grid gap-4 lg:grid-cols-2">
         {steps.map((step, index) => (
-          <div key={step} className="rounded-[1.5rem] border border-white/8 bg-white/[0.04] p-6">
-            <div className="text-xs font-semibold uppercase tracking-[0.18em] text-[#60A5FA]/80">Step {index + 1}</div>
-            <p className="mt-4 text-sm leading-7 text-white/64">{step}</p>
+          <div key={step} className="bxo-card p-6">
+            <div className="font-display text-xs font-semibold uppercase tracking-[0.16em] text-bxo-accent-primary">Step {index + 1}</div>
+            <p className="mt-4 text-sm leading-7 text-bxo-text-secondary">{step}</p>
           </div>
         ))}
       </div>

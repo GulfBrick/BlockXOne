@@ -1,11 +1,11 @@
 'use client'
 
 import { useMemo, useState } from 'react'
-import Image from 'next/image'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { motion } from 'framer-motion'
 import { Button } from './button'
+import { BrandLockup } from '@/components/brand/brand-mark'
 import { cn } from '@/lib/utils'
 import { useAuth } from '@/lib/auth-context-v2'
 import { getDefaultRouteForRoles } from '@/lib/role-routing'
@@ -98,20 +98,20 @@ export function Navbar() {
   }
 
   return (
-    <nav className="sticky top-0 z-50 glass-surface border-b border-white/10">
+    <nav className="sticky top-0 z-50 glass-surface border-b border-bxo-border-subtle">
       <div className="container mx-auto px-4">
         <div className="flex items-center justify-between h-16">
-          <Link href="/" className="flex items-center gap-3 hover:opacity-90 transition-opacity">
-            <Image
-              src="/logo.png" 
-              alt="BlockXOne" 
-              width={40}
-              height={40}
-              className="h-10 w-auto"
+          <Link
+            href="/"
+            aria-label="BlockXOne home"
+            className="flex min-h-11 items-center rounded-lg transition-opacity duration-200 hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bxo-accent-primary focus-visible:ring-offset-2 focus-visible:ring-offset-bxo-bg-primary"
+          >
+            <BrandLockup
+              compact
+              markSize="sm"
+              priority
+              className="max-w-[11rem] sm:max-w-none"
             />
-            <span className="font-[family:var(--font-display)] text-xl font-bold bg-gradient-to-r from-primary to-white bg-clip-text text-transparent hidden sm:inline">
-              BlockXOne
-            </span>
           </Link>
 
           {routes.length > 0 && (
@@ -149,7 +149,12 @@ export function Navbar() {
                 Login with Investor/Fund/Token agent/SuperAdmin to link MetaMask
               </div>
             )}
-            <Button variant="ghost" size="sm" className="hover-elevate press-compress">
+            <Button
+              variant="ghost"
+              size="sm"
+              aria-label="Notifications"
+              className="hover-elevate press-compress"
+            >
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
               </svg>
@@ -161,6 +166,9 @@ export function Navbar() {
                 size="sm" 
                 className="hover-elevate press-compress flex items-center gap-2"
                 onClick={() => setAccountMenuOpen(!accountMenuOpen)}
+                aria-expanded={accountMenuOpen}
+                aria-haspopup="menu"
+                aria-controls="account-navigation"
               >
                 <div className="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center">
                   <svg className="w-4 h-4 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -174,27 +182,33 @@ export function Navbar() {
                 <motion.div
                   initial={{ opacity: 0, y: -10 }}
                   animate={{ opacity: 1, y: 0 }}
-                  className="absolute right-0 mt-2 w-48 glass-surface rounded-xl p-2 shadow-xl border border-white/10"
+                  transition={{ duration: 0.2 }}
+                  id="account-navigation"
+                  role="menu"
+                  className="absolute right-0 mt-2 w-48 glass-surface rounded-xl p-2 shadow-xl border border-bxo-border-default"
                 >
                   <Link 
                     href={switchPortalHref}
-                    className="block px-4 py-2 text-sm hover:bg-white/10 rounded-lg transition-colors"
+                    role="menuitem"
+                    className="block rounded-lg px-4 py-2 text-sm transition-colors hover:bg-bxo-accent-soft"
                     onClick={() => setAccountMenuOpen(false)}
                   >
                     {switchPortalLabel}
                   </Link>
                   <Link 
                     href={user ? getDefaultRouteForRoles(user.roles) : settingsHref}
-                    className="block px-4 py-2 text-sm hover:bg-white/10 rounded-lg transition-colors"
+                    role="menuitem"
+                    className="block rounded-lg px-4 py-2 text-sm transition-colors hover:bg-bxo-accent-soft"
                     onClick={() => setAccountMenuOpen(false)}
                   >
                     Settings
                   </Link>
-                  <div className="border-t border-white/10 my-2"></div>
+                  <div className="my-2 border-t border-bxo-border-subtle"></div>
                   <button
                     type="button"
                     onClick={handleLogout}
-                    className="block w-full rounded-lg px-4 py-2 text-left text-sm text-red-400 transition-colors hover:bg-white/10"
+                    role="menuitem"
+                    className="block w-full rounded-lg px-4 py-2 text-left text-sm text-bxo-danger transition-colors hover:bg-bxo-danger/10"
                   >
                     Logout
                   </button>
@@ -204,7 +218,11 @@ export function Navbar() {
 
             <button
               onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-              className="md:hidden p-2 hover-elevate press-compress"
+              type="button"
+              aria-label={mobileMenuOpen ? 'Close navigation menu' : 'Open navigation menu'}
+              aria-expanded={mobileMenuOpen}
+              aria-controls="mobile-navigation"
+              className="flex min-h-11 min-w-11 items-center justify-center rounded-lg text-bxo-text-secondary transition-[color,background-color,transform] duration-200 hover:bg-bxo-surface-elevated hover:text-bxo-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bxo-accent-primary md:hidden"
             >
               <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 {mobileMenuOpen ? (
@@ -219,10 +237,11 @@ export function Navbar() {
 
         {mobileMenuOpen && routes.length > 0 && (
           <motion.div
-            initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: 'auto' }}
-            exit={{ opacity: 0, height: 0 }}
-            className="md:hidden border-t border-white/10 py-4"
+            initial={{ opacity: 0, y: -8 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.2 }}
+            id="mobile-navigation"
+            className="border-t border-bxo-border-subtle py-4 md:hidden"
           >
             {routes.map((route) => (
               <Link
@@ -233,7 +252,7 @@ export function Navbar() {
                   'block px-4 py-2 text-sm font-medium rounded-lg transition-colors',
                   pathname === route.path
                     ? 'text-primary bg-primary/10'
-                    : 'text-muted-foreground hover:text-foreground hover:bg-white/5'
+                    : 'text-muted-foreground hover:bg-bxo-surface-elevated hover:text-foreground'
                 )}
               >
                 {route.label}

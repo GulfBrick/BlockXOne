@@ -28,9 +28,9 @@ export default function AssetClassesPage() {
     >
       <div className="grid gap-5 lg:grid-cols-2">
         {assetClasses.map((item) => (
-          <div key={item.title} className="rounded-[1.5rem] border border-white/8 bg-white/[0.04] p-6">
-            <h2 className="text-xl font-semibold text-white">{item.title}</h2>
-            <p className="mt-4 text-sm leading-7 text-white/64">{item.text}</p>
+          <div key={item.title} className="bxo-card p-6">
+            <h2 className="text-xl font-semibold text-bxo-text-primary">{item.title}</h2>
+            <p className="mt-4 text-sm leading-7 text-bxo-text-secondary">{item.text}</p>
           </div>
         ))}
       </div>

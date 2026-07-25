@@ -52,13 +52,18 @@ const config: Config = {
           foreground: 'hsl(var(--card-foreground))',
         },
         brand: {
-          cyan: '#3B82F6',
-          dark: '#0B0F1A',
+          cyan: 'var(--bxo-accent-primary)',
+          'cyan-deep': 'var(--bxo-accent-primary-dark)',
+          dark: 'var(--bxo-bg-primary)',
+          surface: 'var(--bxo-surface)',
+          steel: 'var(--bxo-text-tertiary)',
+          frost: 'var(--bxo-text-primary)',
         },
 
         /* BlockXOne Design System Colors */
         bxo: {
           'bg-primary': 'var(--bxo-bg-primary)',
+          'bg-secondary': 'var(--bxo-bg-secondary)',
           'surface': 'var(--bxo-surface)',
           'surface-secondary': 'var(--bxo-surface-secondary)',
           'surface-elevated': 'var(--bxo-surface-elevated)',
@@ -66,6 +71,9 @@ const config: Config = {
           'accent-primary': 'var(--bxo-accent-primary)',
           'accent-primary-dark': 'var(--bxo-accent-primary-dark)',
           'accent-primary-light': 'var(--bxo-accent-primary-light)',
+          'accent-soft': 'var(--bxo-accent-soft)',
+          'accent-muted': 'var(--bxo-accent-muted)',
+          'accent-border': 'var(--bxo-accent-border)',
 
           'success': 'var(--bxo-success)',
           'success-dark': 'var(--bxo-success-dark)',
@@ -114,6 +122,7 @@ const config: Config = {
         'full': 'var(--bxo-radius-full)',
       },
       fontFamily: {
+        'display': 'var(--bxo-font-display)',
         'ui': 'var(--bxo-font-ui)',
         'mono': 'var(--bxo-font-mono)',
         sans: 'var(--bxo-font-ui)',

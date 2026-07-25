@@ -2,20 +2,21 @@
 
 ## Overview
 
-BlockXOne features an institutional-grade UI design system combining a Bloomberg-meets-Stripe aesthetic with a dark-first philosophy. The design prioritizes clarity, efficiency, and premium presentation suitable for institutional finance applications.
+BlockXOne uses the user-supplied BX1 brand system documented in `docs/brand/`. It combines midnight graphite, electric cyan, precise geometric typography, and restrained illumination with the clarity required for institutional finance applications.
 
 ## Color Palette
 
 ### Primary Background
-- **--bxo-bg-primary**: `#0B0F1A` - Deep navy-black base background
-- **--bxo-surface**: `#111827` - Primary surface for cards and panels
-- **--bxo-surface-secondary**: `#161f36` - Secondary surface
-- **--bxo-surface-elevated**: `#1F2937` - Elevated surfaces for depth
+- **--bxo-bg-primary**: `#0B131B` - Midnight graphite base background
+- **--bxo-bg-secondary**: `#071018` - Deep section background
+- **--bxo-surface**: `#0F1E28` - Slate card and panel surface
+- **--bxo-surface-secondary**: `#132733` - Secondary surface
+- **--bxo-surface-elevated**: `#182F3D` - Elevated surface
 
 ### Accent Colors
-- **--bxo-accent-primary**: `#3B82F6` - Electric blue (primary CTA)
-- **--bxo-accent-primary-dark**: `#2563EB` - Darker blue for hover states
-- **--bxo-accent-primary-light**: `#60A5FA` - Lighter blue for disabled/secondary states
+- **--bxo-accent-primary**: `#27D0F7` - Electric cyan
+- **--bxo-accent-primary-dark**: `#00B8E6` - Deep cyan
+- **--bxo-accent-primary-light**: `#7BE8FF` - Highlight cyan
 
 ### Semantic Colors
 - **Success**: `#10B981` (green) - Positive status, confirmations
@@ -24,16 +25,16 @@ BlockXOne features an institutional-grade UI design system combining a Bloomberg
 - **Info**: `#06B6D4` (cyan) - Informational states
 
 ### Text Colors
-- **--bxo-text-primary**: `#F9FAFB` - Primary text
-- **--bxo-text-secondary**: `#9CA3AF` - Secondary text
-- **--bxo-text-tertiary**: `#6B7280` - Tertiary text
-- **--bxo-text-disabled**: `#4B5563` - Disabled text
+- **--bxo-text-primary**: `#EAF6FF` - Frost-white primary text
+- **--bxo-text-secondary**: `#B8C9D8` - Secondary text
+- **--bxo-text-tertiary**: `#7B8EA2` - Steel-grey tertiary text
+- **--bxo-text-disabled**: `#526779` - Disabled text
 
 ### Borders & Dividers
-- **--bxo-border-subtle**: `#1F2937` - Subtle borders
-- **--bxo-border-default**: `#2D3748` - Default borders
-- **--bxo-border-strong**: `#4B5563` - Strong borders
-- **--bxo-divider**: `rgba(255, 255, 255, 0.06)` - Divider lines
+- **--bxo-border-subtle**: `rgba(123, 142, 162, 0.18)` - Subtle borders
+- **--bxo-border-default**: `rgba(39, 208, 247, 0.22)` - Default borders
+- **--bxo-border-strong**: `rgba(39, 208, 247, 0.38)` - Strong borders
+- **--bxo-divider**: `rgba(234, 246, 255, 0.08)` - Divider lines
 
 ## Spacing Scale
 
@@ -54,36 +55,37 @@ BlockXOne features an institutional-grade UI design system combining a Bloomberg
 
 ```
 --bxo-radius-xs: 2px
---bxo-radius-sm: 4px
---bxo-radius-base: 6px
---bxo-radius-md: 8px
+--bxo-radius-sm: 6px
+--bxo-radius-base: 8px
+--bxo-radius-md: 10px
 --bxo-radius-lg: 12px
 --bxo-radius-xl: 16px
---bxo-radius-2xl: 20px
+--bxo-radius-2xl: 18px
 --bxo-radius-full: 9999px
 ```
 
 ## Shadows
 
 ```
---bxo-shadow-xs: 0 1px 2px 0 rgba(0, 0, 0, 0.05)
---bxo-shadow-sm: 0 1px 3px 0 rgba(0, 0, 0, 0.1)
---bxo-shadow-base: 0 4px 6px -1px rgba(0, 0, 0, 0.1)
---bxo-shadow-md: 0 10px 15px -3px rgba(0, 0, 0, 0.1)
---bxo-shadow-lg: 0 20px 25px -5px rgba(0, 0, 0, 0.1)
---bxo-shadow-xl: 0 25px 50px -12px rgba(0, 0, 0, 0.25)
+--bxo-shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.18)
+--bxo-shadow-sm: 0 4px 12px rgba(0, 0, 0, 0.22)
+--bxo-shadow-base: 0 8px 24px rgba(0, 0, 0, 0.28)
+--bxo-shadow-md: 0 12px 40px rgba(0, 0, 0, 0.35)
+--bxo-shadow-lg: 0 20px 56px rgba(0, 0, 0, 0.42)
+--bxo-shadow-xl: 0 28px 80px rgba(0, 0, 0, 0.5)
 
 /* Accent shadows for emphasis */
---bxo-shadow-accent-sm: 0 0 8px rgba(59, 130, 246, 0.2)
---bxo-shadow-accent-md: 0 0 16px rgba(59, 130, 246, 0.3)
---bxo-shadow-accent-lg: 0 0 24px rgba(59, 130, 246, 0.4)
+--bxo-shadow-accent-sm: 0 4px 16px rgba(0, 184, 230, 0.12)
+--bxo-shadow-accent-md: 0 12px 40px rgba(0, 184, 230, 0.16)
+--bxo-shadow-accent-lg: 0 20px 64px rgba(0, 184, 230, 0.2)
 ```
 
 ## Typography
 
 ### Font Families
-- **UI**: `-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto'...` (system fonts)
-- **Mono**: `'JetBrains Mono', 'Fira Code'...` (for data/numbers)
+- **Display**: `Orbitron` (headlines, section labels)
+- **UI**: `Inter` (body, navigation, forms)
+- **Mono**: `JetBrains Mono` (data, identifiers, figures)
 
 ### Font Sizes
 ```
@@ -110,11 +112,11 @@ BlockXOne features an institutional-grade UI design system combining a Bloomberg
 
 ### Durations
 ```
---bxo-duration-xfast: 75ms
---bxo-duration-fast: 100ms
---bxo-duration-base: 200ms
+--bxo-duration-xfast: 120ms
+--bxo-duration-fast: 160ms
+--bxo-duration-base: 220ms
 --bxo-duration-slow: 300ms
---bxo-duration-slower: 500ms
+--bxo-duration-slower: 360ms
 ```
 
 ### Easing Functions
@@ -123,7 +125,7 @@ BlockXOne features an institutional-grade UI design system combining a Bloomberg
 --bxo-ease-in: cubic-bezier(0.4, 0, 1, 1)
 --bxo-ease-out: cubic-bezier(0, 0, 0.2, 1)
 --bxo-ease-in-out: cubic-bezier(0.4, 0, 0.2, 1)
---bxo-ease-bounce: cubic-bezier(0.68, -0.55, 0.265, 1.55)
+--bxo-ease-emphasized: cubic-bezier(0.16, 1, 0.3, 1)
 ```
 
 ### Keyframe Animations

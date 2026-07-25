@@ -71,12 +71,12 @@ No rock may:
 
 | Role | Required treatment |
 |---|---|
-| Foundation | Dark graphite `#0B0F1A`, restrained surface elevation, strong readable borders |
-| Accent | Cyan `#06B6D4` to blue `#3B82F6`; glow is an accent, not a background effect |
-| Text | `#F9FAFB` primary, `#9CA3AF` secondary, `#6B7280` muted |
+| Foundation | Midnight graphite `#0B131B`, slate surface `#0F1E28`, restrained elevation |
+| Accent | Electric cyan `#27D0F7` to deep cyan `#00B8E6`; illumination is an accent, not a background effect |
+| Text | Frost white `#EAF6FF`, accessible secondary text, steel grey `#7B8EA2` muted |
 | States | Success `#10B981`, warning `#F59E0B`, danger `#EF4444` |
-| Display font | Sora |
-| Body font | IBM Plex Sans |
+| Display font | Orbitron |
+| Body font | Inter |
 | Data font | JetBrains Mono |
 | Investor UX | Calm, guided, card-led, one obvious primary action |
 | Operator UX | Dense, decisive, traceable, table/detail-drawer oriented |
@@ -86,7 +86,7 @@ No rock may:
 ### Work
 
 1. Consolidate `design-tokens.css` and the overlapping tokens in `globals.css`.
-2. Load the three canonical font families without layout shift.
+2. Load Orbitron, Inter, and JetBrains Mono without layout shift.
 3. Replace repeated raw page colors with semantic tokens.
 4. Remove decorative holographic/neon/glass effects that compete with transaction state.
 5. Normalize Framer Motion timings and wire component behavior to reduced-motion preferences.
@@ -103,6 +103,17 @@ No rock may:
 - stable loading/error/empty/success states;
 - before/after visual receipts for investor and operator flows;
 - web tests and production build remain green.
+
+### 2026-07-25 checkpoint evidence
+
+- Supplied logo master and brand board are preserved under `docs/brand/`.
+- Deterministic transparent mark, wordmark, lockup, favicon, and application-icon derivatives are served from `apps/web/public/brand/`.
+- The public shell, landing page, shared navigation, dashboard lockup, fonts, colors, radii, shadows, focus treatments, and base motion tokens use the canonical system above.
+- Hermetic web suite: PASS, 4 files / 94 tests.
+- Production-mode Next.js build: PASS, 45 routes.
+- Live local web and API health: HTTP 200.
+- Browser verification: PASS at 375 × 812 and 1440 × 900 for font loading, image loading, 44 px mobile portal target, and horizontal overflow.
+- R-02 remains **in progress** until the protected investor/operator surfaces, intermediate breakpoints, keyboard flows, reduced-motion parity, and state coverage satisfy the full acceptance list.
 
 ## R-03 — Core workflow closure
 

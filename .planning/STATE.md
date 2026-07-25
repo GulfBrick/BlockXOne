@@ -198,3 +198,14 @@ Phase 0 remains in_progress, production completion remains zero, and release rem
 - **Recovery commit:** `ff56617e4651a04e24acce053772f542eb31f130`
 - **Next bounded rock:** R-01 — verify, commit, and publish the functional baseline without replacing GitHub `main`.
 - **Release posture:** Local demonstration is recoverable; production remains NO-GO until mandatory technical, financial, security, compliance, operational, and external professional gates close.
+
+## R-02 brand checkpoint — 2026-07-25
+
+- **Status:** In progress; the canonical brand and public landing foundation are implemented and locally verified.
+- **Branch:** `codex/functional-platform`; GitHub `main` is not replaced.
+- **Source authority:** Supplied logo master and brand guide preserved in `docs/brand/`, with exact deterministic transparent web derivatives under `apps/web/public/brand/`.
+- **Implemented:** Orbitron display typography, Inter body typography, JetBrains Mono data typography, canonical graphite/slate/cyan/frost palette, restrained motion, shared public/authenticated brand lockups, favicon/application icons, semantic public components, and responsive header behavior.
+- **Automated evidence:** Hermetic web suite PASS, 4 files / 94 tests; production-mode Next.js build PASS, 45 routes.
+- **Live evidence:** Local web HTTP 200 and API health HTTP 200; browser checks at 375 × 812 and 1440 × 900 confirm correct fonts and images, 44 px mobile portal target, and no horizontal overflow.
+- **Remaining R-02 gates:** protected investor/operator route receipts, 768 px and 1024 px coverage, keyboard-only flow completion, explicit reduced-motion parity, and loading/error/empty/success state coverage.
+- **Release posture:** This is a recoverable UI checkpoint, not a staging or production release. Production remains NO-GO.

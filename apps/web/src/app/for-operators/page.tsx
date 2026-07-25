@@ -13,7 +13,7 @@ export default function ForOperatorsPage() {
           'Compliance review queues, role-based actions, and audit visibility',
           'Treasury, servicing, token operations, and lifecycle reporting',
         ].map((item) => (
-          <div key={item} className="rounded-[1.5rem] border border-white/8 bg-white/[0.04] p-6 text-sm leading-7 text-white/64">
+          <div key={item} className="bxo-card p-6 text-sm leading-7 text-bxo-text-secondary">
             {item}
           </div>
         ))}
