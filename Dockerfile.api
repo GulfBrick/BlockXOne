@@ -15,6 +15,7 @@ RUN go mod download
 # Copy source code
 COPY cmd/api ./cmd/api
 COPY cmd/migrate ./cmd/migrate
+COPY cmd/seed ./cmd/seed
 COPY internal ./internal
 
 # Build the binary with CGO disabled
@@ -25,7 +26,11 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
     CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
     -ldflags="-w -s" \
     -o /migrate \
-    ./cmd/migrate
+    ./cmd/migrate && \
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+    -ldflags="-w -s" \
+    -o /seed \
+    ./cmd/seed
 
 # Runtime stage
 FROM alpine:3.19
@@ -42,6 +47,7 @@ WORKDIR /home/appuser
 # Copy binary from builder
 COPY --from=builder --chown=appuser:appuser /api /home/appuser/api
 COPY --from=builder --chown=appuser:appuser /migrate /home/appuser/migrate
+COPY --from=builder --chown=appuser:appuser /seed /home/appuser/seed
 COPY --chown=appuser:appuser migrations /home/appuser/migrations
 
 # Switch to non-root user

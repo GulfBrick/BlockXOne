@@ -13,6 +13,9 @@ import (
 	"blockxone/internal/db"
 	"blockxone/internal/logging"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -21,6 +24,11 @@ type SeedUser struct {
 	ID    string
 	Email string
 	Role  string
+}
+
+type seedQuerier interface {
+	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+	QueryRow(context.Context, string, ...any) pgx.Row
 }
 
 func main() {
@@ -37,7 +45,32 @@ func main() {
 	}
 	defer d.Close()
 
-	// Orgs
+	if err := seedDatabase(ctx, d.Pool); err != nil {
+		log.Fatal().Err(err).Msg("seed failed")
+	}
+
+	fmt.Println("seed completed")
+}
+
+func seedDatabase(ctx context.Context, pool *pgxpool.Pool) error {
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin seed transaction: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
+
+	if err := seedData(ctx, tx); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit seed transaction: %w", err)
+	}
+	return nil
+}
+
+func seedData(ctx context.Context, q seedQuerier) error {
 	platformOrgID := "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 	issuerOrgID := "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
 	transferOrgID := "cccccccc-cccc-cccc-cccc-cccccccccccc"
@@ -55,10 +88,12 @@ func main() {
 	}
 
 	for _, o := range orgs {
-		_, _ = d.Pool.Exec(ctx, `
+		if _, err := q.Exec(ctx, `
 			INSERT INTO orgs(id,name,type) VALUES($1,$2,$3)
-			ON CONFLICT (id) DO NOTHING
-		`, o.id, o.name, o.typ)
+			ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name, type=EXCLUDED.type
+		`, o.id, o.name, o.typ); err != nil {
+			return fmt.Errorf("seed organization %q: %w", o.name, err)
+		}
 	}
 
 	users := []SeedUser{
@@ -74,14 +109,22 @@ func main() {
 	// All seeded local demo users share the same password for reproducible dev login flows.
 	demoPasswordHash, err := bcrypt.GenerateFromPassword([]byte("Admin123!"), bcrypt.DefaultCost)
 	if err != nil {
-		log.Fatal().Err(err).Msg("failed to hash demo password")
+		return fmt.Errorf("hash demo password: %w", err)
 	}
 
+	userIDs := make(map[string]string, len(users))
 	for _, u := range users {
-		_, _ = d.Pool.Exec(ctx, `
+		var userID string
+		if err := q.QueryRow(ctx, `
 			INSERT INTO users(id,email,password_hash,status) VALUES($1,$2,$3,'ACTIVE')
-			ON CONFLICT (id) DO UPDATE SET password_hash=$3, email=$2, status='ACTIVE'
-		`, u.ID, u.Email, string(demoPasswordHash))
+			ON CONFLICT (email) DO UPDATE SET
+				password_hash=EXCLUDED.password_hash,
+				status='ACTIVE'
+			RETURNING id
+		`, u.ID, u.Email, string(demoPasswordHash)).Scan(&userID); err != nil {
+			return fmt.Errorf("seed user %q: %w", u.Email, err)
+		}
+		userIDs[u.Email] = userID
 
 		// Determine org by role (simple dev mapping)
 		orgID := platformOrgID
@@ -102,24 +145,34 @@ func main() {
 			orgID = platformOrgID
 		}
 
-		_, err = d.Pool.Exec(ctx, `
+		var roleID string
+		if err := q.QueryRow(ctx, `
+			SELECT id FROM roles WHERE name=$1
+		`, u.Role).Scan(&roleID); err != nil {
+			return fmt.Errorf("load role %q for %q: %w", u.Role, u.Email, err)
+		}
+		if _, err := q.Exec(ctx, `
 			INSERT INTO user_org_roles(user_id,org_id,role_id)
-			SELECT $1, $2, r.id FROM roles r WHERE r.name=$3
+			VALUES($1,$2,$3)
 			ON CONFLICT DO NOTHING
-		`, u.ID, orgID, u.Role)
-		if err != nil {
-			log.Fatal().Err(err).Str("role", u.Role).Msg("assign role failed")
+		`, userID, orgID, roleID); err != nil {
+			return fmt.Errorf("assign role %q to %q: %w", u.Role, u.Email, err)
 		}
 	}
 
 	// Investor profile defaults
-	_, _ = d.Pool.Exec(ctx, `
+	investorUserID := userIDs["investor@blockxone.local"]
+	if investorUserID == "" {
+		return errors.New("seed investor user ID was not returned")
+	}
+	if _, err := q.Exec(ctx, `
 		INSERT INTO investor_profile(user_id, investor_status, accredited_flag, qualified_flag, jurisdiction)
 		VALUES($1,'RETAIL', false, false, 'US')
 		ON CONFLICT (user_id) DO NOTHING
-	`, "11111111-1111-1111-1111-111111111111")
-
-	fmt.Println("seed completed")
+	`, investorUserID); err != nil {
+		return fmt.Errorf("seed investor profile: %w", err)
+	}
+	return nil
 }
 
 func validateSeedTarget(appEnv, allowDevSeed, databaseURL string) error {

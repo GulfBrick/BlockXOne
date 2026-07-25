@@ -1,7 +1,11 @@
 const DEFAULT_API_BASE = 'http://localhost:8080'
 
 export function getServerApiBase() {
-  return (process.env.NEXT_PUBLIC_API_URL || DEFAULT_API_BASE).replace(/\/$/, '')
+  return (
+    process.env.BLOCKXONE_API_INTERNAL_URL ||
+    process.env.NEXT_PUBLIC_API_URL ||
+    DEFAULT_API_BASE
+  ).replace(/\/$/, '')
 }
 
 export async function proxyJsonToApi(path: string, init: RequestInit = {}) {
