@@ -17,6 +17,11 @@ const pairedPilotShare = { releaseMode: 'pilot-share', publicReleaseMode: 'pilot
 test('demo requests are disabled by default and can omit intake configuration', () => {
   assert.equal(validateProductionDemoRequestConfiguration(), false)
   assert.equal(validateProductionDemoRequestConfiguration({ enabled: 'false' }), false)
+  assert.equal(validateProductionDemoRequestConfiguration({
+    enabled: 'false',
+    endpoint: 'https://oqkevkjbkpugjotihtda.supabase.co/functions/v1/demo-request',
+    privacyNoticeUrl: '',
+  }), false)
   assert.throws(
     () => validateProductionDemoRequestConfiguration({ enabled: 'TRUE' }),
     /must be true or false/

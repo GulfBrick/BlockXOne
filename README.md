@@ -15,11 +15,14 @@ NEXT_PUBLIC_BLOCKXONE_WEB_SURFACE=public
 BLOCKXONE_RELEASE_MODE=production
 NEXT_PUBLIC_BLOCKXONE_RELEASE_MODE=production
 NEXT_PUBLIC_DEMO_REQUEST_ENABLED=false
+NEXT_PUBLIC_DEMO_REQUEST_ENDPOINT=https://oqkevkjbkpugjotihtda.supabase.co/functions/v1/demo-request
 SERVER_ACTION_ALLOWED_ORIGINS=block-x-one.vercel.app,bx1.co.za,www.bx1.co.za
 ```
 
-Leave `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_DEMO_REQUEST_ENDPOINT`, and
-`NEXT_PUBLIC_DEMO_PRIVACY_NOTICE_URL` unset for this showcase release. Intake is
+Leave `NEXT_PUBLIC_API_URL` and `NEXT_PUBLIC_DEMO_PRIVACY_NOTICE_URL` unset for
+this showcase release. The enquiry endpoint is configured to the existing
+Supabase function; platform authentication and financial APIs are not migrated
+by this website release. Intake is
 disabled: the enquiry form is not rendered and cannot submit personal details.
 Enabling intake separately
 requires an approved, published privacy notice and verified Supabase origin,
@@ -36,11 +39,9 @@ requires the exact DNS records issued for this project; preserve existing email
 and verification records. Never publish `.env` files, preview credentials,
 database secrets, signer assets, runtime dumps, or local support artifacts.
 
-The preparation branch `codex/bx1-public-site-20260916` has automatic Vercel
-deployment disabled in `apps/web/vercel.json`. After the existing team is on an
-eligible plan, remove that branch hold, validate its preview deployment, and
-merge through a normal pull request. Do not force-replace the existing `main`
-history or merge before the hosting and runtime checks pass.
+Validate a preview deployment and merge through a normal pull request. Do not
+force-replace the existing `main` history. A technically successful deployment
+does not establish eligibility for commercial use on the selected hosting plan.
 
 This repository is a **production-shaped MVP** for **BlockXOne**, implementing the core lifecycle described in the deck:
 - Offering creation & publishing (Offering Manager)

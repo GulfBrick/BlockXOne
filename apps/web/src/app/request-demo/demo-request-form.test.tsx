@@ -6,10 +6,10 @@ import { DemoRequestForm } from './demo-request-form'
 afterEach(() => vi.unstubAllEnvs())
 
 describe('disabled public enquiry surface', () => {
-  it.each(['', 'false'])('collects no data when enabled is %s, even with configured URLs', (enabled) => {
+  it.each(['', 'false'])('collects no data when enabled is %s, with the real endpoint and no notice', (enabled) => {
     vi.stubEnv('NEXT_PUBLIC_DEMO_REQUEST_ENABLED', enabled)
-    vi.stubEnv('NEXT_PUBLIC_DEMO_REQUEST_ENDPOINT', 'https://forms.example.com/demo-request')
-    vi.stubEnv('NEXT_PUBLIC_DEMO_PRIVACY_NOTICE_URL', 'https://legal.example.com/privacy')
+    vi.stubEnv('NEXT_PUBLIC_DEMO_REQUEST_ENDPOINT', 'https://oqkevkjbkpugjotihtda.supabase.co/functions/v1/demo-request')
+    vi.stubEnv('NEXT_PUBLIC_DEMO_PRIVACY_NOTICE_URL', '')
     const html = renderToStaticMarkup(<DemoRequestForm />)
     expect(html).toContain('Online enquiries are temporarily unavailable.')
     expect(html).toContain('No information has been submitted.')
