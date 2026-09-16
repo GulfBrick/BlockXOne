@@ -167,7 +167,7 @@ export interface KYCCase {
   id: string
   user_id: string
   provider_refs: string[]
-  results: any
+  results: unknown
   risk_score?: number
   reviewer_id?: string
   status: KYCStatus
@@ -180,7 +180,7 @@ export interface TimelineEvent {
   action: string
   actor_id?: string
   timestamp: string
-  data?: any
+  data?: unknown
 }
 
 export interface AuditLog {
@@ -190,8 +190,8 @@ export interface AuditLog {
   action: string
   resource_type: string
   resource_id: string
-  before?: any
-  after?: any
+  before?: unknown
+  after?: unknown
   ip: string
   user_agent: string
   timestamp: string
@@ -256,8 +256,8 @@ export interface NAVEntry {
 
 export interface Settings {
   feature_flags: Record<string, boolean>
-  jurisdictions_config: any
-  fee_tables: any
-  risk_rules: any
-  providers: any
+  jurisdictions_config: unknown
+  fee_tables: unknown
+  risk_rules: unknown
+  providers: unknown
 }

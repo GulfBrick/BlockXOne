@@ -1,206 +1,292 @@
 'use client'
 
-import { useMemo, useState } from 'react'
-import { motion } from 'framer-motion'
-import Link from 'next/link'
+import { useEffect, useMemo, useState } from 'react'
+import { useRouter } from 'next/navigation'
+import type { ColumnDef } from '@tanstack/react-table'
+import { Coins, Layers, Search, TrendingUp } from 'lucide-react'
 
-import { AnimatedCard } from '@/components/motion/animated-card'
-import { FilterBar } from '@/components/motion/filter-bar'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { demoFunds } from '@/lib/demo-funds'
+import { StatCard } from '@/components/ui/stat-card'
+import { DataTable } from '@/components/ui/data-table'
+import { StatusBadge } from '@/components/ui/status-badge'
+import type { StatusVariant } from '@/components/ui/status-badge'
+import { useAuth } from '@/lib/auth-context-v2'
+import { investorCatalogApi } from '@/lib/api-client'
+import {
+  compareExactDecimals,
+  formatExactMoney,
+  isPositiveExactDecimal,
+  parseExactDecimal,
+} from '@/lib/exact-decimal'
+import type { InvestorCatalogListItem } from '@/lib/pilot-finance'
+import { countDistinctNetworkTargets } from '@/lib/pilot-record-presentation'
 
-const ENVIRONMENTS = ['All', 'mainnet', 'testnet']
+/** Row shape DataTable consumes (requires an `id`). */
+type MarketRow = InvestorCatalogListItem
+
+function statusVariant(status: string): StatusVariant {
+  switch (status.toUpperCase()) {
+    case 'LIVE':
+      return 'success'
+    case 'PAUSED':
+      return 'warning'
+    case 'CLOSED':
+    case 'CANCELLED':
+      return 'error'
+    case 'DRAFT':
+    case 'PENDING':
+      return 'pending'
+    default:
+      return 'neutral'
+  }
+}
+
+function prettyAssetType(value: string): string {
+  if (!value) return 'Asset'
+  return value
+    .replace(/[_-]+/g, ' ')
+    .replace(/\b\w/g, (c) => c.toUpperCase())
+}
 
 export default function MarketplacePage() {
+  const router = useRouter()
+  const { user, loading } = useAuth()
+
+  const [rows, setRows] = useState<MarketRow[]>([])
+  const [catalogLoaded, setCatalogLoaded] = useState(false)
+  const [isFetching, setIsFetching] = useState(true)
+  const [error, setError] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
-  const [selectedCategory, setSelectedCategory] = useState('All')
-  const [selectedChain, setSelectedChain] = useState('All Chains')
-  const [selectedEnv, setSelectedEnv] = useState('All')
+  const [selectedAssetType, setSelectedAssetType] = useState('All')
 
-  const categories = useMemo(
-    () => ['All', ...Array.from(new Set(demoFunds.map((fund) => fund.category)))],
-    []
+  useEffect(() => {
+    if (loading) return
+    if (!user) {
+      setRows([])
+      setCatalogLoaded(false)
+      setIsFetching(false)
+      return
+    }
+
+    let cancelled = false
+    setIsFetching(true)
+    setRows([])
+    setCatalogLoaded(false)
+    setError(null)
+
+    investorCatalogApi
+      .list(user.token)
+      .then((data) => {
+        if (cancelled) return
+        if (!Array.isArray(data)) throw new Error('Marketplace returned an invalid catalog response.')
+        setRows(data)
+        setCatalogLoaded(true)
+      })
+      .catch((err) => {
+        if (cancelled) return
+        setRows([])
+        setCatalogLoaded(false)
+        setError(err?.message || 'Failed to load marketplace')
+      })
+      .finally(() => {
+        if (!cancelled) setIsFetching(false)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [user, loading])
+
+  const assetTypes = useMemo(
+    () => ['All', ...Array.from(new Set(rows.map((r) => r.asset_class).filter(Boolean)))],
+    [rows]
   )
 
-  const chains = useMemo(
-    () => ['All Chains', ...Array.from(new Set(demoFunds.map((fund) => fund.chain)))],
-    []
+  const filteredRows = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase()
+    return rows.filter((r) => {
+      const matchesSearch =
+        !q ||
+        r.name?.toLowerCase().includes(q) ||
+        r.asset_class?.toLowerCase().includes(q) ||
+        r.description?.toLowerCase().includes(q)
+      const matchesType = selectedAssetType === 'All' || r.asset_class === selectedAssetType
+      return matchesSearch && matchesType
+    })
+  }, [rows, searchQuery, selectedAssetType])
+
+  const distinctAssetTypes = useMemo(
+    () => new Set(rows.map((r) => r.asset_class).filter(Boolean)).size,
+    [rows]
+  )
+  const networkTargetCount = useMemo(
+    () => countDistinctNetworkTargets(rows),
+    [rows]
   )
 
-  const formatZAR = (value: number) =>
-    new Intl.NumberFormat('en-ZA', { style: 'currency', currency: 'ZAR', maximumFractionDigits: 0 }).format(value)
-
-  const filteredFunds = demoFunds.filter((fund) => {
-    const matchesSearch =
-      fund.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      fund.symbol.toLowerCase().includes(searchQuery.toLowerCase())
-    const matchesCategory = selectedCategory === 'All' || fund.category === selectedCategory
-    const matchesChain = selectedChain === 'All Chains' || fund.chain === selectedChain
-    const matchesEnv = selectedEnv === 'All' || fund.environment === selectedEnv
-    return matchesSearch && matchesCategory && matchesChain && matchesEnv
-  })
+  const columns = useMemo<ColumnDef<MarketRow>[]>(
+    () => [
+      {
+        accessorKey: 'name',
+        header: 'Offering',
+        cell: ({ row }) => (
+          <div className="flex flex-col">
+            <span className="font-medium text-bxo-text-primary">
+              {row.original.name || 'Unnamed Offering'}
+            </span>
+            <span className="font-mono text-xs text-bxo-text-tertiary">
+              {row.original.id}
+            </span>
+          </div>
+        )
+      },
+      {
+        accessorKey: 'asset_class',
+        header: 'Asset Type',
+        cell: ({ row }) => (
+          <span className="text-sm text-bxo-text-secondary">
+            {prettyAssetType(row.original.asset_class)}
+          </span>
+        )
+      },
+      {
+        accessorKey: 'price',
+        header: 'Price',
+        sortingFn: (left, right) =>
+          compareExactDecimals(left.original.price, right.original.price),
+        cell: ({ row }) =>
+          isPositiveExactDecimal(parseExactDecimal(row.original.price ?? '')) ? (
+            <span className="font-mono text-sm font-semibold text-bxo-text-primary">
+              {formatExactMoney(row.original.price, row.original.currency)}
+            </span>
+          ) : (
+            <span className="text-sm text-bxo-text-tertiary">Not available</span>
+          )
+      },
+      {
+        id: 'settlement',
+        header: 'Environment',
+        cell: ({ row }) =>
+          row.original.chain_id != null ? (
+            <span className="font-mono text-xs text-bxo-text-secondary">
+              {row.original.runtime_scope === 'TESTNET'
+                ? 'Public testnet'
+                : row.original.runtime_scope === 'LOCAL_PILOT'
+                  ? 'Private validation network'
+                  : 'Network not recorded'} · chain {row.original.chain_id}
+            </span>
+          ) : (
+            <span className="text-xs text-bxo-text-tertiary">Not configured</span>
+          )
+      },
+      {
+        id: 'status',
+        header: 'Status',
+        cell: ({ row }) => (
+          <StatusBadge
+            variant={statusVariant(row.original.status)}
+            label={prettyAssetType(row.original.status || 'Live')}
+          />
+        )
+      }
+    ],
+    []
+  )
 
   return (
-    <div className="min-h-screen relative">
-      <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_120%,rgba(0,188,212,0.08),transparent_50%)]" />
-      
-      <div className="container relative mx-auto px-4 py-8 max-w-6xl">
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.5 }}
-        >
-          <h1 className="text-4xl font-bold mb-2">Fund Marketplace</h1>
-          <p className="text-muted-foreground mb-8">
-            Demo-ready funds with KYC gates, mint/burn fees, and testnet (Tokeny-style) flows.
+    <div className="space-y-6">
+        <div className="flex flex-col gap-1">
+          <h1 className="font-display text-2xl font-semibold text-bxo-text-primary">
+            Market
+          </h1>
+          <p className="text-sm text-bxo-text-secondary">
+            Approved offerings within your organisation&apos;s authorised launch perimeter.
           </p>
+        </div>
 
-          <div className="glass-surface rounded-2xl p-6 mb-8">
-            <div className="flex flex-col md:flex-row gap-4 mb-6">
-              <div className="flex-1">
-                <Input
-                  placeholder="Search funds by name or symbol..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full focus-ring"
-                />
-              </div>
-              <Button className="bg-primary hover:bg-primary/90 hover-elevate press-compress focus-ring">
-                <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
-                </svg>
-                Advanced Filters
-              </Button>
-            </div>
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <StatCard
+            label="Live Offerings"
+            value={catalogLoaded ? rows.length : 'Unavailable'}
+            icon={<TrendingUp className="h-5 w-5" />}
+            isLoading={isFetching}
+          />
+          <StatCard
+            label="Asset Classes"
+            value={catalogLoaded ? distinctAssetTypes : 'Unavailable'}
+            icon={<Layers className="h-5 w-5" />}
+            isLoading={isFetching}
+          />
+          <StatCard
+            label="Network Targets"
+            value={catalogLoaded ? networkTargetCount : 'Unavailable'}
+            icon={<Coins className="h-5 w-5" />}
+            isLoading={isFetching}
+          />
+        </div>
 
-            <div className="space-y-4">
-              <div>
-                <label className="text-sm font-medium mb-2 block">Category</label>
-                <FilterBar 
-                  filters={categories} 
-                  onFilterClick={setSelectedCategory}
-                />
-              </div>
-              <div>
-                <label className="text-sm font-medium mb-2 block">Blockchain</label>
-                <FilterBar 
-                  filters={chains}
-                  onFilterClick={setSelectedChain}
-                />
-              </div>
-              <div>
-                <label className="text-sm font-medium mb-2 block">Environment</label>
-                <FilterBar filters={ENVIRONMENTS} onFilterClick={setSelectedEnv} />
-              </div>
-            </div>
+        <div className="flex flex-col gap-3 rounded-xl border border-bxo-border bg-bxo-surface p-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="relative w-full sm:max-w-sm">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-bxo-text-tertiary" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search offerings by name or asset type..."
+              className="w-full rounded-lg border border-bxo-border bg-bxo-bg-primary py-2 pl-9 pr-3 text-sm text-bxo-text-primary placeholder:text-bxo-text-tertiary focus:border-bxo-accent focus:outline-none focus:ring-1 focus:ring-bxo-accent"
+            />
           </div>
-
-          <div className="grid md:grid-cols-2 lg:grid-cols-2 gap-6">
-            {filteredFunds.map((fund, index) => (
-              <motion.div
-                key={fund.id}
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.3, delay: index * 0.1 }}
-              >
-                <AnimatedCard>
-                  <div className="flex justify-between items-start mb-4">
-                    <div>
-                      <h3 className="text-xl font-semibold mb-1">{fund.name}</h3>
-                      <p className="text-sm text-muted-foreground">{fund.symbol} • {fund.category}</p>
-                    </div>
-                    <div className="text-right">
-                      <div className={`text-lg font-bold ${fund.performance >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                        {fund.performance >= 0 ? `+${fund.performance.toFixed(1)}%` : `${fund.performance.toFixed(1)}%`}
-                      </div>
-                      <div className="text-xs text-muted-foreground">1Y Return</div>
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-4 mb-4 pb-4 border-b border-white/10">
-                    <div>
-                      <div className="text-xs text-muted-foreground mb-1">NAV per Token</div>
-                      <div className="text-lg font-semibold">{formatZAR(fund.nav)}</div>
-                    </div>
-                    <div>
-                      <div className="text-xs text-muted-foreground mb-1">Total AUM</div>
-                      <div className="text-lg font-semibold">{formatZAR(fund.aum)}</div>
-                    </div>
-                  </div>
-
-                  <div className="space-y-2 mb-4">
-                    <div className="flex justify-between text-sm">
-                      <span className="text-muted-foreground">Manager</span>
-                      <span>{fund.manager}</span>
-                    </div>
-                    <div className="flex justify-between text-sm">
-                      <span className="text-muted-foreground">Min. Investment</span>
-                      <span>{formatZAR(fund.minInvestment)}</span>
-                    </div>
-                    <div className="flex justify-between text-sm">
-                      <span className="text-muted-foreground">Blockchain</span>
-                      <span className="flex items-center gap-1">
-                        <span className={`w-2 h-2 rounded-full ${fund.environment === 'testnet' ? 'bg-yellow-400' : 'bg-primary'}`}></span>
-                        {fund.chain}
-                        <span className="text-xs px-2 py-0.5 rounded-full bg-white/10 border border-white/10 capitalize">
-                          {fund.environment}
-                        </span>
-                      </span>
-                    </div>
-                    <div className="flex justify-between text-sm">
-                      <span className="text-muted-foreground">Risk Level</span>
-                      <span
-                        className={`font-medium ${
-                          fund.risk.includes('High')
-                            ? 'text-orange-400'
-                            : fund.risk.includes('Medium')
-                              ? 'text-yellow-400'
-                              : 'text-green-400'
-                        }`}
-                      >
-                        {fund.risk}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between text-sm">
-                      <span className="text-muted-foreground">Fees</span>
-                      <span className="text-xs px-2 py-1 rounded bg-white/5 border border-white/10">
-                        Mint {fund.mintFeeBps / 100}% • Burn {fund.burnFeeBps / 100}%
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between text-sm">
-                      <span className="text-muted-foreground">KYC</span>
-                      <span className={`text-xs px-2 py-1 rounded-full ${fund.kycRequired ? 'bg-amber-400/15 text-amber-300' : 'bg-green-400/10 text-green-300'}`}>
-                        {fund.kycRequired ? 'Required' : 'Optional'}
-                      </span>
-                    </div>
-                  </div>
-
-                  <Link href={`/investor/funds/${fund.id}`}>
-                    <Button className="w-full bg-primary hover:bg-primary/90 hover-elevate press-compress focus-ring">
-                      View Details
-                    </Button>
-                  </Link>
-                </AnimatedCard>
-              </motion.div>
-            ))}
+          <div className="flex flex-wrap items-center gap-2">
+            {assetTypes.map((type) => {
+              const active = selectedAssetType === type
+              return (
+                <button
+                  key={type}
+                  type="button"
+                  onClick={() => setSelectedAssetType(type)}
+                  className={
+                    active
+                      ? 'rounded-lg border border-bxo-accent bg-bxo-accent/10 px-3 py-1.5 text-xs font-medium text-bxo-accent transition-colors'
+                      : 'rounded-lg border border-bxo-border bg-bxo-bg-primary px-3 py-1.5 text-xs font-medium text-bxo-text-secondary transition-colors hover:border-bxo-border-strong hover:text-bxo-text-primary'
+                  }
+                >
+                  {type === 'All' ? 'All' : prettyAssetType(type)}
+                </button>
+              )
+            })}
           </div>
+        </div>
 
-          {filteredFunds.length === 0 && (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              className="glass-surface rounded-2xl p-12 text-center"
-            >
-              <svg className="w-16 h-16 mx-auto mb-4 text-muted-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-              </svg>
-              <h3 className="text-xl font-semibold mb-2">No funds found</h3>
-              <p className="text-muted-foreground">Try adjusting your filters or search query</p>
-            </motion.div>
-          )}
-        </motion.div>
-      </div>
+        {error ? (
+          <div className="rounded-xl border border-bxo-danger/30 bg-bxo-danger/10 p-4 text-sm text-bxo-danger">
+            {error}
+          </div>
+        ) : null}
+
+        <div className="rounded-xl border border-bxo-border bg-bxo-surface">
+          <div className="border-b border-bxo-border px-5 py-4">
+            <h2 className="text-sm font-semibold text-bxo-text-primary">Available Offerings</h2>
+          </div>
+          <div className="p-2">
+            {!isFetching && !catalogLoaded ? (
+              <div className="p-8 text-center text-sm text-bxo-warning-light">
+                The authoritative opportunity catalog is unavailable. Refresh or sign in again before relying on availability.
+              </div>
+            ) : (
+              <DataTable<MarketRow>
+                columns={columns}
+                data={filteredRows}
+                isLoading={isFetching}
+                isEmpty={!isFetching && catalogLoaded && filteredRows.length === 0}
+                emptyStateMessage={
+                  rows.length === 0
+                    ? 'No live offerings are currently available.'
+                    : 'No offerings match your search. Try a different term or asset type.'
+                }
+                onRowClick={(row) => router.push(`/investor/funds/${row.id}`)}
+              />
+            )}
+          </div>
+        </div>
     </div>
   )
 }

@@ -8,9 +8,10 @@ import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { API_BASE, getStoredToken } from '@/lib/api-client'
 
 const ROLE_OPTIONS = [
-  { value: 'Investor', label: 'Investor', description: 'Browse and invest in tokenized funds' },
+  { value: 'Investor', label: 'Investor', description: 'Browse and invest in tokenised funds' },
   { value: 'TokenisationAgent', label: 'Tokenisation Agent', description: 'Mint, burn, and manage token operations' },
   { value: 'IssuerFundManager', label: 'Issuer Fund Manager', description: 'Create offerings and manage fund details' },
   { value: 'ComplianceOfficer', label: 'Compliance Officer', description: 'Review KYC and approve wallets' },
@@ -52,13 +53,13 @@ export default function CreateUserPage() {
     setCreating(true)
 
     try {
-      const token = localStorage.getItem('blockxone_token')
+      const token = getStoredToken()
       if (!token) {
         setError('Not authenticated')
         return
       }
 
-      const response = await fetch('http://localhost:8080/v1/admin/users', {
+      const response = await fetch(`${API_BASE}/v1/admin/users`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -81,8 +82,8 @@ export default function CreateUserPage() {
 
       // Redirect back to users list
       router.push('/admin/users')
-    } catch (err: any) {
-      setError(err.message || 'An error occurred')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'An error occurred')
     } finally {
       setCreating(false)
     }

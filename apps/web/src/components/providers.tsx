@@ -8,6 +8,7 @@ import { AuthProvider } from '@/lib/auth-context-v2'
 import { LayoutWrapper } from './layout-wrapper'
 import { LoadingAnimation } from './effects/loading-animation'
 import { usePathname } from 'next/navigation'
+import { MotionConfig } from 'framer-motion'
 
 export function Providers({ children }: { children: React.ReactNode }) {
   const [queryClient] = useState(() => new QueryClient({
@@ -24,19 +25,21 @@ export function Providers({ children }: { children: React.ReactNode }) {
   return (
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
-        <ThemeProvider
-          attribute="class"
-          defaultTheme="dark"
-          enableSystem
-          disableTransitionOnChange
-        >
-          <LoadingAnimation />
-          <LayoutWrapper>
-            <PageTransition routeKey={pathname}>
-              {children}
-            </PageTransition>
-          </LayoutWrapper>
-        </ThemeProvider>
+        <MotionConfig reducedMotion="user">
+          <ThemeProvider
+            attribute="class"
+            defaultTheme="dark"
+            enableSystem
+            disableTransitionOnChange
+          >
+            <LoadingAnimation />
+            <LayoutWrapper>
+              <PageTransition routeKey={pathname}>
+                {children}
+              </PageTransition>
+            </LayoutWrapper>
+          </ThemeProvider>
+        </MotionConfig>
       </AuthProvider>
     </QueryClientProvider>
   )

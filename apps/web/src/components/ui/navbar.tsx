@@ -1,34 +1,56 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useState } from 'react'
 import Link from 'next/link'
-import { usePathname } from 'next/navigation'
+import { usePathname, useRouter } from 'next/navigation'
 import { motion } from 'framer-motion'
 import { Button } from './button'
+import { BrandLockup } from '@/components/brand/brand-mark'
 import { cn } from '@/lib/utils'
 import { useAuth } from '@/lib/auth-context-v2'
-import { WalletWidget } from '@/components/wallet/WalletWidget'
+import {
+  getDefaultRouteForRoles,
+  hasAnyPermission,
+  hasAnyRole,
+  SETTLEMENT_WORKFLOW_PERMISSIONS,
+  SUBSCRIPTION_WORKFLOW_ROLES,
+} from '@/lib/role-routing'
 
 const INVESTOR_ROUTES = [
   { path: '/investor/market', label: 'Marketplace' },
   { path: '/investor/portfolio', label: 'Portfolio' },
-  { path: '/investor/p2p', label: 'P2P Trading' },
-  { path: '/investor/orders', label: 'Orders' },
   { path: '/investor/kyc', label: 'KYC' },
 ]
 
-const WM_ROUTES = [
-  { path: '/wm', label: 'Dashboard' },
-  { path: '/wm/funds', label: 'Funds' },
-  { path: '/wm/ledger', label: 'Ledger' },
-  { path: '/wm/investors', label: 'Investors' },
-  { path: '/wm/reports', label: 'Reports' },
+type CommandCenterRoute = {
+  path: string
+  label: string
+  permission?: string
+  permissions?: readonly string[]
+  roles?: readonly string[]
+}
+
+const WM_ROUTES: readonly CommandCenterRoute[] = [
+  { path: '/wm', label: 'Overview', permission: 'operator:overview:view' },
+  { path: '/wm/funds', label: 'Offerings', permissions: ['offering:edit', 'financial_profile:approve'] },
+  { path: '/wm/subscriptions', label: 'Subscriptions', permission: 'subscription:approve', roles: SUBSCRIPTION_WORKFLOW_ROLES },
+  { path: '/wm/settlements', label: 'Settlement', permissions: SETTLEMENT_WORKFLOW_PERMISSIONS },
+  { path: '/compliance/queue', label: 'KYC', permission: 'compliance:queue:view' },
+  { path: '/compliance/wallets', label: 'Wallets', permission: 'wallet:approve' },
+  { path: '/tokenisation-agent/deploy', label: 'Deployments', permissions: ['tokenops:deploy_erc3643', 'tokenops:deploy_bxo_testnet_token'] },
+  { path: '/tokenisation-agent/whitelist', label: 'Identity', permission: 'tokenops:whitelist' },
+  { path: '/tokenisation-agent/mint', label: 'Issuance', permission: 'tokenops:mint' },
 ]
 
 const COMPLIANCE_ROUTES = [
-  { path: '/compliance', label: 'KYC Queue' },
-  { path: '/compliance/rules', label: 'Rules' },
-  { path: '/compliance/audit', label: 'Audit Logs' },
+  { path: '/compliance', label: 'Workspace' },
+  { path: '/compliance/queue', label: 'KYC Queue' },
+  { path: '/compliance/wallets', label: 'Wallet Queue' },
+]
+
+const ISSUER_ROUTES = [
+  { path: '/issuer', label: 'Issuer Desk' },
+  { path: '/wm/funds', label: 'Fund Setup' },
 ]
 
 const ADMIN_ROUTES = [
@@ -37,70 +59,122 @@ const ADMIN_ROUTES = [
   { path: '/admin/features', label: 'Features' },
 ]
 
+const TOKEN_AGENT_ROUTES = [
+  { path: '/tokenisation-agent', label: 'Overview' },
+  { path: '/tokenisation-agent/deploy', label: 'Deployments' },
+  { path: '/tokenisation-agent/whitelist', label: 'Identity' },
+  { path: '/tokenisation-agent/mint', label: 'Issuance' },
+]
+
 export function Navbar() {
+  const router = useRouter()
   const pathname = usePathname()
-  const { user } = useAuth()
+  const { user, logout } = useAuth()
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const [accountMenuOpen, setAccountMenuOpen] = useState(false)
 
-  const walletAllowed = useMemo(() => {
-    if (!user) return false
-    const roles = user.roles || []
-    const allowed = ['Investor', 'OfferingManager', 'IssuerFundManager', 'TokenisationAgent', 'SuperAdmin']
-    return roles.some((r) => allowed.includes(r))
-  }, [user])
-
   const getRoutes = () => {
+    const permissions = user?.permissions || {}
+    const canAccessRoute = (route: CommandCenterRoute) =>
+      (!route.roles || hasAnyRole(user?.roles, [...route.roles])) &&
+      (route.permissions
+        ? hasAnyPermission(permissions, route.permissions)
+        : route.permission
+          ? permissions[route.permission] === true
+          : true)
+    const isSuperAdminCommandCenter = Boolean(
+      user?.roles?.includes('SuperAdmin') &&
+      (
+        pathname.startsWith('/wm') ||
+        pathname.startsWith('/compliance') ||
+        pathname.startsWith('/tokenisation-agent')
+      )
+    )
+
+    if (isSuperAdminCommandCenter) {
+      return WM_ROUTES.filter(canAccessRoute)
+    }
+
     if (pathname.startsWith('/investor')) return INVESTOR_ROUTES
-    if (pathname.startsWith('/wm')) return WM_ROUTES
+    if (pathname.startsWith('/wm')) {
+      return WM_ROUTES.filter(canAccessRoute)
+    }
     if (pathname.startsWith('/compliance')) return COMPLIANCE_ROUTES
+    if (pathname.startsWith('/issuer')) return ISSUER_ROUTES
     if (pathname.startsWith('/admin')) return ADMIN_ROUTES
+    if (pathname.startsWith('/tokenisation-agent')) {
+      return TOKEN_AGENT_ROUTES.filter(canAccessRoute)
+    }
     return []
   }
 
   const routes = getRoutes()
-  const isAuthPage = pathname === '/login' || pathname === '/register'
+  const isInvestorSurface = pathname.startsWith('/investor')
+  const switchPortalHref = isInvestorSurface ? '/operator/login' : '/investor/login'
+  const switchPortalLabel = isInvestorSurface ? 'Operator portal' : 'Investor portal'
+  const settingsHref = isInvestorSurface ? '/investor/portfolio' : pathname.startsWith('/admin') ? '/admin' : '/'
+  const logoutHref = isInvestorSurface ? '/investor/login' : '/operator/login'
+  const isAuthPage =
+    pathname === '/login' ||
+    pathname === '/register' ||
+    pathname === '/investor/login' ||
+    pathname === '/investor/register' ||
+    pathname === '/operator/login'
 
   if (isAuthPage) return null
 
+  const routeIsActive = (routePath: string) => {
+    if (routePath === '/wm') return pathname === routePath
+    return pathname === routePath || pathname.startsWith(`${routePath}/`)
+  }
+
+  const handleLogout = () => {
+    logout()
+    setAccountMenuOpen(false)
+    router.push(logoutHref)
+  }
+
   return (
-    <nav className="sticky top-0 z-50 glass-surface border-b border-white/10">
+    <nav className="sticky top-0 z-50 border-b border-bxo-border-subtle bg-bxo-bg-primary/95 shadow-sm">
       <div className="container mx-auto px-4">
         <div className="flex items-center justify-between h-16">
-          <Link href="/" className="flex items-center gap-3 hover:opacity-90 transition-opacity">
-            <img 
-              src="/logo.png" 
-              alt="BlockXOne" 
-              className="h-10 w-auto"
+          <Link
+            href="/"
+            aria-label="BlockXOne home"
+            className="flex min-h-11 items-center rounded-lg transition-opacity duration-200 hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bxo-accent-primary focus-visible:ring-offset-2 focus-visible:ring-offset-bxo-bg-primary"
+          >
+            <BrandLockup
+              presentation="navigation"
+              markSize="sm"
+              priority
+              className="max-w-[11rem] sm:max-w-none"
             />
-            <span className="text-xl font-bold bg-gradient-to-r from-primary to-white bg-clip-text text-transparent hidden sm:inline">
-              BlockXOne
-            </span>
           </Link>
 
           {routes.length > 0 && (
-            <div className="hidden md:flex items-center gap-1">
+            <div className="hidden xl:flex items-center gap-1">
               {routes.map((route) => {
-                const isActive = pathname === route.path
+                const isActive = routeIsActive(route.path)
                 return (
-                  <Link key={route.path} href={route.path} className="relative">
-                    <button
-                      className={cn(
-                        'px-4 py-2 text-sm font-medium transition-colors rounded-lg',
-                        isActive
-                          ? 'text-primary'
-                          : 'text-muted-foreground hover:text-foreground'
-                      )}
-                    >
-                      {route.label}
-                      {isActive && (
-                        <motion.div
-                          layoutId="navbar-active"
-                          className="absolute inset-0 bg-primary/10 rounded-lg -z-10"
-                          transition={{ duration: 0.2 }}
-                        />
-                      )}
-                    </button>
+                  <Link
+                    key={route.path}
+                    href={route.path}
+                    aria-current={isActive ? 'page' : undefined}
+                    className={cn(
+                      'relative rounded-lg px-4 py-2 text-sm font-medium transition-colors',
+                      isActive
+                        ? 'text-primary'
+                        : 'text-muted-foreground hover:text-foreground'
+                    )}
+                  >
+                    {route.label}
+                    {isActive && (
+                      <motion.span
+                        layoutId="navbar-active"
+                        className="absolute inset-0 -z-10 rounded-lg bg-primary/10"
+                        transition={{ duration: 0.2 }}
+                      />
+                    )}
                   </Link>
                 )
               })}
@@ -108,23 +182,15 @@ export function Navbar() {
           )}
 
           <div className="flex items-center gap-3">
-            {walletAllowed ? <WalletWidget /> : (
-              <div className="text-xs text-muted-foreground hidden lg:block">
-                Login with Investor/Fund/Token agent/SuperAdmin to link MetaMask
-              </div>
-            )}
-            <Button variant="ghost" size="sm" className="hover-elevate press-compress">
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
-              </svg>
-            </Button>
-
             <div className="relative">
               <Button 
                 variant="ghost" 
                 size="sm" 
                 className="hover-elevate press-compress flex items-center gap-2"
                 onClick={() => setAccountMenuOpen(!accountMenuOpen)}
+                aria-expanded={accountMenuOpen}
+                aria-haspopup="menu"
+                aria-controls="account-navigation"
               >
                 <div className="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center">
                   <svg className="w-4 h-4 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -138,36 +204,47 @@ export function Navbar() {
                 <motion.div
                   initial={{ opacity: 0, y: -10 }}
                   animate={{ opacity: 1, y: 0 }}
-                  className="absolute right-0 mt-2 w-48 glass-surface rounded-xl p-2 shadow-xl border border-white/10"
+                  transition={{ duration: 0.2 }}
+                  id="account-navigation"
+                  role="menu"
+                  className="absolute right-0 mt-2 w-48 glass-surface rounded-xl p-2 shadow-xl border border-bxo-border-default"
                 >
                   <Link 
-                    href="/login"
-                    className="block px-4 py-2 text-sm hover:bg-white/10 rounded-lg transition-colors"
+                    href={switchPortalHref}
+                    role="menuitem"
+                    className="block rounded-lg px-4 py-2 text-sm transition-colors hover:bg-bxo-accent-soft"
                     onClick={() => setAccountMenuOpen(false)}
                   >
-                    Switch Portal
+                    {switchPortalLabel}
                   </Link>
                   <Link 
-                    href="/"
-                    className="block px-4 py-2 text-sm hover:bg-white/10 rounded-lg transition-colors"
+                    href={user ? getDefaultRouteForRoles(user.roles) : settingsHref}
+                    role="menuitem"
+                    className="block rounded-lg px-4 py-2 text-sm transition-colors hover:bg-bxo-accent-soft"
                     onClick={() => setAccountMenuOpen(false)}
                   >
-                    Settings
+                    My workspace
                   </Link>
-                  <div className="border-t border-white/10 my-2"></div>
-                  <a
-                    href="/api/logout"
-                    className="block px-4 py-2 text-sm text-red-400 hover:bg-white/10 rounded-lg transition-colors"
+                  <div className="my-2 border-t border-bxo-border-subtle"></div>
+                  <button
+                    type="button"
+                    onClick={handleLogout}
+                    role="menuitem"
+                    className="block w-full rounded-lg px-4 py-2 text-left text-sm text-bxo-danger transition-colors hover:bg-bxo-danger/10"
                   >
                     Logout
-                  </a>
+                  </button>
                 </motion.div>
               )}
             </div>
 
             <button
               onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-              className="md:hidden p-2 hover-elevate press-compress"
+              type="button"
+              aria-label={mobileMenuOpen ? 'Close navigation menu' : 'Open navigation menu'}
+              aria-expanded={mobileMenuOpen}
+              aria-controls="mobile-navigation"
+              className="flex min-h-11 min-w-11 items-center justify-center rounded-lg text-bxo-text-secondary transition-[color,background-color,transform] duration-200 hover:bg-bxo-surface-elevated hover:text-bxo-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bxo-accent-primary xl:hidden"
             >
               <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 {mobileMenuOpen ? (
@@ -182,10 +259,11 @@ export function Navbar() {
 
         {mobileMenuOpen && routes.length > 0 && (
           <motion.div
-            initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: 'auto' }}
-            exit={{ opacity: 0, height: 0 }}
-            className="md:hidden border-t border-white/10 py-4"
+            initial={{ opacity: 0, y: -8 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.2 }}
+            id="mobile-navigation"
+            className="border-t border-bxo-border-subtle py-4 xl:hidden"
           >
             {routes.map((route) => (
               <Link
@@ -194,9 +272,9 @@ export function Navbar() {
                 onClick={() => setMobileMenuOpen(false)}
                 className={cn(
                   'block px-4 py-2 text-sm font-medium rounded-lg transition-colors',
-                  pathname === route.path
+                  routeIsActive(route.path)
                     ? 'text-primary bg-primary/10'
-                    : 'text-muted-foreground hover:text-foreground hover:bg-white/5'
+                    : 'text-muted-foreground hover:bg-bxo-surface-elevated hover:text-foreground'
                 )}
               >
                 {route.label}

@@ -65,7 +65,7 @@ export default function AdminPage() {
             </div>
             <h1 className="text-4xl font-bold">Platform Administration</h1>
             <p className="text-muted-foreground max-w-3xl">
-              Central control panel for managing users, compliance, tokenization operations, and platform configuration.
+              Central control panel for managing users, compliance, tokenisation operations, and platform configuration.
             </p>
             {user && (
               <div className="flex items-center gap-4 text-sm text-muted-foreground pt-2">

@@ -5,118 +5,132 @@ import Link from 'next/link'
 
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
-import { Input } from '@/components/ui/input'
 import { useAuth } from '@/lib/auth-context-v2'
-import { blockXOneApi } from '@/lib/api-client'
+import { blockXOneApi, type KycCase } from '@/lib/api-client'
 
-const STORAGE_KEY = 'bx_kyc_case_id'
-
-type Questionnaire = {
-  residency: string
-  pep: string
-  sourceOfFunds: string
-  employmentStatus: string
-  taxNumber: string
+type KycCreateCaseResponse = {
+  id?: string
+  case_id?: string
+  status?: KycCase['status']
 }
 
-const DEFAULT_Q: Questionnaire = {
-  residency: '',
-  pep: '',
-  sourceOfFunds: '',
-  employmentStatus: '',
-  taxNumber: '',
+function getErrorMessage(error: unknown, fallback: string) {
+  if (error instanceof Error) return error.message
+  if (
+    typeof error === 'object' &&
+    error !== null &&
+    'message' in error &&
+    typeof error.message === 'string'
+  ) {
+    return error.message
+  }
+  return fallback
 }
 
 export default function KycPage() {
   const { user } = useAuth()
   const [caseId, setCaseId] = useState<string | null>(null)
-  const [frontId, setFrontId] = useState<File | null>(null)
-  const [backId, setBackId] = useState<File | null>(null)
-  const [questionnaire, setQuestionnaire] = useState<Questionnaire>(DEFAULT_Q)
-  const [status, setStatus] = useState<string>('')
+  const [caseStatus, setCaseStatus] = useState<KycCase['status'] | null>(null)
+  const [status, setStatus] = useState('')
+  const [creating, setCreating] = useState(false)
   const [submitting, setSubmitting] = useState(false)
-  const [loadingCase, setLoadingCase] = useState(false)
+  const [loadingCurrent, setLoadingCurrent] = useState(false)
+  const [currentLoadFailed, setCurrentLoadFailed] = useState(false)
+  const [loadAttempt, setLoadAttempt] = useState(0)
 
   const loggedIn = useMemo(() => Boolean(user?.id), [user])
 
   useEffect(() => {
-    const stored = typeof window !== 'undefined' ? window.localStorage.getItem(STORAGE_KEY) : null
-    if (stored) setCaseId(stored)
-  }, [])
+    let active = true
+    setCaseId(null)
+    setCaseStatus(null)
+    setStatus('')
+    setCurrentLoadFailed(false)
+    if (!user) return () => { active = false }
 
-  const handleFile = (fileList: FileList | null, setter: (f: File | null) => void) => {
-    const f = fileList && fileList[0]
-    setter(f || null)
-  }
+    setLoadingCurrent(true)
+    void blockXOneApi.kyc
+      .currentCase(user.token)
+      .then((response) => {
+        if (!active) return
+        const kycCase = response.case
+        if (!kycCase) {
+          setStatus('No eligibility review exists for this account.')
+          return
+        }
+        setCaseId(kycCase.id)
+        setCaseStatus(kycCase.status)
+        setStatus(`Authoritative case status: ${kycCase.status}.`)
+      })
+      .catch((error) => {
+        if (!active) return
+        setCurrentLoadFailed(true)
+        setStatus(getErrorMessage(error, 'Unable to load the current case from the backend.'))
+      })
+      .finally(() => {
+        if (active) setLoadingCurrent(false)
+      })
 
-  const startCase = async (): Promise<string | null> => {
-    if (!user) {
-      setStatus('Login required before starting KYC')
-      return null
+    return () => {
+      active = false
     }
-    setLoadingCase(true)
-    setStatus('Creating case...')
+  }, [loadAttempt, user])
+
+  const startCase = async () => {
+    if (!user) {
+      setStatus('Login required before starting an eligibility review.')
+      return
+    }
+
+    setCreating(true)
+    setStatus('Creating eligibility review...')
     try {
-      const res = await blockXOneApi.kyc.createCase(user.id, user.email, 'KYC')
-      const id = (res as any)?.id || (res as any)?.case_id || ''
-      if (!id) throw new Error('Case id missing in response')
+      const response = await blockXOneApi.kyc.createCase(
+        user.token,
+        'KYC'
+      ) as KycCreateCaseResponse
+      const id = response.id || response.case_id || ''
+      if (!id) throw new Error('Case ID missing in response')
+
       setCaseId(id)
-      if (typeof window !== 'undefined') window.localStorage.setItem(STORAGE_KEY, id)
-      setStatus('Case created. Upload documents and submit.')
-      return id
-    } catch (e: any) {
-      setStatus(e?.message || 'Failed to create case')
-      return null
+      setCaseStatus(response.status || 'DRAFT')
+      setStatus('Eligibility review created. It is ready to submit to the review queue.')
+    } catch (error) {
+      setStatus(getErrorMessage(error, 'Failed to create eligibility review'))
     } finally {
-      setLoadingCase(false)
+      setCreating(false)
     }
   }
 
   const submitCase = async () => {
-    if (!user) {
-      setStatus('Login required before submitting')
+    if (!user || !caseId) {
+      setStatus('Create an eligibility review before submitting it.')
       return
     }
-    if (!frontId || !backId) {
-      setStatus('Upload front and back of your ID')
-      return
-    }
-    if (!questionnaire.residency || !questionnaire.sourceOfFunds || !questionnaire.employmentStatus) {
-      setStatus('Please complete all questionnaire answers')
-      return
-    }
-    const currentCaseId = caseId || (await startCase())
-    if (!currentCaseId) return
 
     setSubmitting(true)
-    setStatus('Submitting to Compliance...')
+    setStatus('Submitting eligibility review...')
     try {
-      await blockXOneApi.kyc.submitCase(user.id, user.email, currentCaseId)
-      setStatus('Submitted. Awaiting Compliance review.')
-    } catch (e: any) {
-      setStatus(e?.message || 'Submit failed')
+      await blockXOneApi.kyc.submitCase(user.token, caseId)
+      setCaseStatus('SUBMITTED')
+      setStatus('Submitted. Awaiting authorised review.')
+    } catch (error) {
+      setStatus(getErrorMessage(error, 'Submit failed'))
     } finally {
       setSubmitting(false)
     }
   }
 
-  const resetCase = () => {
-    setFrontId(null)
-    setBackId(null)
-    setQuestionnaire(DEFAULT_Q)
-    setStatus('')
-    setCaseId(null)
-    if (typeof window !== 'undefined') window.localStorage.removeItem(STORAGE_KEY)
-  }
-
   if (!loggedIn) {
     return (
-      <div className="min-h-screen bg-[#0D0F14] text-white">
-        <div className="max-w-3xl mx-auto px-4 py-16 space-y-6">
-          <h1 className="text-4xl font-bold">Investor KYC</h1>
-          <p className="text-muted-foreground">Login as an Investor to start KYC and unlock funding workflows.</p>
+      <div className="min-h-screen bg-bxo-bg-primary text-bxo-text-primary">
+        <div className="mx-auto max-w-3xl space-y-6 px-4 py-16">
+          <h1 className="font-display text-4xl font-bold">Investor qualification</h1>
+          <p className="text-bxo-text-secondary">
+            Sign in with an assigned investor account before starting the eligibility workflow.
+          </p>
           <Button asChild>
-            <Link href="/login">Go to login</Link>
+            <Link href="/investor/login">Go to investor login</Link>
           </Button>
         </div>
       </div>
@@ -124,128 +138,97 @@ export default function KycPage() {
   }
 
   return (
-    <div className="min-h-screen bg-[#0D0F14] text-white">
-      <div className="max-w-5xl mx-auto px-4 py-12 space-y-8">
-        <div className="flex flex-col gap-2">
-          <div className="inline-flex items-center gap-2 rounded-full px-3 py-1 bg-primary/10 text-primary text-sm font-medium w-fit">
-            <span className="w-2 h-2 rounded-full bg-primary" />
-            Investor onboarding
+    <div className="min-h-screen bg-bxo-bg-primary text-bxo-text-primary">
+      <div className="mx-auto max-w-4xl space-y-8 px-4 py-12">
+        <div className="space-y-3">
+          <div className="inline-flex w-fit items-center gap-2 rounded-md border border-bxo-accent-border bg-bxo-accent-soft px-3 py-1 text-sm font-medium text-bxo-accent-primary">
+            <span className="h-2 w-2 rounded-full bg-bxo-accent-primary" />
+            Investor qualification
           </div>
-          <h1 className="text-4xl font-bold">KYC verification</h1>
-          <p className="text-muted-foreground max-w-3xl">
-            Upload your ID (front and back) and answer a short questionnaire. We will route the case to Compliance.
+          <h1 className="font-display text-4xl font-bold">Investor eligibility review</h1>
+          <p className="max-w-3xl leading-7 text-bxo-text-secondary">
+            This environment records the eligibility workflow without collecting identity files, tax numbers,
+            source-of-funds answers, or other sensitive personal data.
           </p>
-          <div className="text-sm text-muted-foreground">Case: {caseId || 'not created yet'}</div>
         </div>
 
-        <div className="grid md:grid-cols-2 gap-6">
-          <Card className="p-6 space-y-4 bg-white/5 border-white/10">
-            <div className="flex items-center justify-between">
-              <div>
-                <h2 className="text-xl font-semibold">Identity documents</h2>
-                <p className="text-sm text-muted-foreground">Accepted: PNG, JPG, PDF up to 10 MB.</p>
-              </div>
-              <Button variant="secondary" onClick={startCase} disabled={loadingCase}>
-                {caseId ? 'Recreate case' : 'Create case'}
-              </Button>
+        <Card className="bxo-panel space-y-6 p-6 sm:p-8">
+          <div className="space-y-2">
+            <div className="text-xs font-semibold uppercase tracking-[0.16em] text-bxo-accent-primary">
+              Identity data boundary
             </div>
-
-            <div className="space-y-3">
-              <label className="block text-sm font-medium">ID front</label>
-              <input
-                type="file"
-                accept="image/*,application/pdf"
-                onChange={(e) => handleFile(e.target.files, setFrontId)}
-                className="w-full text-sm"
-              />
-              {frontId ? <div className="text-xs text-muted-foreground">Selected: {frontId.name}</div> : null}
-            </div>
-
-            <div className="space-y-3">
-              <label className="block text-sm font-medium">ID back</label>
-              <input
-                type="file"
-                accept="image/*,application/pdf"
-                onChange={(e) => handleFile(e.target.files, setBackId)}
-                className="w-full text-sm"
-              />
-              {backId ? <div className="text-xs text-muted-foreground">Selected: {backId.name}</div> : null}
-            </div>
-
-            <div className="rounded-lg bg-white/5 border border-white/10 p-3 text-xs text-muted-foreground">
-              Files stay on your device for this demo; submission calls the backend KYC case endpoint.
-            </div>
-          </Card>
-
-          <Card className="p-6 space-y-4 bg-white/5 border-white/10">
-            <div className="flex items-center justify-between">
-              <h2 className="text-xl font-semibold">Questionnaire</h2>
-              <Button variant="ghost" size="sm" onClick={resetCase}>Reset</Button>
-            </div>
-
-            <div className="space-y-3">
-              <label className="block text-sm font-medium">Country of tax residency</label>
-              <Input
-                placeholder="e.g. South Africa"
-                value={questionnaire.residency}
-                onChange={(e) => setQuestionnaire({ ...questionnaire, residency: e.target.value })}
-              />
-            </div>
-
-            <div className="space-y-3">
-              <label className="block text-sm font-medium">Politically Exposed Person (PEP)?</label>
-              <Input
-                placeholder="No / Yes (details)"
-                value={questionnaire.pep}
-                onChange={(e) => setQuestionnaire({ ...questionnaire, pep: e.target.value })}
-              />
-            </div>
-
-            <div className="space-y-3">
-              <label className="block text-sm font-medium">Source of funds</label>
-              <Input
-                placeholder="Salary, investments, etc"
-                value={questionnaire.sourceOfFunds}
-                onChange={(e) => setQuestionnaire({ ...questionnaire, sourceOfFunds: e.target.value })}
-              />
-            </div>
-
-            <div className="space-y-3">
-              <label className="block text-sm font-medium">Employment status</label>
-              <Input
-                placeholder="Employed, self-employed, retired"
-                value={questionnaire.employmentStatus}
-                onChange={(e) => setQuestionnaire({ ...questionnaire, employmentStatus: e.target.value })}
-              />
-            </div>
-
-            <div className="space-y-3">
-              <label className="block text-sm font-medium">Tax number</label>
-              <Input
-                placeholder="Optional"
-                value={questionnaire.taxNumber}
-                onChange={(e) => setQuestionnaire({ ...questionnaire, taxNumber: e.target.value })}
-              />
-            </div>
-          </Card>
-        </div>
-
-        <Card className="p-6 bg-white/5 border-white/10 space-y-4">
-          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-            <div>
-              <div className="text-sm text-muted-foreground">Ready to submit?</div>
-              <div className="text-lg font-semibold">Send to Compliance once docs and answers are in.</div>
-            </div>
-            <div className="flex flex-wrap gap-3">
-              <Button variant="secondary" onClick={startCase} disabled={loadingCase}>
-                {caseId ? 'Case created' : 'Create case'}
-              </Button>
-              <Button onClick={submitCase} disabled={submitting}>
-                {submitting ? 'Submitting...' : 'Submit to Compliance'}
-              </Button>
-            </div>
+            <h2 className="font-display text-2xl font-semibold">No document upload in this environment</h2>
+            <p className="text-sm leading-7 text-bxo-text-secondary">
+              Use only the assigned test identity for this account. Do not submit real personal information.
+              External identity verification and document retention are not connected in this environment.
+            </p>
           </div>
-          {status ? <div className="text-sm text-muted-foreground">{status}</div> : null}
+
+          <div className="rounded-xl border border-bxo-border-subtle bg-bxo-surface p-4">
+            <div className="text-xs uppercase tracking-[0.14em] text-bxo-text-tertiary">Current case</div>
+            <div className="mt-2 break-all font-mono text-sm text-bxo-text-primary">
+              {loadingCurrent
+                ? 'Loading current case from PostgreSQL...'
+                : caseId || 'No eligibility review created'}
+            </div>
+            {caseStatus ? (
+              <div className="mt-2 text-xs font-semibold uppercase tracking-[0.14em] text-bxo-accent-primary">
+                Backend status: {caseStatus}
+              </div>
+            ) : null}
+          </div>
+
+          <div className="flex flex-wrap gap-3">
+            <Button
+              onClick={startCase}
+              disabled={
+                creating ||
+                submitting ||
+                loadingCurrent ||
+                currentLoadFailed ||
+                Boolean(caseId)
+              }
+            >
+              {creating
+                ? 'Creating...'
+                : loadingCurrent
+                  ? 'Checking current case...'
+                  : caseId
+                    ? 'Case created'
+                    : 'Create review case'}
+            </Button>
+            <Button
+              variant="secondary"
+              onClick={submitCase}
+              disabled={
+                !caseId ||
+                creating ||
+                submitting ||
+                (caseStatus !== 'DRAFT' && caseStatus !== 'REJECTED')
+              }
+            >
+              {submitting ? 'Submitting...' : 'Submit for review'}
+            </Button>
+            {currentLoadFailed ? (
+              <Button
+                variant="secondary"
+                onClick={() => setLoadAttempt((attempt) => attempt + 1)}
+                disabled={loadingCurrent || creating || submitting}
+              >
+                Retry current case lookup
+              </Button>
+            ) : null}
+          </div>
+
+          {status ? (
+            <div
+              aria-live="polite"
+              className="rounded-xl border border-bxo-accent-border bg-bxo-accent-soft px-4 py-3 text-sm text-bxo-text-secondary"
+              role="status"
+            >
+              {status}
+            </div>
+          ) : null}
         </Card>
       </div>
     </div>

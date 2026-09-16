@@ -1,19 +1,24 @@
 import { NextResponse } from 'next/server'
+import { proxyJsonToApi } from '@/lib/server-api'
 
-// Mock user for development
-const mockUser = {
-  id: '1',
-  email: 'demo@blockxone.com',
-  role: 'Investor',
-  status: 'Active',
-  kyc_status: 'Approved',
-  devices: [],
-  created_at: new Date().toISOString(),
-  updated_at: new Date().toISOString(),
-}
+export const dynamic = 'force-dynamic'
 
-export async function GET() {
-  // For now, return mock user
-  // In production, this would check session and return actual user
-  return NextResponse.json(mockUser)
+export async function GET(request: Request) {
+  const authHeader = request.headers.get('authorization')
+  if (!authHeader) {
+    return NextResponse.json({ error: 'not authenticated' }, { status: 401 })
+  }
+
+  try {
+    return await proxyJsonToApi('/v1/me', {
+      method: 'GET',
+      headers: {
+        Accept: 'application/json',
+        Authorization: authHeader,
+      },
+    })
+  } catch (error) {
+    console.error('User proxy error:', error)
+    return NextResponse.json({ error: 'Authentication service unavailable' }, { status: 502 })
+  }
 }

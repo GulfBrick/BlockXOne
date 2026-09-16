@@ -1,142 +1,99 @@
-'use client'
+import { ArrowRight } from 'lucide-react'
+import Link from 'next/link'
 
-import { useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { PublicShell } from '@/components/public/public-shell'
 
-import { useAuth } from '@/lib/auth-context-v2'
-import { Button } from '@/components/ui/button'
-import { Card } from '@/components/ui/card'
-import { WalletWidget } from '@/components/wallet/WalletWidget'
-import { EmailLoginForm } from '@/components/auth/EmailLoginForm'
+const portals = [
+  {
+    index: '01',
+    label: 'For investors',
+    title: 'Investor workspace',
+    text: 'Review opportunities, complete qualification steps, manage documents, follow subscriptions, and monitor your portfolio.',
+    href: '/investor/login',
+    cta: 'Investor sign in',
+  },
+  {
+    index: '02',
+    label: 'For institutions',
+    title: 'Institutional workspace',
+    text: 'Manage issuance, compliance, treasury, tokenisation, transfers, and platform administration.',
+    href: '/operator/login',
+    cta: 'Institutional sign in',
+  },
+]
 
-export default function LoginPage() {
-  const router = useRouter()
-  const { user, logout } = useAuth()
-  const [showLogin, setShowLogin] = useState(false)
-  const [status] = useState<string>('')
-  const [loginMode, setLoginMode] = useState<'wallet' | 'email'>('email')
-
+export default function LoginChooserPage() {
   return (
-    <div className="min-h-screen bg-[#0D0F14] text-white">
-      <div className="max-w-6xl mx-auto px-4 py-12 space-y-10">
-        <div className="grid lg:grid-cols-2 gap-8 items-center">
-          <Card className="p-4 bg-gradient-to-br from-cyan-900/10 via-primary/5 to-blue-900/10 border-primary/20">
-            <div className="aspect-video rounded-xl overflow-hidden bg-black/60 border border-white/10">
-              <video
-                autoPlay
-                loop
-                muted
-                playsInline
-                className="w-full h-full object-cover"
-              >
-                <source src="/bxo_drop.mp4" type="video/mp4" />
-              </video>
-            </div>
-          </Card>
+    <PublicShell>
+      <main id="main-content" className="mx-auto max-w-[90rem] px-4 pb-24 pt-14 sm:px-6 sm:pt-20 lg:px-8 lg:pb-32 lg:pt-24">
+        <section className="grid gap-10 border-b border-bxo-border-subtle pb-14 sm:pb-20 lg:grid-cols-12 lg:gap-8 lg:pb-24">
+          <div className="lg:col-span-2" data-bxo-hero-detail>
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-bxo-accent-primary">Secure access</p>
+            <p className="mt-3 text-xs uppercase tracking-[0.14em] text-bxo-text-tertiary">BXO / Access</p>
+          </div>
 
-          <div className="space-y-4">
-            <div className="inline-flex items-center gap-2 rounded-full px-3 py-1 bg-primary/10 text-primary text-sm font-medium">
-              <span className="w-2 h-2 rounded-full bg-primary" />
-              BlockXOne explainer
-            </div>
-            <h1 className="text-4xl font-bold leading-tight">A single bridge to tokenized funds</h1>
-            <p className="text-muted-foreground text-lg">
-              Watch the short walkthrough, then jump into the dev login. Wallet guardrails, mint/burn fees, KYC-ready flows,
-              and Tokeny-style testnet environments are all wired for demo.
+          <div className="lg:col-span-7">
+            <h1 className="max-w-5xl text-bxo-text-primary">
+              <span className="block overflow-hidden pb-1">
+                <span className="block font-ui text-[clamp(3.3rem,7vw,7.4rem)] font-medium leading-[0.9] tracking-[-0.065em]" data-bxo-hero-line>
+                  Choose your
+                </span>
+              </span>
+              <span className="block overflow-hidden pb-2">
+                <span className="block font-editorial text-[clamp(4rem,8vw,8.6rem)] leading-[0.86] tracking-[-0.045em] text-bxo-accent-primary" data-bxo-hero-line>
+                  workspace.
+                </span>
+              </span>
+            </h1>
+          </div>
+
+          <div className="self-end lg:col-span-3" data-bxo-hero-detail>
+            <p className="max-w-md font-reading text-xl leading-8 text-bxo-text-secondary sm:text-2xl sm:leading-9">
+              One platform, with access shaped around the work each participant is authorised to perform.
             </p>
-            <div className="flex flex-wrap gap-3 text-sm text-muted-foreground">
-              <span className="px-3 py-1 rounded-full bg-white/5 border border-white/10">MetaMask + wagmi</span>
-              <span className="px-3 py-1 rounded-full bg-white/5 border border-white/10">Testnets: Base Sepolia, Polygon Amoy</span>
-              <span className="px-3 py-1 rounded-full bg-white/5 border border-white/10">Mint/Burn fees captured</span>
-              <span className="px-3 py-1 rounded-full bg-white/5 border border-white/10">KYC gate optional</span>
-            </div>
-            <div className="flex flex-wrap gap-3 pt-2">
-              <Button size="lg" variant="outline" className="glass-surface" onClick={() => setShowLogin(true)}>
-                Connect wallet to continue
-              </Button>
-              <Button
-                size="lg"
-                className="bg-gradient-to-r from-[#00B6FF] to-[#0894E6] hover:from-[#0894E6] hover:to-[#0A6FB6] text-white"
-                onClick={() => setShowLogin(true)}
+          </div>
+        </section>
+
+        <section className="grid gap-10 pt-10 lg:grid-cols-12 lg:gap-8 lg:pt-14" aria-labelledby="workspace-routes-title">
+          <div className="lg:col-span-2" data-bxo-reveal>
+            <h2 id="workspace-routes-title" className="text-xs font-semibold uppercase tracking-[0.18em] text-bxo-text-tertiary">
+              Workspace routes
+            </h2>
+          </div>
+
+          <div className="lg:col-span-10">
+            {portals.map((portal) => (
+              <Link
+                key={portal.title}
+                href={portal.href}
+                className="group grid min-h-44 gap-6 border-t border-bxo-border-subtle py-8 transition-colors duration-300 hover:border-bxo-accent-border hover:bg-bxo-accent-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bxo-accent-primary focus-visible:ring-inset last:border-b sm:grid-cols-[4rem_minmax(0,1fr)_3rem] sm:items-center sm:px-4 lg:grid-cols-[6rem_minmax(14rem,0.72fr)_minmax(18rem,1fr)_3rem] lg:px-6"
+                data-bxo-reveal
               >
-                Start with MetaMask
-              </Button>
-            </div>
-            {user ? (
-              <div className="flex items-center gap-3 text-sm text-muted-foreground">
-                <span className="text-primary font-semibold">Signed in:</span>
-                <span className="font-mono">{user.email}</span>
-                <span className="text-xs">({user.roles.join(', ') || 'no roles'})</span>
-              </div>
-            ) : null}
+                <span className="font-reading text-xl italic text-bxo-text-tertiary transition-colors group-hover:text-bxo-accent-primary">
+                  {portal.index}
+                </span>
+
+                <div>
+                  <span className="text-xs font-semibold uppercase tracking-[0.16em] text-bxo-accent-primary">{portal.label}</span>
+                  <h3 className="mt-3 font-ui text-3xl font-medium leading-tight tracking-[-0.04em] text-bxo-text-primary sm:text-4xl">
+                    {portal.title}
+                  </h3>
+                </div>
+
+                <div className="sm:col-start-2 lg:col-start-auto">
+                  <p className="max-w-xl font-reading text-lg leading-7 text-bxo-text-secondary sm:text-xl sm:leading-8">{portal.text}</p>
+                  <span className="mt-5 inline-block text-sm font-semibold text-bxo-text-primary lg:hidden">{portal.cta}</span>
+                </div>
+
+                <span className="flex h-12 w-12 items-center justify-center border border-bxo-border-default text-bxo-text-primary transition-[border-color,background-color,color,transform] duration-300 group-hover:translate-x-1 group-hover:border-bxo-accent-primary group-hover:bg-bxo-accent-primary group-hover:text-bxo-bg-primary" aria-hidden="true">
+                  <ArrowRight className="h-5 w-5" />
+                </span>
+                <span className="sr-only">{portal.cta}</span>
+              </Link>
+            ))}
           </div>
-        </div>
-
-        {showLogin && (
-          <div className="space-y-6">
-            {user ? (
-              <Card className="p-4 flex items-center justify-between bg-white/5 border-white/10">
-                <div className="space-y-1">
-                  <div className="text-sm text-muted-foreground">Signed in as</div>
-                  <div className="font-mono text-sm">{user.email}</div>
-                  <div className="text-xs text-muted-foreground">Roles: {user.roles.join(', ') || 'none'}</div>
-                </div>
-                <Button
-                  variant="secondary"
-                  onClick={() => {
-                    logout()
-                    setStatus('Logged out')
-                  }}
-                >
-                  Logout
-                </Button>
-              </Card>
-            ) : null}
-
-            <Card className="p-6 space-y-4">
-              <div className="flex items-center justify-between">
-                <h2 className="text-xl font-semibold">Login Options</h2>
-                <span className="text-xs px-2 py-1 rounded-full bg-primary/10 text-primary">JWT auth</span>
-              </div>
-
-              {/* Tab switcher */}
-              <div className="flex gap-2 justify-center">
-                <Button
-                  variant={loginMode === 'email' ? 'default' : 'outline'}
-                  onClick={() => setLoginMode('email')}
-                >
-                  Email Login
-                </Button>
-                <Button
-                  variant={loginMode === 'wallet' ? 'default' : 'outline'}
-                  onClick={() => setLoginMode('wallet')}
-                >
-                  Wallet Login
-                </Button>
-              </div>
-
-              {loginMode === 'email' ? (
-                <div className="space-y-4">
-                  <p className="text-sm text-muted-foreground">
-                    Sign up as an investor or log in with your existing credentials. Super admin uses this method too.
-                  </p>
-                  <EmailLoginForm />
-                </div>
-              ) : (
-                <div className="space-y-4">
-                  <p className="text-sm text-muted-foreground">
-                    Connect MetaMask, sign the login message, and we'll issue a short-lived JWT. Subsequent API calls use the Bearer
-                    token automatically.
-                  </p>
-                  <WalletWidget />
-                </div>
-              )}
-            </Card>
-
-            {status ? <div className="text-center text-sm text-muted-foreground">{status}</div> : null}
-          </div>
-        )}
-      </div>
-    </div>
+        </section>
+      </main>
+    </PublicShell>
   )
 }

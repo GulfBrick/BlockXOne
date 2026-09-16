@@ -1,56 +1,21 @@
-'use client'
+import { History } from 'lucide-react'
 
 import { Card } from '@/components/ui/card'
 
-type AuditRow = {
-  time: string
-  actor: string
-  action: string
-  target: string
-  detail: string
-}
-
-const AUDIT_ROWS: AuditRow[] = [
-  { time: '09:12', actor: 'compliance@blockxone.local', action: 'Approved', target: 'CASE-1021', detail: 'KYC | risk: Medium | docs verified' },
-  { time: '08:55', actor: 'admin@blockxone.local', action: 'Edited rule', target: 'Jurisdiction blocklist', detail: 'Added BY, SY' },
-  { time: '08:30', actor: 'compliance@blockxone.local', action: 'Rejected', target: 'CASE-1017', detail: 'Wallet | sanctions match | auto reject' },
-  { time: 'Yesterday', actor: 'admin@blockxone.local', action: 'Feature toggle', target: 'Wallet gating', detail: 'Enabled MetaMask required' }
-]
-
 export default function ComplianceAudit() {
   return (
-    <div className="min-h-screen bg-[#0D0F14] text-white">
-      <div className="max-w-5xl mx-auto px-4 py-12 space-y-6">
-        <div className="space-y-2">
-          <div className="inline-flex items-center gap-2 rounded-full px-3 py-1 bg-primary/10 text-primary text-sm font-medium w-fit">
-            <span className="w-2 h-2 rounded-full bg-primary" />
-            Audit log
-          </div>
-          <h1 className="text-3xl font-bold">Reviewer actions</h1>
-          <p className="text-muted-foreground max-w-2xl">Trace key decisions to keep the route live during demos. Replace with your audit feed later.</p>
-        </div>
-
-        <Card className="overflow-hidden bg-white/5 border-white/10">
-          <div className="grid grid-cols-5 gap-3 px-4 py-3 text-xs uppercase tracking-wide text-muted-foreground">
-            <div>Time</div>
-            <div>Actor</div>
-            <div>Action</div>
-            <div>Target</div>
-            <div>Detail</div>
-          </div>
-          <div className="divide-y divide-white/5">
-            {AUDIT_ROWS.map((row, idx) => (
-              <div key={idx} className="grid grid-cols-5 gap-3 px-4 py-3 text-sm">
-                <div className="text-muted-foreground text-xs">{row.time}</div>
-                <div className="font-mono text-xs break-all">{row.actor}</div>
-                <div>{row.action}</div>
-                <div className="text-xs">{row.target}</div>
-                <div className="text-sm text-muted-foreground">{row.detail}</div>
-              </div>
-            ))}
-          </div>
+    <main className="min-h-screen bg-bxo-bg-primary px-4 py-12 text-bxo-text-primary">
+      <div className="mx-auto max-w-4xl space-y-6">
+        <div className="bxo-kicker">Audit history</div>
+        <h1 className="font-display text-3xl font-bold">Reviewer actions</h1>
+        <Card className="bxo-panel p-8 text-center">
+          <History className="mx-auto h-9 w-9 text-bxo-accent-primary" aria-hidden="true" />
+          <h2 className="mt-4 font-display text-xl font-semibold">Audit history is unavailable</h2>
+          <p className="mx-auto mt-3 max-w-2xl text-sm leading-7 text-bxo-text-secondary">
+            This surface does not present placeholder events. Audit history will appear only when the connected audit feed is configured and authorised.
+          </p>
         </Card>
       </div>
-    </div>
+    </main>
   )
 }

@@ -1,68 +1,31 @@
-'use client'
+import Link from 'next/link'
+import { ShieldAlert, UsersRound } from 'lucide-react'
 
-import { motion } from 'framer-motion'
-import { AnimatedCard } from '@/components/motion/animated-card'
+import { Button } from '@/components/ui/button'
 
-const INVESTORS = [
-  { id: '1', name: 'John Smith', email: 'john@example.com', kyc: 'Approved', holdings: 'R52,000', joined: '2025-08-15' },
-  { id: '2', name: 'Sarah Johnson', email: 'sarah@example.com', kyc: 'Approved', holdings: 'R38,500', joined: '2025-09-22' },
-  { id: '3', name: 'Michael Chen', email: 'michael@example.com', kyc: 'Pending', holdings: 'R0', joined: '2025-10-12' },
-]
-
-export default function WMInvestorsPage() {
+export default function InvestorsPage() {
   return (
-    <div className="min-h-screen relative">
-      <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_120%,rgba(0,188,212,0.08),transparent_50%)]" />
-      
-      <div className="container relative mx-auto px-4 py-8">
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.5 }}
-        >
-          <h1 className="text-4xl font-bold mb-2">Investors</h1>
-          <p className="text-muted-foreground mb-8">Manage your investor relationships</p>
-
-          <div className="space-y-4">
-            {INVESTORS.map((investor, index) => (
-              <motion.div
-                key={investor.id}
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.3, delay: index * 0.1 }}
-              >
-                <AnimatedCard>
-                  <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-                    <div className="flex-1">
-                      <h3 className="text-lg font-semibold mb-1">{investor.name}</h3>
-                      <p className="text-sm text-muted-foreground">{investor.email}</p>
-                    </div>
-
-                    <div className="grid grid-cols-3 gap-6">
-                      <div>
-                        <div className="text-xs text-muted-foreground mb-1">KYC Status</div>
-                        <span className={`text-xs px-2 py-1 rounded-full ${
-                          investor.kyc === 'Approved' ? 'bg-green-400/10 text-green-400' : 'bg-yellow-400/10 text-yellow-400'
-                        }`}>
-                          {investor.kyc}
-                        </span>
-                      </div>
-                      <div>
-                        <div className="text-xs text-muted-foreground mb-1">Holdings</div>
-                        <div className="font-semibold">{investor.holdings}</div>
-                      </div>
-                      <div>
-                        <div className="text-xs text-muted-foreground mb-1">Joined</div>
-                        <div className="font-semibold">{investor.joined}</div>
-                      </div>
-                    </div>
-                  </div>
-                </AnimatedCard>
-              </motion.div>
-            ))}
-          </div>
-        </motion.div>
-      </div>
-    </div>
+    <main className="min-h-screen bg-bxo-bg-primary px-4 py-12 text-bxo-text-primary sm:px-6">
+      <section className="mx-auto max-w-3xl space-y-6 rounded-xl border border-bxo-warning-border bg-bxo-surface p-6 sm:p-8">
+        <div className="flex h-12 w-12 items-center justify-center rounded-xl border border-bxo-warning-border bg-bxo-warning/10 text-bxo-warning-light">
+          <UsersRound className="h-6 w-6" aria-hidden="true" />
+        </div>
+        <div>
+          <div className="bxo-kicker">Investor records</div>
+          <h1 className="mt-3 font-display text-4xl font-bold">Investor directory unavailable</h1>
+          <p className="mt-4 leading-7 text-bxo-text-secondary">
+            This workspace does not expose an authorised investor-directory API. Fabricated people, KYC states, and holdings are not displayed.
+          </p>
+        </div>
+        <div className="flex gap-3 rounded-xl border border-bxo-warning-border bg-bxo-warning/10 p-4 text-sm leading-6 text-bxo-warning-light">
+          <ShieldAlert className="mt-0.5 h-5 w-5 shrink-0" aria-hidden="true" />
+          <p>Use the role-controlled KYC, subscription, settlement, and portfolio surfaces for authoritative records already implemented.</p>
+        </div>
+        <div className="flex flex-wrap gap-3">
+          <Button asChild><Link href="/wm/subscriptions">Open subscriptions</Link></Button>
+          <Button asChild variant="outline"><Link href="/wm">Back to workspace</Link></Button>
+        </div>
+      </section>
+    </main>
   )
 }

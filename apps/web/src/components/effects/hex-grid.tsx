@@ -44,7 +44,11 @@ export function HexGrid() {
           const a = Math.PI / 3 * i + t / 4000
           const px = p.x + s * 0.9 * Math.cos(a)
           const py = p.y + s * 0.9 * Math.sin(a)
-          i ? ctx.lineTo(px, py) : ctx.moveTo(px, py)
+          if (i === 0) {
+            ctx.moveTo(px, py)
+          } else {
+            ctx.lineTo(px, py)
+          }
         }
         
         ctx.closePath()

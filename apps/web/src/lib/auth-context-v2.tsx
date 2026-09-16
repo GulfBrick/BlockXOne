@@ -2,20 +2,19 @@
 
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import { blockXOneApi } from './api-client';
+import {
+  persistedSessionToken,
+  verifiedUser,
+  type AuthenticatedUser,
+  type AuthMeResponse,
+} from './auth-session';
 
-type User = {
-  id: string;
-  email: string;
-  roles: string[];
-  orgId?: string;
-  walletId?: string;
-  token: string;
-};
+export type User = AuthenticatedUser;
 
 type AuthContextValue = {
   user: User | null;
   loading: boolean;
-  loginWithToken: (token: string) => Promise<void>;
+  loginWithToken: (token: string) => Promise<User>;
   logout: () => void;
 };
 
@@ -26,32 +25,33 @@ const STORAGE_KEY = 'bx_auth_v2';
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
-  const [isMounted, setIsMounted] = useState(false);
 
   const persist = useCallback((u: User | null) => {
-    if (u) localStorage.setItem(STORAGE_KEY, JSON.stringify(u));
-    else localStorage.removeItem(STORAGE_KEY);
+    if (u) {
+      sessionStorage.setItem(STORAGE_KEY, JSON.stringify(u));
+      localStorage.removeItem(STORAGE_KEY);
+      localStorage.removeItem('blockxone_token');
+      localStorage.removeItem('token');
+      return;
+    }
+
+    sessionStorage.removeItem(STORAGE_KEY);
+    localStorage.removeItem(STORAGE_KEY);
+    localStorage.removeItem('blockxone_token');
+    localStorage.removeItem('token');
   }, []);
 
   const loginWithToken = useCallback(async (token: string) => {
     setLoading(true);
     try {
-      console.log('[Auth] Verifying token with /v1/me...');
-      const me = await blockXOneApi.auth.meWithToken(token);
-      console.log('[Auth] /v1/me response:', me);
-      const u: User = {
-        id: me.user_id,
-        email: me.email,
-        roles: me.roles || [],
-        orgId: (me as any).org_id,
-        walletId: (me as any).wallet_id,
-        token,
-      };
+      const me = await blockXOneApi.auth.meWithToken(token) as AuthMeResponse;
+      const u = verifiedUser(me, token);
       setUser(u);
       persist(u);
-      console.log('[Auth] User signed in:', u);
+      return u;
     } catch (err) {
-      console.error('[Auth] loginWithToken failed:', err);
+      setUser(null);
+      persist(null);
       throw err;
     } finally {
       setLoading(false);
@@ -59,30 +59,40 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, [persist]);
 
   useEffect(() => {
-    setIsMounted(true);
-  }, []);
+    let active = true;
 
-  useEffect(() => {
-    if (!isMounted) return;
-    
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) {
-      setLoading(false);
-      return;
-    }
-    try {
-      const parsed = JSON.parse(raw) as Partial<User>;
-      if (parsed && parsed.token) {
-        // re-verify token to refresh roles/email
-        loginWithToken(parsed.token);
+    const restorePersistedSession = async () => {
+      const token = persistedSessionToken(sessionStorage.getItem(STORAGE_KEY));
+      if (!token) {
+        if (active) {
+          setUser(null);
+          persist(null);
+          setLoading(false);
+        }
         return;
       }
-      setLoading(false);
-    } catch (e) {
-      localStorage.removeItem(STORAGE_KEY);
-      setLoading(false);
-    }
-  }, [isMounted, loginWithToken]);
+
+      try {
+        const me = await blockXOneApi.auth.meWithToken(token) as AuthMeResponse;
+        if (!active) return;
+
+        const restoredUser = verifiedUser(me, token);
+        setUser(restoredUser);
+        persist(restoredUser);
+      } catch {
+        if (!active) return;
+        setUser(null);
+        persist(null);
+      } finally {
+        if (active) setLoading(false);
+      }
+    };
+
+    void restorePersistedSession();
+    return () => {
+      active = false;
+    };
+  }, [persist]);
 
   const logout = () => {
     setUser(null);
