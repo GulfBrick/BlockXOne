@@ -1,479 +1,544 @@
 'use client'
 
-import { useMemo, useState } from 'react'
-import { AnimatePresence, motion } from 'framer-motion'
+import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { useParams } from 'next/navigation'
+import { ArrowLeft, BadgeCheck, CircleDashed, CreditCard, FileText, ShieldCheck } from 'lucide-react'
 
-import { TabContent } from '@/components/motion/tab-content'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import { ensureFunds } from '@/lib/demo-funds'
-import { addTransaction } from '@/lib/transactions'
+import { useAuth } from '@/lib/auth-context-v2'
+import { blockXOneApi, investorCatalogApi } from '@/lib/api-client'
+import {
+  baseUnitsToExactDecimal,
+  formatExactMoney,
+  formatExactUnits,
+  parseExactDecimal,
+} from '@/lib/exact-decimal'
+import { networkTargetLabel } from '@/lib/managed-testnets'
+import {
+  clearExactInvestorSubscriptionRetryIntent,
+  createInvestorSubscriptionRetryIntent,
+  investorSubscriptionIntentMatches,
+  loadInvestorSubscriptionRetryIntent,
+  persistInvestorSubscriptionRetryIntent,
+  withAuthoritativeSubscriptionId,
+  type InvestorSubscriptionRetryIntent,
+} from '@/lib/investor-subscription-retry'
+import {
+  chainEvidenceLabel,
+  newIdempotencyKey,
+  quoteInvestorCatalogSubscription,
+  type ControlledSubscription,
+  type CreatedControlledSubscription,
+  type InvestorCatalogOfferingDetail,
+  type InvestorCatalogReadiness,
+} from '@/lib/pilot-finance'
 
-function formatZAR(value: number) {
-  return new Intl.NumberFormat('en-ZA', {
-    style: 'currency',
-    currency: 'ZAR',
-    maximumFractionDigits: 2,
-  }).format(value)
+function pretty(value: string) {
+  return value.replace(/[_-]+/g, ' ').replace(/\b\w/g, (character) => character.toUpperCase())
 }
 
-export default function FundDetailPage() {
-  const params = useParams()
-  const fundId = params.id as string
-  const funds = useMemo(() => ensureFunds(), [])
-  const fund = useMemo(() => funds.find((f) => f.id === fundId) || null, [fundId, funds])
+function evidenceValue(value: string | number | boolean | null | undefined) {
+  if (value === null || value === undefined || value === '') return 'Not recorded'
+  return String(value)
+}
 
-  const [activeTab, setActiveTab] = useState('overview')
-  const [showBuyModal, setShowBuyModal] = useState(false)
-  const [buyAmount, setBuyAmount] = useState('')
-  const [buySuccess, setBuySuccess] = useState(false)
-  const [mmStatus, setMmStatus] = useState('')
-  const [txHash, setTxHash] = useState('')
+const SUBSCRIPTION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
-  if (!fund) {
-    return (
-      <div className="min-h-screen relative">
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_120%,rgba(0,188,212,0.08),transparent_50%)]" />
-        <div className="container relative mx-auto px-4 py-12 space-y-4">
-          <Link href="/investor/market" className="inline-flex items-center text-sm text-muted-foreground hover:text-foreground transition-colors">
-            <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-            </svg>
-            Back to Marketplace
-          </Link>
-          <div className="glass-surface rounded-2xl p-8">
-            <h1 className="text-3xl font-bold mb-2">Fund not found</h1>
-            <p className="text-muted-foreground">This fund is not available. Choose another from the marketplace.</p>
-          </div>
-        </div>
-      </div>
+function preserveSubscriptionIdInUrl(subscriptionId: string): boolean {
+  if (typeof window === 'undefined') return false
+  try {
+    const url = new URL(window.location.href)
+    url.searchParams.set('subscription_id', subscriptionId)
+    window.history.replaceState(
+      window.history.state,
+      '',
+      `${url.pathname}${url.search}${url.hash}`
     )
+    return true
+  } catch {
+    return false
   }
+}
 
-  const navValue = fund.nav
-  const terms = {
-    minInvestment: formatZAR(fund.minInvestment),
-    minInvestmentValue: fund.minInvestment,
-    lockup: 'Quarterly liquidity',
-    redemptionFreq: 'Monthly',
-  }
-  const navHistory = useMemo(() => {
-    const start = navValue
-    return Array.from({ length: 6 }).map((_, idx) => ({
-      date: `2025-0${6 + idx}`,
-      value: Number((start - idx * 0.18).toFixed(2)),
-    }))
-  }, [navValue])
-  const documents = [
-    { name: 'Prospectus', url: '#', size: '2.1 MB' },
-    { name: 'Fund Terms', url: '#', size: '940 KB' },
-  ]
+export default function InvestorOfferingDetailPage() {
+  const params = useParams()
+  const offeringId = params.id as string
+  const { user, loading: authLoading } = useAuth()
+  const [offering, setOffering] = useState<InvestorCatalogOfferingDetail | null>(null)
+  const [readiness, setReadiness] = useState<InvestorCatalogReadiness | null>(null)
+  const [isLoading, setIsLoading] = useState(true)
+  const [loadError, setLoadError] = useState('')
+  const [units, setUnits] = useState('1')
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [submitError, setSubmitError] = useState('')
+  const [created, setCreated] = useState<CreatedControlledSubscription | null>(null)
+  const [controlled, setControlled] = useState<ControlledSubscription | null>(null)
+  const [refreshingEvidence, setRefreshingEvidence] = useState(false)
+  const [openingCheckout, setOpeningCheckout] = useState(false)
+  const [checkoutReturn, setCheckoutReturn] = useState<'success' | 'cancelled' | ''>('')
+  const [retryReady, setRetryReady] = useState(false)
+  const [pendingRetry, setPendingRetry] = useState<InvestorSubscriptionRetryIntent | null>(null)
 
-  const parsedAmount = parseFloat(buyAmount)
-  const isValidAmount = !isNaN(parsedAmount) && parsedAmount > 0
-  const normalizedAmount = isValidAmount ? Number(parsedAmount.toFixed(2)) : 0
-  const tokensToBuy = normalizedAmount / navValue
-  const totalCost = normalizedAmount
-
-  const chainHex = useMemo(() => {
-    if (fund.contractChainId) return '0x' + fund.contractChainId.toString(16)
-    const map: Record<string, string> = {
-      Ethereum: '0x1',
-      Sepolia: '0xaa36a7',
-      Polygon: '0x89',
-      'Polygon Amoy': '0x13882',
-      Base: '0x2105',
-      'Base Sepolia': '0x14a34',
-      'Arbitrum One': '0xa4b1',
+  useEffect(() => {
+    if (authLoading) return
+    if (!user) {
+      setOffering(null)
+      setReadiness(null)
+      setCreated(null)
+      setControlled(null)
+      setPendingRetry(null)
+      setRetryReady(false)
+      setIsLoading(false)
+      return
     }
-    return map[fund.chain] || ''
-  }, [fund.chain, fund.contractChainId])
 
-  const txRecipient = fund.contractAddress && fund.contractAddress !== '0x0000000000000000000000000000000000000000'
-    ? fund.contractAddress
-    : fund.depositAddress || fund.tokenAddress || '0x000000000000000000000000000000000000dEaD'
+    let cancelled = false
+    setIsLoading(true)
+    setOffering(null)
+    setReadiness(null)
+    setCreated(null)
+    setControlled(null)
+    setPendingRetry(null)
+    setRetryReady(false)
+    setSubmitError('')
+    setCheckoutReturn('')
+    setLoadError('')
+    void Promise.all([
+      investorCatalogApi.get(user.token, offeringId),
+      investorCatalogApi.readiness(user.token, offeringId),
+    ])
+      .then(([offeringRecord, readinessRecord]) => {
+        if (!cancelled) {
+          setOffering(offeringRecord)
+          setReadiness(readinessRecord)
+        }
+      })
+      .catch((caught) => {
+        if (!cancelled) {
+          setOffering(null)
+          setReadiness(null)
+          setLoadError(caught instanceof Error ? caught.message : 'Unable to load this offering.')
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [authLoading, offeringId, user])
 
-  const pricePerTokenEth = fund.pricePerTokenEth && fund.pricePerTokenEth > 0 ? fund.pricePerTokenEth : 0.0001
+  const parsedUnits = useMemo(() => parseExactDecimal(units), [units])
+  const totalAmount = useMemo(() => {
+    if (!offering || !parsedUnits) return null
+    return quoteInvestorCatalogSubscription(
+      parsedUnits.canonical,
+      offering.terms,
+      offering.financial_profile
+    )
+  }, [offering, parsedUnits])
+  const minimumUnits = offering
+    ? baseUnitsToExactDecimal(
+        offering.financial_profile.minimum_subscription_asset_units,
+        offering.terms.common_terms.token_decimals
+      )
+    : null
+  const maximumUnits = offering
+    ? baseUnitsToExactDecimal(
+        offering.financial_profile.maximum_subscription_asset_units,
+        offering.terms.common_terms.token_decimals
+      )
+    : null
+  const pendingRetryMatchesCurrent = pendingRetry === null || (
+    user !== null &&
+    offering !== null &&
+    parsedUnits !== null &&
+    totalAmount !== null &&
+    pendingRetry.subscriptionId === undefined &&
+    investorSubscriptionIntentMatches(pendingRetry, {
+      userId: user.id,
+      offeringId: offering.id,
+      units: parsedUnits.canonical,
+      amount: totalAmount,
+    })
+  )
+  const canSubscribe =
+    readiness?.offering_live === true &&
+    readiness.subscription_ready === true &&
+    parsedUnits !== null &&
+    totalAmount !== null &&
+    created === null &&
+    controlled === null &&
+    pendingRetryMatchesCurrent &&
+    retryReady &&
+    !refreshingEvidence &&
+    !isSubmitting
 
-  const tokenAmountWei = useMemo(() => {
-    const tokens = BigInt(Math.max(0, Math.floor(tokensToBuy * 1e6))) // 6 decimals to reduce overflow risk
-    return tokens * 1_000_000_000_000n // scale to 18 decimals (6 -> 18)
-  }, [tokensToBuy])
+  const refreshControlled = useCallback(async (subscriptionId: string) => {
+    if (!user) return null
+    setRefreshingEvidence(true)
+    setControlled(null)
+    setSubmitError('')
+    try {
+      const record = await blockXOneApi.subscription.getControlled(user.token, subscriptionId)
+      if (record.offering_id !== offeringId) throw new Error('Subscription does not belong to this offering.')
+      if (record.user_id !== user.id) throw new Error('Subscription does not belong to this investor.')
+      setControlled(record)
+      return record
+    } catch (caught) {
+      setSubmitError(caught instanceof Error ? caught.message : 'Unable to refresh subscription evidence.')
+      return null
+    } finally {
+      setRefreshingEvidence(false)
+    }
+  }, [offeringId, user])
 
-  const paymentWei = useMemo(() => {
-    const weiPerToken = BigInt(Math.floor(pricePerTokenEth * 1e18))
-    return (tokenAmountWei * weiPerToken) / 1_000_000_000_000_000_000n
-  }, [tokenAmountWei, pricePerTokenEth])
+  useEffect(() => {
+    if (!user || !offering || typeof window === 'undefined') return
+    const query = new URLSearchParams(window.location.search)
+    const returnState = query.get('checkout')
+    const querySubscriptionId = query.get('subscription_id') || ''
+    const storedRetry = loadInvestorSubscriptionRetryIntent(localStorage, user.id, offeringId)
+    setPendingRetry(storedRetry)
+    if (storedRetry) setUnits(storedRetry.units)
+    if (returnState === 'success' || returnState === 'cancelled') {
+      setCheckoutReturn(returnState)
+    }
+    const subscriptionId = storedRetry?.subscriptionId ?? (
+      SUBSCRIPTION_ID_PATTERN.test(querySubscriptionId) ? querySubscriptionId : ''
+    )
+    if (storedRetry?.subscriptionId && storedRetry.subscriptionId !== querySubscriptionId) {
+      preserveSubscriptionIdInUrl(storedRetry.subscriptionId)
+    }
+    setRetryReady(true)
+    if (SUBSCRIPTION_ID_PATTERN.test(subscriptionId)) {
+      void refreshControlled(subscriptionId).then((record) => {
+        if (
+          !record ||
+          !storedRetry ||
+          (storedRetry.subscriptionId !== undefined && storedRetry.subscriptionId !== subscriptionId) ||
+          !investorSubscriptionIntentMatches(storedRetry, {
+            userId: record.user_id,
+            offeringId: record.offering_id,
+            units: record.units,
+            amount: record.amount,
+          })
+        ) {
+          return
+        }
+        if (clearExactInvestorSubscriptionRetryIntent(localStorage, storedRetry)) {
+          setPendingRetry(null)
+        }
+      })
+    }
+  }, [offering, offeringId, refreshControlled, user])
 
-  async function requestMetamaskPayment() {
-    setMmStatus('')
-    setTxHash('')
-    const eth = (typeof window !== 'undefined' && (window as any).ethereum) || null
-    if (!eth) {
-      setMmStatus('MetaMask not detected. Install MetaMask and retry.')
-      return false
+  async function handleSubscribe(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!user || !offering || !canSubscribe || !parsedUnits || totalAmount === null) return
+
+    setIsSubmitting(true)
+    setSubmitError('')
+    setCreated(null)
+    setControlled(null)
+    let requestRetry: InvestorSubscriptionRetryIntent
+    try {
+      const storedRetry = loadInvestorSubscriptionRetryIntent(localStorage, user.id, offering.id)
+      if (storedRetry) {
+        if (
+          storedRetry.subscriptionId ||
+          !investorSubscriptionIntentMatches(storedRetry, {
+            userId: user.id,
+            offeringId: offering.id,
+            units: parsedUnits.canonical,
+            amount: totalAmount,
+          })
+        ) {
+          throw new Error('A different unresolved subscription request exists. Restore its exact units and amount before retrying.')
+        }
+        requestRetry = storedRetry
+      } else {
+        requestRetry = createInvestorSubscriptionRetryIntent({
+          userId: user.id,
+          offeringId: offering.id,
+          units: parsedUnits.canonical,
+          amount: totalAmount,
+          idempotencyKey: newIdempotencyKey(`subscription:${offering.id}`),
+        })
+      }
+      persistInvestorSubscriptionRetryIntent(localStorage, requestRetry)
+      setPendingRetry(requestRetry)
+    } catch (caught) {
+      setSubmitError(
+        caught instanceof Error
+          ? `${caught.message} The subscription was not sent.`
+          : 'Safe request recovery is unavailable in this browser. The subscription was not sent.'
+      )
+      setIsSubmitting(false)
+      return
     }
 
     try {
-      const accounts = (await eth.request({ method: 'eth_requestAccounts' })) as string[]
-      const from = accounts?.[0]
-      if (!from) throw new Error('No accounts authorized')
-
-      if (chainHex) {
-        try {
-          await eth.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: chainHex }] })
-        } catch (e: any) {
-          if (e?.code !== 4902) throw e
-          // If chain is unknown in MetaMask, we skip add here to avoid bloating prompts; user can add manually.
+      const response = await blockXOneApi.subscription.createControlled(
+        user.token,
+        offering.id,
+        { units: parsedUnits.canonical, amount: totalAmount },
+        requestRetry.idempotencyKey
+      )
+      preserveSubscriptionIdInUrl(response.id)
+      setCreated(response)
+      const completedRetry = withAuthoritativeSubscriptionId(requestRetry, response.id)
+      let retryForCleanup = requestRetry
+      try {
+        persistInvestorSubscriptionRetryIntent(localStorage, completedRetry)
+        retryForCleanup = completedRetry
+        setPendingRetry(completedRetry)
+      } catch {
+        setPendingRetry(requestRetry)
+      }
+      const record = await refreshControlled(response.id)
+      if (
+        record &&
+        investorSubscriptionIntentMatches(requestRetry, {
+          userId: record.user_id,
+          offeringId: record.offering_id,
+          units: record.units,
+          amount: record.amount,
+        })
+      ) {
+        if (clearExactInvestorSubscriptionRetryIntent(localStorage, retryForCleanup)) {
+          setPendingRetry(null)
         }
+      } else if (record) {
+        setSubmitError('The authoritative subscription does not match the exact request. Retry recovery was retained.')
       }
-
-      let data: string | undefined
-      let valueHex = '0x0'
-
-      if (fund.contractAddress && fund.contractAddress !== '0x0000000000000000000000000000000000000000') {
-        // encode purchase(uint256 amount)
-        const selector = '0xa6f2ae3a' // keccak256("purchase(uint256)") first 4 bytes
-        const amountHex = tokenAmountWei.toString(16).padStart(64, '0')
-        data = selector + amountHex
-        valueHex = '0x' + paymentWei.toString(16)
-      } else {
-        valueHex = '0x' + paymentWei.toString(16)
-      }
-
-      if (paymentWei <= 0n) throw new Error('Amount too small for gas estimation')
-
-      const tx = await eth.request({
-        method: 'eth_sendTransaction',
-        params: [
-          {
-            from,
-            to: txRecipient,
-            value: valueHex,
-            data,
-          },
-        ],
-      })
-
-      if (typeof tx === 'string') setTxHash(tx)
-      setMmStatus('Submitted to MetaMask; waiting for confirmation in wallet')
-      return true
-    } catch (e: any) {
-      setMmStatus(e?.message || 'MetaMask transaction failed')
-      return false
+    } catch (caught) {
+      setSubmitError(caught instanceof Error ? caught.message : 'Unable to create the subscription.')
+    } finally {
+      setIsSubmitting(false)
     }
   }
 
-  const handleBuy = async () => {
-    setMmStatus('')
-    setTxHash('')
-    if (!isValidAmount || normalizedAmount < terms.minInvestmentValue) return
-
-    const sent = await requestMetamaskPayment()
-    if (!sent) return
-
-    addTransaction({
-      type: 'buy',
-      fundId,
-      fundName: fund.name,
-      fundSymbol: fund.symbol,
-      investorName: 'John Investor',
-      investorEmail: 'investor@demo.com',
-      quantity: Number(tokensToBuy.toFixed(4)),
-      pricePerToken: navValue,
-      totalAmount: normalizedAmount,
-      status: 'completed',
-    })
-
-    setBuySuccess(true)
-    setTimeout(() => {
-      setBuySuccess(false)
-      setShowBuyModal(false)
-      setBuyAmount('')
-      setMmStatus('')
-      setTxHash('')
-    }, 2500)
+  async function handleOpenCheckout() {
+    if (!user || !controlled || controlled.status !== 'FUNDING_PENDING' || controlled.consideration_source !== 'TEST_PROVIDER') return
+    setOpeningCheckout(true)
+    setSubmitError('')
+    try {
+      const response = await blockXOneApi.subscription.createTestCheckout(user.token, controlled.id)
+      const target = new URL(response.checkout_url)
+      if (target.protocol !== 'https:' || (target.hostname !== 'checkout.stripe.com' && !target.hostname.endsWith('.checkout.stripe.com'))) {
+        throw new Error('Stripe returned an invalid Checkout destination.')
+      }
+      window.location.assign(target.toString())
+    } catch (caught) {
+      setSubmitError(caught instanceof Error ? caught.message : 'Unable to open Stripe test Checkout.')
+      setOpeningCheckout(false)
+    }
   }
 
+  if (isLoading || authLoading) {
+    return <main className="min-h-screen bg-bxo-bg-primary p-12 text-bxo-text-secondary">Loading verified offering readiness…</main>
+  }
+  if (!user) {
+    return (
+      <main className="min-h-screen bg-bxo-bg-primary px-4 py-16 text-bxo-text-primary">
+        <div className="mx-auto max-w-2xl space-y-5 text-center">
+          <h1 className="font-display text-3xl font-bold">Sign in before reviewing an offering.</h1>
+          <Button asChild><Link href="/investor/login">Investor login</Link></Button>
+        </div>
+      </main>
+    )
+  }
+  if (!offering || !readiness) {
+    return (
+      <main className="min-h-screen bg-bxo-bg-primary px-4 py-16 text-bxo-text-primary">
+        <div className="mx-auto max-w-3xl bxo-panel p-8">
+          <h1 className="font-display text-3xl font-bold">Offering unavailable</h1>
+          <p role="alert" className="mt-3 text-bxo-danger-light">{loadError || 'This typed offering could not be loaded.'}</p>
+        </div>
+      </main>
+    )
+  }
+
+  const terms = offering.terms
+  const eligibilityLabel = created?.eligibility_decision
+    ? `Allowed · evidence ${created.eligibility_decision}`
+    : 'Evaluated authoritatively when you submit'
+  const usesTestProvider = offering.financial_profile.consideration_source === 'TEST_PROVIDER'
+  const networkLabel = offering.runtime_scope === 'LOCAL_PILOT'
+    ? 'Private validation network · chain 31337 · no real value'
+    : networkTargetLabel(offering.chain_id)
+
   return (
-    <div className="min-h-screen relative">
-      <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_120%,rgba(0,188,212,0.08),transparent_50%)]" />
-      <div className="container relative mx-auto px-4 py-8 space-y-6">
-        <Link href="/investor/market" className="inline-flex items-center text-sm text-muted-foreground hover:text-foreground transition-colors">
-          <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-          </svg>
-          Back to Marketplace
+    <main className="min-h-screen bg-bxo-bg-primary px-4 py-10 text-bxo-text-primary sm:px-6 lg:px-8">
+      <div className="mx-auto max-w-6xl space-y-8">
+        <Link href="/investor/market" className="inline-flex min-h-11 items-center gap-2 text-sm text-bxo-text-secondary hover:text-bxo-text-primary">
+          <ArrowLeft className="h-4 w-4" />Back to marketplace
         </Link>
 
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.5 }}
-          className="glass-surface rounded-2xl p-8"
-        >
-          <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
-            <div>
-              <h1 className="text-3xl font-bold mb-2">{fund.name}</h1>
-              <p className="text-muted-foreground">{fund.symbol} • Managed by {fund.manager}</p>
-            </div>
-            <div className="text-right">
-              <div className="text-3xl font-bold text-primary mb-1">{formatZAR(navValue)}</div>
-              <div className="text-sm text-muted-foreground">NAV per Token</div>
-            </div>
+        <section className="bxo-panel p-6 sm:p-8">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="rounded-full border border-bxo-accent-border bg-bxo-accent-soft px-3 py-1 text-xs font-semibold text-bxo-accent-primary">{pretty(offering.asset_class)}</span>
+            <span className="rounded-full border border-bxo-border-default px-3 py-1 text-xs">{offering.runtime_scope === 'TESTNET' ? 'Public testnet' : 'Private validation network'}</span>
+            <span className="rounded-full border border-bxo-border-default px-3 py-1 text-xs">{pretty(offering.status)}</span>
           </div>
+          <h1 className="mt-5 font-display text-4xl font-bold sm:text-5xl">{offering.name}</h1>
+          <p className="mt-4 max-w-3xl leading-8 text-bxo-text-secondary">{offering.description}</p>
+          <dl className="mt-6 grid gap-3 sm:grid-cols-3">
+            <div className="rounded-xl border border-bxo-border-subtle p-4"><dt className="text-xs text-bxo-text-tertiary">Price per unit</dt><dd className="mt-2 font-mono text-lg">{formatExactMoney(offering.price, offering.currency)}</dd></div>
+            <div className="rounded-xl border border-bxo-border-subtle p-4"><dt className="text-xs text-bxo-text-tertiary">Network configuration</dt><dd className="mt-2 font-mono text-sm">{networkLabel}</dd><p className="mt-1 text-xs text-bxo-text-tertiary">A configured target is not deployment or issuance evidence.</p></div>
+            <div className="rounded-xl border border-bxo-warning-border bg-bxo-warning/10 p-4"><dt className="text-xs text-bxo-text-tertiary">Payment mode</dt><dd className="mt-2 text-sm font-medium">{usesTestProvider ? 'Stripe test mode' : 'Recorded synthetic evidence'}</dd><p className="mt-1 text-xs text-bxo-warning-light">{usesTestProvider ? 'Provider-backed test evidence only. No real funds are accepted or settled.' : 'Independent local test evidence only. No payment provider or real funds are involved.'}</p></div>
+          </dl>
+        </section>
 
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-6 mb-6">
-            <div>
-              <div className="text-sm text-muted-foreground mb-1">1Y Performance</div>
-              <div className="text-xl font-semibold text-green-400">{`${fund.performance >= 0 ? '+' : ''}${fund.performance.toFixed(1)}%`}</div>
-            </div>
-            <div>
-              <div className="text-sm text-muted-foreground mb-1">Total AUM</div>
-              <div className="text-xl font-semibold">{formatZAR(fund.aum)}</div>
-            </div>
-            <div>
-              <div className="text-sm text-muted-foreground mb-1">Blockchain</div>
-              <div className="text-xl font-semibold">{fund.chain}</div>
-            </div>
-            <div>
-              <div className="text-sm text-muted-foreground mb-1">Token Address</div>
-              <div className="text-sm font-mono">{fund.tokenAddress}</div>
-            </div>
-          </div>
-
-          <div className="flex gap-3">
-            <Button onClick={() => setShowBuyModal(true)} className="bg-primary hover:bg-primary/90 hover-elevate press-compress focus-ring">
-              Subscribe Now
-            </Button>
-            <Button variant="outline" className="glass-surface hover-elevate press-compress focus-ring">
-              Add to Watchlist
-            </Button>
-          </div>
-        </motion.div>
-
-        <div className="glass-surface rounded-2xl p-6">
-          <div className="flex gap-4 border-b border-white/10 mb-6">
-            {['overview', 'performance', 'documents', 'terms'].map((tab) => (
-              <button
-                key={tab}
-                onClick={() => setActiveTab(tab)}
-                className={`pb-3 px-2 text-sm font-medium transition-colors relative ${
-                  activeTab === tab ? 'text-primary' : 'text-muted-foreground hover:text-foreground'
-                }`}
-              >
-                {tab.charAt(0).toUpperCase() + tab.slice(1)}
-                {activeTab === tab && (
-                  <motion.div
-                    layoutId="activeTab"
-                    className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary"
-                    transition={{ duration: 0.2 }}
-                  />
-                )}
-              </button>
-            ))}
-          </div>
-
-          <TabContent activeKey={activeTab}>
-            {activeTab === 'overview' && (
-              <div className="space-y-6">
-                <div>
-                  <h3 className="text-lg font-semibold mb-3">Description</h3>
-                  <p className="text-muted-foreground leading-relaxed">{fund.strategy}</p>
-                </div>
-                <div className="grid md:grid-cols-2 gap-4">
-                  <div className="p-4 rounded-lg bg-white/5">
-                    <div className="text-sm text-muted-foreground mb-1">Risk</div>
-                    <div className="font-semibold">{fund.risk}</div>
-                  </div>
-                  <div className="p-4 rounded-lg bg-white/5">
-                    <div className="text-sm text-muted-foreground mb-1">Minimum Investment</div>
-                    <div className="font-semibold">{terms.minInvestment}</div>
-                  </div>
-                </div>
+        <section aria-label="Investor eligibility and offering readiness" className="grid gap-3 lg:grid-cols-4">
+          {[
+            ['Terms', readiness.terms_active, `ACTIVE v${terms.version}`],
+            ['Financial profile', readiness.financial_profile_active, readiness.financial_profile_active ? 'ACTIVE' : 'BLOCKED'],
+            ['Subscription intake', readiness.subscription_ready, readiness.subscription_ready ? 'ENABLED' : 'BLOCKED'],
+            ['Your eligibility', Boolean(created?.eligibility_decision), eligibilityLabel],
+          ].map(([label, ready, detail]) => (
+            <div key={String(label)} className={`rounded-xl border p-4 ${ready ? 'border-bxo-success/30 bg-bxo-success/10' : 'border-bxo-border-default bg-bxo-surface'}`}>
+              <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.1em] text-bxo-text-tertiary">
+                {ready ? <BadgeCheck className="h-4 w-4 text-bxo-success-light" /> : <CircleDashed className="h-4 w-4" />}
+                {String(label)}
               </div>
-            )}
+              <p className="mt-2 text-sm">{String(detail)}</p>
+            </div>
+          ))}
+        </section>
 
-            {activeTab === 'performance' && (
-              <div>
-                <h3 className="text-lg font-semibold mb-4">NAV History</h3>
-                <div className="space-y-2">
-                  {navHistory.map((entry) => (
-                    <div key={entry.date} className="flex justify-between items-center p-3 rounded-lg bg-white/5">
-                      <span className="text-sm text-muted-foreground">{entry.date}</span>
-                      <span className="font-semibold">R{entry.value.toFixed(2)}</span>
+        <section className="grid gap-6 lg:grid-cols-[1fr_23rem]">
+          <div className="space-y-5">
+            <div className="bxo-card p-6">
+              <h2 className="font-display text-2xl font-bold">Approved terms</h2>
+              <p className="mt-2 break-all font-mono text-xs text-bxo-text-tertiary">SHA-256 {terms.terms_sha256}</p>
+              <dl className="mt-5 grid gap-3 sm:grid-cols-2">
+                <div className="rounded-xl border border-bxo-border-subtle p-4"><dt className="text-xs text-bxo-text-tertiary">Currency</dt><dd className="mt-2 font-mono">{terms.common_terms.currency}</dd></div>
+                <div className="rounded-xl border border-bxo-border-subtle p-4"><dt className="text-xs text-bxo-text-tertiary">Issue date</dt><dd className="mt-2 font-mono">{terms.common_terms.issue_date}</dd></div>
+                <div className="rounded-xl border border-bxo-border-subtle p-4"><dt className="text-xs text-bxo-text-tertiary">Governing law</dt><dd className="mt-2">{terms.common_terms.governing_law}</dd></div>
+                <div className="rounded-xl border border-bxo-border-subtle p-4"><dt className="text-xs text-bxo-text-tertiary">Token precision</dt><dd className="mt-2 font-mono">{terms.common_terms.token_decimals} decimals</dd></div>
+              </dl>
+              <p className="mt-5 text-sm leading-6 text-bxo-text-secondary">
+                This screen shows operational terms and their immutable hash. It is not a prospectus and does not invent a legal document that the API has not supplied.
+              </p>
+            </div>
+
+            {controlled ? (
+              <div className="bxo-panel p-6">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h2 className="font-display text-2xl font-bold">Controlled subscription evidence</h2>
+                    <p className="mt-1 break-all font-mono text-xs text-bxo-text-tertiary">{controlled.id}</p>
+                  </div>
+                  <Button variant="outline" disabled={refreshingEvidence} onClick={() => void refreshControlled(controlled.id)}>
+                    {refreshingEvidence ? 'Refreshing…' : 'Refresh evidence'}
+                  </Button>
+                </div>
+                <div className="mt-5 grid gap-3 sm:grid-cols-3">
+                  <div className="rounded-xl border border-bxo-accent-border bg-bxo-accent-soft p-4"><div className="text-xs text-bxo-text-tertiary">Controlled state</div><div className="mt-2 font-mono text-sm">{controlled.status}</div></div>
+                  <div className="rounded-xl border border-bxo-warning-border bg-bxo-warning/10 p-4"><div className="text-xs text-bxo-text-tertiary">Cash flags</div><div className="mt-2 font-mono text-sm">real=false · settled=false</div></div>
+                  <div className="rounded-xl border border-bxo-border-default p-4"><div className="text-xs text-bxo-text-tertiary">Chain state</div><div className="mt-2 text-sm">{chainEvidenceLabel(controlled)}</div></div>
+                </div>
+                {checkoutReturn === 'success' ? (
+                  <div role="status" className="mt-5 rounded-xl border border-bxo-accent-border bg-bxo-accent-soft p-4 text-sm">
+                    The browser returned through the configured Stripe TEST return URL. That navigation is not funding evidence. Funding remains pending until BlockXOne verifies the signed webhook, re-fetches the PaymentIntent from Stripe, and posts the exact ledger entry.
+                  </div>
+                ) : null}
+                {checkoutReturn === 'cancelled' ? (
+                  <div role="status" className="mt-5 rounded-xl border border-bxo-warning-border bg-bxo-warning/10 p-4 text-sm text-bxo-warning-light">
+                    The browser returned with a checkout-cancelled navigation state. Authoritative funding status is shown only after the controlled subscription is refreshed from the server.
+                  </div>
+                ) : null}
+                {controlled.status === 'FUNDING_PENDING' && controlled.consideration_source === 'TEST_PROVIDER' ? (
+                  <div className="mt-5 rounded-xl border border-bxo-border-default bg-bxo-surface p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-4">
+                      <div>
+                        <div className="flex items-center gap-2 font-semibold"><CreditCard className="h-4 w-4 text-bxo-accent-primary" />Stripe TEST Checkout</div>
+                        <p className="mt-2 max-w-2xl text-sm text-bxo-text-secondary">The server fixes the amount, currency, reference, investor, and payment instruction. Test Checkout cannot mark this subscription funded by itself.</p>
+                      </div>
+                      <Button type="button" disabled={openingCheckout} onClick={() => void handleOpenCheckout()}>
+                        {openingCheckout ? 'Opening Checkout...' : 'Pay with Stripe test card'}
+                      </Button>
+                    </div>
+                  </div>
+                ) : null}
+                <dl className="mt-5 grid gap-4 sm:grid-cols-2">
+                  {Object.entries(controlled.evidence).map(([key, value]) => (
+                    <div key={key}>
+                      <dt className="text-xs uppercase tracking-[0.08em] text-bxo-text-tertiary">{pretty(key)}</dt>
+                      <dd className="mt-1 break-all font-mono text-xs">{evidenceValue(value)}</dd>
                     </div>
                   ))}
-                </div>
+                  <div><dt className="text-xs uppercase tracking-[0.08em] text-bxo-text-tertiary">Chain operation</dt><dd className="mt-1 break-all font-mono text-xs">{evidenceValue(controlled.mint_chain_operation_id)}</dd></div>
+                  <div><dt className="text-xs uppercase tracking-[0.08em] text-bxo-text-tertiary">Transaction hash</dt><dd className="mt-1 break-all font-mono text-xs">{evidenceValue(controlled.transaction_hash)}</dd></div>
+                </dl>
               </div>
-            )}
+            ) : null}
+          </div>
 
-            {activeTab === 'documents' && (
-              <div className="space-y-3">
-                <h3 className="text-lg font-semibold mb-4">Fund Documents</h3>
-                {documents.map((doc) => (
-                  <div key={doc.name} className="flex justify-between items-center p-4 rounded-lg bg-white/5 hover:bg-white/10 transition-colors">
-                    <div className="flex items-center gap-3">
-                      <svg className="w-8 h-8 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                      </svg>
-                      <div>
-                        <div className="font-medium">{doc.name}</div>
-                        <div className="text-sm text-muted-foreground">{doc.size}</div>
-                      </div>
-                    </div>
-                    <Button variant="ghost" size="sm" className="hover-elevate press-compress">
-                      Download
-                    </Button>
-                  </div>
-                ))}
+          <aside className="h-fit rounded-2xl border border-bxo-border-default bg-bxo-bg-primary p-5">
+            <div className="bxo-kicker">Subscription request</div>
+            <p className="mt-3 text-sm leading-6 text-bxo-text-secondary">
+              {usesTestProvider
+                ? 'This creates a controlled obligation. After approval, the test subscription can open Stripe test checkout. Tokens are issued only after provider verification, ledger posting, reconciliation, wallet admission, and chain finality.'
+                : 'This creates a controlled obligation. Tokens are issued only after independent synthetic funding evidence, ledger posting, reconciliation, wallet admission, and local-chain finality.'}
+            </p>
+            <form className="mt-6 space-y-5" onSubmit={handleSubscribe}>
+              <label htmlFor="subscription-units" className="block text-sm font-semibold text-bxo-text-secondary">
+                Units
+                <input
+                  id="subscription-units"
+                  inputMode="decimal"
+                  value={units}
+                  onChange={(event) => setUnits(event.target.value)}
+                  className="mt-2 h-12 w-full rounded-xl border border-bxo-border-default bg-bxo-surface px-4 font-mono outline-none focus:border-bxo-accent-primary focus:ring-2 focus:ring-bxo-accent-muted"
+                  required
+                />
+              </label>
+              <p className="text-xs leading-5 text-bxo-text-tertiary">
+                Approved range {formatExactUnits(minimumUnits)} to {formatExactUnits(maximumUnits)} units. The request must produce an exact amount at the approved currency scale.
+              </p>
+              {units.length > 0 && totalAmount === null ? (
+                <div role="alert" className="rounded-xl border border-bxo-warning-border bg-bxo-warning/10 p-3 text-xs text-bxo-warning-light">
+                  Enter units within the approved range that resolve to an exact currency amount.
+                </div>
+              ) : null}
+              <div className="rounded-xl border border-bxo-border-subtle bg-bxo-surface p-4">
+                <div className="text-xs uppercase tracking-[0.12em] text-bxo-text-tertiary">Exact request amount</div>
+                <div className="mt-2 font-mono text-xl font-semibold">{formatExactMoney(totalAmount, offering.currency)}</div>
               </div>
-            )}
+              {pendingRetry ? (
+                <div role="status" className="rounded-xl border border-bxo-accent-border bg-bxo-accent-soft p-4 text-sm">
+                  {pendingRetry.subscriptionId
+                    ? `Recovering authoritative subscription ${pendingRetry.subscriptionId}. A second request is blocked.`
+                    : pendingRetryMatchesCurrent
+                      ? 'A prior exact request is ready for safe recovery. Submitting the unchanged units and amount reuses its original request key.'
+                      : `A prior request for ${pendingRetry.units} units and ${formatExactMoney(pendingRetry.amount, offering.currency)} is unresolved. Restore those exact values before retrying.`}
+                </div>
+              ) : null}
+              {submitError ? <div role="alert" className="rounded-xl border border-bxo-danger-border bg-bxo-danger-soft p-4 text-sm text-bxo-danger-light">{submitError}</div> : null}
+              {created ? (
+                <div role="status" className="rounded-xl border border-bxo-accent-border bg-bxo-accent-soft p-4 text-sm">
+                  <div className="flex items-center gap-2 font-semibold text-bxo-accent-primary"><BadgeCheck className="h-4 w-4" />Subscription recorded</div>
+                  <p className="mt-2 break-all font-mono text-xs">ID {created.id}</p>
+                  <p className="mt-1 break-all font-mono text-xs">Control {created.control_id}</p>
+                  <p className="mt-2">State {created.status} · eligibility {created.eligibility_decision}</p>
+                </div>
+              ) : null}
+              <Button className="bxo-primary-cta h-12 w-full text-bxo-bg-primary" disabled={!canSubscribe} type="submit">
+                {isSubmitting ? 'Recording exact request…' : readiness.subscription_ready ? 'Submit controlled subscription' : 'Subscription intake blocked'}
+              </Button>
+            </form>
+          </aside>
+        </section>
 
-            {activeTab === 'terms' && (
-              <div className="space-y-6">
-                <div>
-                  <h3 className="text-lg font-semibold mb-4">Fund Terms</h3>
-                  <div className="grid md:grid-cols-2 gap-4">
-                    <div className="p-4 rounded-lg bg-white/5">
-                      <div className="text-sm text-muted-foreground mb-1">Minimum Investment</div>
-                      <div className="font-semibold">{terms.minInvestment}</div>
-                    </div>
-                    <div className="p-4 rounded-lg bg-white/5">
-                      <div className="text-sm text-muted-foreground mb-1">Lock-up Period</div>
-                      <div className="font-semibold">{terms.lockup}</div>
-                    </div>
-                    <div className="p-4 rounded-lg bg-white/5">
-                      <div className="text-sm text-muted-foreground mb-1">Redemption Frequency</div>
-                      <div className="font-semibold">{terms.redemptionFreq}</div>
-                    </div>
-                  </div>
-                </div>
-                <div>
-                  <h3 className="text-lg font-semibold mb-4">Fee Structure</h3>
-                  <div className="grid md:grid-cols-2 gap-4">
-                    {[
-                      { label: 'Management Fee', value: fund.managementFee ? `${fund.managementFee}%` : '1.5%' },
-                      { label: 'Performance Fee', value: fund.performanceFee ? `${fund.performanceFee}%` : '15%' },
-                      { label: 'Mint Fee', value: `${fund.mintFeeBps / 100}%` },
-                      { label: 'Burn Fee', value: `${fund.burnFeeBps / 100}%` },
-                    ].map((fee) => (
-                      <div key={fee.label} className="p-4 rounded-lg bg-white/5">
-                        <div className="text-sm text-muted-foreground mb-1">{fee.label}</div>
-                        <div className="font-semibold">{fee.value}</div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            )}
-          </TabContent>
+        <div className="grid gap-4 md:grid-cols-2">
+          <div className="bxo-card p-6"><FileText className="h-5 w-5 text-bxo-accent-primary" /><h2 className="mt-3 font-display text-xl font-bold">Documents</h2><p className="mt-3 text-sm leading-7 text-bxo-text-secondary">No offering document is supplied by this API. The terms hash is evidence of approved structured data, not evidence that a prospectus exists.</p></div>
+          <div className="bxo-card p-6"><ShieldCheck className="h-5 w-5 text-bxo-accent-primary" /><h2 className="mt-3 font-display text-xl font-bold">Chain truth</h2><p className="mt-3 text-sm leading-7 text-bxo-text-secondary">Network configuration alone is not issuance. Until a durable operation supplies a transaction hash, receipt, confirmations and FINAL state, this position remains not issued.</p></div>
         </div>
       </div>
-
-      <AnimatePresence>
-        {showBuyModal && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4"
-            onClick={() => setShowBuyModal(false)}
-          >
-            <motion.div
-              initial={{ scale: 0.95, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.95, opacity: 0 }}
-              onClick={(e) => e.stopPropagation()}
-              className="glass-surface rounded-2xl p-6 max-w-md w-full"
-            >
-              {!buySuccess ? (
-                <>
-                  <h2 className="text-2xl font-bold mb-4">Subscribe to {fund.symbol}</h2>
-                  <p className="text-muted-foreground mb-6">Enter the amount you want to invest in {fund.name}</p>
-
-                  <div className="space-y-4">
-                    <div>
-                      <Label>Investment Amount (ZAR)</Label>
-                      <Input
-                        type="number"
-                        placeholder="10000"
-                        value={buyAmount}
-                        onChange={(e) => setBuyAmount(e.target.value)}
-                        className="mt-2"
-                      />
-                      <p className="text-xs text-muted-foreground mt-1">Minimum: {terms.minInvestment}</p>
-                    </div>
-
-                    {isValidAmount && normalizedAmount >= terms.minInvestmentValue && (
-                      <motion.div
-                        initial={{ opacity: 0, y: -10 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        className="p-4 rounded-lg bg-primary/10 border border-primary/20"
-                      >
-                        <div className="flex justify-between mb-2">
-                          <span className="text-sm text-muted-foreground">Tokens to receive</span>
-                          <span className="font-semibold">{tokensToBuy.toLocaleString(undefined, { maximumFractionDigits: 4 })}</span>
-                        </div>
-                        <div className="flex justify-between mb-2">
-                          <span className="text-sm text-muted-foreground">Price per token (ETH)</span>
-                          <span className="font-semibold">{pricePerTokenEth} ETH</span>
-                        </div>
-                        <div className="flex justify-between mb-2">
-                          <span className="text-sm text-muted-foreground">Est. on-chain send</span>
-                          <span className="font-semibold">{Number((pricePerTokenEth * tokensToBuy) || 0).toFixed(6)} ETH</span>
-                        </div>
-                        <div className="border-t border-white/10 pt-2 mt-2">
-                          <div className="flex justify-between">
-                            <span className="font-semibold">Total Cost</span>
-                            <span className="font-bold text-primary">R{totalCost.toFixed(2)}</span>
-                          </div>
-                        </div>
-                      </motion.div>
-                    )}
-
-                    <div className="flex gap-3 pt-4">
-                      <Button
-                        onClick={handleBuy}
-                        disabled={!isValidAmount || normalizedAmount < terms.minInvestmentValue}
-                        className="flex-1 bg-primary hover:bg-primary/90 hover-elevate press-compress focus-ring"
-                      >
-                        Confirm Purchase
-                      </Button>
-                      <Button
-                        onClick={() => setShowBuyModal(false)}
-                        variant="outline"
-                        className="flex-1 glass-surface hover-elevate press-compress"
-                      >
-                        Cancel
-                      </Button>
-                    </div>
-                    {mmStatus ? (
-                      <div className="text-xs text-muted-foreground">{mmStatus}</div>
-                    ) : null}
-                  </div>
-                </>
-              ) : (
-                <motion.div initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="text-center py-8">
-                  <div className="w-16 h-16 rounded-full bg-green-500/20 flex items-center justify-center mx-auto mb-4">
-                    <svg className="w-8 h-8 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                    </svg>
-                  </div>
-                  <h3 className="text-xl font-bold mb-2">Purchase Successful!</h3>
-                  <p className="text-muted-foreground mb-2">
-                    You've successfully purchased {tokensToBuy.toLocaleString(undefined, { maximumFractionDigits: 4 })} {fund.symbol} tokens
-                  </p>
-                  <p className="text-sm text-muted-foreground">Total: R{totalCost.toFixed(2)}</p>
-                </motion.div>
-              )}
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
+    </main>
   )
 }

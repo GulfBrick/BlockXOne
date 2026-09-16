@@ -1,14 +1,9 @@
 'use client'
 
 import { motion, AnimatePresence } from 'framer-motion'
-import { useEffect, useState } from 'react'
 
 export function LoadingAnimation() {
-  const [isLoading, setIsLoading] = useState(false)
-
-  useEffect(() => {
-    // Loading animation disabled for now
-  }, [])
+  const isLoading = false
 
   return (
     <AnimatePresence>
@@ -40,9 +35,9 @@ export function LoadingAnimation() {
               ))}
               <defs>
                 <linearGradient id="gradient" x1="0%" y1="0%" x2="100%" y2="100%">
-                  <stop offset="0%" stopColor="#00B6FF" />
-                  <stop offset="50%" stopColor="#0894E6" />
-                  <stop offset="100%" stopColor="#0A6FB6" />
+                  <stop offset="0%" stopColor="#60A5FA" />
+                  <stop offset="50%" stopColor="#3B82F6" />
+                  <stop offset="100%" stopColor="#2563EB" />
                 </linearGradient>
               </defs>
             </svg>
@@ -53,7 +48,7 @@ export function LoadingAnimation() {
               transition={{ delay: 1.2, duration: 0.4 }}
               className="absolute inset-0 flex items-center justify-center"
             >
-              <div className="text-2xl font-bold bg-gradient-to-r from-[#00B6FF] to-[#0A6FB6] bg-clip-text text-transparent">
+              <div className="text-2xl font-bold bg-gradient-to-r from-[#60A5FA] to-[#2563EB] bg-clip-text text-transparent">
                 BXO
               </div>
             </motion.div>

@@ -1,14 +1,12 @@
 'use client'
 
-import { useState } from 'react'
 import Link from 'next/link'
 import { useAuth } from '@/lib/auth-context-v2'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
-import { Input } from '@/components/ui/input'
 
 const USER_ROLES = [
-  { name: 'Investor', users: 1, description: 'Browse and invest in tokenized funds', color: 'bg-blue-500/10 text-blue-500 border-blue-500/20' },
+  { name: 'Investor', users: 1, description: 'Browse and invest in tokenised funds', color: 'bg-blue-500/10 text-blue-500 border-blue-500/20' },
   { name: 'TokenisationAgent', users: 1, description: 'Mint, burn, and manage token operations', color: 'bg-green-500/10 text-green-500 border-green-500/20' },
   { name: 'IssuerFundManager', users: 1, description: 'Create offerings and manage fund details', color: 'bg-purple-500/10 text-purple-500 border-purple-500/20' },
   { name: 'ComplianceOfficer', users: 1, description: 'Review KYC and approve wallets', color: 'bg-orange-500/10 text-orange-500 border-orange-500/20' },
@@ -18,29 +16,6 @@ const USER_ROLES = [
 
 export default function AdminUsersPage() {
   const { user } = useAuth()
-  const [newUserEmail, setNewUserEmail] = useState('')
-  const [selectedRole, setSelectedRole] = useState('Investor')
-  const [creating, setCreating] = useState(false)
-  const [message, setMessage] = useState('')
-
-  const handleCreateUser = async () => {
-    if (!newUserEmail) {
-      setMessage('Email is required')
-      return
-    }
-
-    setCreating(true)
-    setMessage('')
-
-    try {
-      // In a real implementation, this would call the API
-      // For now, just show a message
-      setMessage(`User creation via API would happen here. Use signup form for now.`)
-      setTimeout(() => setMessage(''), 3000)
-    } finally {
-      setCreating(false)
-    }
-  }
 
   return (
     <div className="min-h-screen bg-[#0D0F14] text-white">
@@ -84,14 +59,14 @@ export default function AdminUsersPage() {
         <Card className="p-6 bg-white/5 border-white/10 space-y-4">
           <h2 className="text-xl font-semibold">Create New User</h2>
           <p className="text-sm text-muted-foreground">
-            Use the email signup form at the login page to create investor accounts, or use wallet-based login for role assignment.
+            Investor self-service registration now lives on the investor registration route. Operator and staff access should stay on the operator login path with assigned credentials.
           </p>
           <div className="flex gap-4">
             <Button asChild>
               <Link href="/admin/users/create">Create New User</Link>
             </Button>
             <Button variant="outline" asChild>
-              <Link href="/login">Go to Signup Form</Link>
+              <Link href="/investor/register">Go to investor signup</Link>
             </Button>
           </div>
         </Card>
@@ -122,12 +97,10 @@ export default function AdminUsersPage() {
           <h3 className="text-lg font-semibold mb-3">Authentication Methods</h3>
           <div className="space-y-3 text-sm text-muted-foreground">
             <div>
-              <span className="font-semibold text-white">Email/Password:</span> New users can self-register via the signup form. 
-              They receive the Investor role automatically.
+              <span className="font-semibold text-white">Investor registration:</span> New investors can self-register through the investor registration route and then continue through qualification and KYC.
             </div>
             <div>
-              <span className="font-semibold text-white">Wallet-Based:</span> Connect MetaMask with role-specific email addresses. 
-              The system assigns roles based on email prefix (investor@, token.agent@, issuer@, etc).
+              <span className="font-semibold text-white">Operator access:</span> Staff, issuer, compliance, treasury, tokenisation, and admin users should use assigned credentials through the operator login route.
             </div>
             <div>
               <span className="font-semibold text-white">Pre-seeded Accounts:</span> Test users exist for all roles. 

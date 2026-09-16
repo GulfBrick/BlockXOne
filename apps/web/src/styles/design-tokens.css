@@ -1,0 +1,360 @@
+/**
+ * BlockXOne Brand System v2.0
+ * Source of truth: BlockXOne_Brand_Kit_v2.0_Exact_Logo.zip
+ * Exact chrome/cyan master artwork and sampled production palette.
+ */
+
+:root {
+  color-scheme: dark;
+
+  /* Exact core palette sampled from the supplied master logo. */
+  --bxo-carbon: #01070d;
+  --bxo-midnight: #031a28;
+  --bxo-deep-teal: #09354a;
+  --bxo-structural-blue: #115872;
+  --bxo-signal-cyan: #15b5d3;
+  --bxo-electric-cyan: #2eeffa;
+  --bxo-ice-cyan: #89fafd;
+  --bxo-steel: #78a4b5;
+  --bxo-chrome: #b6d1da;
+  --bxo-frost: #eefbfc;
+  --bxo-carbon-rgb: 1 7 13;
+  --bxo-midnight-rgb: 3 26 40;
+  --bxo-deep-teal-rgb: 9 53 74;
+  --bxo-structural-blue-rgb: 17 88 114;
+  --bxo-signal-cyan-rgb: 21 181 211;
+  --bxo-electric-cyan-rgb: 46 239 250;
+  --bxo-ice-cyan-rgb: 137 250 253;
+  --bxo-steel-rgb: 120 164 181;
+  --bxo-chrome-rgb: 182 209 218;
+  --bxo-frost-rgb: 238 251 252;
+  --bxo-surface-rgb: 7 24 35;
+  --bxo-surface-secondary-rgb: 8 28 40;
+  --bxo-text-secondary-rgb: 156 184 196;
+  --bxo-text-tertiary-rgb: 111 145 159;
+
+  /* Backward-compatible application aliases. */
+  --bxo-bg-primary: var(--bxo-carbon);
+  --bxo-bg-secondary: var(--bxo-midnight);
+  --bxo-surface: rgba(7, 24, 35, 0.88);
+  --bxo-surface-secondary: #081c28;
+  --bxo-surface-elevated: var(--bxo-deep-teal);
+
+  --bxo-accent-primary: var(--bxo-electric-cyan);
+  --bxo-accent-primary-dark: var(--bxo-signal-cyan);
+  --bxo-accent-primary-light: var(--bxo-ice-cyan);
+  --bxo-accent-soft: rgba(46, 239, 250, 0.1);
+  --bxo-accent-muted: rgba(46, 239, 250, 0.16);
+  --bxo-accent-border: rgba(46, 239, 250, 0.32);
+
+  --bxo-gradient-cyan: linear-gradient(
+    135deg,
+    var(--bxo-ice-cyan) 0%,
+    var(--bxo-electric-cyan) 22%,
+    var(--bxo-signal-cyan) 52%,
+    #0a84a3 76%,
+    var(--bxo-structural-blue) 100%
+  );
+  --bxo-gradient-chrome: linear-gradient(
+    135deg,
+    var(--bxo-frost) 0%,
+    var(--bxo-chrome) 20%,
+    var(--bxo-steel) 42%,
+    var(--bxo-frost) 61%,
+    #48798e 82%,
+    var(--bxo-midnight) 100%
+  );
+  --bxo-gradient-panel: linear-gradient(
+    160deg,
+    rgba(17, 88, 114, 0.26) 0%,
+    rgba(7, 24, 35, 0.94) 46%,
+    rgba(1, 7, 13, 0.98) 100%
+  );
+  --bxo-gradient-page:
+    radial-gradient(circle at 80% 6%, rgba(46, 239, 250, 0.12), transparent 27rem),
+    radial-gradient(circle at 18% 84%, rgba(21, 181, 211, 0.08), transparent 32rem),
+    linear-gradient(145deg, var(--bxo-carbon) 0%, #03131e 52%, var(--bxo-midnight) 100%);
+
+  /* Color Palette - Semantic */
+  --bxo-success: #35e0b2;
+  --bxo-success-rgb: 53 224 178;
+  --bxo-success-dark: #20b990;
+  --bxo-success-light: #79f1ce;
+
+  --bxo-warning: #f4c95d;
+  --bxo-warning-rgb: 244 201 93;
+  --bxo-warning-dark: #d3a83e;
+  --bxo-warning-light: #ffe297;
+  --bxo-warning-border: rgba(244, 201, 93, 0.4);
+
+  --bxo-danger: #ff6680;
+  --bxo-danger-rgb: 255 102 128;
+  --bxo-danger-dark: #db435f;
+  --bxo-danger-light: #ff9bad;
+  --bxo-danger-soft: rgba(255, 102, 128, 0.1);
+  --bxo-danger-border: rgba(255, 102, 128, 0.3);
+
+  --bxo-info: var(--bxo-signal-cyan);
+  --bxo-info-dark: #0a84a3;
+  --bxo-info-light: var(--bxo-ice-cyan);
+
+  /* Color Palette - Text */
+  --bxo-text-primary: var(--bxo-frost);
+  --bxo-text-secondary: #9cb8c4;
+  --bxo-text-tertiary: #6f919f;
+  --bxo-text-disabled: rgba(120, 164, 181, 0.56);
+
+  /* Color Palette - Borders & Dividers */
+  --bxo-border-subtle: rgba(120, 164, 181, 0.18);
+  --bxo-border-default: rgba(120, 164, 181, 0.24);
+  --bxo-border-strong: rgba(46, 239, 250, 0.48);
+  --bxo-divider: rgba(120, 164, 181, 0.14);
+
+  /* Color Palette - Overlays */
+  --bxo-overlay-light: rgba(1, 7, 13, 0.5);
+  --bxo-overlay-medium: rgba(1, 7, 13, 0.74);
+  --bxo-overlay-dark: rgba(1, 7, 13, 0.92);
+
+  /* Spacing Scale (4px base) */
+  --bxo-space-0: 0;
+  --bxo-space-1: 4px;
+  --bxo-space-2: 8px;
+  --bxo-space-3: 12px;
+  --bxo-space-4: 16px;
+  --bxo-space-5: 20px;
+  --bxo-space-6: 24px;
+  --bxo-space-7: 28px;
+  --bxo-space-8: 32px;
+  --bxo-space-9: 36px;
+  --bxo-space-10: 40px;
+  --bxo-space-11: 44px;
+  --bxo-space-12: 48px;
+  --bxo-space-13: 52px;
+  --bxo-space-14: 56px;
+  --bxo-space-15: 60px;
+  --bxo-space-16: 64px;
+  --bxo-space-17: 68px;
+  --bxo-space-18: 72px;
+  --bxo-space-19: 76px;
+  --bxo-space-20: 80px;
+  --bxo-space-21: 84px;
+  --bxo-space-22: 88px;
+  --bxo-space-23: 92px;
+  --bxo-space-24: 96px;
+
+  /* Border Radius */
+  --bxo-radius-none: 0;
+  --bxo-radius-xs: 2px;
+  --bxo-radius-sm: 6px;
+  --bxo-radius-base: 8px;
+  --bxo-radius-md: 10px;
+  --bxo-radius-lg: 12px;
+  --bxo-radius-xl: 16px;
+  --bxo-radius-2xl: 18px;
+  --bxo-radius-full: 9999px;
+
+  /* Shadows */
+  --bxo-shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.18);
+  --bxo-shadow-sm: 0 4px 12px rgba(0, 0, 0, 0.22);
+  --bxo-shadow-base: 0 8px 24px rgba(0, 0, 0, 0.28);
+  --bxo-shadow-md: 0 12px 40px rgba(0, 0, 0, 0.35);
+  --bxo-shadow-lg: 0 20px 56px rgba(0, 0, 0, 0.42);
+  --bxo-shadow-xl: 0 28px 80px rgba(0, 0, 0, 0.5);
+
+  /* Restrained brand illumination. */
+  --bxo-shadow-accent-sm: 0 4px 16px rgba(21, 181, 211, 0.12), inset 0 0 0 1px rgba(46, 239, 250, 0.18);
+  --bxo-shadow-accent-md: 0 12px 40px rgba(21, 181, 211, 0.16), inset 0 0 0 1px rgba(46, 239, 250, 0.24);
+  --bxo-shadow-accent-lg: 0 20px 64px rgba(21, 181, 211, 0.2), inset 0 0 0 1px rgba(46, 239, 250, 0.3);
+  --bxo-logo-glow: 0 0 20px rgba(46, 239, 250, 0.22);
+
+  /* Transitions & Animations */
+  --bxo-duration-xfast: 120ms;
+  --bxo-duration-fast: 160ms;
+  --bxo-duration-base: 220ms;
+  --bxo-duration-slow: 300ms;
+  --bxo-duration-slower: 360ms;
+
+  --bxo-ease-linear: linear;
+  --bxo-ease-in: cubic-bezier(0.4, 0, 1, 1);
+  --bxo-ease-out: cubic-bezier(0, 0, 0.2, 1);
+  --bxo-ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+  --bxo-ease-emphasized: cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* Font Families */
+  --bxo-font-display: var(--font-body), 'Archivo', 'Segoe UI', Arial, sans-serif;
+  --bxo-font-editorial: var(--font-accent), 'Abril Fatface', Georgia, serif;
+  --bxo-font-reading: var(--font-reading), 'STIX Two Text', Georgia, serif;
+  --bxo-font-ui: var(--font-body), 'Archivo', 'Segoe UI', Arial, sans-serif;
+  --bxo-font-mono: var(--font-mono), 'JetBrains Mono', 'Cascadia Code', 'SFMono-Regular', Consolas, monospace;
+
+  /* Typography Scale */
+  --bxo-text-xs: 12px;
+  --bxo-text-sm: 14px;
+  --bxo-text-base: 16px;
+  --bxo-text-lg: 18px;
+  --bxo-text-xl: 20px;
+  --bxo-text-2xl: 24px;
+  --bxo-text-3xl: 30px;
+  --bxo-text-4xl: 36px;
+
+  /* Line Heights */
+  --bxo-line-height-tight: 1.2;
+  --bxo-line-height-snug: 1.375;
+  --bxo-line-height-normal: 1.5;
+  --bxo-line-height-relaxed: 1.625;
+  --bxo-line-height-loose: 2;
+
+  /* Z-Index Scale */
+  --bxo-z-hide: -1;
+  --bxo-z-auto: auto;
+  --bxo-z-0: 0;
+  --bxo-z-10: 10;
+  --bxo-z-20: 20;
+  --bxo-z-30: 30;
+  --bxo-z-40: 40;
+  --bxo-z-50: 50;
+  --bxo-z-dropdown: 1000;
+  --bxo-z-sticky: 1020;
+  --bxo-z-fixed: 1030;
+  --bxo-z-modal: 1040;
+  --bxo-z-popover: 1050;
+  --bxo-z-tooltip: 1060;
+}
+
+.dark {
+  /* Dark mode is default and uses the root token set. */
+}
+
+.bg-gradient-accent {
+  background: var(--bxo-gradient-cyan);
+}
+
+.bg-gradient-success {
+  background: linear-gradient(135deg, var(--bxo-success) 0%, var(--bxo-success-dark) 100%);
+}
+
+.bg-gradient-warning {
+  background: linear-gradient(135deg, var(--bxo-warning) 0%, var(--bxo-warning-dark) 100%);
+}
+
+.bg-gradient-danger {
+  background: linear-gradient(135deg, var(--bxo-danger) 0%, var(--bxo-danger-dark) 100%);
+}
+
+.bg-gradient-dark {
+  background: var(--bxo-gradient-panel);
+}
+
+/* Solid institutional surfaces. No glass blur. Depth comes from
+   elevation + a hairline border, the way a trading terminal reads. */
+.glass-base {
+  background: var(--bxo-surface);
+  border: 1px solid var(--bxo-border-subtle);
+}
+
+.glass-elevated {
+  background: var(--bxo-gradient-panel);
+  border: 1px solid var(--bxo-border-default);
+}
+
+.focus-ring {
+  outline: none;
+}
+
+.focus-ring:focus-visible {
+  box-shadow: 0 0 0 2px var(--bxo-bg-primary), 0 0 0 4px var(--bxo-accent-primary);
+}
+
+.interactive {
+  transition: all var(--bxo-duration-base) var(--bxo-ease-out);
+}
+
+.interactive:hover {
+  transform: translateY(-1px);
+}
+
+.interactive:active {
+  transform: translateY(0);
+}
+
+.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--bxo-surface) 25%,
+    var(--bxo-surface-elevated) 50%,
+    var(--bxo-surface) 75%
+  );
+  background-size: 200% 100%;
+  animation: loading 1.5s infinite;
+}
+
+@keyframes loading {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+.pulse-subtle {
+  animation: pulse-subtle 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@keyframes pulse-subtle {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.85;
+  }
+}
+
+.scale-in {
+  animation: scale-in 0.2s var(--bxo-ease-out);
+}
+
+@keyframes scale-in {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.slide-up {
+  animation: slide-up 0.3s var(--bxo-ease-out);
+}
+
+@keyframes slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.fade-in {
+  animation: fade-in 0.3s var(--bxo-ease-out);
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}

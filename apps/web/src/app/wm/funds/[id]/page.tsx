@@ -1,401 +1,304 @@
 'use client'
 
-import { useEffect, useState } from 'react'
-import { useParams } from 'next/navigation'
-import { motion } from 'framer-motion'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
+import { useParams } from 'next/navigation'
+import { ArrowLeft, CheckCircle2, CircleDashed, LockKeyhole, ShieldCheck } from 'lucide-react'
 
-import { AnimatedCard } from '@/components/motion/animated-card'
-import { TabContent } from '@/components/motion/tab-content'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import { Fund, ensureFunds, saveFunds } from '@/lib/demo-funds'
+import { useAuth } from '@/lib/auth-context-v2'
+import { blockXOneApi } from '@/lib/api-client'
+import { baseUnitsToExactDecimal, formatExactMoney, formatExactUnits } from '@/lib/exact-decimal'
+import { managedTestnet, networkTargetLabel } from '@/lib/managed-testnets'
+import { type OfferingReadiness, type TypedOffering } from '@/lib/pilot-finance'
+import { localDeploymentIdempotencyKey } from '@/lib/token-operations'
+
+function pretty(value: string) {
+  return value.replace(/[_-]+/g, ' ').replace(/\b\w/g, (character) => character.toUpperCase())
+}
+
+function entries(value: object | null | undefined) {
+  return value ? Object.entries(value) : []
+}
 
 export default function FundManagementPage() {
   const params = useParams()
-  const fundId = params.id as string
-  const [fund, setFund] = useState<Fund | null>(null)
-  const [activeTab, setActiveTab] = useState('overview')
-  const [mintAmount, setMintAmount] = useState('')
-  const [burnAmount, setBurnAmount] = useState('')
-  const [navValue, setNavValue] = useState('')
-  const [status, setStatus] = useState('')
+  const offeringId = params.id as string
+  const { user, loading: authLoading } = useAuth()
+  const [offering, setOffering] = useState<TypedOffering | null>(null)
+  const [readiness, setReadiness] = useState<OfferingReadiness | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [working, setWorking] = useState(false)
+  const [error, setError] = useState('')
+  const [message, setMessage] = useState('')
+  const [deploymentEvidence, setDeploymentEvidence] = useState<{
+    tokenContract: string
+    identityRegistry: string
+    compliance: string
+    transactionHash: string
+  } | null>(null)
+  const loadRequestId = useRef(0)
 
-  const formatZAR = (value: number) =>
-    new Intl.NumberFormat('en-ZA', { style: 'currency', currency: 'ZAR', maximumFractionDigits: 0 }).format(value)
+  const load = useCallback(async () => {
+    const requestId = ++loadRequestId.current
+    if (!user) {
+      setOffering(null)
+      setReadiness(null)
+      setLoading(false)
+      return
+    }
+    setLoading(true)
+    setOffering(null)
+    setReadiness(null)
+    setDeploymentEvidence(null)
+    setError('')
+    try {
+      const [offeringRecord, readinessRecord] = await Promise.all([
+        blockXOneApi.offering.get(user.token, offeringId),
+        blockXOneApi.offering.readiness(user.token, offeringId),
+      ])
+      if (requestId !== loadRequestId.current) return
+      setOffering(offeringRecord)
+      setReadiness(readinessRecord)
+    } catch (caught) {
+      if (requestId !== loadRequestId.current) return
+      setOffering(null)
+      setReadiness(null)
+      setError(caught instanceof Error ? caught.message : 'Unable to load offering evidence.')
+    } finally {
+      if (requestId === loadRequestId.current) setLoading(false)
+    }
+  }, [offeringId, user])
 
   useEffect(() => {
-    const data = ensureFunds()
-    const found = data.find((f) => f.id === fundId) || data[0] || null
-    setFund(found)
-    setNavValue(found ? String(found.nav) : '')
-  }, [fundId])
+    if (authLoading) return
+    void load()
+  }, [authLoading, load])
 
-  const persistFund = (updated: Fund) => {
-    const all = ensureFunds().map((f) => (f.id === updated.id ? updated : f))
-    setFund(updated)
-    saveFunds(all)
-  }
+  const classTerms = useMemo(() => {
+    const terms = offering?.instrument_terms
+    if (!terms) return null
+    return terms.private_debt_terms || terms.fund_interest_terms || terms.real_estate_spv_terms || null
+  }, [offering])
 
-  const handleMint = () => {
-    if (!fund) return
-    const tokens = parseFloat(mintAmount)
-    if (!tokens || tokens <= 0) return
-    const tokenValue = tokens * fund.nav
-    const feeValue = (tokenValue * fund.mintFeeBps) / 10000
-    const updated: Fund = {
-      ...fund,
-      totalSupply: fund.totalSupply + tokens,
-      aum: fund.aum + tokenValue + feeValue,
+  async function activateProfile() {
+    if (!user || !readiness?.financial_profile || working) return
+    setWorking(true)
+    setError('')
+    setMessage('')
+    try {
+      await blockXOneApi.offering.activateFinancialProfile(
+        user.token,
+        offeringId,
+        readiness.financial_profile.id
+      )
+      setMessage('The financial profile is ACTIVE. The exact checker identity and timestamp are now part of the readiness record.')
+      await load()
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Unable to activate the financial profile.')
+    } finally {
+      setWorking(false)
     }
-    persistFund(updated)
-    setStatus(`Minted ${tokens.toLocaleString()} tokens (+${formatZAR(feeValue)} fee)`)
-    setMintAmount('')
   }
 
-  const handleBurn = () => {
-    if (!fund) return
-    const tokens = parseFloat(burnAmount)
-    if (!tokens || tokens <= 0) return
-    const tokenValue = tokens * fund.nav
-    const feeValue = (tokenValue * fund.burnFeeBps) / 10000
-    const updated: Fund = {
-      ...fund,
-      totalSupply: Math.max(fund.totalSupply - tokens, 0),
-      aum: Math.max(fund.aum - tokenValue - feeValue, 0),
+  async function deployLocalToken() {
+    if (!user || !offering || !readiness || working) return
+    setWorking(true)
+    setError('')
+    setMessage('')
+    try {
+      const prefix =
+        readiness.asset_class === 'PRIVATE_DEBT_NOTE'
+          ? 'BXOD'
+          : readiness.asset_class === 'FUND_INTEREST'
+            ? 'BXOF'
+            : 'BXOR'
+      const suffix = offering.id.replaceAll('-', '').slice(0, 6).toUpperCase()
+      const result = await blockXOneApi.offering.deployLocalERC3643(
+        user.token,
+        offeringId,
+        {
+          symbol: `${prefix}${suffix}`,
+          decimals: offering.instrument_terms.common_terms.token_decimals,
+          idempotency_key: localDeploymentIdempotencyKey(offeringId),
+        }
+      )
+      setDeploymentEvidence({
+        tokenContract: result.token_contract,
+        identityRegistry: result.identity_registry,
+        compliance: result.compliance,
+        transactionHash: result.tx_hash,
+      })
+      setMessage('The zero-supply ERC-3643 token was deployed on the private validation chain and bound to the bootstrap identity and compliance contracts.')
+      await load()
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Unable to deploy the local ERC-3643 token.')
+    } finally {
+      setWorking(false)
     }
-    persistFund(updated)
-    setStatus(`Burned ${tokens.toLocaleString()} tokens (-${formatZAR(feeValue)} fee)`)
-    setBurnAmount('')
   }
 
-  const handleNavUpdate = () => {
-    if (!fund) return
-    if (!navValue || parseFloat(navValue) <= 0) return
-    const nextNav = parseFloat(navValue)
-    const updated: Fund = {
-      ...fund,
-      nav: nextNav,
-      aum: Math.max(nextNav * fund.totalSupply, 0),
-    }
-    persistFund(updated)
-    setStatus(`NAV updated to ${formatZAR(nextNav)}`)
+  if (authLoading || loading) {
+    return <main className="min-h-screen bg-bxo-bg-primary p-12 text-bxo-text-secondary">Loading authoritative terms and readiness…</main>
   }
 
-  if (!fund) {
+  if (!offering || !readiness) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-[#0D0F14] text-muted-foreground">
-        Loading fund...
-      </div>
+      <main className="min-h-screen bg-bxo-bg-primary px-4 py-16 text-bxo-text-primary">
+        <section className="mx-auto max-w-3xl bxo-panel p-8">
+          <h1 className="font-display text-3xl font-bold">Offering evidence unavailable</h1>
+          <p role="alert" className="mt-3 text-bxo-danger-light">{error || 'The API did not return a typed offering.'}</p>
+          <Button asChild className="mt-6"><Link href="/wm/funds">Return to pipeline</Link></Button>
+        </section>
+      </main>
     )
   }
 
+  const terms = offering.instrument_terms
+  const profile = readiness.financial_profile
+  const makerCannotApprove = profile?.prepared_by_user_id === user?.id
+  const canActivate =
+    profile?.status === 'DRAFT' &&
+    user?.permissions?.['financial_profile:approve'] === true &&
+    !makerCannotApprove
+  const canDeploy =
+    offering.status === 'DRAFT' &&
+    readiness.runtime_scope === 'LOCAL_PILOT' &&
+    !readiness.token_deployed &&
+    user?.permissions?.['tokenops:deploy_erc3643'] === true
+  const testnetTarget = managedTestnet(offering.chain_id)
+  const hasLocalContractRecord = readiness.runtime_scope === 'LOCAL_PILOT' && readiness.token_deployed
+  const hasTestnetContractRecord = readiness.runtime_scope === 'TESTNET' && readiness.token_deployed
+  const hasDeploymentProof = hasLocalContractRecord || hasTestnetContractRecord
+
   return (
-    <div className="min-h-screen relative">
-      <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_120%,rgba(0,188,212,0.08),transparent_50%)]" />
-      
-      <div className="container relative mx-auto px-4 py-8 max-w-6xl">
-        <Link href="/wm/funds" className="inline-flex items-center text-sm text-muted-foreground hover:text-foreground mb-6 transition-colors">
-          <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-          </svg>
-          Back to Funds
+    <main className="min-h-screen bg-bxo-bg-primary px-4 py-10 text-bxo-text-primary sm:px-6 lg:px-8">
+      <div className="mx-auto max-w-6xl space-y-7">
+        <Link href="/wm/funds" className="inline-flex min-h-11 items-center gap-2 text-sm text-bxo-text-secondary hover:text-bxo-text-primary">
+          <ArrowLeft className="h-4 w-4" />Back to pipeline
         </Link>
 
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.5 }}
-        >
-          <div className="glass-surface rounded-2xl p-8 mb-6">
-            <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between mb-6">
-              <div>
-                <h1 className="text-3xl font-bold mb-1">{fund.name}</h1>
-                <p className="text-muted-foreground flex flex-wrap gap-2 items-center text-sm">
-                  <span className="px-2 py-1 rounded-full bg-white/5 border border-white/10">{fund.symbol}</span>
-                  <span className="px-2 py-1 rounded-full bg-white/5 border border-white/10">{fund.chain}</span>
-                  <span className="px-2 py-1 rounded-full bg-white/5 border border-white/10 capitalize">{fund.environment}</span>
-                  <span className={`px-2 py-1 rounded-full text-xs ${fund.kycRequired ? 'bg-amber-400/15 text-amber-300' : 'bg-green-400/10 text-green-300'}`}>
-                    {fund.kycRequired ? 'KYC required' : 'KYC optional'}
-                  </span>
-                </p>
-              </div>
-              <div className="flex flex-wrap gap-2 justify-end">
-                <span className="text-xs px-3 py-1.5 rounded-full bg-primary/10 text-primary">{fund.status || 'Draft'}</span>
-                <span className="text-xs px-3 py-1.5 rounded-full bg-white/5 border border-white/10">
-                  Mint {fund.mintFeeBps / 100}% • Burn {fund.burnFeeBps / 100}%
-                </span>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
-              <div>
-                <div className="text-sm text-muted-foreground mb-1">Total AUM</div>
-                <div className="text-2xl font-bold">{formatZAR(fund.aum)}</div>
-              </div>
-              <div>
-                <div className="text-sm text-muted-foreground mb-1">NAV per Token</div>
-                <div className="text-2xl font-bold">{formatZAR(fund.nav)}</div>
-              </div>
-              <div>
-                <div className="text-sm text-muted-foreground mb-1">Total Supply</div>
-                <div className="text-2xl font-bold">{fund.totalSupply.toLocaleString()}</div>
-              </div>
-              <div>
-                <div className="text-sm text-muted-foreground mb-1">Investors</div>
-                <div className="text-2xl font-bold">{fund.investors}</div>
-              </div>
-            </div>
+        <header className="bxo-panel p-6 sm:p-8">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="rounded-full border border-bxo-accent-border bg-bxo-accent-soft px-3 py-1 text-xs font-semibold text-bxo-accent-primary">{pretty(readiness.asset_class)}</span>
+            <span className="rounded-full border border-bxo-border-default px-3 py-1 text-xs">{readiness.runtime_scope === 'TESTNET' ? 'Public testnet' : 'Private validation network'}</span>
+            <span className="rounded-full border border-bxo-border-default px-3 py-1 text-xs">{pretty(offering.status)}</span>
           </div>
+          <h1 className="mt-5 font-display text-4xl font-bold">{offering.name}</h1>
+          <p className="mt-3 max-w-3xl leading-7 text-bxo-text-secondary">{offering.description}</p>
+          <dl className="mt-6 grid gap-3 sm:grid-cols-3">
+            <div className="rounded-xl border border-bxo-border-subtle p-4"><dt className="text-xs text-bxo-text-tertiary">Exact unit price</dt><dd className="mt-2 font-mono">{formatExactMoney(offering.price, offering.currency)}</dd></div>
+            <div className="rounded-xl border border-bxo-border-subtle p-4"><dt className="text-xs text-bxo-text-tertiary">Network target</dt><dd className="mt-2 font-mono">{networkTargetLabel(offering.chain_id)}</dd></div>
+            <div className="rounded-xl border border-bxo-border-subtle p-4"><dt className="text-xs text-bxo-text-tertiary">Payment mode</dt><dd className="mt-2">{profile?.consideration_source === 'TEST_PROVIDER' ? 'Stripe TEST provider evidence' : profile?.consideration_source === 'SYNTHETIC_TEST' ? 'Independent synthetic evidence, no payment provider' : 'Not configured'}</dd><p className="mt-1 text-xs text-bxo-warning-light">No real funds are accepted or settled</p></div>
+          </dl>
+        </header>
 
-          {status && (
-            <motion.div
-              initial={{ opacity: 0, y: -10 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="glass-surface border border-primary/20 rounded-xl p-4 mb-6 flex items-center gap-3"
-            >
-              <div className="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center">
-                <svg className="w-5 h-5 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                </svg>
-              </div>
-              <div>
-                <div className="font-semibold">Updated</div>
-                <div className="text-sm text-muted-foreground">{status}</div>
-              </div>
-            </motion.div>
-          )}
+        {error ? <div role="alert" className="rounded-xl border border-bxo-danger-border bg-bxo-danger-soft p-4 text-sm text-bxo-danger-light">{error}</div> : null}
+        {message ? <div role="status" className="rounded-xl border border-bxo-success/30 bg-bxo-success/10 p-4 text-sm text-bxo-success-light">{message}</div> : null}
 
-          <div className="glass-surface rounded-2xl p-6">
-            <div className="flex gap-4 border-b border-white/10 mb-6">
-              {['overview', 'tokens', 'nav', 'investors'].map((tab) => (
-                <button
-                  key={tab}
-                  onClick={() => setActiveTab(tab)}
-                  className={`pb-3 px-2 text-sm font-medium transition-colors relative ${
-                    activeTab === tab ? 'text-primary' : 'text-muted-foreground hover:text-foreground'
-                  }`}
-                >
-                  {tab.charAt(0).toUpperCase() + tab.slice(1)}
-                  {activeTab === tab && (
-                    <motion.div
-                      layoutId="fundTab"
-                      className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary"
-                      transition={{ duration: 0.2 }}
-                    />
-                  )}
-                </button>
+        <section className="grid gap-5 lg:grid-cols-3">
+          {[
+            { label: 'Terms approval', ready: readiness.terms_approved, detail: `v${readiness.instrument_terms_version}` },
+            { label: 'Financial profile', ready: readiness.financial_profile_active, detail: profile?.status || 'MISSING' },
+            { label: 'Subscription intake', ready: readiness.subscription_enabled, detail: readiness.subscription_enabled ? 'ENABLED' : 'BLOCKED' },
+          ].map((item) => (
+            <div key={item.label} className={`rounded-2xl border p-5 ${item.ready ? 'border-bxo-success/30 bg-bxo-success/10' : 'border-bxo-warning-border bg-bxo-warning/10'}`}>
+              <div className="flex items-center gap-2 text-sm font-semibold">{item.ready ? <CheckCircle2 className="h-4 w-4 text-bxo-success-light" /> : <CircleDashed className="h-4 w-4 text-bxo-warning-light" />}{item.label}</div>
+              <p className="mt-3 font-mono text-sm">{item.detail}</p>
+            </div>
+          ))}
+        </section>
+
+        <section className="grid gap-5 lg:grid-cols-2">
+          <div className="bxo-panel p-6">
+            <h2 className="font-display text-2xl font-bold">Immutable instrument terms</h2>
+            <p className="mt-2 break-all font-mono text-xs text-bxo-text-tertiary">SHA-256 {readiness.instrument_terms_sha256}</p>
+            <h3 className="mt-6 text-xs font-semibold uppercase tracking-[0.12em] text-bxo-accent-primary">Common</h3>
+            <dl className="mt-3 divide-y divide-bxo-divider">
+              {entries(terms.common_terms).map(([label, value]) => (
+                <div key={label} className="flex items-start justify-between gap-4 py-3 text-sm">
+                  <dt className="text-bxo-text-tertiary">{pretty(label)}</dt>
+                  <dd className="break-all text-right font-mono">
+                    {label === 'authorized_units_base_units'
+                      ? `${formatExactUnits(baseUnitsToExactDecimal(String(value), terms.common_terms.token_decimals))} units`
+                      : String(value)}
+                  </dd>
+                </div>
               ))}
+            </dl>
+            <h3 className="mt-6 text-xs font-semibold uppercase tracking-[0.12em] text-bxo-accent-primary">Class-specific</h3>
+            <dl className="mt-3 divide-y divide-bxo-divider">
+              {entries(classTerms).map(([label, value]) => (
+                <div key={label} className="flex items-start justify-between gap-4 py-3 text-sm">
+                  <dt className="text-bxo-text-tertiary">{pretty(label)}</dt>
+                  <dd className="max-w-[55%] break-all text-right font-mono">{String(value)}</dd>
+                </div>
+              ))}
+            </dl>
+            <div className="mt-5 grid gap-2 text-xs text-bxo-text-tertiary">
+              <p>Maker: <span className="break-all font-mono">{terms.prepared_by_user_id}</span></p>
+              <p>Checker: <span className="break-all font-mono">{terms.approved_by_user_id || 'Not approved'}</span></p>
+              <p>Approved: <span className="font-mono">{terms.approved_at || 'Not approved'}</span></p>
+            </div>
+          </div>
+
+          <div className="space-y-5">
+            <div className="bxo-panel p-6">
+              <h2 className="font-display text-2xl font-bold">Financial profile evidence</h2>
+              {profile ? (
+                <>
+                  <dl className="mt-5 space-y-3 text-sm">
+                    <div><dt className="text-bxo-text-tertiary">Profile ID</dt><dd className="mt-1 break-all font-mono">{profile.id}</dd></div>
+                    <div><dt className="text-bxo-text-tertiary">Terms binding</dt><dd className="mt-1 break-all font-mono">v{profile.terms_version} · {profile.terms_sha256}</dd></div>
+                    <div><dt className="text-bxo-text-tertiary">Payment mode</dt><dd className="mt-1">{profile.consideration_source === 'TEST_PROVIDER' ? 'Stripe TEST provider evidence' : profile.consideration_source === 'SYNTHETIC_TEST' ? 'Independent synthetic evidence, no payment provider' : 'Configured evidence source'}</dd></div>
+                    <div><dt className="text-bxo-text-tertiary">Maker</dt><dd className="mt-1 break-all font-mono">{profile.prepared_by_user_id}</dd></div>
+                    <div><dt className="text-bxo-text-tertiary">Checker</dt><dd className="mt-1 break-all font-mono">{profile.approved_by_user_id || 'Independent checker required'}</dd></div>
+                  </dl>
+                  {profile.status === 'DRAFT' ? (
+                    <div className="mt-6">
+                      <Button onClick={() => void activateProfile()} disabled={!canActivate || working}>
+                        {working ? 'Activating…' : makerCannotApprove ? 'Maker cannot activate' : 'Activate exact profile'}
+                      </Button>
+                      {!canActivate ? <p className="mt-3 flex items-center gap-2 text-xs text-bxo-text-tertiary"><LockKeyhole className="h-4 w-4" />Requires financial_profile:approve and a different user.</p> : null}
+                    </div>
+                  ) : null}
+                </>
+              ) : <p className="mt-4 text-sm text-bxo-warning-light">No financial profile is bound to this offering.</p>}
             </div>
 
-            <TabContent activeKey={activeTab}>
-              {activeTab === 'overview' && (
-                <div className="space-y-6">
-                  <div>
-                    <h3 className="text-lg font-semibold mb-3">Fund Details</h3>
-                    <div className="grid md:grid-cols-2 gap-4">
-                      <div className="p-4 rounded-lg bg-white/5">
-                        <div className="text-sm text-muted-foreground mb-1">Token Address</div>
-                        <div className="font-mono text-sm">{fund.tokenAddress}</div>
-                      </div>
-                      <div className="p-4 rounded-lg bg-white/5">
-                        <div className="text-sm text-muted-foreground mb-1">Blockchain</div>
-                        <div className="font-semibold">{fund.chain}</div>
-                      </div>
-                      <div className="p-4 rounded-lg bg-white/5">
-                        <div className="text-sm text-muted-foreground mb-1">Environment</div>
-                        <div className="font-semibold capitalize">{fund.environment}</div>
-                      </div>
-                      <div className="p-4 rounded-lg bg-white/5">
-                        <div className="text-sm text-muted-foreground mb-1">Fees & Controls</div>
-                        <div className="flex flex-wrap gap-2 text-sm">
-                          <span className="px-2 py-1 rounded bg-white/10 border border-white/10">Mint {fund.mintFeeBps / 100}%</span>
-                          <span className="px-2 py-1 rounded bg-white/10 border border-white/10">Burn {fund.burnFeeBps / 100}%</span>
-                          <span className={`px-2 py-1 rounded text-xs ${fund.kycRequired ? 'bg-amber-400/15 text-amber-300' : 'bg-green-400/10 text-green-300'}`}>
-                            {fund.kycRequired ? 'KYC required' : 'KYC optional'}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
+            <div className="bxo-panel p-6">
+              <h2 className="font-display text-2xl font-bold">Chain evidence</h2>
+              <div className={`mt-4 flex gap-3 rounded-xl border p-4 ${hasDeploymentProof ? 'border-bxo-success/30 bg-bxo-success/10' : 'border-bxo-warning-border bg-bxo-warning/10'}`}>
+                <ShieldCheck className={`mt-0.5 h-5 w-5 shrink-0 ${hasDeploymentProof ? 'text-bxo-success-light' : 'text-bxo-warning'}`} />
+                <div className="text-sm leading-6 text-bxo-text-secondary">
+                  <p className="font-semibold text-bxo-text-primary">{testnetTarget ? hasTestnetContractRecord ? `${testnetTarget.name} deployment evidenced` : `${testnetTarget.name} target configured. Deployment not yet evidenced` : hasLocalContractRecord ? 'Private validation token deployment evidenced' : 'Deployment required before publish'}</p>
+                  <p className="mt-1">{testnetTarget ? hasTestnetContractRecord ? `Chain ${testnetTarget.chainId} has finalized deployment evidence bound to the active network, factory, and child-token manifests.` : `Chain ${testnetTarget.chainId} is configuration only on this page. Completion requires a finalized transaction, successful receipt, active manifests, and network finality evidence.` : hasLocalContractRecord ? 'The confirmed deployment operation, transaction, exact token address, identity registry, and compliance addresses are authoritative application records. Subscription issuance still requires its own exact mint receipt and legal-register evidence.' : 'A network target alone is not a deployment. A Tokenisation Agent must deploy zero initial supply against the configured identity and compliance manifest.'}</p>
                 </div>
-              )}
-
-              {activeTab === 'tokens' && (
-                <div className="space-y-6">
-                  <div className="grid md:grid-cols-2 gap-6">
-                    <AnimatedCard>
-                      <h3 className="text-lg font-semibold mb-4">Mint Tokens</h3>
-                      <p className="text-sm text-muted-foreground mb-4">
-                        Issue new fund tokens for capital raises or subscriptions
-                      </p>
-                      <div className="space-y-4">
-                        <div>
-                          <Label>Number of Tokens</Label>
-                          <Input
-                            type="number"
-                            placeholder="0"
-                            value={mintAmount}
-                            onChange={(e) => setMintAmount(e.target.value)}
-                            className="mt-2"
-                          />
-                        </div>
-                        <div className="p-3 rounded-lg bg-white/5">
-                          <div className="text-xs text-muted-foreground mb-1">Value at Current NAV</div>
-                          <div className="text-lg font-semibold">
-                            {formatZAR(mintAmount ? parseFloat(mintAmount) * fund.nav : 0)}
-                          </div>
-                          <div className="text-xs text-muted-foreground">Fee: {formatZAR((mintAmount ? parseFloat(mintAmount) * fund.nav : 0) * fund.mintFeeBps / 10000)}</div>
-                        </div>
-                        <Button
-                          onClick={handleMint}
-                          disabled={!mintAmount || parseFloat(mintAmount) <= 0}
-                          className="w-full bg-green-600 hover:bg-green-700 hover-elevate press-compress focus-ring"
-                        >
-                          Mint Tokens
-                        </Button>
-                      </div>
-                    </AnimatedCard>
-
-                    <AnimatedCard>
-                      <h3 className="text-lg font-semibold mb-4">Burn Tokens</h3>
-                      <p className="text-sm text-muted-foreground mb-4">
-                        Remove tokens from circulation for redemptions or adjustments
-                      </p>
-                      <div className="space-y-4">
-                        <div>
-                          <Label>Number of Tokens</Label>
-                          <Input
-                            type="number"
-                            placeholder="0"
-                            value={burnAmount}
-                            onChange={(e) => setBurnAmount(e.target.value)}
-                            className="mt-2"
-                          />
-                        </div>
-                        <div className="p-3 rounded-lg bg-white/5">
-                          <div className="text-xs text-muted-foreground mb-1">Value at Current NAV</div>
-                          <div className="text-lg font-semibold">
-                            {formatZAR(burnAmount ? parseFloat(burnAmount) * fund.nav : 0)}
-                          </div>
-                          <div className="text-xs text-muted-foreground">Fee: {formatZAR((burnAmount ? parseFloat(burnAmount) * fund.nav : 0) * fund.burnFeeBps / 10000)}</div>
-                        </div>
-                        <Button
-                          onClick={handleBurn}
-                          disabled={!burnAmount || parseFloat(burnAmount) <= 0}
-                          className="w-full bg-red-600 hover:bg-red-700 hover-elevate press-compress focus-ring"
-                        >
-                          Burn Tokens
-                        </Button>
-                      </div>
-                    </AnimatedCard>
-                  </div>
-
-                  <div className="p-4 rounded-lg bg-primary/5 border border-primary/20">
-                    <div className="flex items-start gap-3">
-                      <svg className="w-5 h-5 text-primary mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                      </svg>
-                      <div className="text-sm">
-                        <div className="font-semibold mb-1">Token Management Notice</div>
-                        <div className="text-muted-foreground">
-                          All token operations are recorded on the blockchain and require gas fees. 
-                          Ensure you have sufficient funds in your wallet before proceeding.
-                        </div>
-                      </div>
-                    </div>
-                  </div>
+              </div>
+              <dl className="mt-5 space-y-3 text-sm">
+                <div><dt className="text-bxo-text-tertiary">Token contract record</dt><dd className="mt-1 break-all font-mono">{offering.token_contract || 'None'}</dd></div>
+                <div><dt className="text-bxo-text-tertiary">Compliance registry</dt><dd className="mt-1 break-all font-mono">{offering.compliance_registry || 'Not configured'}</dd></div>
+                <div><dt className="text-bxo-text-tertiary">Deployment transaction record</dt><dd className="mt-1 break-all font-mono">{deploymentEvidence?.transactionHash || offering.deployment_transaction_hash || 'None'}</dd></div>
+              </dl>
+              {!readiness.token_deployed && readiness.runtime_scope === 'LOCAL_PILOT' ? (
+                <div className="mt-6">
+                  <Button onClick={() => void deployLocalToken()} disabled={!canDeploy || working}>
+                    {working ? 'Deploying and waiting for receipt…' : canDeploy ? 'Deploy zero-supply token' : 'Tokenisation Agent required'}
+                  </Button>
+                  <p className="mt-3 text-xs text-bxo-text-tertiary">Private validation network only. The platform supplies the exact registry and compliance addresses from the configured manifest; callers cannot substitute them.</p>
                 </div>
-              )}
-
-              {activeTab === 'nav' && (
-                <div className="space-y-6">
-                  <AnimatedCard>
-                    <h3 className="text-lg font-semibold mb-4">Update NAV</h3>
-                    <p className="text-sm text-muted-foreground mb-4">
-                      Set the Net Asset Value per token based on fund performance
-                    </p>
-                    <div className="space-y-4">
-                      <div>
-                        <Label>NAV per Token (ZAR)</Label>
-                        <Input
-                          type="number"
-                          step="0.01"
-                          placeholder="0.00"
-                          value={navValue}
-                          onChange={(e) => setNavValue(e.target.value)}
-                          className="mt-2"
-                        />
-                      </div>
-                      <div className="p-3 rounded-lg bg-white/5">
-                        <div className="text-xs text-muted-foreground mb-1">Total Fund Value</div>
-                        <div className="text-lg font-semibold">
-                          {formatZAR(navValue ? parseFloat(navValue) * fund.totalSupply : 0)}
-                        </div>
-                      </div>
-                      <Button
-                        onClick={handleNavUpdate}
-                        disabled={!navValue || parseFloat(navValue) <= 0}
-                        className="w-full bg-primary hover:bg-primary/90 hover-elevate press-compress focus-ring"
-                      >
-                        Update NAV
-                      </Button>
-                    </div>
-                  </AnimatedCard>
-
-                  <div className="space-y-3">
-                    <h3 className="text-lg font-semibold">NAV History</h3>
-                    <div className="space-y-2">
-                      {[
-                        { date: '2025-10-15', value: 105.20, change: '+2.3%' },
-                        { date: '2025-10-01', value: 102.85, change: '+1.8%' },
-                        { date: '2025-09-15', value: 101.04, change: '-0.5%' },
-                      ].map((entry) => (
-                        <div key={entry.date} className="flex justify-between items-center p-3 rounded-lg bg-white/5">
-                          <span className="text-sm text-muted-foreground">{entry.date}</span>
-                          <div className="flex items-center gap-4">
-                            <span className="font-semibold">R{entry.value.toFixed(2)}</span>
-                            <span className={`text-sm ${entry.change.startsWith('+') ? 'text-green-400' : 'text-red-400'}`}>
-                              {entry.change}
-                            </span>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
+              ) : !readiness.token_deployed && readiness.runtime_scope === 'TESTNET' ? (
+                <div className="mt-6 rounded-xl border border-bxo-warning-border bg-bxo-warning/10 p-4">
+                  <p className="text-sm font-semibold text-bxo-text-primary">Governed deployment handoff required</p>
+                  <p className="mt-2 text-xs leading-5 text-bxo-text-secondary">
+                    An authorised Tokenisation Agent must create the bound deployment operation in its deployment queue. A different authorised checker must approve the immutable operation before signing and broadcast.
+                  </p>
                 </div>
-              )}
-
-              {activeTab === 'investors' && (
-                <div>
-                  <h3 className="text-lg font-semibold mb-4">Investor Distribution</h3>
-                  <div className="space-y-3">
-                    {[
-                      { name: 'John Smith', holdings: 12500 },
-                      { name: 'Sarah Johnson', holdings: 8200 },
-                      { name: 'Michael Chen', holdings: 15600 },
-                    ].map((investor) => (
-                      <div key={investor.name} className="flex justify-between items-center p-4 rounded-lg bg-white/5">
-                        <div>
-                          <div className="font-semibold">{investor.name}</div>
-                          <div className="text-sm text-muted-foreground">{investor.holdings.toLocaleString()} tokens</div>
-                        </div>
-                        <div className="text-right">
-                          <div className="font-semibold">{formatZAR(investor.holdings * fund.nav)}</div>
-                          <div className="text-xs text-muted-foreground">
-                            {((investor.holdings / Math.max(fund.totalSupply, 1)) * 100).toFixed(2)}% of total
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </TabContent>
+              ) : null}
+            </div>
           </div>
-        </motion.div>
+        </section>
       </div>
-    </div>
+    </main>
   )
 }

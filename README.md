@@ -1,5 +1,47 @@
 # BlockXOne — Asset Tokenization Platform (MVP Build)
 
+## Hosted website release
+
+The current `apps/web` package contains the public BlockXOne website prepared for
+the existing `block-x-one` Vercel project. Set its Root Directory to `apps/web`,
+Framework Preset to Next.js, and Node.js Version to 22.x. The package's Vercel
+configuration runs installation and builds with the pinned Node/npm toolchain.
+
+Set these non-secret values for both production and preview:
+
+```text
+BLOCKXONE_WEB_SURFACE=public
+NEXT_PUBLIC_BLOCKXONE_WEB_SURFACE=public
+BLOCKXONE_RELEASE_MODE=production
+NEXT_PUBLIC_BLOCKXONE_RELEASE_MODE=production
+NEXT_PUBLIC_DEMO_REQUEST_ENABLED=false
+SERVER_ACTION_ALLOWED_ORIGINS=block-x-one.vercel.app,bx1.co.za,www.bx1.co.za
+```
+
+Leave `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_DEMO_REQUEST_ENDPOINT`, and
+`NEXT_PUBLIC_DEMO_PRIVACY_NOTICE_URL` unset for this showcase release. Intake is
+disabled: the enquiry form is not rendered and cannot submit personal details.
+Enabling intake separately
+requires an approved, published privacy notice and verified Supabase origin,
+abuse-control, retention, and notification configuration. Do not use placeholder
+controller details or turn off the enabled-intake validation gates.
+
+This release does not host or authorize financial operations, investor accounts,
+payments, token issuance, or production blockchain execution. Authenticated
+platform and API routes remain unavailable on the public website. The historical
+MVP setup below is not the deployment procedure for this hosted website.
+
+Vercel commercial use requires an eligible paid plan. Connecting `bx1.co.za`
+requires the exact DNS records issued for this project; preserve existing email
+and verification records. Never publish `.env` files, preview credentials,
+database secrets, signer assets, runtime dumps, or local support artifacts.
+
+The preparation branch `codex/bx1-public-site-20260916` has automatic Vercel
+deployment disabled in `apps/web/vercel.json`. After the existing team is on an
+eligible plan, remove that branch hold, validate its preview deployment, and
+merge through a normal pull request. Do not force-replace the existing `main`
+history or merge before the hosting and runtime checks pass.
+
 This repository is a **production-shaped MVP** for **BlockXOne**, implementing the core lifecycle described in the deck:
 - Offering creation & publishing (Offering Manager)
 - KYC/KYB + wallet approval (Compliance Officer)

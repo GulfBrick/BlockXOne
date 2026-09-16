@@ -12,7 +12,7 @@ export function PageTransition({
   const ease: [number, number, number, number] = [0.2, 0, 0, 1]
 
   const variants: Variants = {
-    initial: { opacity: 0, y: 12, filter: "blur(4px)" },
+    initial: { opacity: 1, y: 0, filter: "blur(0px)" },
     in: { 
       opacity: 1, 
       y: 0, 

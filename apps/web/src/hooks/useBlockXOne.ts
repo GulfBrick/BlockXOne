@@ -1,7 +1,11 @@
 'use client';
 
 import { useState } from 'react';
-import { blockXOneApi } from '@/lib/api-client';
+import {
+  blockXOneApi,
+  type WalletChallengeRequest,
+  type WalletConnectRequest,
+} from '@/lib/api-client';
 import { useAuth } from '@/lib/auth-context-v2';
 
 // ============================================================================
@@ -18,7 +22,7 @@ export function useOfferings() {
     setLoading(true);
     setError(null);
     try {
-      return await blockXOneApi.offering.list(user.id, user.email);
+      return await blockXOneApi.offering.list(user.token);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Failed to fetch offerings';
       setError(msg);
@@ -33,7 +37,7 @@ export function useOfferings() {
     setLoading(true);
     setError(null);
     try {
-      return await blockXOneApi.offering.get(user.id, user.email, offeringId);
+      return await blockXOneApi.offering.get(user.token, offeringId);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Failed to fetch offering';
       setError(msg);
@@ -137,7 +141,7 @@ export function useKyc() {
     setLoading(true);
     setError(null);
     try {
-      return await blockXOneApi.kyc.createCase(user.id, user.email, caseType);
+      return await blockXOneApi.kyc.createCase(user.token, caseType);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Failed to create KYC case';
       setError(msg);
@@ -152,7 +156,7 @@ export function useKyc() {
     setLoading(true);
     setError(null);
     try {
-      return await blockXOneApi.kyc.submitCase(user.id, user.email, caseId);
+      return await blockXOneApi.kyc.submitCase(user.token, caseId);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Failed to submit KYC case';
       setError(msg);
@@ -167,7 +171,7 @@ export function useKyc() {
     setLoading(true);
     setError(null);
     try {
-      return await blockXOneApi.kyc.getCase(user.id, user.email, caseId);
+      return await blockXOneApi.kyc.getCase(user.token, caseId);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Failed to fetch KYC case';
       setError(msg);
@@ -189,17 +193,27 @@ export function useWallet() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const connect = async (data: {
-    address: string;
-    chainId: number;
-    message: string;
-    signature: string;
-  }) => {
-    // Wallet connect is the login path; allow without an existing session.
+  const challenge = async (data: WalletChallengeRequest) => {
+    if (!user) throw new Error('Sign in before linking a wallet');
     setLoading(true);
     setError(null);
     try {
-      return await blockXOneApi.wallet.connect(data as any);
+      return await blockXOneApi.wallet.challenge(user.token, data);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Failed to request a wallet challenge';
+      setError(msg);
+      throw err;
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const connect = async (data: WalletConnectRequest) => {
+    if (!user) throw new Error('Sign in before linking a wallet');
+    setLoading(true);
+    setError(null);
+    try {
+      return await blockXOneApi.wallet.connect(user.token, data);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Failed to connect wallet';
       setError(msg);
@@ -224,7 +238,7 @@ export function useWallet() {
     }
   };
 
-  return { connect, list, loading, error };
+  return { challenge, connect, list, loading, error };
 }
 
 // ============================================================================
@@ -327,7 +341,13 @@ export function useTokenOps() {
     setLoading(true);
     setError(null);
     try {
-      return await blockXOneApi.token.mint(user.id, user.email, user.roles, subscriptionId);
+      return await blockXOneApi.token.mint(
+        user.id,
+        user.email,
+        user.roles,
+        subscriptionId,
+        user.token
+      );
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Failed to mint tokens';
       setError(msg);
