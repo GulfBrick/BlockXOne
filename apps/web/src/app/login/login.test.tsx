@@ -42,6 +42,16 @@ describe('server login/setup admission', () => {
     expect(html).toContain('action="/auth/setup"')
     expect(html).not.toContain('name="email"')
   })
+  it('renders actionable setup errors only after checking the active workspace', async () => {
+    const params = { setup: '1', error: 'password_mismatch' }
+    const html = renderToStaticMarkup(await LoginPage({ searchParams: Promise.resolve(params) }))
+    expect(html).toContain('The two passwords do not match.')
+    expect(html).toContain('action="/auth/setup"')
+    expect((await generateMetadata({ searchParams: Promise.resolve(params) })).referrer).toBe('strict-origin')
+    mocks.workspace.mockResolvedValue(null)
+    const denied = renderToStaticMarkup(await LoginPage({ searchParams: Promise.resolve(params) }))
+    expect(denied).not.toContain('action="/auth/setup"')
+  })
   it('turns errors into fixed copy, not provider details or user query text', async () => {
     mocks.workspace.mockRejectedValueOnce(new Error('private-provider-detail'))
     const html = renderToStaticMarkup(await LoginPage({ searchParams: Promise.resolve({ setup: '1', error: '<script>bad</script>' }) }))

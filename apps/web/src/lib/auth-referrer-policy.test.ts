@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { authDocumentReferrerPolicy } from './auth-referrer-policy'
+import { AUTH_ERROR_COPY } from './supabase/contracts'
 
 describe('Auth document referrer policy', () => {
   // Native navigation POST + no-referrer yields Origin:null in Fetch. Only
@@ -9,6 +10,10 @@ describe('Auth document referrer policy', () => {
   })
   it.each([{ setup: '1' }, { error: 'invalid_credentials' }, { setup: '1', error: 'invalid_request' }])('allows fixed login presentation state %j', (query) => {
     expect(authDocumentReferrerPolicy('/login', query)).toBe('strict-origin')
+  })
+  it.each(Object.keys(AUTH_ERROR_COPY))('keeps setup retry %s submit-capable without exposing query strings', (error) => {
+    expect(authDocumentReferrerPolicy('/login', { setup: '1', error })).toBe('strict-origin')
+    expect(authDocumentReferrerPolicy('/login', new URLSearchParams({ setup: '1', error }))).toBe('strict-origin')
   })
   it.each(['/login', '/workspace', '/auth/confirm'])('does not expose referrers from token-bearing %s', (path) => {
     for (const key of ['token_hash', 'token', 'access_token', 'refresh_token', 'code']) {
