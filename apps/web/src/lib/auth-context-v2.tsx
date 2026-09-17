@@ -2,6 +2,7 @@
 
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import { blockXOneApi } from './api-client';
+import { isLegacyClientAuthDisabled } from './auth-mode';
 import {
   persistedSessionToken,
   verifiedUser,
@@ -27,7 +28,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [loading, setLoading] = useState(true);
 
   const persist = useCallback((u: User | null) => {
-    if (u) {
+    if (u && !isLegacyClientAuthDisabled()) {
       sessionStorage.setItem(STORAGE_KEY, JSON.stringify(u));
       localStorage.removeItem(STORAGE_KEY);
       localStorage.removeItem('blockxone_token');
@@ -44,6 +45,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const loginWithToken = useCallback(async (token: string) => {
     setLoading(true);
     try {
+      if (isLegacyClientAuthDisabled()) throw new Error('Legacy authentication is unavailable.');
       const me = await blockXOneApi.auth.meWithToken(token) as AuthMeResponse;
       const u = verifiedUser(me, token);
       setUser(u);
@@ -62,7 +64,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     let active = true;
 
     const restorePersistedSession = async () => {
-      const token = persistedSessionToken(sessionStorage.getItem(STORAGE_KEY));
+      const token = isLegacyClientAuthDisabled() ? null : persistedSessionToken(sessionStorage.getItem(STORAGE_KEY));
       if (!token) {
         if (active) {
           setUser(null);

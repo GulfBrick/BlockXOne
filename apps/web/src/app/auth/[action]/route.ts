@@ -1,0 +1,116 @@
+import { NextRequest, NextResponse } from 'next/server'
+import { resolveAuthMode } from '@/lib/auth-mode'
+import { AUTH_ERROR_COPY, type AuthErrorCode } from '@/lib/supabase/contracts'
+import { canonicalAppOrigin, createRequestSupabaseClient, readVerifiedUser, readWorkspace, secureCookieOptions } from '@/lib/supabase/server'
+import { hasCanonicalOrigin, InvalidAuthRequest, LOGIN_EMAIL_COOKIE, PENDING_INVITE_COOKIE, privateResponse, readAuthForm, responseCookieAdapter } from '@/lib/supabase/http'
+
+export const dynamic = 'force-dynamic'
+export const revalidate = 0
+type Context = { params: Promise<{ action: string }> }
+type PendingInvite = { tokenHash: string; type: 'invite' | 'recovery'; expiresAt: number }
+const actions = new Set(['confirm', 'login', 'setup', 'logout'])
+const tokenPattern = /^[A-Za-z0-9_-]{32,512}$/
+
+function htmlPage(title: string, content: string, status = 200): NextResponse {
+  // All interpolated arguments here are fixed application copy, never request
+  // input, provider text, tokens or claims. No scripts or remote resources.
+  return privateResponse(new NextResponse(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>${title} | BlockXOne</title><style>html{color-scheme:dark}body{margin:0;background:#01070d;color:#eefbfc;font:16px/1.6 system-ui,sans-serif}main{box-sizing:border-box;max-width:32rem;margin:8vh auto;padding:2rem 1rem}h1{font-size:2rem;line-height:1.2}p{color:#9cb8c4}a{color:#2eeffa;display:inline-block;padding:.75rem 0}button{min-height:44px;padding:.75rem 1.5rem;background:#2eeffa;color:#01070d;border:0;font:inherit;font-weight:600;cursor:pointer}button:focus-visible,a:focus-visible{outline:3px solid #2eeffa;outline-offset:4px}form{margin:1.5rem 0}</style></head><body><main id="main-content"><a href="/">BlockXOne</a><h1>${title}</h1>${content}</main></body></html>`, { status, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'" } }))
+}
+
+function errorResponse(code: AuthErrorCode, status: number) {
+  return htmlPage('Access unavailable', `<p role="alert">${AUTH_ERROR_COPY[code]}</p><a href="/login">Return to sign in</a>`, status)
+}
+function redirect(path: string) { return privateResponse(NextResponse.redirect(new URL(path, canonicalAppOrigin()), 303)) }
+function clearPending(response: NextResponse) {
+  response.cookies.set(PENDING_INVITE_COOKIE, '', secureCookieOptions({ maxAge: 0 }))
+  return response
+}
+function invalidInvite(status = 400) {
+  return clearPending(htmlPage('Invitation unavailable', '<p role="alert">This invitation link is invalid or has expired.</p><a href="/login">Return to sign in</a>', status))
+}
+function readPending(value: string | undefined): PendingInvite | null {
+  try {
+    if (!value || value.length > 1800) return null
+    const parsed = JSON.parse(decodeURIComponent(value))
+    if (!tokenPattern.test(parsed.tokenHash) || !['invite', 'recovery'].includes(parsed.type) || typeof parsed.expiresAt !== 'number' || parsed.expiresAt <= Date.now() || parsed.expiresAt > Date.now() + 600000) return null
+    return parsed
+  } catch { return null }
+}
+
+async function dispatch(request: NextRequest, context: Context): Promise<NextResponse> {
+  const mode = resolveAuthMode()
+  if (mode !== 'supabase') return errorResponse(mode === 'invalid' ? 'unavailable' : 'access_denied', mode === 'invalid' ? 503 : 404)
+  const { action } = await context.params
+  if (!actions.has(action)) return errorResponse('invalid_request', 404)
+  const allowedMethod = action === 'confirm' ? ['GET', 'POST'] : ['POST']
+  if (!allowedMethod.includes(request.method)) {
+    const response = errorResponse('invalid_request', 405)
+    response.headers.set('Allow', allowedMethod.join(', '))
+    return response
+  }
+  const jar = responseCookieAdapter(request)
+  try {
+    if (request.method === 'GET') {
+      // GET only stages a token. Mail scanners cannot consume an invitation.
+      const tokenHash = request.nextUrl.searchParams.get('token_hash')
+      if (tokenHash !== null || request.nextUrl.searchParams.has('type')) {
+        const type = request.nextUrl.searchParams.get('type')
+        if (!tokenHash || !tokenPattern.test(tokenHash) || (type !== 'invite' && type !== 'recovery') || request.nextUrl.searchParams.getAll('token_hash').length !== 1 || request.nextUrl.searchParams.getAll('type').length !== 1) return invalidInvite()
+        const pending: PendingInvite = { tokenHash, type, expiresAt: Date.now() + 600000 }
+        const response = redirect('/auth/confirm')
+        response.cookies.set(PENDING_INVITE_COOKIE, encodeURIComponent(JSON.stringify(pending)), secureCookieOptions({ maxAge: 600 }))
+        return response
+      }
+      if (!readPending(request.cookies.get(PENDING_INVITE_COOKIE)?.value)) return invalidInvite()
+      return htmlPage('Confirm your access', '<p>Continue to verify your invitation and set your password.</p><form method="post" action="/auth/confirm"><button type="submit">Continue securely</button></form><a href="/">Back to home</a>')
+    }
+    if (!hasCanonicalOrigin(request)) return errorResponse('invalid_request', 403)
+    const form = await readAuthForm(request)
+    const client = createRequestSupabaseClient(jar.adapter)
+    if (action === 'confirm') {
+      const pending = readPending(request.cookies.get(PENDING_INVITE_COOKIE)?.value)
+      if (!pending) return invalidInvite()
+      const { error } = await client.auth.verifyOtp({ token_hash: pending.tokenHash, type: pending.type })
+      return jar.finish(clearPending(error ? invalidInvite() : redirect('/login?setup=1')))
+    }
+    if (action === 'login') {
+      const email = form.get('email')?.trim() ?? ''
+      const password = form.get('password') ?? ''
+      if (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !password || password.length > 1024) return errorResponse('invalid_request', 400)
+      const { error } = await client.auth.signInWithPassword({ email, password })
+      if (error) {
+        if (error.status === 429 || !error.status || error.status >= 500) return jar.finish(errorResponse('unavailable', 503))
+        const response = redirect('/login?error=invalid_credentials')
+        response.cookies.set(LOGIN_EMAIL_COOKIE, encodeURIComponent(email), secureCookieOptions({ maxAge: 300 }))
+        return jar.finish(response)
+      }
+      const workspace = await readWorkspace(client)
+      const response = redirect(workspace ? '/workspace' : '/workspace/access-denied')
+      response.cookies.set(LOGIN_EMAIL_COOKIE, '', secureCookieOptions({ maxAge: 0 }))
+      return jar.finish(response)
+    }
+    if (action === 'setup') {
+      const password = form.get('password') ?? ''
+      if (password.length < 12 || password.length > 1024 || password !== form.get('confirmPassword')) return errorResponse('invalid_request', 400)
+      if (!await readWorkspace(client)) return jar.finish(errorResponse('access_denied', 403))
+      const { error } = await client.auth.updateUser({ password })
+      if (error) return jar.finish(error.status && error.status < 500 && error.status !== 429 ? redirect('/login?setup=1&error=invalid_request') : errorResponse('unavailable', 503))
+      return jar.finish(redirect(await readWorkspace(client) ? '/workspace' : '/workspace/access-denied'))
+    }
+    if (!await readVerifiedUser(client)) return jar.finish(errorResponse('access_denied', 401))
+    const { error } = await client.auth.signOut({ scope: 'local' })
+    if (error) return jar.finish(errorResponse('unavailable', 503))
+    return jar.finish(clearPending(redirect('/login')))
+  } catch (error) {
+    const response = error instanceof InvalidAuthRequest ? errorResponse('invalid_request', 400) : errorResponse('unavailable', 503)
+    return jar.finish(action === 'confirm' ? clearPending(response) : response)
+  }
+}
+
+export const GET = dispatch
+export const POST = dispatch
+export const PUT = dispatch
+export const PATCH = dispatch
+export const DELETE = dispatch
+export const OPTIONS = dispatch
+export const HEAD = dispatch

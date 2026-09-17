@@ -5,6 +5,7 @@ import { useEffect, useMemo } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
 
 import { useAuth } from '@/lib/auth-context-v2'
+import { isLegacyClientAuthDisabled } from '@/lib/auth-mode'
 import {
   getDefaultRouteForRoles,
   hasAnyRole,
@@ -95,6 +96,11 @@ const SURFACE_RULES = [
 ]
 
 export function LayoutWrapper({ children }: { children: React.ReactNode }) {
+  if (isLegacyClientAuthDisabled()) return <>{children}</>
+  return <LegacyLayoutWrapper>{children}</LegacyLayoutWrapper>
+}
+
+function LegacyLayoutWrapper({ children }: { children: React.ReactNode }) {
   const router = useRouter()
   const pathname = usePathname()
   const { user, loading } = useAuth()

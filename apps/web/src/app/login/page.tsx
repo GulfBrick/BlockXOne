@@ -1,7 +1,18 @@
 import { ArrowRight } from 'lucide-react'
 import Link from 'next/link'
+import { cookies } from 'next/headers'
 
 import { PublicShell } from '@/components/public/public-shell'
+import { SupabaseAuthForm } from '@/components/auth/supabase-auth-form'
+import { resolveAuthMode } from '@/lib/auth-mode'
+import { isAuthErrorCode } from '@/lib/supabase/contracts'
+import { LOGIN_EMAIL_COOKIE } from '@/lib/supabase/http'
+import { createPageSupabaseClient } from '@/lib/supabase/page'
+import { readWorkspace } from '@/lib/supabase/server'
+
+export const dynamic = 'force-dynamic'
+export const revalidate = 0
+export const metadata = { title: 'Sign in', robots: { index: false, follow: false }, referrer: 'no-referrer' as const }
 
 const portals = [
   {
@@ -22,7 +33,7 @@ const portals = [
   },
 ]
 
-export default function LoginChooserPage() {
+function LoginChooserPage() {
   return (
     <PublicShell>
       <main id="main-content" className="mx-auto max-w-[90rem] px-4 pb-24 pt-14 sm:px-6 sm:pt-20 lg:px-8 lg:pb-32 lg:pt-24">
@@ -93,6 +104,39 @@ export default function LoginChooserPage() {
             ))}
           </div>
         </section>
+      </main>
+    </PublicShell>
+  )
+}
+
+export default async function LoginPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
+  const mode = resolveAuthMode()
+  if (mode === 'legacy') return <LoginChooserPage />
+  const params = await searchParams
+  const setup = params.setup === '1'
+  let unavailable = mode !== 'supabase'
+  let validSetup = !setup
+  if (setup && !unavailable) {
+    try { validSetup = Boolean(await readWorkspace(await createPageSupabaseClient())) }
+    catch { unavailable = true }
+  }
+  let initialEmail = ''
+  if (!setup) {
+    try {
+      const saved = (await cookies()).get(LOGIN_EMAIL_COOKIE)?.value
+      const decoded = saved ? decodeURIComponent(saved) : ''
+      if (decoded.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(decoded)) initialEmail = decoded
+    } catch { /* Email-only convenience is not an authorization input. */ }
+  }
+  return (
+    <PublicShell>
+      <main id="main-content" className="mx-auto w-full max-w-md px-4 py-16 sm:px-6 sm:py-24">
+        <p className="text-sm font-semibold uppercase tracking-[0.16em] text-bxo-accent-primary">Secure access</p>
+        <h1 className="mt-4 font-ui text-3xl font-medium leading-tight tracking-tight text-bxo-text-primary sm:text-4xl">{setup ? 'Set your password' : 'Sign in to BlockXOne'}</h1>
+        {unavailable ? <p role="alert" className="mt-6 text-base text-bxo-text-secondary">Access is temporarily unavailable. Please try again.</p>
+          : !validSetup ? <p role="alert" className="mt-6 text-base text-bxo-text-secondary">This invitation link is invalid or has expired.</p>
+          : <SupabaseAuthForm mode={setup ? 'setup' : 'login'} initialEmail={initialEmail} error={isAuthErrorCode(params.error) ? params.error : undefined} />}
+        <Link href="/" className="mt-6 inline-flex min-h-11 items-center text-sm text-bxo-accent-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bxo-accent-primary">Back to home</Link>
       </main>
     </PublicShell>
   )

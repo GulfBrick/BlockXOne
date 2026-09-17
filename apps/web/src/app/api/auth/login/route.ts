@@ -1,9 +1,17 @@
 import { NextResponse } from 'next/server'
+import { isProductionWebPathBlocked } from '@/lib/release-policy'
+import { resolveAuthMode } from '@/lib/auth-mode'
 import { proxyJsonToApi } from '@/lib/server-api'
 
 export const dynamic = 'force-dynamic'
 
 export async function POST(request: Request) {
+  if (isProductionWebPathBlocked('/api/auth/login')) {
+    return NextResponse.json({ error: 'unavailable' }, {
+      status: resolveAuthMode() === 'invalid' ? 503 : 404,
+      headers: { 'Cache-Control': 'private, no-store', 'Referrer-Policy': 'no-referrer' },
+    })
+  }
   let body: { email?: string; password?: string }
 
   try {

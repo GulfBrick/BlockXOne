@@ -3,6 +3,8 @@ import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
+import { spawnSync } from 'node:child_process'
+import { createOperatingSystemEnvironment } from './run-hermetic-tests.mjs'
 
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url))
 const webRoot = path.resolve(scriptDirectory, '..')
@@ -53,4 +55,45 @@ test('authenticated navigation uses its compact menu below the extra-large break
   assert.equal((navbar.match(/xl:hidden/g) || []).length, 2)
   assert.doesNotMatch(navbar, /className="hidden md:flex items-center gap-1"/)
   assert.doesNotMatch(navbar, /md:hidden/)
+})
+
+function loadNativeConfig(changed = {}) {
+  const environment = Object.assign(createOperatingSystemEnvironment(), {
+    NODE_ENV: 'production', BLOCKXONE_WEB_SURFACE: 'public', NEXT_PUBLIC_BLOCKXONE_WEB_SURFACE: 'public',
+    BLOCKXONE_AUTH_MODE: 'supabase', NEXT_PUBLIC_BLOCKXONE_AUTH_MODE: 'supabase',
+    SUPABASE_URL: 'https://project.supabase.co',
+    SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_' + 'x'.repeat(32),
+    BLOCKXONE_APP_ORIGIN: 'https://bx1.co.za',
+    NEXT_PUBLIC_API_URL: 'https://stale-legacy-api.example',
+    NEXT_PUBLIC_DEMO_REQUEST_ENABLED: 'false', SERVER_ACTION_ALLOWED_ORIGINS: 'bx1.co.za',
+  }, changed)
+  return spawnSync(process.execPath, ['-e', "const c=require('./next.config.js');Promise.all([c.rewrites(),c.headers()]).then(([rewrites,headers])=>console.log(JSON.stringify({rewrites,headers}))).catch(()=>process.exit(1))"], {
+    cwd: webRoot, env: environment, encoding: 'utf8', windowsHide: true,
+  })
+}
+
+test('native production config has no legacy rewrite and private Auth/workspace response rules', () => {
+  const result = loadNativeConfig()
+  assert.equal(result.status, 0, result.stderr)
+  const configuration = JSON.parse(result.stdout)
+  assert.deepEqual(configuration.rewrites, [])
+  for (const source of ['/login', '/auth/:path*', '/workspace/:path*']) {
+    const headers = configuration.headers.find((entry) => entry.source === source)?.headers
+    assert.ok(headers, source)
+    assert.ok(headers.some(({ key, value }) => key === 'Cache-Control' && value === 'private, no-store'))
+    assert.ok(headers.some(({ key, value }) => key === 'Referrer-Policy' && value === 'no-referrer'))
+  }
+})
+
+test('native production configuration rejects mismatches and server secret-key classes', () => {
+  for (const changed of [
+    { NEXT_PUBLIC_BLOCKXONE_AUTH_MODE: '' },
+    { BLOCKXONE_AUTH_MODE: 'unknown' },
+    { SUPABASE_PUBLISHABLE_KEY: 'sb_secret_fixture_never_echo' },
+    { SUPABASE_SERVICE_ROLE_KEY: 'fixture_never_echo' },
+  ]) {
+    const result = loadNativeConfig(changed)
+    assert.notEqual(result.status, 0)
+    assert.ok(!result.stderr.includes('fixture_never_echo'))
+  }
 })

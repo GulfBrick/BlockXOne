@@ -111,3 +111,30 @@ test('does not trust a missing, relative, or non-npm executable package', () => 
     }).failures.length, 0)
   })
 })
+
+test('preflight fails closed for invalid Auth flags and secret-key classes without printing values', () => {
+  withTempWebPackage(writePackageFiles, (dir) => {
+    const settings = { cwd: dir, nodeVersion: '22.23.1', npmCliVersion: '10.9.8' }
+    const environment = {
+      BLOCKXONE_AUTH_MODE: 'supabase', NEXT_PUBLIC_BLOCKXONE_AUTH_MODE: 'supabase',
+      SUPABASE_URL: 'https://project.supabase.co',
+      SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_' + 'x'.repeat(32),
+      BLOCKXONE_APP_ORIGIN: 'https://bx1.co.za',
+    }
+    assert.deepEqual(evaluatePreflight({ ...settings, environment }).failures, [])
+    for (const changed of [
+      { NEXT_PUBLIC_BLOCKXONE_AUTH_MODE: '' },
+      { SUPABASE_URL: 'http://localhost' },
+      { BLOCKXONE_APP_ORIGIN: 'https://bx1.co.za/path' },
+      { SUPABASE_PUBLISHABLE_KEY: 'sb_secret_fixture_never_echo' },
+      { SUPABASE_SERVICE_ROLE_KEY: 'fixture_never_echo' },
+      { SUPABASE_SECRET_KEYS: 'fixture_never_echo' },
+      { NEXT_PUBLIC_SUPABASE_SERVICE_ROLE_KEY: 'fixture_never_echo' },
+      { NEXT_PUBLIC_SUPABASE_SECRET_KEY: 'fixture_never_echo' },
+    ]) {
+      const result = evaluatePreflight({ ...settings, environment: { ...environment, ...changed } })
+      assert.ok(result.failures.length > 0)
+      assert.ok(!result.failures.join(' ').includes('fixture_never_echo'))
+    }
+  })
+})
