@@ -1,5 +1,6 @@
 import 'server-only'
 import { Pool, type PoolConfig } from 'pg'
+import supabaseCa from './supabase-ca.json'
 import { WALLET_ORIGIN, type LinkedWallet, type WalletActor, type WalletChallenge, type WalletDatabase, type WalletErrorCode } from './contracts'
 
 type Environment = Record<string, string | undefined>
@@ -34,7 +35,7 @@ export function walletDatabaseConfig(env: Environment = process.env): PoolConfig
     }
     return {
       host: url.hostname, port, user, password, database: 'postgres',
-      ssl: { rejectUnauthorized: true, servername: url.hostname },
+      ssl: { ca: supabaseCa.pem, rejectUnauthorized: true, servername: url.hostname },
       max: 2, connectionTimeoutMillis: 3000, idleTimeoutMillis: 10000,
       query_timeout: 8000, statement_timeout: 7000, lock_timeout: 4000,
       application_name: 'bx1-wallet-verifier',

@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { X509Certificate } from 'node:crypto'
+import supabaseCa from './supabase-ca.json'
 
 vi.mock('server-only', () => ({}))
 const fake = vi.hoisted(() => ({ query: vi.fn(), release: vi.fn(), connect: vi.fn(), pool: vi.fn() }))
@@ -17,18 +19,30 @@ beforeEach(() => {
 })
 
 describe('restricted wallet database configuration', () => {
+  it('pins the currently valid public Supabase root CA without runtime fetching', () => {
+    const certificate = new X509Certificate(supabaseCa.pem)
+    const expected = '80:70:25:AD:50:D4:ED:21:9D:2C:9C:7D:29:9C:00:4F:82:4E:B0:0C:F7:F6:5A:FE:F6:07:D0:7B:72:E6:CA:FA'
+    expect(supabaseCa.source).toBe('https://supabase-downloads.s3-ap-southeast-1.amazonaws.com/prod/ssl/prod-ca-2021.crt')
+    expect(certificate.fingerprint256).toBe(expected)
+    expect(supabaseCa.fingerprint256).toBe(expected)
+    expect(certificate.ca).toBe(true)
+    expect(certificate.verify(certificate.publicKey)).toBe(true)
+    expect(Date.parse(certificate.validFrom)).toBeLessThanOrEqual(Date.now())
+    expect(Date.parse(certificate.validTo)).toBeGreaterThan(Date.now())
+    expect(new Date(certificate.validTo).toISOString()).toBe('2031-04-26T10:56:53.000Z')
+  })
   it('rejects missing credentials without any general database fallback', () => {
     expect(() => walletDatabaseConfig({ DATABASE_URL: direct })).toThrow(WalletDatabaseError)
     expect(fake.pool).not.toHaveBeenCalled()
   })
   it('requires exact dedicated role, project host, TLS verification and bounded pooling', () => {
     const config = walletDatabaseConfig({ BLOCKXONE_WALLET_VERIFIER_DATABASE_URL: direct })
-    expect(config).toMatchObject({ host: 'db.oqkevkjbkpugjotihtda.supabase.co', user: 'bx1_wallet_verifier', port: 5432, database: 'postgres', max: 2, ssl: { rejectUnauthorized: true }, connectionTimeoutMillis: 3000, query_timeout: 8000, statement_timeout: 7000 })
+    expect(config).toMatchObject({ host: 'db.oqkevkjbkpugjotihtda.supabase.co', user: 'bx1_wallet_verifier', port: 5432, database: 'postgres', max: 2, ssl: { ca: supabaseCa.pem, rejectUnauthorized: true, servername: 'db.oqkevkjbkpugjotihtda.supabase.co' }, connectionTimeoutMillis: 3000, query_timeout: 8000, statement_timeout: 7000 })
     expect(config).not.toHaveProperty('connectionString')
   })
   it('admits only the verified shared pooler and role.project username', () => {
     const url = direct.replace('bx1_wallet_verifier:', 'bx1_wallet_verifier.oqkevkjbkpugjotihtda:').replace('db.oqkevkjbkpugjotihtda.supabase.co:5432', 'aws-0-eu-central-1.pooler.supabase.com:6543')
-    expect(walletDatabaseConfig({ BLOCKXONE_WALLET_VERIFIER_DATABASE_URL: url })).toMatchObject({ host: 'aws-0-eu-central-1.pooler.supabase.com', port: 6543, user: 'bx1_wallet_verifier.oqkevkjbkpugjotihtda', ssl: { rejectUnauthorized: true, servername: 'aws-0-eu-central-1.pooler.supabase.com' } })
+    expect(walletDatabaseConfig({ BLOCKXONE_WALLET_VERIFIER_DATABASE_URL: url })).toMatchObject({ host: 'aws-0-eu-central-1.pooler.supabase.com', port: 6543, user: 'bx1_wallet_verifier.oqkevkjbkpugjotihtda', ssl: { ca: supabaseCa.pem, rejectUnauthorized: true, servername: 'aws-0-eu-central-1.pooler.supabase.com' } })
     for (const invalid of [url.replace('oqkevkjbkpugjotihtda:', 'wrongproject:'), url.replace('.oqkevkjbkpugjotihtda:', ':'), url.replace(':6543/', ':5432/'), url.replace('aws-0-eu-central-1', 'aws-0-us-east-1')]) {
       expect(() => walletDatabaseConfig({ BLOCKXONE_WALLET_VERIFIER_DATABASE_URL: invalid })).toThrow('unavailable')
     }
@@ -39,6 +53,9 @@ describe('restricted wallet database configuration', () => {
     direct.replace('oqkevkjbkpugjotihtda', 'otherproject'),
     direct.replace('db.oqkevkjbkpugjotihtda.supabase.co', 'attacker.example'),
     direct + '?sslmode=disable', direct + '?sslmode=no-verify', direct.replace(':5432/', ':6543/'),
+    direct + '?sslrootcert=attacker.pem', direct + '?sslcert=attacker.pem', direct + '?sslkey=attacker.key',
+    direct + '?sslmode=verify-full&sslrootcert=attacker.pem', direct + '?sslmode=verify-full&sslmode=disable',
+    direct + '?ca=attacker', direct + '?rejectUnauthorized=false', direct + '?servername=attacker.example',
     direct.replace('/postgres', '/other'), direct.replace('postgresql:', 'http:'),
   ])('rejects unadmitted credentials without exposing them', (url) => {
     try { walletDatabaseConfig({ BLOCKXONE_WALLET_VERIFIER_DATABASE_URL: url }); throw new Error('not rejected') } catch (error) {
@@ -79,6 +96,12 @@ describe('restricted function adapter', () => {
   it('does not pass a failed connection error or password to callers', async () => {
     fake.connect.mockRejectedValue(new Error(direct))
     await expect(createWalletDatabase({ BLOCKXONE_WALLET_VERIFIER_DATABASE_URL: direct }).readChallenge(actor, challenge.challengeId)).rejects.toMatchObject({ code: 'unavailable', message: 'unavailable' })
+  })
+  it('redacts TLS certificate errors without retrying insecurely', async () => {
+    fake.connect.mockRejectedValue(Object.assign(new Error(`SELF_SIGNED_CERT_IN_CHAIN ${direct}`), { code: 'SELF_SIGNED_CERT_IN_CHAIN' }))
+    await expect(createWalletDatabase({ BLOCKXONE_WALLET_VERIFIER_DATABASE_URL: direct }).readChallenge(actor, challenge.challengeId)).rejects.toMatchObject({ code: 'unavailable', message: 'unavailable' })
+    expect(fake.connect).toHaveBeenCalledTimes(1)
+    expect(fake.pool).toHaveBeenCalledWith(expect.objectContaining({ ssl: { ca: supabaseCa.pem, rejectUnauthorized: true, servername: 'db.oqkevkjbkpugjotihtda.supabase.co' } }))
   })
   it('discards a connection whose rollback failed', async () => {
     fake.query.mockImplementation(async (sql) => {
