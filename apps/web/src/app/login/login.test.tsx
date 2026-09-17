@@ -7,7 +7,7 @@ vi.mock('@/lib/supabase/page', () => ({ createPageSupabaseClient: mocks.client }
 vi.mock('@/lib/supabase/server', async (importOriginal) => ({ ...await importOriginal<object>(), readWorkspace: mocks.workspace }))
 vi.mock('next/headers', () => ({ cookies: mocks.cookies }))
 vi.mock('@/components/public/public-shell', () => ({ PublicShell: ({ children }: { children: ReactNode }) => <>{children}</> }))
-import LoginPage from './page'
+import LoginPage, { generateMetadata } from './page'
 
 beforeEach(() => {
   vi.stubEnv('BLOCKXONE_AUTH_MODE', 'supabase')
@@ -17,6 +17,12 @@ beforeEach(() => {
   mocks.cookies.mockResolvedValue({ get: () => undefined })
 })
 describe('server login/setup admission', () => {
+  it('login/setup metadata preserves browser POST origins without exposing URL paths or query strings', async () => {
+    for (const searchParams of [{}, { setup: '1' }, { error: 'invalid_credentials' }]) {
+      expect((await generateMetadata({ searchParams: Promise.resolve(searchParams) })).referrer).toBe('strict-origin')
+    }
+    expect((await generateMetadata({ searchParams: Promise.resolve({ token_hash: 'synthetic' }) })).referrer).toBe('no-referrer')
+  })
   it('shows the real login without legacy portals or public registration', async () => {
     const html = renderToStaticMarkup(await LoginPage({ searchParams: Promise.resolve({}) }))
     expect(html).toContain('Sign in to BlockXOne')

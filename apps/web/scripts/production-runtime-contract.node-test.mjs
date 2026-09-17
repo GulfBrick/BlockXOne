@@ -81,7 +81,8 @@ test('native production config has no legacy rewrite and private Auth/workspace 
     const headers = configuration.headers.find((entry) => entry.source === source)?.headers
     assert.ok(headers, source)
     assert.ok(headers.some(({ key, value }) => key === 'Cache-Control' && value === 'private, no-store'))
-    assert.ok(headers.some(({ key, value }) => key === 'Referrer-Policy' && value === 'no-referrer'))
+    const expectedReferrerPolicy = source === '/auth/:path*' ? 'no-referrer' : 'strict-origin'
+    assert.ok(headers.some(({ key, value }) => key === 'Referrer-Policy' && value === expectedReferrerPolicy))
   }
 })
 

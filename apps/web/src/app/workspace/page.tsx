@@ -2,13 +2,16 @@ import { notFound, redirect } from 'next/navigation'
 import { PublicShell } from '@/components/public/public-shell'
 import { Button } from '@/components/ui/button'
 import { isSupabaseAuthMode } from '@/lib/auth-mode'
+import { authDocumentReferrerPolicy } from '@/lib/auth-referrer-policy'
 import { createPageSupabaseClient } from '@/lib/supabase/page'
 import { readVerifiedUser, readWorkspace } from '@/lib/supabase/server'
 import type { Bx1Workspace } from '@/lib/supabase/contracts'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
-export const metadata = { title: 'Your workspace', robots: { index: false, follow: false }, referrer: 'no-referrer' as const }
+export async function generateMetadata({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
+  return { title: 'Your workspace', robots: { index: false, follow: false }, referrer: authDocumentReferrerPolicy('/workspace', await searchParams) }
+}
 
 export default async function WorkspacePage() {
   if (!isSupabaseAuthMode()) notFound()

@@ -130,7 +130,9 @@ const nextConfig = {
           { key: 'CDN-Cache-Control', value: 'no-store' },
           { key: 'Vercel-CDN-Cache-Control', value: 'no-store' },
           { key: 'Pragma', value: 'no-cache' },
-          { key: 'Referrer-Policy', value: 'no-referrer' },
+          // Native forms need a non-null Origin. Middleware/metadata narrow
+          // token-bearing URLs; Auth handlers retain no-referrer by default.
+          { key: 'Referrer-Policy', value: source === '/auth/:path*' ? 'no-referrer' : 'strict-origin' },
           { key: 'X-Robots-Tag', value: 'noindex, nofollow, noarchive' },
         ],
       })) : []),

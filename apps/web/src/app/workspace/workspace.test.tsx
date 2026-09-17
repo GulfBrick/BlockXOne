@@ -7,7 +7,7 @@ vi.mock('@/lib/supabase/page', () => ({ createPageSupabaseClient: mocks.client }
 vi.mock('@/lib/supabase/server', () => ({ readVerifiedUser: mocks.user, readWorkspace: mocks.workspace }))
 vi.mock('@/components/public/public-shell', () => ({ PublicShell: ({ children }: { children: ReactNode }) => <>{children}</> }))
 vi.mock('next/navigation', () => ({ redirect: (path: string) => { throw new Error(`REDIRECT:${path}`) }, notFound: () => { throw new Error('NOT_FOUND') } }))
-import WorkspacePage from './page'
+import WorkspacePage, { generateMetadata } from './page'
 import AccessDeniedPage from './access-denied/page'
 
 beforeEach(() => {
@@ -19,6 +19,10 @@ beforeEach(() => {
 })
 
 describe('server-rendered protected workspace', () => {
+  it('workspace metadata enables native signout while token-bearing URLs retain no-referrer', async () => {
+    expect((await generateMetadata({ searchParams: Promise.resolve({}) })).referrer).toBe('strict-origin')
+    expect((await generateMetadata({ searchParams: Promise.resolve({ access_token: 'synthetic' }) })).referrer).toBe('no-referrer')
+  })
   it('renders only actual identity/assignments, a POST logout and explicit unavailable operations', async () => {
     const html = renderToStaticMarkup(await WorkspacePage())
     expect(mocks.workspace).toHaveBeenCalledOnce()

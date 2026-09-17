@@ -6,14 +6,15 @@ import {
 } from './lib/release-policy'
 import { isSupabaseWebPathAllowed, resolveAuthMode } from './lib/auth-mode'
 import { updateSupabaseSession } from './lib/supabase/middleware'
+import { authDocumentReferrerPolicy, type AuthReferrerPolicy } from './lib/auth-referrer-policy'
 
-function privateAuthHeaders(response: NextResponse): NextResponse {
+function privateAuthHeaders(response: NextResponse, referrerPolicy: AuthReferrerPolicy = 'no-referrer'): NextResponse {
   response.headers.set('Cache-Control', 'private, no-store')
   response.headers.set('Pragma', 'no-cache')
   response.headers.set('CDN-Cache-Control', 'no-store')
   response.headers.set('Vercel-CDN-Cache-Control', 'no-store')
   response.headers.set('X-Robots-Tag', 'noindex, nofollow, noarchive')
-  response.headers.set('Referrer-Policy', 'no-referrer')
+  response.headers.set('Referrer-Policy', referrerPolicy)
   return response
 }
 
@@ -32,7 +33,11 @@ export async function middleware(request: NextRequest) {
   if (authMode === 'supabase' && isSupabaseWebPathAllowed(request.nextUrl.pathname)) {
     try {
       // Preserve this exact response: replacing it discards refresh cookies.
-      return privateAuthHeaders(await updateSupabaseSession(request))
+      const response = await updateSupabaseSession(request)
+      const referrerPolicy = request.method === 'GET' && response.status === 200
+        ? authDocumentReferrerPolicy(request.nextUrl.pathname, request.nextUrl.searchParams)
+        : 'no-referrer'
+      return privateAuthHeaders(response, referrerPolicy)
     } catch {
       return privateAuthHeaders(new NextResponse(null, { status: 503 }))
     }
