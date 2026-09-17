@@ -10,10 +10,19 @@ import {
 import { resolveAuthMode, isLegacyClientAuthDisabled } from './auth-mode'
 
 describe('native Auth admission', () => {
-  it.each(['/login', '/auth/confirm', '/auth/login', '/auth/setup', '/auth/logout', '/workspace', '/workspace/access-denied'])('admits only the exact native path %s', (pathname) => {
+  it.each(['/login', '/auth/confirm', '/auth/login', '/auth/setup', '/auth/logout', '/workspace', '/workspace/access-denied', '/api/wallet/challenge', '/api/wallet/verify'])('admits only the exact native path %s', (pathname) => {
     expect(isProductionWebPathBlocked(pathname, 'production', 'pilot', 'pilot', 'supabase', 'supabase')).toBe(false)
     expect(isProductionWebPathBlocked(`${pathname}/extra`, 'production', 'pilot', 'pilot', 'supabase', 'supabase')).toBe(true)
     expect(isProductionWebPathBlocked(pathname, 'production', '', '', 'supabase', '')).toBe(true)
+  })
+  it.each([
+    '/api/wallet', '/api/wallet/', '/api/wallet/*', '/api/wallet/finalize', '/api/wallet/read',
+    '/api/wallet/challenge/', '/api/wallet/verify/', '/api/wallet/verify/extra',
+    '/api/wallet/%76erify', '/api%2Fwallet/verify', '//api/wallet/verify', '/api//wallet/verify',
+    '/api/wallet\\verify', '/api/wallet/VERIFY', '/api/wallet/verify.json',
+    '/api/payments', '/api/mint', '/tokenisation-agent/mint', '/compliance/wallets', '/admin/wallets',
+  ])('denies wallet lookalikes and financial route %s', (pathname) => {
+    expect(isProductionWebPathBlocked(pathname, 'production', 'pilot', 'pilot', 'supabase', 'supabase')).toBe(true)
   })
   it.each(['/api/login', '/api/logout', '/api/auth/login', '/api/auth/signup', '/api/auth/user', '/investor/login', '/operator/login', '/wm/funds/new', '/admin', '/register', '/auth/signup', '/workspace/private', '/%61uth/login', '/auth%2Flogin', '//auth/login', '/auth/login/', '/auth\\login'])('denies %s despite development and pilot flags', (pathname) => {
     expect(isProductionWebPathBlocked(pathname, 'development', 'pilot', 'pilot', 'supabase', 'supabase')).toBe(true)
