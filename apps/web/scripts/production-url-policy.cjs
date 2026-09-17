@@ -143,6 +143,37 @@ function validateProductionDemoRequestConfiguration(options = {}) {
   return true
 }
 
+function validateSupabaseAuthConfiguration(options = {}) {
+  const serverMode = options.authMode || ''
+  const publicMode = options.publicAuthMode || ''
+  if (!serverMode && !publicMode) return 'legacy'
+  if (serverMode !== 'supabase' || publicMode !== 'supabase') {
+    throw new Error('Auth mode requires BLOCKXONE_AUTH_MODE and NEXT_PUBLIC_BLOCKXONE_AUTH_MODE to equal supabase exactly')
+  }
+  for (const [raw, name] of [[options.supabaseUrl, 'SUPABASE_URL'], [options.appOrigin, 'BLOCKXONE_APP_ORIGIN']]) {
+    let parsed
+    try {
+      parsed = validateProductionRemoteHttpsUrl(raw, name)
+    } catch {
+      throw new Error(`${name} must be an absolute remote HTTPS origin`)
+    }
+    if (parsed.pathname !== '/' || parsed.hostname.includes('*') || /[\\\s\u0000-\u001f]/.test(String(raw || '')) || !String(raw).startsWith('https://')) {
+      throw new Error(`${name} must be an absolute remote HTTPS origin`)
+    }
+    if (name === 'BLOCKXONE_APP_ORIGIN' && raw !== parsed.origin) {
+      throw new Error('BLOCKXONE_APP_ORIGIN must be an exact canonical HTTPS origin without a trailing slash')
+    }
+  }
+  const key = String(options.publishableKey || '')
+  if (!/^sb_publishable_[A-Za-z0-9_-]{20,}$/.test(key)) {
+    throw new Error('SUPABASE_PUBLISHABLE_KEY must be a modern sb_publishable_ key, never a legacy JWT or secret/service-role key')
+  }
+  for (const name of ['SUPABASE_SERVICE_ROLE_KEY', 'SUPABASE_SECRET_KEY', 'SUPABASE_SECRET_KEYS', 'NEXT_PUBLIC_SUPABASE_SERVICE_ROLE_KEY', 'NEXT_PUBLIC_SUPABASE_SECRET_KEY', 'NEXT_PUBLIC_SUPABASE_SECRET_KEYS']) {
+    if (options.environment?.[name]) throw new Error(`${name} is forbidden in the web runtime`)
+  }
+  return 'supabase'
+}
+
 function validateProductionApiUrl(raw, options) {
   const policy = resolveProductionUrlPolicy(options)
   let parsed
@@ -241,4 +272,5 @@ module.exports = {
   validateProductionDemoRequestConfiguration,
   validateProductionPrivacyNoticeUrl,
   validateServerActionOrigins,
+  validateSupabaseAuthConfiguration,
 }

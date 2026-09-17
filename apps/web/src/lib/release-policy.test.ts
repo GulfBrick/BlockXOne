@@ -7,6 +7,33 @@ import {
   PILOT_ALLOWED_PREFIXES,
   PRODUCTION_BLOCKED_PREFIXES
 } from './release-policy'
+import { resolveAuthMode, isLegacyClientAuthDisabled } from './auth-mode'
+
+describe('native Auth admission', () => {
+  it.each(['/login', '/auth/confirm', '/auth/login', '/auth/setup', '/auth/logout', '/workspace', '/workspace/access-denied'])('admits only the exact native path %s', (pathname) => {
+    expect(isProductionWebPathBlocked(pathname, 'production', 'pilot', 'pilot', 'supabase', 'supabase')).toBe(false)
+    expect(isProductionWebPathBlocked(`${pathname}/extra`, 'production', 'pilot', 'pilot', 'supabase', 'supabase')).toBe(true)
+    expect(isProductionWebPathBlocked(pathname, 'production', '', '', 'supabase', '')).toBe(true)
+  })
+  it.each(['/api/login', '/api/logout', '/api/auth/login', '/api/auth/signup', '/api/auth/user', '/investor/login', '/operator/login', '/wm/funds/new', '/admin', '/register', '/auth/signup', '/workspace/private', '/%61uth/login', '/auth%2Flogin', '//auth/login', '/auth/login/', '/auth\\login'])('denies %s despite development and pilot flags', (pathname) => {
+    expect(isProductionWebPathBlocked(pathname, 'development', 'pilot', 'pilot', 'supabase', 'supabase')).toBe(true)
+  })
+  it('keeps public routes and exact-mode navigation while invalid flags stay contained', () => {
+    expect(isProductionWebPathBlocked('/', 'production', '', '', 'invalid', 'invalid')).toBe(false)
+    expect(isPortalAccessAdvertised('production', '', '', 'supabase', 'supabase')).toBe(true)
+    expect(isPortalAccessAdvertised('development', 'pilot', 'pilot', 'supabase', '')).toBe(false)
+    expect(isProductionWebPathBlocked('/workspace', 'development', '', '', '', '')).toBe(true)
+    expect(isProductionWebPathBlocked('/auth/confirm', 'development', '', '', '', '')).toBe(true)
+  })
+  it('never enables legacy browser Auth on any declared public mode', () => {
+    expect(resolveAuthMode('', '')).toBe('legacy')
+    expect(resolveAuthMode('supabase', 'supabase')).toBe('supabase')
+    expect(resolveAuthMode('supabase', '')).toBe('invalid')
+    expect(resolveAuthMode('Supabase', 'Supabase')).toBe('invalid')
+    expect(isLegacyClientAuthDisabled('')).toBe(false)
+    for (const value of ['supabase', 'unknown', 'Supabase', ' ']) expect(isLegacyClientAuthDisabled(value)).toBe(true)
+  })
+})
 
 describe('release-one web policy', () => {
   it.each(PRODUCTION_BLOCKED_PREFIXES)('blocks %s in production', (pathname) => {

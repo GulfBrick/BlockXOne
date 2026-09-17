@@ -6,6 +6,7 @@ import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 
 import { createOperatingSystemEnvironment } from './run-hermetic-tests.mjs'
+import policy from './production-url-policy.cjs'
 
 const webRoot = fileURLToPath(new URL('..', import.meta.url))
 const gracefulShutdownTimeoutMs = 5_000
@@ -511,6 +512,16 @@ export async function completeContainmentCleanup({
 }
 
 export async function runProductionContainmentProbe() {
+  // Only validated non-secret native Auth settings are deliberately forwarded.
+  // Never inherit the caller's whole environment or any caller session.
+  const authMode = policy.validateSupabaseAuthConfiguration({
+    authMode: process.env.BLOCKXONE_AUTH_MODE,
+    publicAuthMode: process.env.NEXT_PUBLIC_BLOCKXONE_AUTH_MODE,
+    supabaseUrl: process.env.SUPABASE_URL,
+    publishableKey: process.env.SUPABASE_PUBLISHABLE_KEY,
+    appOrigin: process.env.BLOCKXONE_APP_ORIGIN,
+    environment: process.env,
+  })
   const serverPath = findServerPath()
   if (!serverPath) {
     throw new Error('Production standalone server is missing. Run `npm run build` before the containment probe.')
@@ -528,6 +539,11 @@ export async function runProductionContainmentProbe() {
     NEXT_PUBLIC_API_URL: 'https://api.blockxone.example',
     SERVER_ACTION_ALLOWED_ORIGINS: 'app.blockxone.example',
   })
+  if (authMode === 'supabase') {
+    for (const name of ['BLOCKXONE_AUTH_MODE', 'NEXT_PUBLIC_BLOCKXONE_AUTH_MODE', 'SUPABASE_URL', 'SUPABASE_PUBLISHABLE_KEY', 'BLOCKXONE_APP_ORIGIN']) {
+      childEnvironment[name] = process.env[name]
+    }
+  }
   let logs = ''
   const appendLog = (chunk) => {
     logs = `${logs}${chunk}`.slice(-20_000)
@@ -582,10 +598,34 @@ export async function runProductionContainmentProbe() {
       '/operator/login',
       '/admin',
       '/api/auth/signup',
+      '/api/auth/login',
+      '/api/auth/user',
+      '/api/login',
+      '/api/logout',
+      '/investor/login',
+      '/register',
       '/wm/funds/new',
       '/tokenisation-agent/mint',
     ]) {
       await assertStatus(origin, pathname, 404)
+    }
+    if (authMode === 'supabase') {
+      await assertStatus(origin, '/login', 200)
+      const workspace = await fetch(`${origin}/workspace`, { redirect: 'manual', signal: AbortSignal.timeout(5_000) })
+      await workspace.body?.cancel()
+      if (![303, 307, 401, 403].includes(workspace.status)) throw new Error('Anonymous native workspace must deny access.')
+      const cacheRules = (workspace.headers.get('cache-control') || '').split(',').map((rule) => rule.trim().toLowerCase())
+      if (!cacheRules.includes('private') || !cacheRules.includes('no-store')) throw new Error('Native workspace denial must be private/no-store.')
+      if ([303, 307].includes(workspace.status)) {
+        const location = workspace.headers.get('location')
+        if (!location || new URL(location, origin).pathname !== '/login') throw new Error('Anonymous workspace must redirect only to login.')
+      }
+      await assertStatus(origin, '/auth/unknown', 404)
+      await assertStatus(origin, '/workspace/unknown', 404)
+    } else {
+      await assertStatus(origin, '/login', 404)
+      await assertStatus(origin, '/auth/confirm', 404)
+      await assertStatus(origin, '/workspace', 404)
     }
   } catch (error) {
     probeError = error

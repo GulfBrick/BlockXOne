@@ -5,10 +5,20 @@ const {
   validateProductionDemoRequestConfiguration,
   validateProductionPrivacyNoticeUrl,
   validateServerActionOrigins,
+  validateSupabaseAuthConfiguration,
 } = require('./scripts/production-url-policy.cjs')
 
 const isProduction = process.env.NODE_ENV === 'production'
-const configuredApiUrl = process.env.NEXT_PUBLIC_API_URL || (isProduction ? '' : 'http://localhost:8080')
+const authMode = validateSupabaseAuthConfiguration({
+  authMode: process.env.BLOCKXONE_AUTH_MODE,
+  publicAuthMode: process.env.NEXT_PUBLIC_BLOCKXONE_AUTH_MODE,
+  supabaseUrl: process.env.SUPABASE_URL,
+  publishableKey: process.env.SUPABASE_PUBLISHABLE_KEY,
+  appOrigin: process.env.BLOCKXONE_APP_ORIGIN,
+  environment: process.env,
+})
+// Native identity is never proxied to the legacy Go API.
+const configuredApiUrl = authMode === 'supabase' ? '' : process.env.NEXT_PUBLIC_API_URL || (isProduction ? '' : 'http://localhost:8080')
 const configuredDemoRequestEndpoint = process.env.NEXT_PUBLIC_DEMO_REQUEST_ENDPOINT || ''
 const configuredPrivacyNoticeUrl = process.env.NEXT_PUBLIC_DEMO_PRIVACY_NOTICE_URL || ''
 const demoRequestEnabled = validateProductionDemoRequestConfiguration({
@@ -30,7 +40,7 @@ const configuredRuntimeScope = String(process.env.NEXT_PUBLIC_BLOCKXONE_RUNTIME_
   .toUpperCase()
 
 if (isProduction) {
-  if (isPublicOnlyProduction) {
+  if (isPublicOnlyProduction || authMode === 'supabase') {
     // A public showcase may launch without collecting personal information.
     // Enabling enquiries still requires both reviewed endpoint and notice URLs.
     if (demoRequestEnabled) {
@@ -50,7 +60,7 @@ if (isProduction) {
 }
 
 const serverActionAllowedOrigins = isProduction
-  ? validateServerActionOrigins(process.env.SERVER_ACTION_ALLOWED_ORIGINS, productionUrlPolicy)
+  ? validateServerActionOrigins(process.env.SERVER_ACTION_ALLOWED_ORIGINS, authMode === 'supabase' ? undefined : productionUrlPolicy)
   : ['localhost:3000']
 
 const apiOrigin = configuredApiUrl ? new URL(configuredApiUrl).origin : ''
@@ -112,11 +122,22 @@ const nextConfig = {
             value: `default-src 'self'; script-src 'self' 'unsafe-eval' 'unsafe-inline' https://apis.google.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' ${apiOrigin} ${demoRequestOrigin} https://*.firebaseio.com https://*.googleapis.com; frame-src https://accounts.google.com;`
           }
         ]
-      }
+      },
+      ...(authMode === 'supabase' ? ['/login', '/auth/:path*', '/workspace/:path*'].map((source) => ({
+        source,
+        headers: [
+          { key: 'Cache-Control', value: 'private, no-store' },
+          { key: 'CDN-Cache-Control', value: 'no-store' },
+          { key: 'Vercel-CDN-Cache-Control', value: 'no-store' },
+          { key: 'Pragma', value: 'no-cache' },
+          { key: 'Referrer-Policy', value: 'no-referrer' },
+          { key: 'X-Robots-Tag', value: 'noindex, nofollow, noarchive' },
+        ],
+      })) : []),
     ]
   },
   async rewrites() {
-    if (!configuredApiUrl) return []
+    if (authMode === 'supabase' || !configuredApiUrl) return []
     return [{
       source: '/api/:path*',
       destination: `${configuredApiUrl}/:path*`

@@ -10,9 +10,49 @@ const {
   validateProductionDemoRequestConfiguration,
   validateProductionPrivacyNoticeUrl,
   validateServerActionOrigins,
+  validateSupabaseAuthConfiguration,
 } = policy
 const pairedPilot = { releaseMode: 'pilot', publicReleaseMode: 'pilot' }
 const pairedPilotShare = { releaseMode: 'pilot-share', publicReleaseMode: 'pilot-share' }
+
+const nativeAuth = {
+  authMode: 'supabase', publicAuthMode: 'supabase',
+  supabaseUrl: 'https://project.supabase.co',
+  publishableKey: 'sb_publishable_' + 'x'.repeat(32),
+  appOrigin: 'https://bx1.co.za',
+}
+
+test('native Auth configuration requires exact paired flags and safe server-only settings', () => {
+  assert.equal(validateSupabaseAuthConfiguration(), 'legacy')
+  assert.equal(validateSupabaseAuthConfiguration(nativeAuth), 'supabase')
+  for (const [authMode, publicAuthMode] of [
+    ['supabase', ''], ['', 'supabase'], ['Supabase', 'Supabase'], ['unknown', 'unknown'],
+    ['supabase', 'pilot'], [' supabase', 'supabase'],
+  ]) {
+    assert.throws(() => validateSupabaseAuthConfiguration({ ...nativeAuth, authMode, publicAuthMode }), /Auth mode/)
+  }
+  for (const variable of ['supabaseUrl', 'appOrigin']) {
+    for (const value of ['', 'http://bx1.co.za', 'https://localhost', 'https://*.supabase.co', 'https://bx1.co.za\r\n', 'https://user:password@bx1.co.za', 'https://bx1.co.za/path', 'https://bx1.co.za?token=value']) {
+      assert.throws(() => validateSupabaseAuthConfiguration({ ...nativeAuth, [variable]: value }), /HTTPS origin/)
+    }
+  }
+  for (const appOrigin of ['https://bx1.co.za/', 'https://BX1.co.za', 'https://bx1.co.za:443']) {
+    assert.throws(() => validateSupabaseAuthConfiguration({ ...nativeAuth, appOrigin }), /exact canonical HTTPS origin/)
+  }
+})
+
+test('native Auth rejects secret keys without exposing their contents', () => {
+  for (const publishableKey of ['', 'sb_secret_do_not_echo_this_fixture', 'unrecognised-key']) {
+    assert.throws(() => validateSupabaseAuthConfiguration({ ...nativeAuth, publishableKey }), (error) => {
+      assert.match(error.message, /publishable|anon/i)
+      assert.ok(!error.message.includes('do_not_echo'))
+      return true
+    })
+  }
+  const jwt = (role) => `${Buffer.from('{}').toString('base64url')}.${Buffer.from(JSON.stringify({ role })).toString('base64url')}.fixture`
+  assert.throws(() => validateSupabaseAuthConfiguration({ ...nativeAuth, publishableKey: jwt('anon') }), /publishable/i)
+  assert.throws(() => validateSupabaseAuthConfiguration({ ...nativeAuth, publishableKey: jwt('service_role') }), /publishable|anon/i)
+})
 
 test('demo requests are disabled by default and can omit intake configuration', () => {
   assert.equal(validateProductionDemoRequestConfiguration(), false)

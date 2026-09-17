@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
+import policy from './production-url-policy.cjs'
 
 export const requiredNodeVersion = '22.23.1'
 export const requiredNpmVersion = '10.9.8'
@@ -27,6 +28,7 @@ export function evaluatePreflight({
   nodeVersion = process.versions.node,
   npmUserAgent = process.env.npm_config_user_agent,
   npmCliVersion,
+  environment = process.env,
 } = {}) {
   const failures = []
   const npmVersion = npmCliVersion ?? npmVersionFromUserAgent(npmUserAgent)
@@ -57,6 +59,19 @@ export function evaluatePreflight({
     } catch (error) {
       failures.push(`${filename} is not valid JSON: ${error.message}`)
     }
+  }
+
+  try {
+    policy.validateSupabaseAuthConfiguration({
+      authMode: environment.BLOCKXONE_AUTH_MODE,
+      publicAuthMode: environment.NEXT_PUBLIC_BLOCKXONE_AUTH_MODE,
+      supabaseUrl: environment.SUPABASE_URL,
+      publishableKey: environment.SUPABASE_PUBLISHABLE_KEY,
+      appOrigin: environment.BLOCKXONE_APP_ORIGIN,
+      environment,
+    })
+  } catch (error) {
+    failures.push(error.message)
   }
 
   return { failures, nodeVersion, npmVersion }

@@ -1,5 +1,6 @@
 // API client used by the Next.js app.
 // Protected browser calls authenticate exclusively with the verified JWT session.
+import { isLegacyClientAuthDisabled, resolveAuthMode } from './auth-mode'
 
 import type {
   ControlledSubscription,
@@ -383,6 +384,7 @@ function getPayloadString(payload: unknown, key: 'error' | 'message') {
 }
 
 export function getStoredToken(): string | null {
+  if (isLegacyClientAuthDisabled()) return null;
   if (typeof window === 'undefined') return null;
   try {
     const raw = window.sessionStorage.getItem(SESSION_KEY);
@@ -398,6 +400,9 @@ export function getStoredToken(): string | null {
 }
 
 async function apiCall<T>(endpoint: string, opts: ApiCallOptions = {}): Promise<T> {
+  if (isLegacyClientAuthDisabled() || (typeof window === 'undefined' && resolveAuthMode() !== 'legacy')) {
+    throw new ApiError('This operation is not enabled.', { code: 'operation_unavailable', status: 503 })
+  }
   const url = `${API_BASE}${endpoint}`
 
   const headers: Record<string, string> = {
