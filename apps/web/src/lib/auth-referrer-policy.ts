@@ -1,3 +1,5 @@
+import { isAuthErrorCode } from './supabase/contracts'
+
 export type AuthReferrerPolicy = 'no-referrer' | 'strict-origin'
 type AuthSearchParams = Record<string, string | string[] | undefined>
 
@@ -16,7 +18,7 @@ export function authDocumentReferrerPolicy(
     if (seen.has(key) || pathname !== '/login') return 'no-referrer'
     seen.add(key)
     if (key === 'setup' && value === '1') continue
-    if (key === 'error' && typeof value === 'string' && ['invalid_credentials', 'invalid_request', 'access_denied', 'unavailable'].includes(value)) continue
+    if (key === 'error' && isAuthErrorCode(value)) continue
     return 'no-referrer'
   }
   return 'strict-origin'

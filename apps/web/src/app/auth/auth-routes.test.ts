@@ -168,9 +168,83 @@ describe('login, setup, logout', () => {
     expect(auth.updateUser).not.toHaveBeenCalled()
   })
   it('denies mismatched passwords and provider password errors', async () => {
-    expect((await POST(request('setup', { password: 'long-private-password', confirmPassword: 'other' }), context('setup'))).status).toBe(400)
+    const mismatch = await POST(request('setup', { password: 'long-private-password', confirmPassword: 'other' }), context('setup'))
+    expect(mismatch.status).toBe(303)
+    expect(mismatch.headers.get('location')).toBe(`${canonical}/login?setup=1&error=password_mismatch`)
+    expect(auth.updateUser).not.toHaveBeenCalled()
     auth.updateUser.mockResolvedValueOnce({ error: { status: 422 } })
-    expect((await POST(request('setup', { password: 'long-private-password', confirmPassword: 'long-private-password' }), context('setup'))).headers.get('location')).toBe(`${canonical}/login?setup=1&error=invalid_request`)
+    expect((await POST(request('setup', { password: 'long-private-password', confirmPassword: 'long-private-password' }), context('setup'))).headers.get('location')).toBe(`${canonical}/login?setup=1&error=password_rejected`)
+  })
+  it.each([0, 11, 1025])('keeps rejected setup length %i in setup with no credential reflection', async (length) => {
+    const password = 'x'.repeat(length)
+    const response = await POST(request('setup', { password, confirmPassword: password }), context('setup'))
+    expect(response.status).toBe(303)
+    expect(response.headers.get('location')).toBe(`${canonical}/login?setup=1&error=password_length`)
+    expect(response.headers.get('cache-control')).toContain('no-store')
+    expect(response.headers.get('set-cookie')).toBeNull()
+    expect(await response.text()).toBe('')
+    expect(auth.updateUser).not.toHaveBeenCalled()
+  })
+  it('rejects malformed setup fields without losing the setup destination', async () => {
+    const req = new NextRequest(`${canonical}/auth/setup`, { method: 'POST', headers: { origin: canonical, host: 'bx1.co.za', 'content-type': 'application/x-www-form-urlencoded' }, body: 'password=private-one&password=private-two' })
+    const response = await POST(req, context('setup'))
+    expect(response.headers.get('location')).toBe(`${canonical}/login?setup=1&error=setup_request_invalid`)
+    expect(mocks.create).not.toHaveBeenCalled()
+    expect(auth.updateUser).not.toHaveBeenCalled()
+    expect(await response.text()).not.toContain('private-')
+  })
+  it.each([
+    [{ 'content-type': 'application/json' }, '{}'],
+    [{ 'content-length': '8193' }, 'password=synthetic'],
+    [{ 'content-length': 'invalid' }, 'password=synthetic'],
+    [{}, `password=${'x'.repeat(8193)}`],
+  ])('keeps malformed setup body rejected before Auth', async (extraHeaders, body) => {
+    const req = new NextRequest(`${canonical}/auth/setup`, { method: 'POST', headers: { origin: canonical, host: 'bx1.co.za', 'content-type': 'application/x-www-form-urlencoded', ...extraHeaders }, body })
+    const response = await POST(req, context('setup'))
+    expect(response.headers.get('location')).toBe(`${canonical}/login?setup=1&error=setup_request_invalid`)
+    expect(mocks.create).not.toHaveBeenCalled()
+    expect(auth.updateUser).not.toHaveBeenCalled()
+  })
+  it('logs only a fixed outcome code, never credentials or provider text', async () => {
+    const log = vi.spyOn(console, 'info').mockImplementation(() => {})
+    await POST(request('setup', { password: 'private-secret-password', confirmPassword: 'not-the-same' }), context('setup'))
+    expect(log).toHaveBeenCalledExactlyOnceWith(JSON.stringify({ event: 'auth_setup_result', code: 'password_mismatch' }))
+    expect(JSON.stringify(log.mock.calls)).not.toContain('private-secret-password')
+    log.mockClear()
+    await POST(request('setup', { password: 'private-secret-password', confirmPassword: 'private-secret-password' }), context('setup'))
+    expect(log).toHaveBeenCalledExactlyOnceWith(JSON.stringify({ event: 'auth_setup_result', code: 'password_saved' }))
+  })
+  it.each([
+    ['same_password', 422, 'password_same'],
+    ['weak_password', 422, 'password_rejected'],
+    ['reauthentication_needed', 400, 'password_reauthentication'],
+    ['session_not_found', 401, 'password_reauthentication'],
+  ])('maps provider %s to fixed actionable copy without raw details', async (code, status, expected) => {
+    auth.updateUser.mockResolvedValueOnce({ error: { code, status, message: 'private-provider-detail' } })
+    const response = await POST(request('setup', { password: 'long-private-password', confirmPassword: 'long-private-password' }), context('setup'))
+    expect(response.headers.get('location')).toBe(`${canonical}/login?setup=1&error=${expected}`)
+    expect(await response.text()).not.toContain('private-provider-detail')
+  })
+  it('carries session-refresh cookies through a setup rejection', async () => {
+    mocks.create.mockImplementation((adapter) => {
+      auth.updateUser.mockImplementation(async () => {
+        adapter.setAll([{ name: 'sb-test.0', value: 'refresh-chunk', options: {} }], {})
+        return { error: { status: 422, code: 'weak_password' } }
+      })
+      return { auth }
+    })
+    const response = await POST(request('setup', { password: 'long-private-password', confirmPassword: 'long-private-password' }), context('setup'))
+    expect(response.cookies.get('sb-test.0')).toMatchObject({ value: 'refresh-chunk', httpOnly: true, secure: true })
+    expect(response.headers.get('location')).toContain('setup=1')
+  })
+  it('leaves a setup retry link on origin and provider-availability errors', async () => {
+    const forged = await POST(request('setup', {}, { origin: 'https://evil.test' }), context('setup'))
+    expect(forged.status).toBe(403)
+    expect(await forged.text()).toContain('href="/login?setup=1"')
+    auth.updateUser.mockResolvedValueOnce({ error: { status: 503, message: 'private-provider-detail' } })
+    const unavailable = await POST(request('setup', { password: 'long-private-password', confirmPassword: 'long-private-password' }), context('setup'))
+    expect(unavailable.status).toBe(503)
+    expect(await unavailable.text()).toContain('Return to password setup')
   })
   it('server-revokes only this session and does not fake success on provider failure', async () => {
     expect((await POST(request('logout'), context('logout'))).headers.get('location')).toBe(`${canonical}/login`)
