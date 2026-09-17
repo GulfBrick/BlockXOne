@@ -38,6 +38,17 @@ describe('method, mode, origin and body admission', () => {
   it.each(['', 'null', 'https://bx1.co.za.evil.test'])('rejects missing or misleading Origin %s', async (origin) => {
     expect((await POST(request('login', {}, { origin }), context('login'))).status).toBe(403)
   })
+  it.each(['login', 'setup', 'logout', 'confirm'])('does not accept absent/null Origin or absent/null/foreign Host on %s', async (action) => {
+    for (const [header, value] of [['origin', undefined], ['origin', 'null'], ['host', undefined], ['host', 'null'], ['host', 'foreign.example']] as const) {
+      const req = request(action)
+      if (value === undefined) req.headers.delete(header)
+      else req.headers.set(header, value)
+      const response = await POST(req, context(action))
+      expect(response.status).toBe(403)
+      expect(response.headers.get('referrer-policy')).toBe('no-referrer')
+    }
+    expect(mocks.create).not.toHaveBeenCalled()
+  })
   it('rejects forged Host even with a canonical Origin and URL', async () => {
     expect((await POST(request('login', {}, { host: 'evil.test' }), context('login'))).status).toBe(403)
   })
@@ -48,7 +59,7 @@ describe('method, mode, origin and body admission', () => {
   it('rejects non-form, oversized and duplicate fields', async () => {
     expect((await POST(request('login', {}, { 'content-type': 'application/json' }), context('login'))).status).toBe(400)
     expect((await POST(request('login', { password: 'x'.repeat(9000) }), context('login'))).status).toBe(400)
-    const req = new NextRequest(`${canonical}/auth/login`, { method: 'POST', headers: { origin: canonical, 'content-type': 'application/x-www-form-urlencoded' }, body: 'email=a&email=b' })
+    const req = new NextRequest(`${canonical}/auth/login`, { method: 'POST', headers: { origin: canonical, host: 'bx1.co.za', 'content-type': 'application/x-www-form-urlencoded' }, body: 'email=a&email=b' })
     expect((await POST(req, context('login'))).status).toBe(400)
   })
   it('denies unknown actions, wrong methods and invalid paired flags', async () => {
@@ -68,14 +79,26 @@ describe('scanner-safe invite', () => {
     const response = await GET(new NextRequest(`${canonical}/auth/confirm?token_hash=${hash}&type=invite`), context('confirm'))
     expect(response.status).toBe(303)
     expect(response.headers.get('location')).toBe(`${canonical}/auth/confirm`)
+    expect(response.headers.get('referrer-policy')).toBe('no-referrer')
     expect(auth.verifyOtp).not.toHaveBeenCalled()
     const pending = response.cookies.get(PENDING_INVITE_COOKIE)!
     expect(pending).toMatchObject({ httpOnly: true, secure: true, sameSite: 'lax', path: '/', maxAge: 600 })
     expect(pending).not.toHaveProperty('domain')
     const clean = await GET(new NextRequest(`${canonical}/auth/confirm`, { headers: { cookie: `${PENDING_INVITE_COOKIE}=${pending.value}` } }), context('confirm'))
     const html = await clean.text()
+    expect(clean.headers.get('referrer-policy')).toBe('strict-origin')
+    expect(html).toContain('<meta name="referrer" content="strict-origin">')
+    expect(html).not.toContain('<meta name="referrer" content="no-referrer">')
     expect(html).toContain('method="post"')
     expect(html).not.toContain(hash)
+    expect(auth.verifyOtp).not.toHaveBeenCalled()
+  })
+  it('does not promote a confirmation document with unexpected query state to a form', async () => {
+    const pending = encodeURIComponent(JSON.stringify({ tokenHash: hash, type: 'invite', expiresAt: Date.now() + 600000 }))
+    const response = await GET(new NextRequest(`${canonical}/auth/confirm?code=synthetic`, { headers: { cookie: `${PENDING_INVITE_COOKIE}=${pending}` } }), context('confirm'))
+    expect(response.status).toBe(400)
+    expect(response.headers.get('referrer-policy')).toBe('no-referrer')
+    expect(await response.text()).not.toContain('<form')
     expect(auth.verifyOtp).not.toHaveBeenCalled()
   })
   it('only same-origin POST consumes the pending invite, clears it, and redirects to setup', async () => {
@@ -95,6 +118,7 @@ describe('scanner-safe invite', () => {
     const response = await POST(request('confirm', {}, { cookie: `${PENDING_INVITE_COOKIE}=${valid}` }), context('confirm'))
     expect(response.status).toBe(400)
     expect(await response.text()).not.toContain('must-not-leak')
+    expect(response.headers.get('referrer-policy')).toBe('no-referrer')
     expect(response.cookies.get(PENDING_INVITE_COOKIE)?.maxAge).toBe(0)
   })
 })

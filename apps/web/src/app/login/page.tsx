@@ -5,6 +5,7 @@ import { cookies } from 'next/headers'
 import { PublicShell } from '@/components/public/public-shell'
 import { SupabaseAuthForm } from '@/components/auth/supabase-auth-form'
 import { resolveAuthMode } from '@/lib/auth-mode'
+import { authDocumentReferrerPolicy } from '@/lib/auth-referrer-policy'
 import { isAuthErrorCode } from '@/lib/supabase/contracts'
 import { LOGIN_EMAIL_COOKIE } from '@/lib/supabase/http'
 import { createPageSupabaseClient } from '@/lib/supabase/page'
@@ -12,7 +13,9 @@ import { readWorkspace } from '@/lib/supabase/server'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
-export const metadata = { title: 'Sign in', robots: { index: false, follow: false }, referrer: 'no-referrer' as const }
+export async function generateMetadata({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
+  return { title: 'Sign in', robots: { index: false, follow: false }, referrer: authDocumentReferrerPolicy('/login', await searchParams) }
+}
 
 const portals = [
   {

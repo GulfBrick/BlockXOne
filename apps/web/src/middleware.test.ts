@@ -91,6 +91,36 @@ describe('production middleware containment', () => {
     expect(response.headers.get('referrer-policy')).toBe('no-referrer')
   })
 
+  it.each(['/login', '/login?setup=1', '/login?error=invalid_credentials', '/workspace', '/auth/confirm'])('permits Origin-bearing native forms only on the clean document %s', async (path) => {
+    vi.stubEnv('BLOCKXONE_AUTH_MODE', 'supabase')
+    vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_AUTH_MODE', 'supabase')
+    const refreshed = NextResponse.next()
+    refreshed.headers.set('Referrer-Policy', 'no-referrer')
+    refreshed.cookies.set('fixture-refresh', 'nonsecret', { httpOnly: true })
+    vi.mocked(updateSupabaseSession).mockResolvedValueOnce(refreshed)
+    const response = await middleware(new NextRequest(`https://bx1.co.za${path}`))
+    expect(response).toBe(refreshed)
+    expect(response.headers.get('referrer-policy')).toBe('strict-origin')
+    expect(response.headers.get('cache-control')).toBe('private, no-store')
+    expect(response.cookies.get('fixture-refresh')?.value).toBe('nonsecret')
+  })
+
+  it.each(['/auth/confirm?token_hash=synthetic&type=invite', '/login?token=synthetic', '/workspace?code=synthetic', '/workspace/access-denied'])('retains no-referrer for token-bearing or non-form %s', async (path) => {
+    vi.stubEnv('BLOCKXONE_AUTH_MODE', 'supabase')
+    vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_AUTH_MODE', 'supabase')
+    vi.mocked(updateSupabaseSession).mockResolvedValueOnce(NextResponse.next())
+    expect((await middleware(new NextRequest(`https://bx1.co.za${path}`))).headers.get('referrer-policy')).toBe('no-referrer')
+  })
+
+  it('does not override no-referrer on refresh errors or POST responses', async () => {
+    vi.stubEnv('BLOCKXONE_AUTH_MODE', 'supabase')
+    vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_AUTH_MODE', 'supabase')
+    vi.mocked(updateSupabaseSession).mockResolvedValueOnce(NextResponse.json({ error: 'unavailable' }, { status: 503 }))
+    expect((await middleware(new NextRequest('https://bx1.co.za/login'))).headers.get('referrer-policy')).toBe('no-referrer')
+    vi.mocked(updateSupabaseSession).mockResolvedValueOnce(NextResponse.next())
+    expect((await middleware(new NextRequest('https://bx1.co.za/auth/login', { method: 'POST' }))).headers.get('referrer-policy')).toBe('no-referrer')
+  })
+
   it('does not call refresh on public or denied routes, and returns503 on invalid mode', async () => {
     vi.stubEnv('BLOCKXONE_AUTH_MODE', 'supabase')
     vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_AUTH_MODE', 'supabase')

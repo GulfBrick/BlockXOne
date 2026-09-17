@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { resolveAuthMode } from '@/lib/auth-mode'
+import { authDocumentReferrerPolicy, type AuthReferrerPolicy } from '@/lib/auth-referrer-policy'
 import { AUTH_ERROR_COPY, type AuthErrorCode } from '@/lib/supabase/contracts'
 import { canonicalAppOrigin, createRequestSupabaseClient, readVerifiedUser, readWorkspace, secureCookieOptions } from '@/lib/supabase/server'
 import { hasCanonicalOrigin, InvalidAuthRequest, LOGIN_EMAIL_COOKIE, PENDING_INVITE_COOKIE, privateResponse, readAuthForm, responseCookieAdapter } from '@/lib/supabase/http'
@@ -11,10 +12,10 @@ type PendingInvite = { tokenHash: string; type: 'invite' | 'recovery'; expiresAt
 const actions = new Set(['confirm', 'login', 'setup', 'logout'])
 const tokenPattern = /^[A-Za-z0-9_-]{32,512}$/
 
-function htmlPage(title: string, content: string, status = 200): NextResponse {
+function htmlPage(title: string, content: string, status = 200, referrerPolicy: AuthReferrerPolicy = 'no-referrer'): NextResponse {
   // All interpolated arguments here are fixed application copy, never request
   // input, provider text, tokens or claims. No scripts or remote resources.
-  return privateResponse(new NextResponse(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>${title} | BlockXOne</title><style>html{color-scheme:dark}body{margin:0;background:#01070d;color:#eefbfc;font:16px/1.6 system-ui,sans-serif}main{box-sizing:border-box;max-width:32rem;margin:8vh auto;padding:2rem 1rem}h1{font-size:2rem;line-height:1.2}p{color:#9cb8c4}a{color:#2eeffa;display:inline-block;padding:.75rem 0}button{min-height:44px;padding:.75rem 1.5rem;background:#2eeffa;color:#01070d;border:0;font:inherit;font-weight:600;cursor:pointer}button:focus-visible,a:focus-visible{outline:3px solid #2eeffa;outline-offset:4px}form{margin:1.5rem 0}</style></head><body><main id="main-content"><a href="/">BlockXOne</a><h1>${title}</h1>${content}</main></body></html>`, { status, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'" } }))
+  return privateResponse(new NextResponse(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="${referrerPolicy}"><title>${title} | BlockXOne</title><style>html{color-scheme:dark}body{margin:0;background:#01070d;color:#eefbfc;font:16px/1.6 system-ui,sans-serif}main{box-sizing:border-box;max-width:32rem;margin:8vh auto;padding:2rem 1rem}h1{font-size:2rem;line-height:1.2}p{color:#9cb8c4}a{color:#2eeffa;display:inline-block;padding:.75rem 0}button{min-height:44px;padding:.75rem 1.5rem;background:#2eeffa;color:#01070d;border:0;font:inherit;font-weight:600;cursor:pointer}button:focus-visible,a:focus-visible{outline:3px solid #2eeffa;outline-offset:4px}form{margin:1.5rem 0}</style></head><body><main id="main-content"><a href="/">BlockXOne</a><h1>${title}</h1>${content}</main></body></html>`, { status, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'" } }), referrerPolicy)
 }
 
 function errorResponse(code: AuthErrorCode, status: number) {
@@ -61,8 +62,8 @@ async function dispatch(request: NextRequest, context: Context): Promise<NextRes
         response.cookies.set(PENDING_INVITE_COOKIE, encodeURIComponent(JSON.stringify(pending)), secureCookieOptions({ maxAge: 600 }))
         return response
       }
-      if (!readPending(request.cookies.get(PENDING_INVITE_COOKIE)?.value)) return invalidInvite()
-      return htmlPage('Confirm your access', '<p>Continue to verify your invitation and set your password.</p><form method="post" action="/auth/confirm"><button type="submit">Continue securely</button></form><a href="/">Back to home</a>')
+      if (request.nextUrl.search || !readPending(request.cookies.get(PENDING_INVITE_COOKIE)?.value)) return invalidInvite()
+      return htmlPage('Confirm your access', '<p>Continue to verify your invitation and set your password.</p><form method="post" action="/auth/confirm"><button type="submit">Continue securely</button></form><a href="/">Back to home</a>', 200, authDocumentReferrerPolicy('/auth/confirm', request.nextUrl.searchParams))
     }
     if (!hasCanonicalOrigin(request)) return errorResponse('invalid_request', 403)
     const form = await readAuthForm(request)

@@ -2,17 +2,18 @@ import 'server-only'
 import { NextResponse, type NextRequest } from 'next/server'
 import type { CookieOptions } from '@supabase/ssr'
 import { canonicalAppOrigin, secureCookieOptions, type CookieAdapter } from './server'
+import type { AuthReferrerPolicy } from '@/lib/auth-referrer-policy'
 
 export const PENDING_INVITE_COOKIE = 'bx1-pending-invite'
 export const LOGIN_EMAIL_COOKIE = 'bx1-login-email'
 
-export function privateResponse(response: NextResponse): NextResponse {
+export function privateResponse(response: NextResponse, referrerPolicy: AuthReferrerPolicy = 'no-referrer'): NextResponse {
   response.headers.set('Cache-Control', 'private, no-cache, no-store, must-revalidate, max-age=0')
   response.headers.set('CDN-Cache-Control', 'no-store')
   response.headers.set('Vercel-CDN-Cache-Control', 'no-store')
   response.headers.set('Pragma', 'no-cache')
   response.headers.set('Expires', '0')
-  response.headers.set('Referrer-Policy', 'no-referrer')
+  response.headers.set('Referrer-Policy', referrerPolicy)
   response.headers.set('X-Robots-Tag', 'noindex, nofollow, noarchive')
   response.headers.set('X-Content-Type-Options', 'nosniff')
   return response
@@ -45,7 +46,7 @@ export function responseCookieAdapter(request: NextRequest) {
 export function hasCanonicalOrigin(request: NextRequest): boolean {
   const expected = canonicalAppOrigin()
   const host = request.headers.get('host')
-  return request.headers.get('origin') === expected && request.nextUrl.origin === expected && (!host || host === new URL(expected).host)
+  return request.headers.get('origin') === expected && request.nextUrl.origin === expected && host === new URL(expected).host
 }
 
 export class InvalidAuthRequest extends Error {}
