@@ -6,6 +6,9 @@ import { authDocumentReferrerPolicy } from '@/lib/auth-referrer-policy'
 import { createPageSupabaseClient } from '@/lib/supabase/page'
 import { readVerifiedUser, readWorkspace } from '@/lib/supabase/server'
 import type { Bx1Workspace } from '@/lib/supabase/contracts'
+import { MetaMaskWalletLink } from '@/components/workspace/metamask-wallet-link'
+import { isWalletDatabaseConfigured } from '@/lib/wallets/database'
+import { WALLET_CHAIN_ID, type LinkedWallet } from '@/lib/wallets/contracts'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -18,10 +21,34 @@ export default async function WorkspacePage() {
   let workspace: Bx1Workspace | null = null
   let signedIn = false
   let unavailable = false
+  const wallets: LinkedWallet[] = []
+  const walletConfigured = isWalletDatabaseConfigured()
+  let walletReadUnavailable = false
   try {
     const client = await createPageSupabaseClient()
     signedIn = Boolean(await readVerifiedUser(client))
     if (signedIn) workspace = await readWorkspace(client)
+    if (workspace && walletConfigured) {
+      // The caller JWT's RLS policy is the authoritative user_id=auth.uid filter;
+      // user_id itself is deliberately not granted to the client. Narrow further
+      // to the already-authorized organisations and expose only safe columns.
+      try {
+        const { data, error } = await client.from('bx1_wallets')
+          .select('id,organisation_id,address,chain_id,verified_at,status')
+          .in('organisation_id', workspace.organisations.map((org) => org.id))
+          .order('verified_at', { ascending: false })
+        if (error || !Array.isArray(data)) throw new Error('Wallet read unavailable')
+        for (const row of data) {
+          if (typeof row.id !== 'string' || typeof row.organisation_id !== 'string' ||
+            !workspace.organisations.some((org) => org.id === row.organisation_id) ||
+            typeof row.address !== 'string' || !/^0x[0-9a-f]{40}$/i.test(row.address) ||
+            row.chain_id !== WALLET_CHAIN_ID || row.status !== 'PENDING' ||
+            typeof row.verified_at !== 'string' || !Number.isFinite(Date.parse(row.verified_at))) throw new Error('Wallet read unavailable')
+          wallets.push({ id: row.id, organisationId: row.organisation_id, address: row.address,
+            chainId: WALLET_CHAIN_ID, verifiedAt: row.verified_at, status: 'PENDING' })
+        }
+      } catch { wallets.length = 0; walletReadUnavailable = true }
+    }
   } catch { unavailable = true }
   // Framework redirects throw; keep them outside the provider error catch.
   if (!unavailable && !signedIn) redirect('/login')
@@ -51,6 +78,7 @@ export default async function WorkspacePage() {
             </section>
           </div>
         )}
+        {!unavailable && workspace ? <MetaMaskWalletLink organisations={workspace.organisations.map(({ id, name }) => ({ id, name }))} wallets={wallets} configured={walletConfigured} readUnavailable={walletReadUnavailable} /> : null}
         <p className="mt-8 border-l-2 border-bxo-accent-primary pl-4 text-base leading-7 text-bxo-text-secondary">Financial and token operations are not enabled.</p>
       </main>
     </PublicShell>
