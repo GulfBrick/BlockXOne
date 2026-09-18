@@ -3,6 +3,7 @@ import { PublicShell } from '@/components/public/public-shell'
 import { Button } from '@/components/ui/button'
 import { isSupabaseAuthMode } from '@/lib/auth-mode'
 import { authDocumentReferrerPolicy } from '@/lib/auth-referrer-policy'
+import { evaluateActionPermission } from '@/lib/authorization/policy'
 import { createPageSupabaseClient } from '@/lib/supabase/page'
 import { readVerifiedUser, readWorkspace } from '@/lib/supabase/server'
 import type { Bx1Workspace } from '@/lib/supabase/contracts'
@@ -33,6 +34,9 @@ export default async function WorkspacePage() {
       // user_id itself is deliberately not granted to the client. Narrow further
       // to the already-authorized organisations and expose only safe columns.
       try {
+        for (const organisation of workspace.organisations) {
+          if (!evaluateActionPermission(workspace, 'wallet.read_own', { userId: workspace.user.id, organisationId: organisation.id }).allowed) throw new Error('Wallet read unavailable')
+        }
         const { data, error } = await client.from('bx1_wallets')
           .select('id,organisation_id,address,chain_id,verified_at,status')
           .in('organisation_id', workspace.organisations.map((org) => org.id))
