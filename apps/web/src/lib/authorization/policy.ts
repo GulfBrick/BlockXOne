@@ -59,7 +59,7 @@ export function evaluateActionPermission(
   if (!resolvedWorkspace(workspace)) return { allowed: false, reason: 'unavailable_identity' }
   if (!SUPPORTED_ACTIONS.some((supported) => supported === action)) return { allowed: false, reason: 'not_enabled' }
 
-  const keys = action === 'workspace.read' ? []
+  const keys: Array<keyof PermissionTarget> = action === 'workspace.read' ? []
     : action === 'profile.read_own' || action === 'memberships.read_own' ? ['userId']
       : action === 'organisation.read' ? ['organisationId'] : ['userId', 'organisationId']
   const scope = target === undefined && action === 'workspace.read' ? {} : target
