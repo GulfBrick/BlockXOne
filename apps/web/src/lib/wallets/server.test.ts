@@ -22,6 +22,7 @@ vi.mock('./database', () => ({
 import { handleWalletRequest } from './server'
 import { WalletDatabaseError } from './database'
 import * as policy from '@/lib/authorization/policy'
+import { BX1_ROLES } from '@/lib/supabase/contracts'
 import * as route from '@/app/api/wallet/[action]/route'
 
 const actor: WalletActor = {
@@ -95,9 +96,50 @@ beforeEach(() => {
 })
 
 describe('wallet identity boundary', () => {
+  describe.each(BX1_ROLES)('%s scoped personal ownership', (role) => {
+    it.each(['challenge', 'verify'])('allows real-policy %s only for the verified actor and assigned organisation', async (action) => {
+      mocks.workspace.mockResolvedValue({ user: { id: actor.userId, platformUserId: actor.platformUserId, email: 'fixture@example.test', displayName: null }, organisations: [{ id: actor.organisationId, name: 'Fixture', roles: [role] }] })
+      const fields: Record<string, string> = action === 'verify' ? { signature: await signer.signMessage(challenge.message) } : {}
+      const response = await dispatch(action, fields)
+      expect(response.status).toBe(action === 'challenge' ? 201 : 200)
+      assertPrivate(response)
+      if (action === 'challenge') expect(db.issueChallenge).toHaveBeenCalledWith(actor, challenge.address, 80002, expect.any(String))
+      else {
+        expect(db.consumeChallenge).toHaveBeenCalledWith(actor, challengeId, challenge.message, fields.signature)
+        expect((await response.json()).wallet.status).toBe('PENDING')
+      }
+    })
+    it.each(['challenge', 'verify'])('denies a same-organisation foreign actor for %s before adapter acquisition', async (action) => {
+      mocks.workspace.mockResolvedValue({ user: { id: otherId, platformUserId: actor.platformUserId, email: 'other@example.test', displayName: null }, organisations: [{ id: actor.organisationId, name: 'Fixture', roles: [role] }] })
+      const fields: Record<string, string> = action === 'verify' ? { signature: await signer.signMessage(challenge.message) } : {}
+      await assertError(await dispatch(action, fields), 403, 'unauthorised')
+      expect(mocks.database).not.toHaveBeenCalled()
+      expect(db.issueChallenge).not.toHaveBeenCalled()
+      expect(db.readChallenge).not.toHaveBeenCalled()
+      expect(db.consumeChallenge).not.toHaveBeenCalled()
+    })
+    it.each(['challenge', 'verify'])('cannot borrow the role from another organisation for %s', async (action) => {
+      mocks.workspace.mockResolvedValue({ user: { id: actor.userId, platformUserId: actor.platformUserId, email: 'fixture@example.test', displayName: null }, organisations: [{ id: otherId, name: 'Other organisation', roles: [role] }] })
+      const fields: Record<string, string> = action === 'verify' ? { signature: await signer.signMessage(challenge.message) } : {}
+      await assertError(await dispatch(action, fields), 403, 'unauthorised')
+      expect(mocks.database).not.toHaveBeenCalled()
+    })
+  })
+  describe.each(['challenge', 'verify'])('%s real-policy malformed role denial', (action) => {
+    it.each([{ roles: [] }, { roles: ['Root'] }, { roles: ['Investor', 'Root'] }])('denies roles $roles despite forged metadata before any adapter work', async ({ roles }) => {
+      mocks.workspace.mockResolvedValue({ user: { id: actor.userId, platformUserId: actor.platformUserId, email: 'fixture@example.test', displayName: null }, organisations: [{ id: actor.organisationId, name: 'Fixture', roles }] })
+      client.auth.getUser.mockResolvedValue({ data: { user: { id: actor.userId, user_metadata: { roles: [...BX1_ROLES] }, app_metadata: { roles: [...BX1_ROLES] } } }, error: null })
+      const fields: Record<string, string> = action === 'verify' ? { signature: await signer.signMessage(challenge.message) } : {}
+      await assertError(await dispatch(action, fields), 403, 'unauthorised')
+      expect(mocks.database).not.toHaveBeenCalled()
+      expect(db.issueChallenge).not.toHaveBeenCalled()
+      expect(db.readChallenge).not.toHaveBeenCalled()
+      expect(db.consumeChallenge).not.toHaveBeenCalled()
+    })
+  })
   it.each(['challenge', 'verify'])('checks the real %s policy after verified identity and before adapter acquisition', async (action) => {
     const evaluate = vi.spyOn(policy, 'evaluateActionPermission')
-    const fields = action === 'verify' ? { signature: await signer.signMessage(challenge.message) } : {}
+    const fields: Record<string, string> = action === 'verify' ? { signature: await signer.signMessage(challenge.message) } : {}
     const response = await dispatch(action, fields)
     expect(response.status).toBe(action === 'challenge' ? 201 : 200)
     assertPrivate(response)
@@ -108,7 +150,7 @@ describe('wallet identity boundary', () => {
   })
   it.each(['challenge', 'verify'])('denied %s policy acquires no adapter and performs no issue/read/consume', async (action) => {
     const evaluate = vi.spyOn(policy, 'evaluateActionPermission').mockReturnValue({ allowed: false, reason: 'invalid_scope' })
-    const fields = action === 'verify' ? { signature: await signer.signMessage(challenge.message) } : {}
+    const fields: Record<string, string> = action === 'verify' ? { signature: await signer.signMessage(challenge.message) } : {}
     const response = await dispatch(action, fields)
     await assertError(response, 403, 'unauthorised')
     expect(evaluate).toHaveBeenCalledWith(expect.any(Object), `wallet.ownership.${action}`, { userId: actor.userId, organisationId: actor.organisationId })
@@ -196,7 +238,7 @@ describe('wallet HTTP containment', () => {
     for (const action of ['finalize', 'read', 'approve']) await assertError(await dispatch(action), 404, 'invalid_request')
     expect(mocks.database).not.toHaveBeenCalled()
   })
-  it.each(['verified', 'status', 'actor', 'sessionId', 'userId', 'domain', 'message'])('rejects browser-selected %s', async (key) => {
+  it.each(['verified', 'status', 'actor', 'sessionId', 'userId', 'domain', 'message', 'role', 'roles', 'user_metadata', 'app_metadata', 'mandate', 'approved'])('rejects browser-selected %s', async (key) => {
     await assertError(await dispatch('challenge', { [key]: 'forged' }), 400, 'invalid_request')
     expect(db.issueChallenge).not.toHaveBeenCalled()
   })

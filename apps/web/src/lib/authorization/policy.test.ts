@@ -114,4 +114,27 @@ describe('server action contract', () => {
     expect(evaluateActionPermission(candidate, 'treasury.payment.execute', target)).toEqual({ allowed: false, reason: 'not_enabled' })
     expect(JSON.stringify({ candidate, target })).toBe(before)
   })
+
+  describe.each(BX1_ROLES)('%s blanket unsupported-action denial, not maker-checker implementation', (role) => {
+    it.each([
+      ['self approval', { maker: 'user-a', checker: 'user-a', approved: true }],
+      ['same person with two accounts', { maker: 'account-a', checker: 'account-b', personId: 'same-person' }],
+      ['asserted independent approver', { maker: 'user-a', checker: 'user-b', independent: true }],
+      ['claimed active mandate', { mandate: { status: 'ACTIVE', expiresAt: '2099-01-01' } }],
+      ['claimed expired mandate', { mandate: { status: 'EXPIRED' } }],
+      ['claimed revoked mandate', { mandate: { status: 'REVOKED' } }],
+      ['changed approved payload', { approvedHash: 'old', payloadHash: 'new', approved: true }],
+      ['wallet and governance flags', { walletVerified: true, emergency: true, enabled: true, roles: [...BX1_ROLES] }],
+    ])('cannot enable future actions with %s', (_label, claims) => {
+      for (const action of FUTURE_ACTIONS) {
+        const candidate = { ...workspace([role]), ...claims }
+        expect(evaluateActionPermission(candidate, action, { userId: 'user-a', organisationId: 'org-a', ...claims })).toEqual({ allowed: false, reason: 'not_enabled' })
+      }
+    })
+  })
+  it('all-role unions still categorically deny every future action', () => {
+    for (const action of FUTURE_ACTIONS) {
+      expect(evaluateActionPermission(workspace([...BX1_ROLES]), action, { userId: 'user-a', organisationId: 'org-a' })).toEqual({ allowed: false, reason: 'not_enabled' })
+    }
+  })
 })
