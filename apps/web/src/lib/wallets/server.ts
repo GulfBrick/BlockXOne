@@ -8,6 +8,7 @@ import { resolveAuthMode } from '@/lib/auth-mode'
 import { evaluateActionPermission } from '@/lib/authorization/policy'
 import { canonicalAppOrigin, createRequestSupabaseClient, readWorkspace } from '@/lib/supabase/server'
 import { hasCanonicalOrigin, readAuthForm, responseCookieAdapter } from '@/lib/supabase/http'
+import { hasRequiredMfa, isMfaContextCurrent, readMfaContext } from '@/lib/supabase/mfa'
 import { WALLET_CHAIN_ID, WALLET_ORIGIN, type LinkedWallet, type WalletActor, type WalletChallenge, type WalletErrorCode } from './contracts'
 import { getWalletDatabase, isWalletDatabaseConfigured, WalletDatabaseError } from './database'
 
@@ -71,12 +72,19 @@ async function verifiedActor(client: SupabaseClient, organisationId: string, act
   } catch { throw new WalletRequestError('unauthorised', 401) }
   requireUnexpired(claims.exp)
 
+  // Ordinary ownership proofs remain available to unenrolled accounts. Once
+  // ANY factor is verified, exact-token AAL and fresh session/factor authority
+  // are required before resolving resources or acquiring the narrow verifier.
+  const mfa = await readMfaContext(client)
+  if (!mfa || !hasRequiredMfa(mfa)) throw new WalletRequestError('unauthorised', 403)
+
   // This uses only the caller's normal RLS client. The immutable platform UUID
   // comes from bx1_profiles, never email or editable user metadata.
   const workspace = await readWorkspace(client)
   if (!workspace || workspace.user.id !== user.id || !validUuid(workspace.user.platformUserId)
     || !workspace.organisations.some((organisation) => organisation.id === organisationId)) throw new WalletRequestError('unauthorised', 403)
   if (!evaluateActionPermission(workspace, action, { userId: user.id, organisationId }).allowed) throw new WalletRequestError('unauthorised', 403)
+  if (!await isMfaContextCurrent(client, mfa)) throw new WalletRequestError('unauthorised', 401)
   const current = await client.auth.getSession()
   providerError(current.error)
   if (current.data.session?.access_token !== accessToken) throw new WalletRequestError('unauthorised', 401)

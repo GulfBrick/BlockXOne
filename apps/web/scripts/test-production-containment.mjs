@@ -622,10 +622,39 @@ export async function runProductionContainmentProbe() {
       }
       await assertStatus(origin, '/auth/unknown', 404)
       await assertStatus(origin, '/workspace/unknown', 404)
+      for (const pathname of ['/login/mfa/unknown', '/auth/mfa-enroll/unknown', '/auth/mfa-verify/unknown', '/workspace/security/unknown']) {
+        await assertStatus(origin, pathname, 404)
+      }
+      for (const pathname of ['/login/mfa', '/workspace/security']) {
+        const response = await fetch(`${origin}${pathname}`, { redirect: 'manual', signal: AbortSignal.timeout(5_000) })
+        await response.body?.cancel()
+        if (![303,307].includes(response.status) || new URL(response.headers.get('location') || '/', origin).pathname !== '/login') {
+          throw new Error('Anonymous MFA/security page must redirect only to login.')
+        }
+        if (!response.headers.get('cache-control')?.includes('no-store') || !response.headers.get('cache-control')?.includes('private')) {
+          throw new Error('MFA/security denial must be private/no-store.')
+        }
+      }
+      for (const pathname of ['/auth/mfa-enroll','/auth/mfa-verify']) {
+        await assertStatus(origin, pathname, 405)
+        for (const forgedOrigin of [undefined, 'null', 'https://foreign.example']) {
+          const response = await fetch(`${origin}${pathname}`, { method: 'POST', redirect: 'manual',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded', ...(forgedOrigin ? { Origin: forgedOrigin } : {}) },
+            body: '', signal: AbortSignal.timeout(5_000) })
+          await response.body?.cancel()
+          if (response.status !== 403 || !response.headers.get('cache-control')?.includes('no-store')) {
+            throw new Error('MFA POST without canonical origin must deny privately before Auth.')
+          }
+        }
+      }
     } else {
       await assertStatus(origin, '/login', 404)
       await assertStatus(origin, '/auth/confirm', 404)
       await assertStatus(origin, '/workspace', 404)
+      await assertStatus(origin, '/login/mfa', 404)
+      await assertStatus(origin, '/workspace/security', 404)
+      await assertStatus(origin, '/auth/mfa-enroll', 404)
+      await assertStatus(origin, '/auth/mfa-verify', 404)
     }
   } catch (error) {
     probeError = error

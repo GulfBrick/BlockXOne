@@ -10,6 +10,17 @@ import {
 import { resolveAuthMode, isLegacyClientAuthDisabled } from './auth-mode'
 
 describe('native Auth admission', () => {
+  it.each(['/login/mfa', '/workspace/security', '/auth/mfa-enroll', '/auth/mfa-verify'])('admits MFA path %s only exactly in paired mode', pathname => {
+    expect(isProductionWebPathBlocked(pathname, 'production', '', '', 'supabase', 'supabase')).toBe(false)
+    for (const path of [`${pathname}/extra`, `${pathname}/`, pathname.replace('/', '//'), pathname.replaceAll('/', '\\'), pathname.replace('mfa', '%6dfa')]) {
+      if (path !== pathname) expect(isProductionWebPathBlocked(path, 'production', '', '', 'supabase', 'supabase')).toBe(true)
+    }
+    expect(isProductionWebPathBlocked(pathname, 'production', '', '', 'supabase', '')).toBe(true)
+    expect(isProductionWebPathBlocked(pathname, 'production', '', '', '', '')).toBe(true)
+  })
+  it.each(['/auth/mfa-unenroll', '/auth/mfa-reset', '/auth/mfa-cancel', '/auth/mfa/verify', '/login/MFA', '/workspace/security/reset', '/auth/mfa-verify.json'])('keeps MFA bypass/alias path %s blocked', pathname => {
+    expect(isProductionWebPathBlocked(pathname, 'production', 'pilot', 'pilot', 'supabase', 'supabase')).toBe(true)
+  })
   it.each(['/login', '/auth/confirm', '/auth/login', '/auth/setup', '/auth/logout', '/workspace', '/workspace/access-denied', '/api/wallet/challenge', '/api/wallet/verify'])('admits only the exact native path %s', (pathname) => {
     expect(isProductionWebPathBlocked(pathname, 'production', 'pilot', 'pilot', 'supabase', 'supabase')).toBe(false)
     expect(isProductionWebPathBlocked(`${pathname}/extra`, 'production', 'pilot', 'pilot', 'supabase', 'supabase')).toBe(true)

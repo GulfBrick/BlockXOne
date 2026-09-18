@@ -41,7 +41,10 @@ try {
   checks++
   await db.exec('begin'); begun = true
   await db.exec(await readFile(new URL('../../../supabase/tests/bx1_identity_workspace.sql', import.meta.url), 'utf8'))
+  await db.exec(await readFile(new URL('../../../supabase/tests/bx1_mfa_assurance.sql', import.meta.url), 'utf8'))
   await db.exec(await readFile(new URL('../../../supabase/migrations/20260916234746_bx1_identity_workspace.sql', import.meta.url), 'utf8'))
+  await db.exec(await readFile(new URL('../../../supabase/migrations/20260917190042_bx1_wallet_ownership.sql', import.meta.url), 'utf8'))
+  await db.exec(await readFile(new URL('../../../supabase/migrations/20260918015541_bx1_mfa_assurance.sql', import.meta.url), 'utf8'))
   for (let user = 1; user <= 3; user++) {
     await db.query('insert into auth.users(id) values ($1)',[uid(user)])
     await db.query('insert into auth.sessions(id,user_id) values ($1,$2)',[sid(user),uid(user)])
@@ -108,7 +111,7 @@ try {
   for(const table of tables) await denied(`select * from public.${table}`,`anon ${table} denied`)
   await denied('select bx1_private.has_active_session()','anon cannot invoke private predicate')
   await db.exec('reset role')
-  await equal("select count(*) from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='bx1_private' and p.prosecdef and p.proconfig @> array['search_path=\"\"']",2,'definer helpers have fixed empty search path')
+  await equal("select count(*) from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='bx1_private' and p.proname in ('has_active_session','can_access_organisation') and p.prosecdef and p.proconfig @> array['search_path=\"\"']",2,'original definer helpers retain fixed empty search path after MFA upgrade')
   await db.exec('rollback'); begun = false
   await equal("select count(*) from pg_namespace where nspname in ('auth','bx1_private')",0,'fixture and migration rolled back')
   assert(checks>100,'No vacuous matrix')

@@ -27,6 +27,7 @@ export const SUPABASE_ALLOWED_PATHS = [
   '/login', '/auth/confirm', '/auth/login', '/auth/setup', '/auth/logout',
   '/workspace', '/workspace/access-denied',
   '/api/wallet/challenge', '/api/wallet/verify',
+  '/login/mfa', '/workspace/security', '/auth/mfa-enroll', '/auth/mfa-verify',
 ] as const
 
 export function isSupabaseWebPathAllowed(pathname: string): boolean {

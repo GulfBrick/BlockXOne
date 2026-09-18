@@ -36,11 +36,11 @@ const otherId = '66666666-6666-4666-8666-666666666666'
 const signer = Wallet.createRandom() // Ephemeral fixture; no real account or stored key.
 const stranger = Wallet.createRandom()
 function accessToken(claims: Record<string, unknown> = {}) {
-  return ['eyJhbGciOiJFUzI1NiJ9', Buffer.from(JSON.stringify({ sub: actor.userId, session_id: actor.sessionId, exp: Math.floor(Date.now() / 1000) + 300, ...claims })).toString('base64url'), 'fixture'].join('.')
+  return ['eyJhbGciOiJFUzI1NiJ9', Buffer.from(JSON.stringify({ sub: actor.userId, session_id: actor.sessionId, exp: Math.floor(Date.now() / 1000) + 300, aal: 'aal1', ...claims })).toString('base64url'), 'fixture'].join('.')
 }
 let token: string
 let challenge: WalletChallenge
-let client: { auth: { getSession: ReturnType<typeof vi.fn>; getUser: ReturnType<typeof vi.fn> } }
+let client: { auth: { getSession: ReturnType<typeof vi.fn>; getUser: ReturnType<typeof vi.fn> }; rpc: ReturnType<typeof vi.fn> }
 let db: { issueChallenge: ReturnType<typeof vi.fn>; readChallenge: ReturnType<typeof vi.fn>; consumeChallenge: ReturnType<typeof vi.fn> }
 let cookieAdapter: CookieAdapter
 
@@ -83,7 +83,7 @@ beforeEach(() => {
   client = { auth: {
     getSession: vi.fn(async () => ({ data: { session: { access_token: token } }, error: null })),
     getUser: vi.fn(async () => ({ data: { user: { id: actor.userId, email: 'fixture@example.test', user_metadata: { platformUserId: otherId, role: 'SuperAdmin' } } }, error: null })),
-  } }
+  }, rpc: vi.fn().mockResolvedValue({ data: { active: true, requires_mfa: false, session_aal: 'aal1', session_is_mfa: false, session_is_totp: false }, error: null }) }
   db = {
     issueChallenge: vi.fn(async () => challenge),
     readChallenge: vi.fn(async () => challenge),
@@ -93,6 +93,60 @@ beforeEach(() => {
   mocks.database.mockReturnValue(db)
   mocks.createClient.mockImplementation((adapter: CookieAdapter) => { cookieAdapter = adapter; return client })
   mocks.workspace.mockResolvedValue({ user: { id: actor.userId, platformUserId: actor.platformUserId, email: 'fixture@example.test', displayName: null }, organisations: [{ id: actor.organisationId, name: 'Fixture', roles: ['Investor'] }] })
+})
+
+describe('wallet MFA admission executes the real trusted context', () => {
+  function enroll({ aal = 'aal1', live = false, totp = true } = {}) {
+    token = accessToken({ aal })
+    client.auth.getUser.mockResolvedValue({ data: { user: { id: actor.userId, email: 'fixture@example.test', factors: [{ id: otherId, status: 'verified', factor_type: totp ? 'totp' : 'phone' }] } }, error: null })
+    client.rpc.mockResolvedValue({ data: { active: true, requires_mfa: true, session_aal: live ? 'aal2' : 'aal1', session_is_mfa: live, session_is_totp: live && totp }, error: null })
+  }
+  it.each(['challenge', 'verify'])('denies enrolled AAL1 %s before acquiring any database adapter', async (action) => {
+    enroll()
+    const fields: Record<string, string> = action === 'verify' ? { signature: await signer.signMessage(challenge.message) } : {}
+    await assertError(await dispatch(action, fields), 403, 'unauthorised')
+    expect(mocks.workspace).not.toHaveBeenCalled()
+    expect(mocks.database).not.toHaveBeenCalled()
+    expect(db.issueChallenge).not.toHaveBeenCalled()
+    expect(db.readChallenge).not.toHaveBeenCalled()
+    expect(db.consumeChallenge).not.toHaveBeenCalled()
+  })
+  it('does not use upgraded live session AAL2 to accept an old signed AAL1 token', async () => {
+    enroll({ live: true })
+    await assertError(await dispatch(), 403, 'unauthorised')
+    expect(mocks.database).not.toHaveBeenCalled()
+  })
+  it('accepts signed/live AAL2 ownership proof while retaining the original actor contract', async () => {
+    enroll({ aal: 'aal2', live: true })
+    const response = await dispatch()
+    expect(response.status).toBe(201)
+    expect(db.issueChallenge).toHaveBeenCalledWith(actor, challenge.address, 80002, expect.any(String))
+    expect(client.rpc).toHaveBeenCalledWith('bx1_mfa_status')
+    expect(client.rpc.mock.invocationCallOrder[0]).toBeLessThan(mocks.database.mock.invocationCallOrder[0])
+  })
+  it('denies stale signed AAL2 when the used live factor was removed', async () => {
+    enroll({ aal: 'aal2' })
+    await assertError(await dispatch(), 403, 'unauthorised')
+    expect(mocks.database).not.toHaveBeenCalled()
+  })
+  it('keeps unsupported factors MFA-required rather than treating them as unenrolled', async () => {
+    enroll({ totp: false })
+    await assertError(await dispatch(), 403, 'unauthorised')
+    expect(mocks.database).not.toHaveBeenCalled()
+  })
+  it('fails unavailable for an assurance RPC error without acquiring a verifier', async () => {
+    client.rpc.mockResolvedValue({ data: null, error: { message: 'private SQL detail' } })
+    await assertError(await dispatch(), 503, 'unavailable')
+    expect(mocks.database).not.toHaveBeenCalled()
+  })
+  it('checks the same context token after workspace reads before adapter acquisition', async () => {
+    mocks.workspace.mockImplementation(async () => {
+      token = accessToken({ exp: Math.floor(Date.now() / 1000) + 301 })
+      return { user: { id: actor.userId, platformUserId: actor.platformUserId, email: 'fixture@example.test', displayName: null }, organisations: [{ id: actor.organisationId, name: 'Fixture', roles: ['Investor'] }] }
+    })
+    await assertError(await dispatch(), 401, 'unauthorised')
+    expect(mocks.database).not.toHaveBeenCalled()
+  })
 })
 
 describe('wallet identity boundary', () => {

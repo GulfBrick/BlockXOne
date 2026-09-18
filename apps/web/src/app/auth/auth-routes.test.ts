@@ -1,12 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { NextRequest } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 vi.mock('server-only', () => ({}))
-const mocks = vi.hoisted(() => ({ create: vi.fn(), user: vi.fn(), workspace: vi.fn() }))
+const mocks = vi.hoisted(() => ({ create: vi.fn(), user: vi.fn(), workspace: vi.fn(), mfaContext: vi.fn(), sufficient: vi.fn(), current: vi.fn(), mfaAction: vi.fn() }))
 vi.mock('@/lib/supabase/server', async (importOriginal) => ({
   ...await importOriginal<object>(), createRequestSupabaseClient: mocks.create,
   readVerifiedUser: mocks.user, readWorkspace: mocks.workspace,
 }))
-import { GET, POST, PUT } from './[action]/route'
+vi.mock('@/lib/supabase/mfa', () => ({ readMfaContext: mocks.mfaContext, hasRequiredMfa: mocks.sufficient, isMfaContextCurrent: mocks.current }))
+vi.mock('@/lib/supabase/mfa-actions', async (original) => ({ ...await original<object>(), handleMfaAction: mocks.mfaAction }))
+import { GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD } from './[action]/route'
 import { PENDING_INVITE_COOKIE } from '@/lib/supabase/http'
 
 const canonical = 'https://bx1.co.za'
@@ -25,6 +27,9 @@ beforeEach(() => {
   mocks.create.mockReturnValue({ auth })
   mocks.user.mockResolvedValue({ id: 'u1', email: 'person@example.test' })
   mocks.workspace.mockResolvedValue(workspace)
+  mocks.mfaContext.mockResolvedValue({ fixture: 'trusted-context' })
+  mocks.sufficient.mockReturnValue(true)
+  mocks.current.mockResolvedValue(true)
 })
 
 describe('method, mode, origin and body admission', () => {
@@ -124,6 +129,52 @@ describe('scanner-safe invite', () => {
 })
 
 describe('login, setup, logout', () => {
+  it('checks MFA before any workspace reads and preserves AAL1 challenge cookies', async () => {
+    mocks.sufficient.mockReturnValue(false)
+    mocks.create.mockImplementation((adapter) => {
+      auth.signInWithPassword.mockImplementation(async () => {
+        adapter.setAll([{ name: 'sb-test.0', value: 'aal1-cookie', options: {} }], {})
+        return { error: null }
+      })
+      return { auth }
+    })
+    const response = await POST(request('login', { email: 'person@example.test', password: 'private-input' }), context('login'))
+    expect(response.headers.get('location')).toBe(`${canonical}/login/mfa`)
+    expect(response.cookies.get('sb-test.0')?.value).toBe('aal1-cookie')
+    expect(mocks.workspace).not.toHaveBeenCalled()
+  })
+  it('takes an inactive login directly to access denial without workspace reads', async () => {
+    mocks.mfaContext.mockResolvedValue(null)
+    const response = await POST(request('login', { email: 'person@example.test', password: 'private-input' }), context('login'))
+    expect(response.headers.get('location')).toBe(`${canonical}/workspace/access-denied`)
+    expect(mocks.workspace).not.toHaveBeenCalled()
+  })
+  it('retains setup continuation before password mutation and workspace RLS', async () => {
+    mocks.sufficient.mockReturnValue(false)
+    const response = await POST(request('setup', { password: 'long-private-password', confirmPassword: 'long-private-password' }), context('setup'))
+    expect(response.headers.get('location')).toBe(`${canonical}/login/mfa?continue=setup`)
+    expect(auth.updateUser).not.toHaveBeenCalled()
+    expect(mocks.workspace).not.toHaveBeenCalled()
+  })
+  it('refuses password mutation when token continuity changed during workspace reads', async () => {
+    mocks.current.mockResolvedValue(false)
+    const response = await POST(request('setup', { password: 'long-private-password', confirmPassword: 'long-private-password' }), context('setup'))
+    expect(response.status).toBe(503)
+    expect(auth.updateUser).not.toHaveBeenCalled()
+  })
+  it.each(['invite', 'recovery'])('requires enrolled MFA after %s confirmation without losing setup', async (type) => {
+    mocks.sufficient.mockReturnValue(false)
+    const pending = encodeURIComponent(JSON.stringify({ tokenHash: 'a'.repeat(64), type, expiresAt: Date.now() + 600000 }))
+    const response = await POST(request('confirm', {}, { cookie: `${PENDING_INVITE_COOKIE}=${pending}` }), context('confirm'))
+    expect(response.headers.get('location')).toBe(`${canonical}/login/mfa?continue=setup`)
+    expect(response.cookies.get(PENDING_INVITE_COOKIE)?.maxAge).toBe(0)
+    expect(mocks.workspace).not.toHaveBeenCalled()
+  })
+  it('leaves AAL1 signout independent of workspace/MFA bootstrap', async () => {
+    mocks.mfaContext.mockResolvedValue(null)
+    expect((await POST(request('logout'), context('logout'))).headers.get('location')).toBe(`${canonical}/login`)
+    expect(mocks.mfaContext).not.toHaveBeenCalled()
+  })
   it('signs in and returns only the fixed workspace redirect, propagating ALL cookies and headers', async () => {
     mocks.create.mockImplementation((adapter) => {
       auth.signInWithPassword.mockImplementation(async () => {
@@ -266,5 +317,45 @@ describe('login, setup, logout', () => {
     expect(response.status).toBe(503)
     expect(await response.text()).not.toContain('secret-sql-error')
     expect(response.headers.get('cache-control')).toContain('no-store')
+  })
+})
+
+describe('MFA route admission and shared cookie response', () => {
+  it.each(['mfa-enroll', 'mfa-verify'])('dispatches only same-origin bounded POST %s with the same client and cookie adapter', async (action) => {
+    mocks.create.mockImplementation((adapter) => {
+      mocks.mfaAction.mockImplementation(async () => {
+        adapter.setAll([{ name: 'sb-test.0', value: 'upgraded', options: {} }, { name: 'sb-test.1', value: '', options: { maxAge: 0 } }], { 'X-Test-Refresh': 'mfa' })
+        return NextResponse.json({ ok: false, error: 'invalid_code' }, { status: 400 })
+      })
+      return { auth }
+    })
+    const response = await POST(request(action), context(action))
+    expect(mocks.mfaAction).toHaveBeenCalledWith(action, expect.any(URLSearchParams), { auth })
+    expect(response.headers.get('cache-control')).toContain('no-store')
+    expect(response.cookies.get('sb-test.0')).toMatchObject({ value: 'upgraded', httpOnly: true, secure: true })
+    expect(response.cookies.get('sb-test.1')?.maxAge).toBe(0)
+    expect(response.headers.get('x-test-refresh')).toBe('mfa')
+  })
+  it.each(['mfa-enroll', 'mfa-verify'])('rejects non-POST %s, null origin and forged Host before Auth', async (action) => {
+    for (const [handler, method] of [[GET, 'GET'], [PUT, 'PUT'], [PATCH, 'PATCH'], [DELETE, 'DELETE'], [OPTIONS, 'OPTIONS'], [HEAD, 'HEAD']] as const) {
+      const response = await handler(new NextRequest(`${canonical}/auth/${action}`, { method }), context(action))
+      expect(response.status).toBe(405)
+      expect(await response.json()).toEqual({ ok: false, error: 'invalid_request' })
+    }
+    const invalidHeaders: Record<string, string>[] = [{ origin: 'null' }, { origin: '' }, { host: 'evil.test' }]
+    for (const headers of invalidHeaders) {
+      const response = await POST(request(action, {}, headers), context(action))
+      expect(response.status).toBe(403)
+      expect(await response.json()).toEqual({ ok: false, error: 'invalid_request' })
+    }
+    expect(mocks.create).not.toHaveBeenCalled()
+    expect(mocks.mfaAction).not.toHaveBeenCalled()
+  })
+  it.each(['mfa-enroll', 'mfa-verify'])('keeps malformed %s requests private and JSON without raw details', async (action) => {
+    const req = new NextRequest(`${canonical}/auth/${action}`, { method: 'POST', headers: { origin: canonical, host: 'bx1.co.za', 'content-type': 'application/x-www-form-urlencoded' }, body: 'code=123456&code=123456' })
+    const response = await POST(req, context(action))
+    expect(response.status).toBe(400)
+    expect(await response.json()).toEqual({ ok: false, error: 'invalid_request' })
+    expect(mocks.create).not.toHaveBeenCalled()
   })
 })

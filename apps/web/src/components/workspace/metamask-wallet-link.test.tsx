@@ -288,10 +288,13 @@ describe('actual controller / HTTP / workspace integration', () => {
     const platformUserId = '55555555-5555-4555-8555-555555555555'
     integration.workspace.mockResolvedValue({ user: { id: userId, platformUserId, email: 'fixture@example.test', displayName: null }, organisations: [{ id: org, name: 'Fixture organisation', roles: ['Investor'] }] })
     integration.user.mockResolvedValue({ id: userId, email: 'fixture@example.test' })
-    const token = ['header', Buffer.from(JSON.stringify({ sub: userId, session_id: '66666666-6666-4666-8666-666666666666', exp: Math.floor(Date.now() / 1000) + 300 })).toString('base64url'), 'fixture'].join('.')
+    const token = ['header', Buffer.from(JSON.stringify({ sub: userId, session_id: '66666666-6666-4666-8666-666666666666', exp: Math.floor(Date.now() / 1000) + 300, aal: 'aal1', amr: [] })).toString('base64url'), 'fixture'].join('.')
     integration.client.mockReturnValue({ auth: {
       getSession: async () => ({ data: { session: { access_token: token } }, error: null }),
-      getUser: async (exact: string) => ({ data: { user: exact === token ? { id: userId } : null }, error: null }),
+      getUser: async (exact: string) => ({ data: { user: exact === token ? { id: userId, email: 'fixture@example.test', factors: [] } : null }, error: null }),
+    }, rpc: async (name: string) => {
+      expect(name).toBe('bx1_mfa_status')
+      return { data: { active: true, requires_mfa: false, session_aal: 'aal1', session_is_mfa: false, session_is_totp: false }, error: null }
     } })
     return { userId, platformUserId }
   }
@@ -306,7 +309,7 @@ describe('actual controller / HTTP / workspace integration', () => {
     const consume = vi.fn(async () => { persisted = true; return saved })
     integration.database.mockReturnValue({ issueChallenge: async () => stored, readChallenge: async () => stored, consumeChallenge: consume })
     const query = { select: vi.fn().mockReturnThis(), in: vi.fn().mockReturnThis(), order: vi.fn(async () => ({ error: null, data: persisted ? [{ id: saved.id, organisation_id: org, address: liveAddress, chain_id: 80002, verified_at: saved.verifiedAt, status: 'PENDING' }] : [] })) }
-    const from = vi.fn(() => query); integration.pageClient.mockResolvedValue({ from })
+    const from = vi.fn(() => query); integration.pageClient.mockResolvedValue({ ...integration.client(), from })
     const refresh = vi.fn()
     const controller = createWalletLinkController({ onChange: () => {}, refresh, post: async (path, body, signal) => {
       const action = path.split('/').at(-1)!
@@ -337,7 +340,7 @@ describe('actual controller / HTTP / workspace integration', () => {
 
   it('does not query wallet tables without verifier configuration', async () => {
     configure(); integration.configured.mockReturnValue(false)
-    const from = vi.fn(); integration.pageClient.mockResolvedValue({ from })
+    const from = vi.fn(); integration.pageClient.mockResolvedValue({ ...integration.client(), from })
     const html = renderToStaticMarkup(await WorkspacePage())
     expect(from).not.toHaveBeenCalled()
     expect(html).toContain('Wallet linking is being configured')
@@ -351,7 +354,7 @@ describe('actual controller / HTTP / workspace integration', () => {
   ])('contains wallet read failure without breaking sign-in or leaking raw records', async (result) => {
     configure()
     const query = { select: vi.fn().mockReturnThis(), in: vi.fn().mockReturnThis(), order: vi.fn().mockResolvedValue(result) }
-    integration.pageClient.mockResolvedValue({ from: () => query })
+    integration.pageClient.mockResolvedValue({ ...integration.client(), from: () => query })
     const html = renderToStaticMarkup(await WorkspacePage())
     expect(html).toContain('fixture@example.test'); expect(html).toContain('Wallet records are temporarily unavailable')
     expect(html).not.toContain('private-query-detail'); expect(html).not.toContain('Ownership verified: compliance pending')

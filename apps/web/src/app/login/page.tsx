@@ -1,6 +1,7 @@
 import { ArrowRight } from 'lucide-react'
 import Link from 'next/link'
 import { cookies } from 'next/headers'
+import { redirect } from 'next/navigation'
 
 import { PublicShell } from '@/components/public/public-shell'
 import { SupabaseAuthForm } from '@/components/auth/supabase-auth-form'
@@ -10,6 +11,7 @@ import { isAuthErrorCode } from '@/lib/supabase/contracts'
 import { LOGIN_EMAIL_COOKIE } from '@/lib/supabase/http'
 import { createPageSupabaseClient } from '@/lib/supabase/page'
 import { readWorkspace } from '@/lib/supabase/server'
+import { hasRequiredMfa, isMfaContextCurrent, readMfaContext } from '@/lib/supabase/mfa'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -119,10 +121,22 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
   const setup = params.setup === '1'
   let unavailable = mode !== 'supabase'
   let validSetup = !setup
+  let mfaRequired = false
   if (setup && !unavailable) {
-    try { validSetup = Boolean(await readWorkspace(await createPageSupabaseClient())) }
+    try {
+      const client = await createPageSupabaseClient()
+      const context = await readMfaContext(client)
+      if (context) {
+        mfaRequired = !hasRequiredMfa(context)
+        if (!mfaRequired) {
+          validSetup = Boolean(await readWorkspace(client))
+          if (!await isMfaContextCurrent(client, context)) throw new Error('Access unavailable')
+        }
+      }
+    }
     catch { unavailable = true }
   }
+  if (!unavailable && mfaRequired) redirect('/login/mfa?continue=setup')
   let initialEmail = ''
   if (!setup) {
     try {
