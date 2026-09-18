@@ -21,6 +21,7 @@ vi.mock('./database', () => ({
 }))
 import { handleWalletRequest } from './server'
 import { WalletDatabaseError } from './database'
+import * as policy from '@/lib/authorization/policy'
 import * as route from '@/app/api/wallet/[action]/route'
 
 const actor: WalletActor = {
@@ -94,6 +95,28 @@ beforeEach(() => {
 })
 
 describe('wallet identity boundary', () => {
+  it.each(['challenge', 'verify'])('checks the real %s policy after verified identity and before adapter acquisition', async (action) => {
+    const evaluate = vi.spyOn(policy, 'evaluateActionPermission')
+    const fields = action === 'verify' ? { signature: await signer.signMessage(challenge.message) } : {}
+    const response = await dispatch(action, fields)
+    expect(response.status).toBe(action === 'challenge' ? 201 : 200)
+    assertPrivate(response)
+    expect(evaluate).toHaveBeenCalledWith(await mocks.workspace.mock.results[0].value, `wallet.ownership.${action}`, { userId: actor.userId, organisationId: actor.organisationId })
+    expect(client.auth.getUser.mock.invocationCallOrder[0]).toBeLessThan(evaluate.mock.invocationCallOrder[0])
+    expect(mocks.workspace.mock.invocationCallOrder[0]).toBeLessThan(evaluate.mock.invocationCallOrder[0])
+    expect(evaluate.mock.invocationCallOrder[0]).toBeLessThan(mocks.database.mock.invocationCallOrder[0])
+  })
+  it.each(['challenge', 'verify'])('denied %s policy acquires no adapter and performs no issue/read/consume', async (action) => {
+    const evaluate = vi.spyOn(policy, 'evaluateActionPermission').mockReturnValue({ allowed: false, reason: 'invalid_scope' })
+    const fields = action === 'verify' ? { signature: await signer.signMessage(challenge.message) } : {}
+    const response = await dispatch(action, fields)
+    await assertError(response, 403, 'unauthorised')
+    expect(evaluate).toHaveBeenCalledWith(expect.any(Object), `wallet.ownership.${action}`, { userId: actor.userId, organisationId: actor.organisationId })
+    expect(mocks.database).not.toHaveBeenCalled()
+    expect(db.issueChallenge).not.toHaveBeenCalled()
+    expect(db.readChallenge).not.toHaveBeenCalled()
+    expect(db.consumeChallenge).not.toHaveBeenCalled()
+  })
   it('uses exactly the server retrieved token with getUser before deriving claims and immutable actor', async () => {
     const response = await dispatch()
     expect(response.status).toBe(201)
