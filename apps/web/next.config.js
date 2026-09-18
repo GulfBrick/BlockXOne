@@ -123,7 +123,7 @@ const nextConfig = {
           }
         ]
       },
-      ...(authMode === 'supabase' ? ['/login', '/auth/:path*', '/workspace/:path*'].map((source) => ({
+      ...(authMode === 'supabase' ? ['/login', '/login/mfa', '/auth/:path*', '/workspace/:path*'].map((source) => ({
         source,
         headers: [
           { key: 'Cache-Control', value: 'private, no-store' },

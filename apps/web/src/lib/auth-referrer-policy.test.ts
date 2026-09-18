@@ -3,6 +3,18 @@ import { authDocumentReferrerPolicy } from './auth-referrer-policy'
 import { AUTH_ERROR_COPY } from './supabase/contracts'
 
 describe('Auth document referrer policy', () => {
+  it.each(['/login/mfa', '/workspace/security'])('supports clean MFA native signout document %s', path => {
+    expect(authDocumentReferrerPolicy(path, {})).toBe('strict-origin')
+    for (const key of ['token', 'code', 'next', 'error']) expect(authDocumentReferrerPolicy(path, { [key]: 'private' })).toBe('no-referrer')
+  })
+  it('only permits the fixed MFA setup continuation once', () => {
+    expect(authDocumentReferrerPolicy('/login/mfa', { continue: 'setup' })).toBe('strict-origin')
+    expect(authDocumentReferrerPolicy('/login/mfa', new URLSearchParams('continue=setup'))).toBe('strict-origin')
+    expect(authDocumentReferrerPolicy('/login/mfa', new URLSearchParams('continue=setup&continue=setup'))).toBe('no-referrer')
+    expect(authDocumentReferrerPolicy('/login/mfa', { continue: ['setup', 'setup'] })).toBe('no-referrer')
+    expect(authDocumentReferrerPolicy('/login/mfa', { continue: 'https://evil.test' })).toBe('no-referrer')
+    expect(authDocumentReferrerPolicy('/workspace/security', { continue: 'setup' })).toBe('no-referrer')
+  })
   // Native navigation POST + no-referrer yields Origin:null in Fetch. Only
   // clean form documents opt into strict-origin; origin admission stays strict.
   it.each(['/login', '/workspace', '/auth/confirm'])('retains the origin for clean %s form submission', (path) => {
