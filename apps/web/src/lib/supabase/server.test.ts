@@ -3,6 +3,8 @@ vi.mock('server-only', () => ({}))
 const sdk = vi.hoisted(() => ({ createServerClient: vi.fn() }))
 vi.mock('@supabase/ssr', () => sdk)
 import { createRequestSupabaseClient, readWorkspace, safeLocalRedirect, AuthUnavailableError } from './server'
+import * as policy from '@/lib/authorization/policy'
+import { BX1_ROLES } from './contracts'
 
 function fixture() {
   const rows: Record<string, unknown> = {
@@ -12,7 +14,7 @@ function fixture() {
   }
   const filters: unknown[][] = []
   const client = {
-    auth: { getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'user-a', email: 'alice@example.test', user_metadata: { role: 'SuperAdmin' } } }, error: null }) },
+    auth: { getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'user-a', email: 'alice@example.test', user_metadata: { role: 'SuperAdmin' }, app_metadata: { roles: ['SuperAdmin'], organisationId: 'forged-org' } } }, error: null }) },
     from: vi.fn((table: string) => {
       const query = {
         select: vi.fn().mockReturnThis(),
@@ -60,6 +62,54 @@ describe('request-local Supabase client', () => {
 })
 
 describe('workspace reads', () => {
+  it.each(BX1_ROLES)('passes verified own rows through real policy for %s without wallet facts', async (role) => {
+    const { client, rows } = fixture()
+    rows.bx1_memberships = [{ organisation_id: 'org-a', role, status: 'ACTIVE' }]
+    const evaluate = vi.spyOn(policy, 'evaluateActionPermission')
+    const result = await readWorkspace(client as never)
+    expect(result?.organisations[0].roles).toEqual([role])
+    expect(evaluate.mock.calls).toEqual([
+      [result, 'workspace.read'],
+      [result, 'profile.read_own', { userId: 'user-a' }],
+      [result, 'memberships.read_own', { userId: 'user-a' }],
+      [result, 'organisation.read', { organisationId: 'org-a' }],
+    ])
+    expect(client.auth.getUser.mock.invocationCallOrder[0]).toBeLessThan(client.from.mock.invocationCallOrder[0])
+    expect(client.from.mock.invocationCallOrder.at(-1)).toBeLessThan(evaluate.mock.invocationCallOrder[0])
+  })
+  it.each(['workspace.read', 'profile.read_own', 'memberships.read_own', 'organisation.read'])('returns no workspace when policy denies %s', async (deniedAction) => {
+    const { client } = fixture()
+    const realEvaluate = policy.evaluateActionPermission
+    const evaluate = vi.spyOn(policy, 'evaluateActionPermission').mockImplementation((workspace, action, target) =>
+      action === deniedAction ? { allowed: false, reason: 'invalid_scope' } : realEvaluate(workspace, action, target))
+    expect(await readWorkspace(client as never)).toBeNull()
+    expect(evaluate).toHaveBeenCalledWith(expect.any(Object), deniedAction, ...deniedAction === 'workspace.read' ? [] : [expect.any(Object)])
+  })
+  it.each(['mismatched profile', 'suspended profile', 'suspended organisation'])('denies %s before policy sees a candidate', async (failure) => {
+    const { client, rows } = fixture()
+    const evaluate = vi.spyOn(policy, 'evaluateActionPermission')
+    if (failure === 'mismatched profile') rows.bx1_profiles = { id: 'other-user', platform_user_id: 'platform-a', status: 'ACTIVE' }
+    if (failure === 'suspended profile') rows.bx1_profiles = { id: 'user-a', platform_user_id: 'platform-a', status: 'SUSPENDED' }
+    if (failure === 'suspended organisation') rows.bx1_organisations = [{ id: 'org-a', name: 'A', status: 'SUSPENDED' }]
+    expect(await readWorkspace(client as never)).toBeNull()
+    expect(evaluate).not.toHaveBeenCalled()
+  })
+  it('denies suspended membership rows and does not promote metadata roles', async () => {
+    const { client, rows } = fixture()
+    rows.bx1_memberships = [{ organisation_id: 'org-a', role: 'Investor', status: 'SUSPENDED' }]
+    await expect(readWorkspace(client as never)).rejects.toThrow(AuthUnavailableError)
+  })
+  it('checks each resolved organisation without admitting metadata-only assignments', async () => {
+    const { client, rows } = fixture()
+    rows.bx1_memberships = [{ organisation_id: 'org-a', role: 'Investor', status: 'ACTIVE' }, { organisation_id: 'org-b', role: 'SuperAdmin', status: 'ACTIVE' }]
+    rows.bx1_organisations = [{ id: 'org-a', name: 'A', status: 'ACTIVE' }, { id: 'org-b', name: 'B', status: 'ACTIVE' }, { id: 'forged-org', name: 'Forged', status: 'ACTIVE' }]
+    const evaluate = vi.spyOn(policy, 'evaluateActionPermission')
+    const result = await readWorkspace(client as never)
+    expect(result?.organisations.map((org) => org.id)).toEqual(['org-a', 'org-b'])
+    expect(evaluate).toHaveBeenCalledWith(result, 'organisation.read', { organisationId: 'org-a' })
+    expect(evaluate).toHaveBeenCalledWith(result, 'organisation.read', { organisationId: 'org-b' })
+    expect(evaluate).not.toHaveBeenCalledWith(result, 'organisation.read', { organisationId: 'forged-org' })
+  })
   it('verifies user then reads actual own active profile and tenant roles, ignoring metadata', async () => {
     const { client, filters } = fixture()
     const result = await readWorkspace(client as never)

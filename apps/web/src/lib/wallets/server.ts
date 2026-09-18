@@ -5,6 +5,7 @@ import { getAddress, verifyMessage, ZeroAddress } from 'ethers'
 import { NextResponse, type NextRequest } from 'next/server'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { resolveAuthMode } from '@/lib/auth-mode'
+import { evaluateActionPermission } from '@/lib/authorization/policy'
 import { canonicalAppOrigin, createRequestSupabaseClient, readWorkspace } from '@/lib/supabase/server'
 import { hasCanonicalOrigin, readAuthForm, responseCookieAdapter } from '@/lib/supabase/http'
 import { WALLET_CHAIN_ID, WALLET_ORIGIN, type LinkedWallet, type WalletActor, type WalletChallenge, type WalletErrorCode } from './contracts'
@@ -46,7 +47,7 @@ function requireUnexpired(exp: number): void {
   if (!Number.isSafeInteger(exp) || exp <= Math.floor(Date.now() / 1000)) throw new WalletRequestError('unauthorised', 401)
 }
 
-async function verifiedActor(client: SupabaseClient, organisationId: string): Promise<{ actor: WalletActor; exp: number }> {
+async function verifiedActor(client: SupabaseClient, organisationId: string, action: 'wallet.ownership.challenge' | 'wallet.ownership.verify'): Promise<{ actor: WalletActor; exp: number }> {
   // Session storage is only a token source. No claims below are trusted until
   // this exact token has been verified by Supabase Auth's user endpoint.
   const session = await client.auth.getSession()
@@ -75,6 +76,7 @@ async function verifiedActor(client: SupabaseClient, organisationId: string): Pr
   const workspace = await readWorkspace(client)
   if (!workspace || workspace.user.id !== user.id || !validUuid(workspace.user.platformUserId)
     || !workspace.organisations.some((organisation) => organisation.id === organisationId)) throw new WalletRequestError('unauthorised', 403)
+  if (!evaluateActionPermission(workspace, action, { userId: user.id, organisationId }).allowed) throw new WalletRequestError('unauthorised', 403)
   const current = await client.auth.getSession()
   providerError(current.error)
   if (current.data.session?.access_token !== accessToken) throw new WalletRequestError('unauthorised', 401)
@@ -147,7 +149,7 @@ export async function handleWalletRequest(request: NextRequest, context: Context
     }
     if (!isWalletDatabaseConfigured()) return fail('unavailable')
     const client = createRequestSupabaseClient(jar.adapter)
-    const { actor, exp } = await verifiedActor(client, organisationId)
+    const { actor, exp } = await verifiedActor(client, organisationId, action === 'challenge' ? 'wallet.ownership.challenge' : 'wallet.ownership.verify')
     const database = getWalletDatabase()
     if (action === 'challenge') {
       requireUnexpired(exp)

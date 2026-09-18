@@ -1,24 +1,121 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { ReactNode } from 'react'
+import { BX1_ROLES, type Bx1Role, type Bx1Workspace } from '@/lib/supabase/contracts'
+import * as policy from '@/lib/authorization/policy'
 vi.mock('server-only', () => ({}))
-const mocks = vi.hoisted(() => ({ client: vi.fn(), user: vi.fn(), workspace: vi.fn() }))
+const mocks = vi.hoisted(() => ({ client: vi.fn(), user: vi.fn(), workspace: vi.fn(), configured: vi.fn() }))
 vi.mock('@/lib/supabase/page', () => ({ createPageSupabaseClient: mocks.client }))
 vi.mock('@/lib/supabase/server', () => ({ readVerifiedUser: mocks.user, readWorkspace: mocks.workspace }))
+vi.mock('@/lib/wallets/database', () => ({ isWalletDatabaseConfigured: mocks.configured }))
 vi.mock('@/components/public/public-shell', () => ({ PublicShell: ({ children }: { children: ReactNode }) => <>{children}</> }))
 vi.mock('next/navigation', () => ({ redirect: (path: string) => { throw new Error(`REDIRECT:${path}`) }, notFound: () => { throw new Error('NOT_FOUND') } }))
 import WorkspacePage, { generateMetadata } from './page'
 import AccessDeniedPage from './access-denied/page'
 
+function resolvedWorkspace(roles: Bx1Role[]): Bx1Workspace {
+  return { user: { id: 'u1', email: 'real@example.test', platformUserId: 'legacy1', displayName: 'Real Person' }, organisations: [{ id: 'o1', name: 'BlockXOne Internal', roles }] }
+}
+
+const savedRow = { id: 'wallet-a', organisation_id: 'o1', address: '0x1111111111111111111111111111111111111111', chain_id: 80002, verified_at: '2026-09-18T00:00:00.000Z', status: 'PENDING' }
+function walletQuery(data: unknown = [], error: unknown = null) {
+  const query = { select: vi.fn().mockReturnThis(), in: vi.fn().mockReturnThis(), order: vi.fn().mockResolvedValue({ data, error }) }
+  const from = vi.fn(() => query)
+  mocks.client.mockResolvedValue({ from })
+  return { from, query }
+}
+
 beforeEach(() => {
   vi.stubEnv('BLOCKXONE_AUTH_MODE', 'supabase')
   vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_AUTH_MODE', 'supabase')
+  mocks.configured.mockReturnValue(false)
   mocks.client.mockResolvedValue({})
   mocks.user.mockResolvedValue({ id: 'u1', email: 'real@example.test' })
   mocks.workspace.mockResolvedValue({ user: { id: 'u1', email: 'real@example.test', platformUserId: 'legacy1', displayName: 'Real Person' }, organisations: [{ id: 'o1', name: 'BlockXOne Internal', roles: ['SuperAdmin', 'FinancialController'] }] })
 })
 
 describe('server-rendered protected workspace', () => {
+  describe.each(BX1_ROLES)('%s wallet-optional access', (role) => {
+    it('retains identity, assignments and POST signout without provider or verifier configuration', async () => {
+      mocks.workspace.mockResolvedValue(resolvedWorkspace([role]))
+      const { from } = walletQuery()
+      const html = renderToStaticMarkup(await WorkspacePage())
+      expect(html).toContain('real@example.test')
+      expect(html).toContain(role)
+      expect(html).toContain('method="post" action="/auth/logout"')
+      expect(html).toContain('Financial and token operations are not enabled.')
+      expect(html).toContain('Wallet linking is being configured')
+      expect(from).not.toHaveBeenCalled()
+    })
+    it('uses real own-user policy before the unchanged safe RLS projection with no saved wallet', async () => {
+      mocks.configured.mockReturnValue(true)
+      const workspace = resolvedWorkspace([role])
+      workspace.organisations.push({ id: 'o2', name: 'Second organisation', roles: ['Investor'] })
+      mocks.workspace.mockResolvedValue(workspace)
+      const evaluate = vi.spyOn(policy, 'evaluateActionPermission')
+      const { from, query } = walletQuery()
+      const html = renderToStaticMarkup(await WorkspacePage())
+      expect(evaluate.mock.calls).toEqual([
+        [workspace, 'wallet.read_own', { userId: 'u1', organisationId: 'o1' }],
+        [workspace, 'wallet.read_own', { userId: 'u1', organisationId: 'o2' }],
+      ])
+      expect(evaluate.mock.invocationCallOrder.at(-1)).toBeLessThan(from.mock.invocationCallOrder[0])
+      expect(from).toHaveBeenCalledWith('bx1_wallets')
+      expect(query.select).toHaveBeenCalledWith('id,organisation_id,address,chain_id,verified_at,status')
+      expect(query.in).toHaveBeenCalledWith('organisation_id', ['o1', 'o2'])
+      expect(html).toContain('real@example.test')
+      expect(html).not.toContain('Ownership verified: compliance pending')
+    })
+  })
+  it('skips the entire wallet query if any organisation is denied while preserving usable identity/logout', async () => {
+    mocks.configured.mockReturnValue(true)
+    const workspace = resolvedWorkspace(['SuperAdmin', 'FinancialController'])
+    workspace.organisations.push({ id: 'o2', name: 'Second organisation', roles: ['Investor'] })
+    mocks.workspace.mockResolvedValue(workspace)
+    const realEvaluate = policy.evaluateActionPermission
+    const evaluate = vi.spyOn(policy, 'evaluateActionPermission').mockImplementation((candidate, action, target) =>
+      target?.organisationId === 'o2' ? { allowed: false, reason: 'invalid_scope' } : realEvaluate(candidate, action, target))
+    const { from, query } = walletQuery([savedRow])
+    const html = renderToStaticMarkup(await WorkspacePage())
+    expect(evaluate).toHaveBeenCalledTimes(2)
+    expect(from).not.toHaveBeenCalled()
+    expect(query.select).not.toHaveBeenCalled()
+    expect(html).toContain('real@example.test')
+    expect(html).toContain('Active assignments')
+    expect(html).toContain('method="post" action="/auth/logout"')
+    expect(html).toContain('Wallet records are temporarily unavailable')
+    expect(html).not.toContain(savedRow.address)
+  })
+  it.each([{ roles: [] }, { roles: ['Root'] }, { roles: ['Investor', 'Root'] }])('real policy denies invalid role fixture $roles without querying wallets', async ({ roles }) => {
+    mocks.configured.mockReturnValue(true)
+    mocks.workspace.mockResolvedValue(resolvedWorkspace(roles as Bx1Role[]))
+    const { from } = walletQuery([savedRow])
+    const html = renderToStaticMarkup(await WorkspacePage())
+    expect(from).not.toHaveBeenCalled()
+    expect(html).toContain('Wallet records are temporarily unavailable')
+    expect(html).toContain('real@example.test')
+    expect(html).not.toContain(savedRow.address)
+  })
+  it('retains the safe own-wallet projection and PENDING/Amoy presentation', async () => {
+    mocks.configured.mockReturnValue(true)
+    const { query } = walletQuery([{ ...savedRow, user_id: 'not-select-granted', signature: 'private-proof' }])
+    const html = renderToStaticMarkup(await WorkspacePage())
+    expect(query.select).toHaveBeenCalledWith('id,organisation_id,address,chain_id,verified_at,status')
+    expect(html).toContain('Ownership verified: compliance pending')
+    expect(html).toContain('80002')
+    expect(html).toContain(savedRow.address)
+    expect(html).not.toContain('not-select-granted')
+    expect(html).not.toContain('private-proof')
+    // RLS establishes ownership; this mock only proves safe-field projection.
+  })
+  it.each([{ organisation_id: 'foreign-org' }, { chain_id: 1 }, { status: 'APPROVED' }, { verified_at: 'bad' }])('rejects malformed wallet projection %j without exposing partial results', async (change) => {
+    mocks.configured.mockReturnValue(true)
+    walletQuery([savedRow, { ...savedRow, ...change }])
+    const html = renderToStaticMarkup(await WorkspacePage())
+    expect(html).toContain('Wallet records are temporarily unavailable')
+    expect(html).toContain('real@example.test')
+    expect(html).not.toContain(savedRow.address)
+  })
   it('workspace metadata enables native signout while token-bearing URLs retain no-referrer', async () => {
     expect((await generateMetadata({ searchParams: Promise.resolve({}) })).referrer).toBe('strict-origin')
     expect((await generateMetadata({ searchParams: Promise.resolve({ access_token: 'synthetic' }) })).referrer).toBe('no-referrer')

@@ -3,6 +3,7 @@ import 'server-only'
 import { createServerClient, type CookieOptions, type SetAllCookies } from '@supabase/ssr'
 import type { SupabaseClient, User } from '@supabase/supabase-js'
 import { isSupabaseAuthMode } from '@/lib/auth-mode'
+import { evaluateActionPermission } from '@/lib/authorization/policy'
 import { BX1_ROLES, type Bx1Role, type Bx1Workspace } from './contracts'
 
 export type CookieAdapter = {
@@ -93,10 +94,15 @@ export async function readWorkspace(client: SupabaseClient): Promise<Bx1Workspac
     if (!organisations?.length) return null
     const visible = organisations.filter((org) => ids.includes(org.id) && org.status === 'ACTIVE' && typeof org.name === 'string')
     if (!visible.length) return null
-    return {
+    const workspace: Bx1Workspace = {
       user: { id: user.id, email: user.email!, platformUserId: profile.platform_user_id, displayName: typeof profile.display_name === 'string' ? profile.display_name : null },
       organisations: visible.map((org) => ({ id: org.id, name: org.name, roles: [...new Set(memberships.filter((member) => member.organisation_id === org.id).map((member) => member.role as Bx1Role))] })),
     }
+    if (!evaluateActionPermission(workspace, 'workspace.read').allowed
+      || !evaluateActionPermission(workspace, 'profile.read_own', { userId: user.id }).allowed
+      || !evaluateActionPermission(workspace, 'memberships.read_own', { userId: user.id }).allowed
+      || workspace.organisations.some((organisation) => !evaluateActionPermission(workspace, 'organisation.read', { organisationId: organisation.id }).allowed)) return null
+    return workspace
   } catch { throw new AuthUnavailableError() }
 }
 
