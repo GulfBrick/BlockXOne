@@ -1,4 +1,5 @@
 import { notFound, redirect } from 'next/navigation'
+import Link from 'next/link'
 import { PublicShell } from '@/components/public/public-shell'
 import { Button } from '@/components/ui/button'
 import { isSupabaseAuthMode } from '@/lib/auth-mode'
@@ -6,6 +7,7 @@ import { authDocumentReferrerPolicy } from '@/lib/auth-referrer-policy'
 import { evaluateActionPermission } from '@/lib/authorization/policy'
 import { createPageSupabaseClient } from '@/lib/supabase/page'
 import { readVerifiedUser, readWorkspace } from '@/lib/supabase/server'
+import { hasRequiredMfa, isMfaContextCurrent, readMfaContext } from '@/lib/supabase/mfa'
 import type { Bx1Workspace } from '@/lib/supabase/contracts'
 import { MetaMaskWalletLink } from '@/components/workspace/metamask-wallet-link'
 import { isWalletDatabaseConfigured } from '@/lib/wallets/database'
@@ -21,14 +23,25 @@ export default async function WorkspacePage() {
   if (!isSupabaseAuthMode()) notFound()
   let workspace: Bx1Workspace | null = null
   let signedIn = false
+  let mfaRequired = false
   let unavailable = false
   const wallets: LinkedWallet[] = []
   const walletConfigured = isWalletDatabaseConfigured()
   let walletReadUnavailable = false
   try {
     const client = await createPageSupabaseClient()
+    let context: Awaited<ReturnType<typeof readMfaContext>> = null
     signedIn = Boolean(await readVerifiedUser(client))
-    if (signedIn) workspace = await readWorkspace(client)
+    if (signedIn) {
+      context = await readMfaContext(client)
+      if (context) {
+        mfaRequired = !hasRequiredMfa(context)
+        if (!mfaRequired) {
+          workspace = await readWorkspace(client)
+          if (!await isMfaContextCurrent(client, context)) throw new Error('Access unavailable')
+        }
+      }
+    }
     if (workspace && walletConfigured) {
       // The caller JWT's RLS policy is the authoritative user_id=auth.uid filter;
       // user_id itself is deliberately not granted to the client. Narrow further
@@ -53,9 +66,11 @@ export default async function WorkspacePage() {
         }
       } catch { wallets.length = 0; walletReadUnavailable = true }
     }
+    if (workspace && context && !await isMfaContextCurrent(client, context)) throw new Error('Access unavailable')
   } catch { unavailable = true }
   // Framework redirects throw; keep them outside the provider error catch.
   if (!unavailable && !signedIn) redirect('/login')
+  if (!unavailable && mfaRequired) redirect('/login/mfa')
   if (!unavailable && !workspace) redirect('/workspace/access-denied')
   return (
     <PublicShell>
@@ -65,7 +80,7 @@ export default async function WorkspacePage() {
             <p className="text-sm font-semibold uppercase tracking-[0.16em] text-bxo-accent-primary">BlockXOne access</p>
             <h1 className="mt-4 font-ui text-3xl font-medium tracking-tight text-bxo-text-primary sm:text-4xl">Your workspace</h1>
           </div>
-          <form method="post" action="/auth/logout"><Button type="submit" variant="outline" className="min-h-11 focus-visible:ring-bxo-accent-primary">Sign out</Button></form>
+          <div className="flex flex-wrap items-center gap-4"><Link href="/workspace/security" className="inline-flex min-h-11 items-center text-sm text-bxo-accent-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bxo-accent-primary">Account security</Link><form method="post" action="/auth/logout"><Button type="submit" variant="outline" className="min-h-11 focus-visible:ring-bxo-accent-primary">Sign out</Button></form></div>
         </div>
         {unavailable || !workspace ? <p role="alert" className="mt-8 text-base text-bxo-text-secondary">Access is temporarily unavailable. Please try again.</p> : (
           <div className="mt-8 grid gap-8 md:grid-cols-2">

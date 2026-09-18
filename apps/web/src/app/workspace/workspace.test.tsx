@@ -4,7 +4,8 @@ import type { ReactNode } from 'react'
 import { BX1_ROLES, type Bx1Role, type Bx1Workspace } from '@/lib/supabase/contracts'
 import * as policy from '@/lib/authorization/policy'
 vi.mock('server-only', () => ({}))
-const mocks = vi.hoisted(() => ({ client: vi.fn(), user: vi.fn(), workspace: vi.fn(), configured: vi.fn() }))
+const mocks = vi.hoisted(() => ({ client: vi.fn(), user: vi.fn(), workspace: vi.fn(), configured: vi.fn(), mfa: vi.fn(), sufficient: vi.fn(), current: vi.fn() }))
+vi.mock('@/lib/supabase/mfa', () => ({ readMfaContext: mocks.mfa, hasRequiredMfa: mocks.sufficient, isMfaContextCurrent: mocks.current }))
 vi.mock('@/lib/supabase/page', () => ({ createPageSupabaseClient: mocks.client }))
 vi.mock('@/lib/supabase/server', () => ({ readVerifiedUser: mocks.user, readWorkspace: mocks.workspace }))
 vi.mock('@/lib/wallets/database', () => ({ isWalletDatabaseConfigured: mocks.configured }))
@@ -29,12 +30,56 @@ beforeEach(() => {
   vi.stubEnv('BLOCKXONE_AUTH_MODE', 'supabase')
   vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_AUTH_MODE', 'supabase')
   mocks.configured.mockReturnValue(false)
+  mocks.mfa.mockResolvedValue({})
+  mocks.sufficient.mockReturnValue(true)
+  mocks.current.mockResolvedValue(true)
   mocks.client.mockResolvedValue({})
   mocks.user.mockResolvedValue({ id: 'u1', email: 'real@example.test' })
   mocks.workspace.mockResolvedValue({ user: { id: 'u1', email: 'real@example.test', platformUserId: 'legacy1', displayName: 'Real Person' }, organisations: [{ id: 'o1', name: 'BlockXOne Internal', roles: ['SuperAdmin', 'FinancialController'] }] })
 })
 
 describe('server-rendered protected workspace', () => {
+  it('rejects a changed token after workspace lookup before querying wallets', async () => {
+    mocks.configured.mockReturnValue(true)
+    mocks.current.mockResolvedValue(false)
+    const { from } = walletQuery([savedRow])
+    const html = renderToStaticMarkup(await WorkspacePage())
+    expect(html).toContain('Access is temporarily unavailable.')
+    expect(html).not.toContain('real@example.test')
+    expect(html).not.toContain(savedRow.address)
+    expect(from).not.toHaveBeenCalled()
+  })
+  it('rejects a token changed during wallet lookup before rendering any identity', async () => {
+    mocks.configured.mockReturnValue(true)
+    mocks.current.mockResolvedValueOnce(true).mockResolvedValueOnce(false)
+    const { from } = walletQuery([savedRow])
+    const html = renderToStaticMarkup(await WorkspacePage())
+    expect(from).toHaveBeenCalledOnce()
+    expect(html).toContain('Access is temporarily unavailable.')
+    expect(html).not.toContain('real@example.test')
+    expect(html).not.toContain(savedRow.address)
+  })
+  it.each(BX1_ROLES)('%s must complete enrolled MFA before workspace or wallet queries', async role => {
+    mocks.workspace.mockResolvedValue(resolvedWorkspace([role]))
+    mocks.sufficient.mockReturnValue(false)
+    const { from } = walletQuery()
+    await expect(WorkspacePage()).rejects.toThrow('REDIRECT:/login/mfa')
+    expect(mocks.workspace).not.toHaveBeenCalled()
+    expect(from).not.toHaveBeenCalled()
+  })
+  it('has an account security entry without changing financial availability', async () => {
+    const html = renderToStaticMarkup(await WorkspacePage())
+    expect(html).toContain('href="/workspace/security"')
+    expect(html).toContain('Account security')
+    expect(html).toContain('Financial and token operations are not enabled.')
+  })
+  it('MFA provider failure does not become unenrolled access', async () => {
+    mocks.mfa.mockRejectedValue(Error('private assurance detail'))
+    const html = renderToStaticMarkup(await WorkspacePage())
+    expect(html).toContain('Access is temporarily unavailable.')
+    expect(html).not.toContain('private assurance detail')
+    expect(mocks.workspace).not.toHaveBeenCalled()
+  })
   describe.each(BX1_ROLES)('%s wallet-optional access', (role) => {
     it('retains identity, assignments and POST signout without provider or verifier configuration', async () => {
       mocks.workspace.mockResolvedValue(resolvedWorkspace([role]))
