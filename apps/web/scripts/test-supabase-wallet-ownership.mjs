@@ -7,8 +7,10 @@ import { PGlite } from '@electric-sql/pglite'
 const mode = process.argv.slice(2)
 if (mode.length && (mode.length !== 1 || mode[0] !== '--concurrency')) throw new Error('Unsupported test mode')
 const fixture = await readFile(new URL('../../../supabase/tests/bx1_identity_workspace.sql', import.meta.url), 'utf8')
+const mfaFixture = await readFile(new URL('../../../supabase/tests/bx1_mfa_assurance.sql', import.meta.url), 'utf8')
 const identity = await readFile(new URL('../../../supabase/migrations/20260916234746_bx1_identity_workspace.sql', import.meta.url), 'utf8')
 const wallet = await readFile(new URL('../../../supabase/migrations/20260917190042_bx1_wallet_ownership.sql', import.meta.url), 'utf8')
+const mfa = await readFile(new URL('../../../supabase/migrations/20260918015541_bx1_mfa_assurance.sql', import.meta.url), 'utf8')
 const id = (prefix, n) => `${prefix}0000000-0000-4000-8000-${String(n).padStart(12, '0')}`
 const uid = (n) => id(1,n), sid = (n) => id(2,n), org = (n) => id(3,n), pid = (n) => id(4,n)
 const address = (n) => '0x' + String(n).padStart(40, '0')
@@ -21,6 +23,7 @@ async function check(db, sql, expected, label, params=[]) {
 }
 async function setup(db) {
   await db.exec(fixture)
+  await db.exec(mfaFixture)
   // Hosted Auth tables have RLS. No policy/grant is added for the wallet owner.
   await db.exec('alter table auth.users enable row level security; alter table auth.sessions enable row level security;')
   await db.exec(identity)
@@ -30,7 +33,7 @@ async function setup(db) {
     create role bx1_fixture_migrator nologin noinherit nosuperuser createdb createrole bypassrls;
     grant usage, create on schema public to bx1_fixture_migrator with grant option;
     grant usage on schema auth to bx1_fixture_migrator;
-    grant select on auth.users, auth.sessions to bx1_fixture_migrator;
+    grant select on auth.users, auth.sessions, auth.mfa_factors to bx1_fixture_migrator;
     alter schema bx1_private owner to bx1_fixture_migrator;
     alter table public.bx1_profiles owner to bx1_fixture_migrator;
     alter table public.bx1_organisations owner to bx1_fixture_migrator;
@@ -41,6 +44,7 @@ async function setup(db) {
     set local role bx1_fixture_migrator;
   `)
   await db.exec(wallet)
+  await db.exec(mfa)
   await db.exec('reset role')
   for(let user=1;user<=3;user++) {
     await db.query('insert into auth.users(id) values ($1)',[uid(user)])
@@ -333,6 +337,7 @@ async function concurrency() {
             alter default privileges in schema public revoke all on tables from anon, authenticated, service_role;
             alter default privileges for role bx1_fixture_migrator in schema public revoke all on tables from anon, authenticated, service_role;
             drop schema bx1_private cascade;
+            drop function public.bx1_mfa_status();
             drop table public.bx1_wallets, public.bx1_memberships, public.bx1_profiles, public.bx1_organisations cascade;
             drop schema auth cascade;
             drop owned by bx1_wallet_owner;
