@@ -2,7 +2,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { ReactNode } from 'react'
 vi.mock('server-only', () => ({}))
-const mocks = vi.hoisted(() => ({ client: vi.fn(), workspace: vi.fn(), cookies: vi.fn() }))
+const mocks = vi.hoisted(() => ({ client: vi.fn(), workspace: vi.fn(), cookies: vi.fn(), mfa: vi.fn(), sufficient: vi.fn(), current: vi.fn() }))
+vi.mock('@/lib/supabase/mfa', () => ({ readMfaContext: mocks.mfa, hasRequiredMfa: mocks.sufficient, isMfaContextCurrent: mocks.current }))
+vi.mock('next/navigation', () => ({ redirect: (path: string) => { throw Error(`REDIRECT:${path}`) } }))
 vi.mock('@/lib/supabase/page', () => ({ createPageSupabaseClient: mocks.client }))
 vi.mock('@/lib/supabase/server', async (importOriginal) => ({ ...await importOriginal<object>(), readWorkspace: mocks.workspace }))
 vi.mock('next/headers', () => ({ cookies: mocks.cookies }))
@@ -13,10 +15,34 @@ beforeEach(() => {
   vi.stubEnv('BLOCKXONE_AUTH_MODE', 'supabase')
   vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_AUTH_MODE', 'supabase')
   mocks.client.mockResolvedValue({})
+  mocks.mfa.mockResolvedValue({})
+  mocks.sufficient.mockReturnValue(true)
+  mocks.current.mockResolvedValue(true)
   mocks.workspace.mockResolvedValue({ user: { id: 'u1' }, organisations: [{ id: 'o1' }] })
   mocks.cookies.mockResolvedValue({ get: () => undefined })
 })
 describe('server login/setup admission', () => {
+  it('does not render password setup after the token changes during workspace lookup', async () => {
+    mocks.current.mockResolvedValue(false)
+    const html = renderToStaticMarkup(await LoginPage({ searchParams: Promise.resolve({ setup: '1' }) }))
+    expect(html).toContain('Access is temporarily unavailable.')
+    expect(html).not.toContain('action="/auth/setup"')
+  })
+  it('routes enrolled recovery/setup to fixed MFA continuation before workspace', async () => {
+    mocks.sufficient.mockReturnValue(false)
+    await expect(LoginPage({ searchParams: Promise.resolve({ setup: '1' }) })).rejects.toThrow('REDIRECT:/login/mfa?continue=setup')
+    expect(mocks.workspace).not.toHaveBeenCalled()
+  })
+  it('requires active bootstrap and does not treat failed assurance as nofactor', async () => {
+    mocks.mfa.mockResolvedValue(null)
+    const absent = renderToStaticMarkup(await LoginPage({ searchParams: Promise.resolve({ setup: '1' }) }))
+    expect(absent).toContain('This invitation link is invalid or has expired.')
+    expect(mocks.workspace).not.toHaveBeenCalled()
+    mocks.mfa.mockRejectedValue(Error('private-provider-error'))
+    const unavailable = renderToStaticMarkup(await LoginPage({ searchParams: Promise.resolve({ setup: '1' }) }))
+    expect(unavailable).toContain('Access is temporarily unavailable.')
+    expect(unavailable).not.toContain('private-provider-error')
+  })
   it('login/setup metadata preserves browser POST origins without exposing URL paths or query strings', async () => {
     for (const searchParams of [{}, { setup: '1' }, { error: 'invalid_credentials' }]) {
       expect((await generateMetadata({ searchParams: Promise.resolve(searchParams) })).referrer).toBe('strict-origin')
