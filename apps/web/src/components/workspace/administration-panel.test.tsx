@@ -94,29 +94,31 @@ describe('contained administration presentation', () => {
 
 describe('scoped forms and independent actions', () => {
   const form = (values: Record<string, string>) => { const data = new FormData(); for (const [key, value] of Object.entries(values)) data.set(key, value); return data }
-  it.each([
+  const validForms: Array<Record<string, string>> = [
     { changeKind: 'ENTITY_DRAFT_CREATE', displayName: 'Synthetic Fund', entityKind: 'FUND', jurisdictionCode: '', registrationReference: '' },
     { changeKind: 'MEMBERSHIP_GRANT', principalId: otherPrincipal, role: 'Investor' },
     { changeKind: 'MEMBERSHIP_REVOKE', membershipId, reason: 'security' },
     { changeKind: 'GOVERNANCE_GRANT', personId: other, validUntil: '2026-10-01T00:00:00Z' },
     { changeKind: 'GOVERNANCE_REVOKE', grantId, reason: 'routine' },
     { changeKind: 'PERSON_SCOPE_REVOKE', personId: person, reason: 'security' },
-  ])('constructs the exact %s typed payload from scoped fields', values => {
-    const result = buildProposalFromForm(form(values as Record<string, string>), ready())
+  ]
+  it.each(validForms)('constructs the exact %s typed payload from scoped fields', values => {
+    const result = buildProposalFromForm(form(values), ready())
     expect(result?.kind).toBe(values.changeKind)
     expect(result?.payload).not.toHaveProperty('changeKind')
   })
   it('does not invent legal facts', () => {
     expect(buildProposalFromForm(form({ changeKind: 'ENTITY_DRAFT_CREATE', displayName: 'Fund', entityKind: 'FUND' }), ready())?.payload).toEqual({ displayName: 'Fund', kind: 'FUND', jurisdictionCode: null, registrationReference: null })
   })
-  it.each([
+  const invalidForms: Array<Record<string, string>> = [
     { changeKind: 'MEMBERSHIP_GRANT', principalId: principal, role: 'SuperAdmin' },
     { changeKind: 'GOVERNANCE_GRANT', personId: person, validUntil: '2026-10-01T00:00:00Z' },
     { changeKind: 'MEMBERSHIP_REVOKE', membershipId: proposalId, reason: 'security' },
     { changeKind: 'GOVERNANCE_REVOKE', grantId: proposalId, reason: 'security' },
     { changeKind: 'PERSON_SCOPE_REVOKE', personId: proposalId, reason: 'security' },
     { changeKind: 'ENTITY_DRAFT_CREATE', displayName: 'Fund', entityKind: 'FUND', jurisdictionCode: 'za' },
-  ])('rejects self elevation, unknown recipients or invalid legal facts %j', values => expect(buildProposalFromForm(form(values as Record<string, string>), ready())).toBeNull())
+  ]
+  it.each(invalidForms)('rejects self elevation, unknown recipients or invalid legal facts %j', values => expect(buildProposalFromForm(form(values), ready())).toBeNull())
   it('permits self-requested reduction, but never self-review or beneficiary application', () => {
     const view = ready(), command = { ...proposal(), requesterPersonId: person, beneficiaryPersonId: person, allowedTransitions: ['approve', 'reject', 'cancel'] as const }
     expect(permittedTransitions({ ...command, allowedTransitions: [...command.allowedTransitions] }, view)).toEqual(['cancel'])

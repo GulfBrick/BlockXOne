@@ -27,8 +27,12 @@ export async function submitAdministrationCommand(client: SupabaseClient, candid
       expectedState = 'PENDING_REVIEW'
     } else {
       command = { intent: intent.intent, proposalId: intent.proposalId, expectedRevision: intent.expectedRevision }
-      if (intent.intent === 'review') command.decision = intent.decision
-      expectedState = intent.intent === 'apply' ? 'APPLIED' : intent.intent === 'cancel' ? 'CANCELLED' : intent.decision === 'approve' ? 'APPROVED' : 'REJECTED'
+      if (intent.intent === 'review') {
+        command.decision = intent.decision
+        expectedState = intent.decision === 'approve' ? 'APPROVED' : 'REJECTED'
+      } else {
+        expectedState = intent.intent === 'apply' ? 'APPLIED' : 'CANCELLED'
+      }
     }
     // No comparisons to refreshed revision/allowedTransitions here: SQL must
     // adjudicate historical-key replay and persist discovered stale terminals.
