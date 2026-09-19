@@ -1,4 +1,5 @@
 import { isAuthErrorCode } from './supabase/contracts'
+import { parseAdministrationQuery } from './administration/query'
 
 export type AuthReferrerPolicy = 'no-referrer' | 'strict-origin'
 type AuthSearchParams = Record<string, string | string[] | undefined>
@@ -11,6 +12,7 @@ export function authDocumentReferrerPolicy(
   pathname: string,
   searchParams: URLSearchParams | AuthSearchParams,
 ): AuthReferrerPolicy {
+  if (pathname === '/workspace/administration') return parseAdministrationQuery(searchParams) ? 'strict-origin' : 'no-referrer'
   if (!['/login', '/login/mfa', '/workspace', '/workspace/security', '/auth/confirm'].includes(pathname)) return 'no-referrer'
   const entries = searchParams instanceof URLSearchParams ? [...searchParams.entries()] : Object.entries(searchParams).filter(([, value]) => value !== undefined)
   const seen = new Set<string>()

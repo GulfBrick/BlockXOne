@@ -91,7 +91,7 @@ describe('production middleware containment', () => {
     expect(response.headers.get('referrer-policy')).toBe('no-referrer')
   })
 
-  it.each(['/login', '/login?setup=1', '/login?error=invalid_credentials', '/workspace', '/auth/confirm', '/login/mfa', '/login/mfa?continue=setup', '/workspace/security'])('permits Origin-bearing native forms only on the clean document %s', async (path) => {
+  it.each(['/login', '/login?setup=1', '/login?error=invalid_credentials', '/workspace', '/auth/confirm', '/login/mfa', '/login/mfa?continue=setup', '/workspace/security', '/workspace/administration', '/workspace/administration?organisation=11111111-1111-4111-8111-111111111111', '/workspace/administration?organisation=11111111-1111-4111-8111-111111111111&proposal=22222222-2222-4222-8222-222222222222'])('permits Origin-bearing native forms only on the clean document %s', async (path) => {
     vi.stubEnv('BLOCKXONE_AUTH_MODE', 'supabase')
     vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_AUTH_MODE', 'supabase')
     const refreshed = NextResponse.next()
@@ -105,7 +105,7 @@ describe('production middleware containment', () => {
     expect(response.cookies.get('fixture-refresh')?.value).toBe('nonsecret')
   })
 
-  it.each(['/auth/confirm?token_hash=synthetic&type=invite', '/login?token=synthetic', '/workspace?code=synthetic', '/workspace/access-denied', '/login/mfa?continue=setup&continue=setup', '/login/mfa?code=synthetic', '/workspace/security?token=synthetic'])('retains no-referrer for token-bearing or non-form %s', async (path) => {
+  it.each(['/auth/confirm?token_hash=synthetic&type=invite', '/login?token=synthetic', '/workspace?code=synthetic', '/workspace/access-denied', '/login/mfa?continue=setup&continue=setup', '/login/mfa?code=synthetic', '/workspace/security?token=synthetic', '/workspace/administration?token=synthetic', '/workspace/administration?proposal=invalid', '/workspace/administration?organisation=11111111-1111-4111-8111-111111111111&organisation=11111111-1111-4111-8111-111111111111'])('retains no-referrer for token-bearing or non-form %s', async (path) => {
     vi.stubEnv('BLOCKXONE_AUTH_MODE', 'supabase')
     vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_AUTH_MODE', 'supabase')
     vi.mocked(updateSupabaseSession).mockResolvedValueOnce(NextResponse.next())
@@ -131,6 +131,15 @@ describe('production middleware containment', () => {
     const response = await middleware(new NextRequest('https://bx1.co.za/workspace'))
     expect(response.status).toBe(503)
     expect(response.headers.get('cache-control')).toBe('private, no-store')
+    expect(updateSupabaseSession).not.toHaveBeenCalled()
+  })
+  it.each(['/WORKSPACE/ADMINISTRATION', '/AUTH/ADMIN-COMMAND', '/API/MINT', '/ADMIN'])('returns a private denial for uppercase protected lookalike %s without refreshing a session', async path => {
+    vi.stubEnv('BLOCKXONE_AUTH_MODE', 'supabase')
+    vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_AUTH_MODE', 'supabase')
+    const response = await middleware(new NextRequest(`https://bx1.co.za${path}`))
+    expect(response.status).toBe(404)
+    expect(response.headers.get('cache-control')).toBe('private, no-store')
+    expect(response.headers.get('referrer-policy')).toBe('no-referrer')
     expect(updateSupabaseSession).not.toHaveBeenCalled()
   })
 
