@@ -11,7 +11,7 @@ const proposal = '30000000-0000-4000-8000-000000000001'
 const form = () => new URLSearchParams({ intent: 'apply', organisationId: org, requestKey: key, proposalId: proposal, expectedRevision: '2' })
 const client = {} as SupabaseClient
 const success = { ok: true, proposalId: proposal, state: 'APPLIED', revision: '3', replayed: false, scopeState: 'HOLD', scopeRevision: '2' }
-beforeEach(() => mocks.submit.mockResolvedValue(success))
+beforeEach(() => { mocks.submit.mockResolvedValue(success) })
 
 describe('bounded parsed-form administration HTTP adapter', () => {
   it('returns explicit authoritative JSON with private headers and no cookie-jar replacement', async () => {

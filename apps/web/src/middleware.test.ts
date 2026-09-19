@@ -133,6 +133,15 @@ describe('production middleware containment', () => {
     expect(response.headers.get('cache-control')).toBe('private, no-store')
     expect(updateSupabaseSession).not.toHaveBeenCalled()
   })
+  it.each(['/WORKSPACE/ADMINISTRATION', '/AUTH/ADMIN-COMMAND', '/API/MINT', '/ADMIN'])('returns a private denial for uppercase protected lookalike %s without refreshing a session', async path => {
+    vi.stubEnv('BLOCKXONE_AUTH_MODE', 'supabase')
+    vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_AUTH_MODE', 'supabase')
+    const response = await middleware(new NextRequest(`https://bx1.co.za${path}`))
+    expect(response.status).toBe(404)
+    expect(response.headers.get('cache-control')).toBe('private, no-store')
+    expect(response.headers.get('referrer-policy')).toBe('no-referrer')
+    expect(updateSupabaseSession).not.toHaveBeenCalled()
+  })
 
   it('fails closed when the writable refresh boundary fails', async () => {
     vi.stubEnv('BLOCKXONE_AUTH_MODE', 'supabase')
