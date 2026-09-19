@@ -7,12 +7,13 @@ import { canonicalAppOrigin, createRequestSupabaseClient, readVerifiedUser, read
 import { hasCanonicalOrigin, InvalidAuthRequest, LOGIN_EMAIL_COOKIE, PENDING_INVITE_COOKIE, privateResponse, readAuthForm, responseCookieAdapter } from '@/lib/supabase/http'
 import { hasRequiredMfa, isMfaContextCurrent, readMfaContext } from '@/lib/supabase/mfa'
 import { handleMfaAction, mfaErrorResponse } from '@/lib/supabase/mfa-actions'
+import { administrationErrorResponse, handleAdministrationAction } from '@/lib/administration/actions'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
 type Context = { params: Promise<{ action: string }> }
 type PendingInvite = { tokenHash: string; type: 'invite' | 'recovery'; expiresAt: number }
-const actions = new Set(['confirm', 'login', 'setup', 'logout', 'mfa-enroll', 'mfa-verify'])
+const actions = new Set(['confirm', 'login', 'setup', 'logout', 'mfa-enroll', 'mfa-verify', 'admin-command'])
 const tokenPattern = /^[A-Za-z0-9_-]{32,512}$/
 
 function htmlPage(title: string, content: string, status = 200, referrerPolicy: AuthReferrerPolicy = 'no-referrer'): NextResponse {
@@ -50,14 +51,18 @@ function readPending(value: string | undefined): PendingInvite | null {
 async function dispatch(request: NextRequest, context: Context): Promise<NextResponse> {
   const { action } = await context.params
   const mfaAction = action === 'mfa-enroll' || action === 'mfa-verify'
+  const adminAction = action === 'admin-command'
   const mode = resolveAuthMode()
+  if (adminAction && mode !== 'supabase') return administrationErrorResponse(mode === 'invalid' ? 'unavailable' : 'unauthorised', mode === 'invalid' ? 503 : 404)
   if (mode !== 'supabase') return mfaAction
     ? mfaErrorResponse(mode === 'invalid' ? 'unavailable' : 'unauthorised', mode === 'invalid' ? 503 : 404)
     : errorResponse(mode === 'invalid' ? 'unavailable' : 'access_denied', mode === 'invalid' ? 503 : 404)
   if (!actions.has(action)) return errorResponse('invalid_request', 404)
+  if (adminAction && request.nextUrl.pathname !== '/auth/admin-command') return administrationErrorResponse('invalid_request', 404)
+  if (adminAction && request.nextUrl.search) return administrationErrorResponse('invalid_request')
   const allowedMethod = action === 'confirm' ? ['GET', 'POST'] : ['POST']
   if (!allowedMethod.includes(request.method)) {
-    const response = mfaAction ? mfaErrorResponse('invalid_request', 405) : errorResponse('invalid_request', 405)
+    const response = adminAction ? administrationErrorResponse('invalid_request', 405) : mfaAction ? mfaErrorResponse('invalid_request', 405) : errorResponse('invalid_request', 405)
     response.headers.set('Allow', allowedMethod.join(', '))
     return response
   }
@@ -77,9 +82,18 @@ async function dispatch(request: NextRequest, context: Context): Promise<NextRes
       if (request.nextUrl.search || !readPending(request.cookies.get(PENDING_INVITE_COOKIE)?.value)) return invalidInvite()
       return htmlPage('Confirm your access', '<p>Continue to verify your invitation and set your password.</p><form method="post" action="/auth/confirm"><button type="submit">Continue securely</button></form><a href="/">Back to home</a>', 200, authDocumentReferrerPolicy('/auth/confirm', request.nextUrl.searchParams))
     }
-    if (!hasCanonicalOrigin(request)) return mfaAction ? mfaErrorResponse('invalid_request', 403) : errorResponse('invalid_request', 403, action === 'setup')
-    const form = await readAuthForm(request)
+    if (!hasCanonicalOrigin(request)) return adminAction ? administrationErrorResponse('invalid_request', 403) : mfaAction ? mfaErrorResponse('invalid_request', 403) : errorResponse('invalid_request', 403, action === 'setup')
+    let form: URLSearchParams
+    try { form = await readAuthForm(request) }
+    catch (error) {
+      // Fatal UTF-8/body decoding can throw TypeError before any client exists.
+      // Never classify a later dispatch/finalization TypeError as a safe reject:
+      // the command may already have committed and its outcome is unknown.
+      if (adminAction && error instanceof TypeError) return administrationErrorResponse('invalid_request')
+      throw error
+    }
     const client = createRequestSupabaseClient(jar.adapter)
+    if (adminAction) return jar.finish(await handleAdministrationAction(form, client))
     if (mfaAction) return jar.finish(await handleMfaAction(action, form, client))
     if (action === 'confirm') {
       const pending = readPending(request.cookies.get(PENDING_INVITE_COOKIE)?.value)
@@ -141,6 +155,7 @@ async function dispatch(request: NextRequest, context: Context): Promise<NextRes
     if (error) return jar.finish(errorResponse('unavailable', 503))
     return jar.finish(clearPending(redirect('/login')))
   } catch (error) {
+    if (adminAction) return jar.finish(administrationErrorResponse(error instanceof InvalidAuthRequest ? 'invalid_request' : 'unavailable'))
     if (mfaAction) return jar.finish(mfaErrorResponse(error instanceof InvalidAuthRequest ? 'invalid_request' : 'unavailable'))
     const response = error instanceof InvalidAuthRequest
       ? action === 'setup' ? setupRetry('setup_request_invalid') : errorResponse('invalid_request', 400)

@@ -7,9 +7,22 @@ import {
   PILOT_ALLOWED_PREFIXES,
   PRODUCTION_BLOCKED_PREFIXES
 } from './release-policy'
-import { resolveAuthMode, isLegacyClientAuthDisabled } from './auth-mode'
+import { resolveAuthMode, isLegacyClientAuthDisabled, SUPABASE_ALLOWED_PATHS } from './auth-mode'
 
 describe('native Auth admission', () => {
+  it('adds exactly the two administration paths without changing the prior allowlist', () => {
+    expect([...SUPABASE_ALLOWED_PATHS]).toEqual([
+      '/login', '/auth/confirm', '/auth/login', '/auth/setup', '/auth/logout',
+      '/workspace', '/workspace/access-denied', '/api/wallet/challenge', '/api/wallet/verify',
+      '/login/mfa', '/workspace/security', '/auth/mfa-enroll', '/auth/mfa-verify',
+      '/workspace/administration', '/auth/admin-command',
+    ])
+  })
+  it.each(['/workspace/administration', '/auth/admin-command'])('admits only exact administration path %s in paired mode', pathname => {
+    expect(isProductionWebPathBlocked(pathname, 'production', '', '', 'supabase', 'supabase')).toBe(false)
+    for (const variant of [`${pathname}/`, `${pathname}/extra`, `${pathname}.json`, pathname.toUpperCase(), pathname.replaceAll('/', '\\'), pathname.replace('admin', '%61dmin'), pathname.replace('/', '//'), `${pathname}/../private`]) expect(isProductionWebPathBlocked(variant, 'production', '', '', 'supabase', 'supabase')).toBe(true)
+    for (const [server, client] of [['supabase', ''], ['', 'supabase'], ['', ''], ['Supabase', 'Supabase']]) expect(isProductionWebPathBlocked(pathname, 'production', '', '', server, client)).toBe(true)
+  })
   it.each(['/login/mfa', '/workspace/security', '/auth/mfa-enroll', '/auth/mfa-verify'])('admits MFA path %s only exactly in paired mode', pathname => {
     expect(isProductionWebPathBlocked(pathname, 'production', '', '', 'supabase', 'supabase')).toBe(false)
     for (const path of [`${pathname}/extra`, `${pathname}/`, pathname.replace('/', '//'), pathname.replaceAll('/', '\\'), pathname.replace('mfa', '%6dfa')]) {

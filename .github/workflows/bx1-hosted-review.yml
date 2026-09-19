@@ -173,5 +173,21 @@ jobs:
             NEXT_PUBLIC_DEMO_REQUEST_ENABLED=false \
             bash --noprofile --norc -euo pipefail <<'BX1_CHECK'
           npm run build
-          printf '%s\n' 'BX1_HOSTED_REVIEW_PASS scope=source-checks-serial-synthetic-SQL-build GoTrue=not-proven concurrency=not-proven deployment=not-performed'
+          BX1_CHECK
+
+      - name: Probe built route containment on the GitHub cloud runner
+        timeout-minutes: 3
+        run: |
+          env -i PATH="$PATH" HOME="$HOME" TMPDIR="$RUNNER_TEMP" CI=true TZ=UTC NEXT_TELEMETRY_DISABLED=1 \
+            NODE_ENV=production \
+            BLOCKXONE_AUTH_MODE=supabase NEXT_PUBLIC_BLOCKXONE_AUTH_MODE=supabase \
+            SUPABASE_URL=https://supabase.blockxone.invalid \
+            SUPABASE_PUBLISHABLE_KEY=sb_publishable_00000000000000000000000000000000 \
+            BLOCKXONE_APP_ORIGIN=https://app.blockxone.invalid \
+            SERVER_ACTION_ALLOWED_ORIGINS=app.blockxone.invalid \
+            BLOCKXONE_WEB_SURFACE=public NEXT_PUBLIC_BLOCKXONE_WEB_SURFACE=public \
+            NEXT_PUBLIC_DEMO_REQUEST_ENABLED=false \
+            bash --noprofile --norc -euo pipefail <<'BX1_CHECK'
+          npm run test:production-containment
+          printf '%s\n' 'BX1_HOSTED_REVIEW_PASS scope=source-checks-serial-synthetic-SQL-build-built-route-containment GoTrue=not-proven concurrency=not-proven deployment=not-performed'
           BX1_CHECK

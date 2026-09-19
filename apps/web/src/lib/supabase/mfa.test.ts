@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 vi.mock('server-only', () => ({}))
-import { hasRequiredMfa, isMfaContextCurrent, readMfaContext, requireRecentTotp, toMfaView } from './mfa'
+import { hasCurrentTotp, hasRequiredMfa, isMfaContextCurrent, readMfaContext, requireRecentTotp, toMfaView } from './mfa'
 
 const now = 1_800_000_000
 const uid = '10000000-0000-4000-8000-000000000001'
@@ -138,6 +138,20 @@ describe('exact-token live MFA context', () => {
 })
 
 describe('recent TOTP session assurance, never a business capability', () => {
+  it('separates current TOTP reads from command recency without weakening ordinary login', async () => {
+    const current = (await readMfaContext(enrolled({ amr: [{ method: 'totp', timestamp: now - 301 }] }).client))!
+    expect(hasCurrentTotp(current)).toBe(true)
+    expect(requireRecentTotp(current, now)).toEqual({ allowed: false, reason: 'step_up_required' })
+    const ordinary = (await readMfaContext(fixture().client))!
+    expect(hasRequiredMfa(ordinary)).toBe(true)
+    expect(hasCurrentTotp(ordinary)).toBe(false)
+    const phone = (await readMfaContext(fixture({ aal: 'aal2' }, [factor('verified', 'phone')], status({ requires_mfa: true, session_aal: 'aal2', session_is_mfa: true })).client))!
+    expect(hasRequiredMfa(phone)).toBe(true)
+    expect(hasCurrentTotp(phone)).toBe(false)
+    expect(hasCurrentTotp({} as never)).toBe(false)
+    vi.spyOn(Date, 'now').mockReturnValue((now + 600) * 1000)
+    expect(hasCurrentTotp(current)).toBe(false)
+  })
   it.each([0, 300])('accepts trusted current TOTP age %s seconds', async (age) => {
     const context = (await readMfaContext(enrolled({ amr: [{ method: 'totp', timestamp: now - age }] }).client))!
     expect(requireRecentTotp(context, now)).toEqual({ allowed: true })

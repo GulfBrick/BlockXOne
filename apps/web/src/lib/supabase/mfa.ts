@@ -142,11 +142,18 @@ export function toMfaView(context: VerifiedMfaContext): MfaView {
   return { state, factors, hasPendingTotp: factors.some((factor) => factor.status === 'unverified') }
 }
 
+// Privileged reads require a live, verified OWN TOTP binding, even when
+// ordinary login is permitted without enrollment. Recency is command-only.
+export function hasCurrentTotp(context: VerifiedMfaContext): boolean {
+  const data = contexts.get(context)
+  return Boolean(data && hasRequiredMfa(context) && data.aal === 'aal2' && data.status.session_is_totp
+    && data.factors.some((factor) => factor.factorType === 'totp' && factor.status === 'verified'))
+}
+
 export function requireRecentTotp(context: VerifiedMfaContext, nowEpochSeconds: number):
   { allowed: true } | { allowed: false; reason: 'mfa_required' | 'step_up_required' } {
   const data = contexts.get(context)
-  if (!data || !hasRequiredMfa(context) || data.aal !== 'aal2' || !data.status.session_is_totp
-    || !data.factors.some((factor) => factor.factorType === 'totp' && factor.status === 'verified')) return { allowed: false, reason: 'mfa_required' }
+  if (!data || !hasCurrentTotp(context)) return { allowed: false, reason: 'mfa_required' }
   if (!Number.isSafeInteger(nowEpochSeconds) || nowEpochSeconds < 0 || data.expiresAt <= nowEpochSeconds) return { allowed: false, reason: 'step_up_required' }
   const timestamps = data.methods.filter((entry) => entry.method === 'totp').map((entry) => entry.timestamp)
   if (!timestamps.length || timestamps.some((timestamp) => timestamp === null || timestamp > nowEpochSeconds)) return { allowed: false, reason: 'step_up_required' }
