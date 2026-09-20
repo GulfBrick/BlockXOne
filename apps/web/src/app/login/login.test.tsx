@@ -14,6 +14,7 @@ import LoginPage, { generateMetadata } from './page'
 beforeEach(() => {
   vi.stubEnv('BLOCKXONE_AUTH_MODE', 'supabase')
   vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_AUTH_MODE', 'supabase')
+  vi.stubEnv('BLOCKXONE_TESTNET_FUND_DEMO', '')
   mocks.client.mockResolvedValue({})
   mocks.mfa.mockResolvedValue({})
   mocks.sufficient.mockReturnValue(true)
@@ -55,6 +56,36 @@ describe('server login/setup admission', () => {
     expect(html).toContain('action="/auth/login"')
     expect(html).not.toContain('Investor sign in')
     expect(html).not.toContain('/register')
+  })
+  it('links new test customers to registration only in the exact hosted test environment', async () => {
+    vi.stubEnv('BLOCKXONE_TESTNET_FUND_DEMO', 'enabled')
+    vi.stubEnv('SUPABASE_URL', 'https://fegnnnlseuejkrusbbkv.supabase.co')
+    vi.stubEnv('VERCEL_ENV', 'preview')
+    vi.stubEnv('BLOCKXONE_APP_ORIGIN', 'https://bx1-customer-preview.vercel.app')
+    const html = renderToStaticMarkup(await LoginPage({ searchParams: Promise.resolve({}) }))
+    expect(html).toContain('href="/register"')
+    expect(html).toContain('Create your test account')
+    expect(html).toContain('investor or wealth manager')
+    expect(html).toContain('Registration does not grant approval or signing authority')
+    expect(html).toContain('action="/auth/login"')
+    const setup = renderToStaticMarkup(await LoginPage({ searchParams: Promise.resolve({ setup: '1' }) }))
+    expect(setup).not.toContain('href="/register"')
+    expect(setup).toContain('action="/auth/setup"')
+  })
+  it.each([
+    ['VERCEL_ENV', 'production'],
+    ['SUPABASE_URL', 'https://oqkevkjbkpugjotihtda.supabase.co'],
+    ['BLOCKXONE_APP_ORIGIN', 'https://bx1.co.za'],
+    ['NEXT_PUBLIC_BLOCKXONE_AUTH_MODE', ''],
+  ])('does not advertise registration when the exact test guard is broken: %s', async (name, value) => {
+    vi.stubEnv('BLOCKXONE_TESTNET_FUND_DEMO', 'enabled')
+    vi.stubEnv('SUPABASE_URL', 'https://fegnnnlseuejkrusbbkv.supabase.co')
+    vi.stubEnv('VERCEL_ENV', 'preview')
+    vi.stubEnv('BLOCKXONE_APP_ORIGIN', 'https://bx1-customer-preview.vercel.app')
+    vi.stubEnv(name, value)
+    const html = renderToStaticMarkup(await LoginPage({ searchParams: Promise.resolve({}) }))
+    expect(html).not.toContain('href="/register"')
+    expect(html).not.toContain('Create your test account')
   })
   it('query setup=1 alone never authorizes password setup', async () => {
     mocks.workspace.mockResolvedValue(null)

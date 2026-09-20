@@ -37,6 +37,18 @@ describe('portal navigation and source-driven surfaces', () => {
     expect(html).toContain('Skip to main content'); expect(html).toContain('aria-current="page"'); expect(html).toContain('Testnet environment')
     expect(html).not.toContain('Switch role'); expect(html).not.toContain('Impersonate'); expect(html).not.toContain('href="/portal/compliance"')
   })
+  it('keeps account security and the account workspace available inside the mobile navigation', () => {
+    const html = renderToStaticMarkup(<PortalShell user={data().user} capabilities={{ manageProducts: false, reviewCompliance: false, invest: true }} active="overview" title="Overview"><p>Saved content</p></PortalShell>)
+    const mobileNavigation = html.match(/<details[^>]*>[\s\S]*?<\/details>/)?.[0]
+    expect(mobileNavigation).toBeDefined()
+    expect(mobileNavigation).toContain('Navigate your workspace')
+    expect(mobileNavigation).toContain('aria-label="Account navigation"')
+    expect(mobileNavigation).toContain('href="/workspace/security"')
+    expect(mobileNavigation).toContain('Account security')
+    expect(mobileNavigation).toContain('href="/workspace"')
+    expect(mobileNavigation).toContain('Account workspace')
+    expect(mobileNavigation).not.toContain('href="/portal/compliance"')
+  })
   it.each(['Investor', 'ComplianceOfficer', 'TransferAgent', 'TokenisationAgent', 'TreasuryOperator', 'FinancialController', 'SuperAdmin'])('does not infer product authority from %s', role => {
     const value = snapshot(); value.organisations = [{ id: organisation, name: 'Fictional Org', status: 'ACTIVE', roles: [role] }]
     expect(productManagementOrganisations(value)).toEqual([])

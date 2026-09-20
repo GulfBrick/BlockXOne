@@ -27,7 +27,7 @@ export function PortalShell({ user, organisationName, capabilities, active, titl
       <Link href="/portal" className={styles.brand} aria-label="BlockXOne portal home"><span className={styles.brandMark} aria-hidden="true">BX</span><span>Block<span>X</span>One</span></Link>
       <p className={styles.sidebarCaption}>Ownership, reimagined</p>
       {links}
-      <details className={styles.mobileNav}><summary>Navigate your workspace</summary>{links}</details>
+      <details className={styles.mobileNav}><summary>Navigate your workspace</summary>{links}<nav aria-label="Account navigation" className={styles.nav}><Link href="/workspace/security" className={styles.navLink}><ShieldCheck aria-hidden="true" />Account security<ArrowUpRight aria-hidden="true" /></Link><Link href="/workspace" className={styles.navLink}>Account workspace<ArrowUpRight aria-hidden="true" /></Link></nav></details>
       <p className={styles.navRestricted}>Workspace tools reflect your assigned access. Signing authority is managed separately.</p>
       <div className={styles.sidebarFoot}>
         <div className={styles.environmentCard}><strong>Customer journey · Test environment</strong><p>Fictional products and synthetic settlement. No real investment or cash payment is available.</p></div>

@@ -41,11 +41,11 @@ export function RegistrationForm({ initialIntent, error }: { initialIntent?: Reg
   const invalid = (name: string) => displayedError !== undefined && errorFields[displayedError] === name
   return <form action="/auth/register" method="post" onSubmit={submit} aria-busy={pending} className="space-y-7">
     {displayedError ? <p id="registration-error" ref={errorRef} tabIndex={-1} role="alert" className="rounded-xl border border-bxo-danger-border bg-bxo-danger-soft p-4 text-sm leading-6 text-bxo-text-primary outline-none focus-visible:ring-2 focus-visible:ring-bxo-accent-primary">{REGISTRATION_ERRORS[displayedError]}</p> : null}
-    <fieldset aria-describedby="registration-path-help" className="min-w-0">
+    <fieldset aria-describedby={invalid('intent') ? 'registration-error registration-path-help' : 'registration-path-help'} className="min-w-0">
       <legend className="text-sm font-semibold text-bxo-text-primary">How will you use BlockXOne? <span className="text-bxo-text-secondary">Required</span></legend>
       <div className="mt-3 grid gap-3 sm:grid-cols-2">
         {([{ value: 'investor', title: 'Investor', text: 'Explore opportunities and apply to invest.', Icon: ChartNoAxesCombined }, { value: 'wealth-manager', title: 'Wealth manager', text: 'Apply to structure and manage offerings.', Icon: BriefcaseBusiness }] as const).map(({ value, title, text, Icon }) => <label key={value} className={`relative flex min-h-36 cursor-pointer items-start gap-3 rounded-xl border p-4 transition-colors focus-within:ring-2 focus-within:ring-bxo-accent-primary ${intent === value ? 'border-bxo-accent-primary bg-bxo-accent-soft' : 'border-bxo-border-default bg-bxo-bg-primary hover:border-bxo-accent-border'}`}>
-          <input className="mt-1 h-4 w-4 shrink-0 accent-cyan-400" type="radio" name="intent" value={value} checked={intent === value} onChange={() => setIntent(value)} required aria-invalid={invalid('intent') || undefined} />
+          <input className="mt-1 h-4 w-4 shrink-0 accent-cyan-400" type="radio" name="intent" value={value} checked={intent === value} onChange={() => setIntent(value)} required aria-describedby={invalid('intent') ? 'registration-error' : undefined} />
           <span><Icon aria-hidden="true" className="mb-3 h-5 w-5 text-bxo-accent-primary" /><span className="block text-base font-semibold text-bxo-text-primary">{title}</span><span className="mt-1 block text-sm leading-6 text-bxo-text-secondary">{text}</span></span>
         </label>)}
       </div>

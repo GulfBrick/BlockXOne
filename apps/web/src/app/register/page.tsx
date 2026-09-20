@@ -1,5 +1,5 @@
 import Link from 'next/link'
-import { redirect } from 'next/navigation'
+import { notFound } from 'next/navigation'
 import { ArrowRight, Check, ShieldCheck } from 'lucide-react'
 import { PublicShell } from '@/components/public/public-shell'
 import { RegistrationForm } from '@/components/portal/registration-form'
@@ -11,7 +11,7 @@ export const revalidate = 0
 export const metadata = { title: 'Create your account | BlockXOne', robots: { index: false, follow: false }, referrer: 'no-referrer' as const }
 
 export default async function RegisterPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
-  if (!isDemoEnvironment(process.env)) redirect('/investor/register')
+  if (!isDemoEnvironment(process.env)) notFound()
   const params = await searchParams
   const checkEmail = params.status === 'check-email'
   return <PublicShell><main id="main-content" className="mx-auto max-w-7xl px-4 py-12 sm:px-6 sm:py-20 lg:px-8">

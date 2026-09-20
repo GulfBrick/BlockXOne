@@ -10,13 +10,18 @@ import {
 import { resolveAuthMode, isLegacyClientAuthDisabled, SUPABASE_ALLOWED_PATHS } from './auth-mode'
 
 describe('native Auth admission', () => {
-  it('adds exactly the two administration paths without changing the prior allowlist', () => {
+  it('lists exactly the reviewed native routes; TEST customer admission remains server-gated', () => {
     expect([...SUPABASE_ALLOWED_PATHS]).toEqual([
       '/login', '/auth/confirm', '/auth/login', '/auth/setup', '/auth/logout',
       '/workspace', '/workspace/access-denied', '/api/wallet/challenge', '/api/wallet/verify',
       '/login/mfa', '/workspace/security', '/auth/mfa-enroll', '/auth/mfa-verify',
       '/workspace/administration', '/auth/admin-command',
       '/workspace/testnet-fund', '/api/testnet-fund/command',
+      '/register', '/auth/register', '/portal', '/portal/onboarding',
+      '/portal/products', '/portal/products/new', '/portal/products/detail',
+      '/portal/compliance', '/portal/compliance/detail', '/portal/opportunities',
+      '/portal/opportunities/detail', '/portal/portfolio',
+      '/api/portal/command', '/api/portal/documents',
     ])
   })
   it.each(['/workspace/administration', '/auth/admin-command'])('admits only exact administration path %s in paired mode', pathname => {
@@ -65,7 +70,7 @@ describe('native Auth admission', () => {
   ])('denies wallet lookalikes and financial route %s', (pathname) => {
     expect(isProductionWebPathBlocked(pathname, 'production', 'pilot', 'pilot', 'supabase', 'supabase')).toBe(true)
   })
-  it.each(['/api/login', '/api/logout', '/api/auth/login', '/api/auth/signup', '/api/auth/user', '/investor/login', '/operator/login', '/wm/funds/new', '/admin', '/register', '/auth/signup', '/workspace/private', '/%61uth/login', '/auth%2Flogin', '//auth/login', '/auth/login/', '/auth\\login'])('denies %s despite development and pilot flags', (pathname) => {
+  it.each(['/api/login', '/api/logout', '/api/auth/login', '/api/auth/signup', '/api/auth/user', '/investor/login', '/operator/login', '/wm/funds/new', '/admin', '/register/extra', '/Register', '/register/', '/portal/unknown', '/portal%2fproducts', '/portal//products', '/auth/signup', '/workspace/private', '/%61uth/login', '/auth%2Flogin', '//auth/login', '/auth/login/', '/auth\\login'])('denies %s despite development and pilot flags', (pathname) => {
     expect(isProductionWebPathBlocked(pathname, 'development', 'pilot', 'pilot', 'supabase', 'supabase')).toBe(true)
   })
   it('keeps public routes and exact-mode navigation while invalid flags stay contained', () => {

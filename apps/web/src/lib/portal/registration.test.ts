@@ -219,4 +219,15 @@ describe('registration form semantics', () => {
     expect(html).toContain('passwords do not match')
     expect(html).toContain('aria-invalid="true"')
   })
+  it('associates a missing-intent error with required radios without unsupported aria-invalid', () => {
+    const html = renderToStaticMarkup(createElement(RegistrationForm, { error: 'intent_required' }))
+    expect(html).toContain('aria-describedby="registration-error registration-path-help"')
+    const radios = html.match(/<input[^>]*type="radio"[^>]*>/g) ?? []
+    expect(radios).toHaveLength(2)
+    for (const radio of radios) {
+      expect(radio).toContain('required=""')
+      expect(radio).toContain('aria-describedby="registration-error"')
+      expect(radio).not.toContain('aria-invalid')
+    }
+  })
 })
