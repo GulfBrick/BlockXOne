@@ -17,9 +17,19 @@ const ADDRESS = /^0x[0-9a-f]{40}$/i
 const RPC_TIMEOUT_MS = 12_000
 
 function quantity(value: unknown, label: string): bigint {
-  if (typeof value !== 'string' || !/^0x(?:0|[1-9a-f][0-9a-f]*)$/i.test(value)) throw new Error(`Invalid ${label} returned by the wallet. Nothing was sent.`)
+  const invalid = () => {
+    // A nonce is public chain metadata. Keep this diagnostic bounded and never serialize provider objects.
+    const valueType = value === null ? 'null' : typeof value
+    const preview = typeof value === 'string' ? JSON.stringify(value.slice(0, 72))
+      : value === null || ['undefined', 'number', 'boolean', 'bigint'].includes(typeof value) ? String(value).slice(0, 72) : '[not a scalar]'
+    const diagnostic = label === 'pending nonce' ? ` (type: ${valueType}; value: ${preview})` : ''
+    return new Error(`Invalid ${label} returned by the wallet${diagnostic}. Nothing was sent.`)
+  }
+  // Some wallet providers return padded hexadecimal quantities (for example 0x00).
+  // Accept equivalent hex encodings, but still reject numeric values and normalize every output.
+  if (typeof value !== 'string' || !/^0x[0-9a-f]+$/i.test(value)) throw invalid()
   const parsed = BigInt(value)
-  if (parsed > MAX_QUANTITY) throw new Error(`Invalid ${label} returned by the wallet. Nothing was sent.`)
+  if (parsed > MAX_QUANTITY) throw invalid()
   return parsed
 }
 

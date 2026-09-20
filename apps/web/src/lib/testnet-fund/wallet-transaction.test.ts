@@ -117,7 +117,7 @@ describe('read-only Amoy wallet transaction preparation', () => {
     { eth_getBlockByNumber: {} },
     { eth_getBlockByNumber: { baseFeePerGas: '-1' } },
     { eth_estimateGas: '0x0' },
-    { eth_estimateGas: '0x0001' },
+    { eth_estimateGas: '0xnothex' },
     { eth_getBalance: '1000000000000000000' },
   ])('fails closed on malformed required RPC data %j', async override => {
     await expect(prepareAmoyWalletTransaction(fakeProvider(override), input)).rejects.toThrow()
@@ -143,6 +143,42 @@ describe('read-only Amoy wallet transaction preparation', () => {
     const result = await prepareAmoyWalletTransaction(fakeProvider({ eth_getTransactionCount: '0x2' }), input, { retryNonce: '0x2' })
     expect(result.transaction.nonce).toBe('0x2')
     await expect(prepareAmoyWalletTransaction(fakeProvider({ eth_getTransactionCount: '0x3' }), input, { retryNonce: '0x2' })).rejects.toThrow('saved transaction nonce has already changed')
+  })
+
+  it('accepts equivalent padded nonce quantities and always emits canonical hex', async () => {
+    const provider = fakeProvider({ eth_getTransactionCount: (params?: unknown[]) => params?.[1] === 'latest' ? '0x0' : '0x00' })
+    const result = await prepareAmoyWalletTransaction(provider, input, { retryNonce: '0x0000' })
+    expect(result.nonce).toBe('0x0')
+    expect(result.transaction.nonce).toBe('0x0')
+    expect(await validateRecoveryNonce(provider, wallet)).toBe('0x0')
+  })
+
+  it('accepts padded required gas quantities without losing integer precision', async () => {
+    const result = await prepareAmoyWalletTransaction(fakeProvider({ eth_estimateGas: '0x0001' }), input)
+    expect(result.summary.estimatedGas).toBe('1')
+    expect(result.transaction.gas).toBe('0x2')
+  })
+
+  it.each([null, 0, false, '0x', 'zero'])('rejects invalid pending nonce %j with a bounded public-metadata diagnostic', async value => {
+    const provider = fakeProvider({ eth_getTransactionCount: (params?: unknown[]) => params?.[1] === 'latest' ? '0x0' : value })
+    await expect(validateRecoveryNonce(provider, wallet)).rejects.toThrow(`Invalid pending nonce returned by the wallet (type: ${value === null ? 'null' : typeof value}; value:`)
+  })
+
+  it('does not serialize objects in nonce diagnostics or reveal other provider data', async () => {
+    const provider = fakeProvider({ eth_getTransactionCount: (params?: unknown[]) => params?.[1] === 'latest' ? '0x0' : { sensitive: 'do-not-display' } })
+    await expect(validateRecoveryNonce(provider, wallet)).rejects.toThrow('type: object; value: [not a scalar]')
+  })
+
+  it('keeps pending-nonce string diagnostics bounded', async () => {
+    const provider = fakeProvider({ eth_getTransactionCount: (params?: unknown[]) => params?.[1] === 'latest' ? '0x0' : 'z'.repeat(1_000) })
+    try {
+      await validateRecoveryNonce(provider, wallet)
+      throw new Error('Expected the malformed nonce to be rejected')
+    } catch (error) {
+      expect(error).toBeInstanceOf(Error)
+      expect((error as Error).message).toContain('Invalid pending nonce')
+      expect((error as Error).message.length).toBeLessThan(200)
+    }
   })
 })
 
