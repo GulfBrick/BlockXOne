@@ -6,6 +6,18 @@ select m.grantor,m.admin_option,m.inherit_option,m.set_option
 from pg_catalog.pg_auth_members m
 where m.roleid='bx1_authority_owner'::regrole and m.member=current_user::regrole;
 grant bx1_authority_owner to current_user with inherit true, set true granted by current_user;
+-- ALTER ... OWNER requires the destination role to have schema CREATE. Restore
+-- the full original ACL before commit; this is not a runtime DDL capability.
+create temporary table bx1_recovery_original_schema on commit drop as
+select not has_schema_privilege('bx1_authority_owner','bx1_private','CREATE') added_create,
+  (select coalesce(jsonb_agg(to_jsonb(a) order by grantor,grantee,privilege_type,is_grantable),'[]'::jsonb)
+   from aclexplode(n.nspacl) a) original_acl
+from pg_catalog.pg_namespace n where n.nspname='bx1_private';
+do $$ begin
+  if (select added_create from pg_temp.bx1_recovery_original_schema) then
+    grant create on schema bx1_private to bx1_authority_owner;
+  end if;
+end $$;
 
 create table bx1_private.recovery_authorities (
   id uuid primary key default pg_catalog.gen_random_uuid(),
@@ -454,6 +466,13 @@ grant execute on function bx1_private.request_recovery(uuid,jsonb),bx1_private.e
 do $$
 declare edge record; actual jsonb; expected jsonb;
 begin
+  if (select added_create from pg_temp.bx1_recovery_original_schema) then
+    revoke create on schema bx1_private from bx1_authority_owner;
+  end if;
+  select original_acl into expected from pg_temp.bx1_recovery_original_schema;
+  select coalesce(jsonb_agg(to_jsonb(a) order by grantor,grantee,privilege_type,is_grantable),'[]'::jsonb) into actual
+    from pg_catalog.pg_namespace n cross join lateral aclexplode(n.nspacl) a where n.nspname='bx1_private';
+  if actual is distinct from expected then raise exception 'recovery schema ACL not restored'; end if;
   select * into edge from pg_temp.bx1_recovery_original_edges where grantor=current_user::regrole;
   if found then
     execute format('grant bx1_authority_owner to %I with admin %s, inherit %s, set %s granted by %I',current_user,edge.admin_option,edge.inherit_option,edge.set_option,current_user);

@@ -13,11 +13,23 @@ const ownIntent = { intent: 'request', reason: 'LOST_AUTHENTICATOR' }
 const migration = '../../../supabase/migrations/20260920120609_bx1_recovery_containment.sql'
 const tables = ['recovery_cases', 'recovery_authorities', 'recovery_holds', 'recovery_requests', 'recovery_events']
 let checks = 0, cases = 0, failures = 0, begun = false, nextKey = 1000, parseResult, parseRead
+let phase = 'initialise'
 const source = path => readFile(new URL(path, import.meta.url), 'utf8')
 const equal = (a, b, label) => { assert.deepEqual(a, b, label); checks++ }
 const truth = (value, label) => { assert.ok(value, label); checks++ }
 const admin = () => db.exec('reset role')
-const sqlFile = async path => db.exec(await source(path))
+async function sqlFile(path) {
+  phase = path.split('/').at(-1)
+  const sql = await source(path)
+  try { return await db.exec(sql) }
+  catch (error) {
+    const position = Number(error?.position)
+    if (Number.isInteger(position) && position > 0 && position <= sql.length)
+      error.fixtureLine = sql.slice(0, position - 1).split('\n').length
+    throw error
+  }
+}
+const schemaAclSql = "select nspname,coalesce((select jsonb_agg(to_jsonb(a) order by grantor,grantee,privilege_type,is_grantable) from aclexplode(n.nspacl) a),'[]'::jsonb) acl from pg_namespace n where nspname in ('public','bx1_private','auth') order by nspname"
 const key = () => id('b', nextKey++)
 async function scalar(sql, params = []) { return Object.values((await db.query(sql, params)).rows[0])[0] }
 async function check(sql, expected, label, params = []) { equal(await scalar(sql, params), expected, label) }
@@ -89,10 +101,12 @@ async function preservedBusiness() {
     'factors',(select jsonb_agg(to_jsonb(f) order by id) from auth.mfa_factors f))`)
 }
 
-async function schemaMatrix(beforeIdentity, beforeEdges, beforeRoles) {
+async function schemaMatrix(beforeIdentity, beforeEdges, beforeRoles, beforeSchemaAcls) {
   equal(await scalar("select jsonb_build_object('oid',oid,'owner',proowner,'acl',proacl) from pg_proc where oid='bx1_private.has_active_session()'::regprocedure"), beforeIdentity, 'active-session OID owner and ACL retained')
   equal((await db.query('select roleid,member,grantor,admin_option,inherit_option,set_option from pg_auth_members order by roleid,member,grantor')).rows, beforeEdges, 'all membership grantors and flags restored')
   equal((await db.query('select oid,rolname,rolsuper,rolinherit,rolcreaterole,rolcreatedb,rolcanlogin,rolreplication,rolbypassrls from pg_roles order by oid')).rows, beforeRoles, 'role attributes unchanged')
+  equal((await db.query(schemaAclSql)).rows, beforeSchemaAcls, 'all schema ACL grantors and privileges restored')
+  await check("select has_schema_privilege('bx1_authority_owner','bx1_private','CREATE')", false, 'application owner retains no schema CREATE')
   await check("select count(*)::int from pg_class where relnamespace='bx1_private'::regnamespace and relname=any($1::text[]) and relrowsecurity and relowner='bx1_authority_owner'::regrole", 5, 'exact five private RLS owner tables', [tables])
   for (const role of ['anon', 'authenticated', 'service_role', 'bx1_wallet_owner', 'bx1_wallet_verifier']) {
     for (const table of tables) await check('select has_table_privilege($1,$2,\'SELECT,INSERT,UPDATE,DELETE\')', false, `${role} has no direct ${table} access`, [role, `bx1_private.${table}`])
@@ -322,6 +336,7 @@ try {
   await sqlFile('../../../supabase/tests/bx1_mfa_assurance.sql')
   await db.exec("alter table auth.sessions add column created_at timestamptz not null default now()-interval '1 hour'; alter table auth.users enable row level security; alter table auth.sessions enable row level security")
   await sqlFile('../../../supabase/migrations/20260916234746_bx1_identity_workspace.sql')
+  phase = 'non-superuser-migrator-setup'
   await db.exec(`create role bx1_fixture_migrator nologin noinherit nosuperuser createdb createrole bypassrls;
     grant usage,create on schema public to bx1_fixture_migrator with grant option;
     grant usage on schema auth to bx1_fixture_migrator;
@@ -336,14 +351,18 @@ try {
   await sqlFile('../../../supabase/migrations/20260917190042_bx1_wallet_ownership.sql')
   await sqlFile('../../../supabase/migrations/20260918015541_bx1_mfa_assurance.sql')
   await sqlFile('../../../supabase/migrations/20260918234447_bx1_controlled_administration.sql')
+  phase = 'before-recovery-catalog-capture'
   const beforeIdentity = await scalar("select jsonb_build_object('oid',oid,'owner',proowner,'acl',proacl) from pg_proc where oid='bx1_private.has_active_session()'::regprocedure")
   const beforeEdges = (await db.query('select roleid,member,grantor,admin_option,inherit_option,set_option from pg_auth_members order by roleid,member,grantor')).rows
   const beforeRoles = (await db.query('select oid,rolname,rolsuper,rolinherit,rolcreaterole,rolcreatedb,rolcanlogin,rolreplication,rolbypassrls from pg_roles order by oid')).rows
+  const beforeSchemaAcls = (await db.query(schemaAclSql)).rows
   await sqlFile(migration)
-  await admin(); await schemaMatrix(beforeIdentity, beforeEdges, beforeRoles)
+  phase = 'schema-matrix'
+  await admin(); await schemaMatrix(beforeIdentity, beforeEdges, beforeRoles, beforeSchemaAcls)
   console.log(`BX1_RECOVERY_SCHEMA_PASS assertions=${checks} migrations=5 nonSuperuser=true`)
   await sqlFile('../../../supabase/tests/bx1_controlled_administration.sql')
   await sqlFile('../../../supabase/tests/bx1_recovery_containment.sql')
+  phase = 'recovery-matrix'
   await matrix()
   await admin(); await db.exec('rollback'); begun = false
   await check("select count(*)::int from pg_namespace where nspname in ('auth','bx1_private')", 0, 'all synthetic database state rolled back')
@@ -351,7 +370,7 @@ try {
   if (failures) { console.error(`BX1_RECOVERY_SQL_RED assertions=${checks} cases=${cases} failures=${failures} cleanup=rolled-back`); process.exitCode = 1 }
   else console.log(`BX1_RECOVERY_SQL_PASS assertions=${checks} cases=${cases} cleanup=rolled-back migrations=5 fixture=synthetic-serial-cloud-CI GoTrue=not-proven concurrency=not-proven hostedTimeout=not-proven recoveryProviderEffects=not-enabled`)
 } catch (error) {
-  console.error(`BX1_RECOVERY_SQL_FAILED assertions=${checks} code=${typeof error?.code === 'string' ? error.code : 'assertion'} check=${error?.name === 'AssertionError' ? error.message.split('\n')[0] : 'fixture operation'}`)
+  console.error(`BX1_RECOVERY_SQL_FAILED phase=${phase} line=${Number.isInteger(error?.fixtureLine) ? error.fixtureLine : 'unknown'} assertions=${checks} code=${typeof error?.code === 'string' ? error.code : 'assertion'} check=${error?.name === 'AssertionError' ? error.message.split('\n')[0] : 'fixture operation'}`)
   process.exitCode = 1
 } finally {
   if (begun) { try { await db.exec('rollback') } catch {} }
