@@ -4,10 +4,73 @@ import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import type { Bx1Workspace } from '@/lib/supabase/contracts'
 import { DEMO_PROJECT, demoMoney, type DemoFund, type DemoOperation, type DemoSnapshot, type DemoTransaction } from '@/lib/testnet-fund/contracts'
+import { classifyWalletSubmissionError, prepareAmoyWalletTransaction, validateRecoveryNonce, walletErrorMessage } from '@/lib/testnet-fund/wallet-transaction'
 
 type Provider = { request: (args: { method: string; params?: unknown[] }) => Promise<unknown>; isMetaMask?: boolean; providers?: Provider[] }
 type Props = { initial: DemoSnapshot; workspace: Bx1Workspace; artifactAvailable: boolean; chainReady: boolean }
-type PendingTransaction = { hash?: string; wallet: string; unknown?: boolean }
+export type PendingTransaction = { hash?: string; wallet: string; unknown?: boolean; nonce?: string; retryable?: boolean; schemaVersion?: 2; intent?: { data: string; to?: string } }
+type TransactionStorage = Pick<Storage, 'getItem' | 'setItem'>
+type PreparedWalletTransaction = Awaited<ReturnType<typeof prepareAmoyWalletTransaction>>['transaction']
+
+export function readPendingDemoTransaction(storage: TransactionStorage, key: string): PendingTransaction | null {
+  const raw = storage.getItem(key)
+  if (!raw) return null
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    if (typeof parsed !== 'object' || parsed === null || !('wallet' in parsed) || typeof parsed.wallet !== 'string') throw new Error('Invalid record')
+    return parsed as PendingTransaction
+  } catch { return { wallet: '', unknown: true } }
+}
+
+export function canRecoverRejectedDemoDeployment(saved: PendingTransaction | null): boolean {
+  return Boolean(saved?.unknown && !saved.hash && saved.nonce === undefined && /^0x[0-9a-f]{40}$/i.test(saved.wallet))
+}
+
+export async function submitRecordedDemoTransaction(provider: Provider, storage: TransactionStorage, key: string, transaction: PreparedWalletTransaction, expectedStored: string | null): Promise<string> {
+  if (storage.getItem(key) !== expectedStored) throw new Error('The saved submission changed. Refresh before continuing; nothing was sent.')
+  const previous = readPendingDemoTransaction(storage, key)
+  if (previous && (previous.hash || !previous.retryable || previous.nonce !== transaction.nonce || previous.wallet.toLowerCase() !== transaction.from.toLowerCase())) throw new Error('A submission is already recorded. Verify it instead of sending again.')
+  if (previous?.intent && (previous.intent.data !== transaction.data || previous.intent.to !== transaction.to)) throw new Error('The saved transaction payload changed. Recovery is locked; nothing was sent.')
+  const record: PendingTransaction = { schemaVersion: 2, wallet: transaction.from, nonce: transaction.nonce, unknown: true, intent: { data: transaction.data, ...(transaction.to ? { to: transaction.to } : {}) } }
+  // Write the original nonce and ambiguity before dispatch; no retry can allocate a new nonce.
+  storage.setItem(key, JSON.stringify(record))
+  let hash: unknown
+  try {
+    hash = await provider.request({ method: 'eth_sendTransaction', params: [transaction] })
+  } catch (error) {
+    const outcome = classifyWalletSubmissionError(error)
+    if (outcome !== 'unknown') storage.setItem(key, JSON.stringify({ ...record, unknown: false, retryable: true }))
+    throw new Error(`${walletErrorMessage(error)} ${outcome === 'unknown' ? 'Submission remains locked. Check MetaMask Activity and verify its existing transaction hash.' : 'No new nonce will be used. You can review fees and retry this same transaction.'}`)
+  }
+  if (typeof hash !== 'string' || !/^0x[0-9a-f]{64}$/i.test(hash)) throw new Error('MetaMask did not return a transaction hash. Submission remains locked; check MetaMask Activity before doing anything else.')
+  try { storage.setItem(key, JSON.stringify({ ...record, unknown: false, hash })) }
+  catch { throw new Error(`Transaction submitted: ${hash}. The browser could not save its hash. Keep this hash and use Verify existing transaction; do not send again.`) }
+  return hash
+}
+
+export async function recoverRejectedDemoDeployment(options: {
+  provider: Provider; storage: TransactionStorage; key: string; fundId: string; currentWallet: string;
+  refresh: () => Promise<DemoSnapshot>; confirm: (message: string) => boolean;
+}): Promise<boolean> {
+  const { provider, storage, key } = options
+  const original = storage.getItem(key)
+  const saved = readPendingDemoTransaction(storage, key)
+  if (!canRecoverRejectedDemoDeployment(saved) || !saved || saved.wallet.toLowerCase() !== options.currentWallet.toLowerCase()) throw new Error('Only the original presenter can recover a legacy rejected deployment without a hash. Existing hashes and unknown nonce-recorded submissions remain locked.')
+  const fresh = await options.refresh()
+  const fund = fresh.funds.find(item => item.id === options.fundId)
+  if (!fund || fund.status !== 'DRAFT' || fund.contract_address || fund.deployment_transaction_hash) throw new Error('The saved fund is no longer an unbound draft. Refresh and verify its recorded deployment instead.')
+  const accounts = await provider.request({ method: 'eth_accounts' })
+  if (!Array.isArray(accounts) || typeof accounts[0] !== 'string' || accounts[0].toLowerCase() !== saved.wallet.toLowerCase()) throw new Error('Select the original presenter wallet in MetaMask before recovery.')
+  const nonce = await validateRecoveryNonce(provider, saved.wallet)
+  if (!options.confirm('Confirm MetaMask Activity shows this fund deployment as FAILED with “gas tip cap 15000000000, minimum needed 25000000000” (15 Gwei sent; 25 Gwei minimum), with no submitted transaction hash.\n\nThis only unlocks a reviewed retry of deployment nonce 0. It does not send anything. If Activity shows pending, confirmed, a hash, or another error, choose Cancel.')) return false
+  // Recheck after the human review. A late original transaction must not become a fresh-nonce retry.
+  const checkedAccounts = await provider.request({ method: 'eth_accounts' })
+  if (!Array.isArray(checkedAccounts) || typeof checkedAccounts[0] !== 'string' || checkedAccounts[0].toLowerCase() !== saved.wallet.toLowerCase()) throw new Error('The selected account changed during recovery. Nothing was unlocked.')
+  await validateRecoveryNonce(provider, saved.wallet, nonce)
+  if (storage.getItem(key) !== original) throw new Error('The saved submission changed during recovery. Nothing was unlocked.')
+  storage.setItem(key, JSON.stringify({ schemaVersion: 2, wallet: saved.wallet, nonce, unknown: false, retryable: true }))
+  return true
+}
 const inputClass = 'w-full rounded-lg border border-slate-600 bg-slate-950 px-3 py-2.5 text-slate-100'
 const buttonClass = 'rounded-lg border border-cyan-500/40 bg-cyan-400/10 px-4 py-2.5 text-sm font-medium text-cyan-200 hover:bg-cyan-400/20 disabled:cursor-not-allowed disabled:opacity-40'
 function ethereum(): Provider {
@@ -69,14 +132,15 @@ export function TestnetFundDemo({ initial, workspace, artifactAvailable, chainRe
     if (actionLock.current) return
     actionLock.current = true
     setBusy(true); setMessage('')
-    try { await action() } catch (error) { setMessage(error instanceof Error ? error.message : 'Outcome unknown. Refresh saved state; do not repeat a wallet transaction.') }
+    try { await action() } catch (error) { setMessage(walletErrorMessage(error)) }
     finally { actionLock.current = false; setBusy(false); setRevision(value => value + 1) }
   }
-  async function refresh() {
+  async function refresh(): Promise<DemoSnapshot> {
     const response = await fetch('/api/testnet-fund/command', { credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(20000) })
     const result = await response.json()
     if (!response.ok || !result.snapshot) throw new Error(result.error ?? 'Unable to refresh saved state.')
     setSnapshot(result.snapshot)
+    return result.snapshot
   }
   function command(action: string, payload: Record<string, unknown>) {
     void run(async () => { await execute(action, payload); setMessage('Saved to the hosted test database.') })
@@ -94,35 +158,33 @@ export function TestnetFundDemo({ initial, workspace, artifactAvailable, chainRe
   const transactionKey = (selected: DemoFund, operation?: DemoOperation) => `${storagePrefix}chain:${selected.id}:${operation?.id ?? 'deployment'}`
   function pending(selected: DemoFund, operation?: DemoOperation): PendingTransaction | null {
     if (!hydrated || typeof window === 'undefined') return null
-    try { const saved = localStorage.getItem(transactionKey(selected, operation)); return saved ? JSON.parse(saved) : null } catch { return null }
+    return readPendingDemoTransaction(localStorage, transactionKey(selected, operation))
   }
   async function sign(selected: DemoFund, operation?: DemoOperation) {
     const provider = ethereum()
     const key = transactionKey(selected, operation)
-    if (localStorage.getItem(key)) throw new Error('A submission is already recorded. Verify it instead of sending again.')
+    const expectedStored = localStorage.getItem(key)
+    const saved = readPendingDemoTransaction(localStorage, key)
+    if (saved && (saved.hash || !saved.retryable || !saved.nonce)) throw new Error('A submission is already recorded. Verify it instead of sending again.')
     const accounts = await provider.request({ method: 'eth_accounts' })
     const expectedWallet = operation ? selected.contract_owner : wallet
     if (!expectedWallet || !Array.isArray(accounts) || typeof accounts[0] !== 'string' || accounts[0].toLowerCase() !== expectedWallet.toLowerCase()) throw new Error('Select the fund presenter wallet in MetaMask, then reconnect.')
+    if (saved && saved.wallet.toLowerCase() !== expectedWallet.toLowerCase()) throw new Error('Reconnect the original wallet from the rejected attempt. Recovery cannot switch signers.')
     if (await provider.request({ method: 'eth_chainId' }) !== '0x13882') throw new Error('Select Amoy before signing. Nothing was sent.')
     const prepared = await execute(operation ? 'prepare_transaction' : 'prepare_deployment', operation ? { fund_id: selected.id, operation_id: operation.id } : { fund_id: selected.id, wallet: expectedWallet })
     if (!prepared.transaction) throw new Error('No transaction was prepared.')
     const transaction = prepared.transaction
     if (transaction.from.toLowerCase() !== expectedWallet.toLowerCase() || transaction.value !== '0x0') throw new Error('Prepared signer or native value changed.')
+    const reviewed = await prepareAmoyWalletTransaction(provider, transaction, saved?.nonce ? { retryNonce: saved.nonce } : undefined)
+    const reviewedAt = Date.now()
     const summary = operation ? `${operation.kind} ${operation.units} non-transferable demo units for ${operation.wallet}` : 'Deploy a new Amoy-only demonstration fund token'
-    if (!window.confirm(`${summary}\n\nNetwork: Polygon Amoy 80002\nSigner: ${expectedWallet}\nNative value: 0 (test gas required)\nNo real money or production authority. Continue to MetaMask?`)) return
+    if (!window.confirm(`${summary}\n\nNetwork: Polygon Amoy 80002\nSigner: ${expectedWallet}\nNative value: 0\nNonce: ${BigInt(reviewed.nonce).toString()}${saved ? ' (same rejected attempt)' : ''}\nEstimated gas: ${reviewed.summary.estimatedGas}\nGas limit: ${reviewed.summary.gasLimit}\nPriority fee: ${reviewed.summary.priorityFeeGwei} Gwei\nMaximum fee per gas: ${reviewed.summary.maxFeePerGasGwei} Gwei\nMaximum transaction cost: ${reviewed.summary.maximumCostPol} test POL\nWallet balance: ${reviewed.summary.balancePol} test POL\n\nNo real money or production authority. Continue to MetaMask?`)) return
+    if (Date.now() - reviewedAt > 60000) throw new Error('The fee review expired. Review current Amoy fees again; nothing was sent.')
     const latest = await provider.request({ method: 'eth_accounts' })
-    if (!Array.isArray(latest) || latest[0]?.toLowerCase() !== expectedWallet.toLowerCase() || await provider.request({ method: 'eth_chainId' }) !== '0x13882') throw new Error('Account or network changed. Review again; nothing was sent.')
-    // Persist ambiguity BEFORE dispatch. Only explicit user rejection can clear it.
-    localStorage.setItem(key, JSON.stringify({ wallet: expectedWallet, unknown: true }))
-    try {
-      const hash = await provider.request({ method: 'eth_sendTransaction', params: [transaction] })
-      if (typeof hash !== 'string' || !/^0x[0-9a-f]{64}$/i.test(hash)) throw new Error('MetaMask did not return a transaction hash.')
-      localStorage.setItem(key, JSON.stringify({ wallet: expectedWallet, hash }))
-      setMessage('Transaction submitted. Verify after 12 Amoy confirmations; do not send it again.')
-    } catch (error) {
-      if (typeof error === 'object' && error !== null && 'code' in error && error.code === 4001) localStorage.removeItem(key)
-      throw error
-    }
+    if (!Array.isArray(latest) || typeof latest[0] !== 'string' || latest[0].toLowerCase() !== expectedWallet.toLowerCase() || await provider.request({ method: 'eth_chainId' }) !== '0x13882') throw new Error('Account or network changed. Review again; nothing was sent.')
+    await validateRecoveryNonce(provider, expectedWallet, reviewed.nonce)
+    await submitRecordedDemoTransaction(provider, localStorage, key, reviewed.transaction, expectedStored)
+    setMessage('Transaction submitted. Verify after 12 Amoy confirmations; do not send it again.')
   }
   async function verify(selected: DemoFund, operation?: DemoOperation) {
     const saved = pending(selected, operation)
@@ -134,16 +196,17 @@ export function TestnetFundDemo({ initial, workspace, artifactAvailable, chainRe
     }
     const signer = saved?.wallet ?? selected.contract_owner ?? wallet
     if (!signer) throw new Error('Connect the original presenter wallet before verifying the deployment.')
-    localStorage.setItem(transactionKey(selected, operation), JSON.stringify({ wallet: signer, hash }))
+    localStorage.setItem(transactionKey(selected, operation), JSON.stringify({ ...saved, wallet: signer, hash, unknown: false, retryable: false }))
     await execute(operation ? 'verify_transaction' : 'verify_deployment', operation ? { fund_id: selected.id, operation_id: operation.id, transaction_hash: hash } : { fund_id: selected.id, wallet: signer, transaction_hash: hash })
     setMessage('Amoy receipt verified and saved. Register and accounting updated from confirmed evidence.')
   }
   function chainButtons(selected: DemoFund, operation?: DemoOperation) {
     const saved = pending(selected, operation)
     return <div className="mt-3 flex flex-wrap items-center gap-3" data-revision={revision}>
-      <button className={buttonClass} disabled={!hydrated || busy || !artifactAvailable || !chainReady || Boolean(saved) || !wallet} onClick={() => void run(() => sign(selected, operation))}>{operation ? `Sign ${operation.kind.toLowerCase()} in MetaMask` : 'Deploy fund token with MetaMask'}</button>
+      <button className={buttonClass} disabled={!hydrated || busy || !artifactAvailable || !chainReady || Boolean(saved && (saved.hash || !saved.retryable || !saved.nonce)) || !wallet} onClick={() => void run(() => sign(selected, operation))}>{saved?.retryable ? 'Review and retry with the same nonce' : operation ? `Sign ${operation.kind.toLowerCase()} in MetaMask` : 'Deploy fund token with MetaMask'}</button>
       <button className={buttonClass} disabled={busy || !artifactAvailable} onClick={() => void run(() => verify(selected, operation))}>Verify existing transaction</button>
-      {saved?.hash ? <a className="break-all text-xs text-cyan-300 underline" href={`https://amoy.polygonscan.com/tx/${saved.hash}`} target="_blank" rel="noreferrer">View submitted transaction</a> : saved?.unknown ? <p className="text-sm text-amber-300">Submission uncertain. Check MetaMask Activity; sending is locked.</p> : null}
+      {!operation && canRecoverRejectedDemoDeployment(saved) ? <button className={buttonClass} disabled={busy || !wallet || !chainReady} onClick={() => void run(async () => { const recovered = await recoverRejectedDemoDeployment({ provider: ethereum(), storage: localStorage, key: transactionKey(selected), fundId: selected.id, currentWallet: wallet, refresh, confirm: text => window.confirm(text) }); if (recovered) setMessage('Rejected deployment recovered for review at nonce 0. Nothing was sent. Use Review and retry with the same nonce; keep the Amoy fees shown.'); })}>Recover rejected deployment</button> : null}
+      {saved?.hash ? <a className="break-all text-xs text-cyan-300 underline" href={`https://amoy.polygonscan.com/tx/${saved.hash}`} target="_blank" rel="noreferrer">View submitted transaction</a> : saved?.unknown ? <p className="text-sm text-amber-300">Submission uncertain. Check MetaMask Activity; sending is locked.</p> : saved?.retryable ? <p className="text-sm text-amber-300">Rejected attempt retained. Any reviewed retry must reuse nonce {saved.nonce && /^0x[0-9a-f]+$/i.test(saved.nonce) ? BigInt(saved.nonce).toString() : 'unavailable'}; no new transaction is sent automatically.</p> : null}
     </div>
   }
   return <main className="mx-auto max-w-7xl px-4 py-10 text-slate-200 sm:px-8">
@@ -152,7 +215,7 @@ export function TestnetFundDemo({ initial, workspace, artifactAvailable, chainRe
       <h1 className="mt-5 text-4xl font-medium tracking-tight text-white sm:text-5xl">From fund launch to investor exit.</h1>
       <p className="mt-4 max-w-3xl text-slate-400">Persisted in Supabase. Signed with MetaMask. Verified on Polygon Amoy. This presenter-led demonstration uses fictional parties and synthetic cash; it does not prove independent production approvals.</p>
       <div className="mt-5 flex flex-wrap gap-2 text-xs"><span className="rounded-full bg-cyan-400/10 px-3 py-2 text-cyan-200">AMOY · 80002</span><span className="rounded-full bg-amber-400/10 px-3 py-2 text-amber-200">SYNTHETIC TEST CASH · NO REAL MONEY</span><span className="rounded-full bg-slate-800 px-3 py-2">NON-TRANSFERABLE DEMO UNITS</span></div>
-      <div className="mt-6 flex flex-wrap items-center gap-3"><button className={buttonClass} disabled={busy} onClick={() => void run(connect)}>Connect MetaMask / select Amoy</button><button className={buttonClass} disabled={busy} onClick={() => void run(refresh)}>Refresh saved state</button>{wallet ? <span className="break-all text-xs text-slate-400">{wallet}</span> : null}</div>
+      <div className="mt-6 flex flex-wrap items-center gap-3"><button className={buttonClass} disabled={busy} onClick={() => void run(connect)}>Connect MetaMask / select Amoy</button><button className={buttonClass} disabled={busy} onClick={() => void run(async () => { await refresh() })}>Refresh saved state</button>{wallet ? <span className="break-all text-xs text-slate-400">{wallet}</span> : null}</div>
       {!artifactAvailable ? <p className="mt-4 text-amber-200">Token deployment is unavailable until the cloud-compiled contract artifact is included in this preview.</p> : null}
       {!chainReady ? <p className="mt-4 text-amber-200">The restricted receipt-verifier connection still needs activation on this preview. Wallet transactions are disabled until it is configured.</p> : null}
       <p role="status" aria-live="polite" className="mt-4 min-h-6 text-sm text-cyan-100">{busy ? 'Working with the hosted platform…' : message}</p>
