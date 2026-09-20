@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { channel } from 'node:diagnostics_channel'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import type { Socket } from 'node:net'
 import { beforeAll, describe, expect, it, vi } from 'vitest'
@@ -52,9 +53,24 @@ type Mode = 'rpc-read' | 'rpc-command' | 'controller'
 type RequestEvidence = {
   method: string; path: string; receivedAt: number; bodyHash: string; bytes: number
   headersSentAt: number | null; socketClosedAt: number | null; responseClosedAt: number | null; watchdogFired: boolean
+  peerEndAt: number | null; socketErrorAt: number | null; socketErrorCode: string | null
 }
-type FetchEvidence = { method: string; path: string; dispatchedAt: number; abortedAt: number | null; signal: AbortSignal | null }
-type Closure = { listenerClosed: boolean; sockets: number; timers: number; handlers: number; refreshes: number; elapsedMs: number }
+type FetchEvidence = { method: string; path: string; dispatchedAt: number; abortedAt: number | null; signal: AbortSignal | null
+  clientHeadersAt: number | null; fetchRejectedAt: number | null; fetchErrorCode: string | null }
+type TransportEvidence = { id: number; method: string; path: string; createdAt: number | null; sendHeadersAt: number | null
+  headersAt: number | null; errorAt: number | null; errorCode: string | null; errorName: string | null
+  clientSocketClosedAt: number | null; clientSocketEndAt: number | null }
+type Closure = { listenerClosed: boolean; sockets: number; timers: number; handlers: number; refreshes: number
+  diagnosticSubscriptions: number; diagnosticSocketListeners: number; elapsedMs: number }
+const safeErrorCode = (error: unknown): string => {
+  const code = error && typeof error === 'object' && 'code' in error ? error.code : null
+  return typeof code === 'string' && ['ABORT_ERR', 'UND_ERR_ABORTED', 'UND_ERR_SOCKET', 'UND_ERR_DESTROYED',
+    'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT', 'ECONNRESET', 'EPIPE', 'ERR_STREAM_PREMATURE_CLOSE'].includes(code) ? code : 'OTHER'
+}
+const safeErrorName = (error: unknown): string => {
+  const name = error && typeof error === 'object' && 'name' in error ? error.name : null
+  return typeof name === 'string' && ['AbortError', 'TimeoutError', 'SocketError', 'TypeError', 'Error'].includes(name) ? name : 'OTHER'
+}
 
 async function fixture(mode: Mode) {
   const startedAt = new Date().toISOString()
@@ -65,6 +81,10 @@ async function fixture(mode: Mode) {
   const failures: string[] = []
   const requests: RequestEvidence[] = []
   const fetches: FetchEvidence[] = []
+  const transport: TransportEvidence[] = []
+  const diagnosticUnsubscribers = new Set<() => void>()
+  const diagnosticSocketUnsubscribers = new Set<() => void>()
+  let cleanupStartedAt: number | null = null
   let accepting = true
   let posts = 0
   let gets = 0
@@ -100,9 +120,12 @@ async function fixture(mode: Mode) {
     }
     const body = new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(parts))
     const entry: RequestEvidence = { method, path, receivedAt: performance.now(), bodyHash: hash(body), bytes,
-      headersSentAt: null, socketClosedAt: null, responseClosedAt: null, watchdogFired: false }
+      headersSentAt: null, socketClosedAt: null, responseClosedAt: null, watchdogFired: false,
+      peerEndAt: null, socketErrorAt: null, socketErrorCode: null }
     requests.push(entry)
     request.socket.once('close', () => { entry.socketClosedAt = performance.now() })
+    request.socket.once('end', () => { entry.peerEndAt = performance.now() })
+    request.socket.once('error', error => { entry.socketErrorAt = performance.now(); entry.socketErrorCode = safeErrorCode(error) })
     response.once('close', () => { entry.responseClosedAt = performance.now() })
     if (method === 'GET') {
       gets += 1
@@ -158,17 +181,80 @@ async function fixture(mode: Mode) {
   if (!address || typeof address === 'string') { server.close(); throw fail('LISTEN_ADDRESS') }
   const origin = 'http://127.0.0.1:' + address.port
 
+  // Passive diagnostics for this exact loopback fixture only. Never retain or
+  // export Undici request/header/error objects, and never alter their signals,
+  // body streams, socket state or dispatcher. Weak identity correlates retries.
+  const transportByRequest = new WeakMap<object, TransportEvidence>()
+  const clientSocketsObserved = new WeakSet<object>()
+  const subscribe = (name: string, observe: (message: Record<string, unknown>, entry: TransportEvidence) => void) => {
+    const diagnostic = channel(name)
+    const listener = (value: unknown) => {
+      try {
+        if (!value || typeof value !== 'object') return
+        const message = value as Record<string, unknown>
+        const request = message.request
+        if (!request || typeof request !== 'object') return
+        const descriptor = request as Record<string, unknown>
+        if (descriptor.origin !== origin || typeof descriptor.method !== 'string' || typeof descriptor.path !== 'string'
+          || !routeAllowed(descriptor.method, descriptor.path)) return
+        let entry = transportByRequest.get(request)
+        if (!entry) {
+          if (transport.length >= 16) { if (!failures.includes('DIAGNOSTIC_LIMIT')) failures.push('DIAGNOSTIC_LIMIT'); return }
+          entry = { id: transport.length + 1, method: descriptor.method, path: descriptor.path, createdAt: null,
+            sendHeadersAt: null, headersAt: null, errorAt: null, errorCode: null, errorName: null,
+            clientSocketClosedAt: null, clientSocketEndAt: null }
+          transportByRequest.set(request, entry)
+          transport.push(entry)
+        }
+        observe(message, entry)
+      } catch {
+        // A diagnostic subscriber must never throw into the real transport.
+        if (!failures.includes('DIAGNOSTIC_OBSERVER_FAILED')) failures.push('DIAGNOSTIC_OBSERVER_FAILED')
+      }
+    }
+    diagnostic.subscribe(listener)
+    diagnosticUnsubscribers.add(() => diagnostic.unsubscribe(listener))
+  }
+  subscribe('undici:request:create', (_message, entry) => { entry.createdAt ??= performance.now() })
+  subscribe('undici:request:headers', (_message, entry) => { entry.headersAt ??= performance.now() })
+  subscribe('undici:request:error', (message, entry) => {
+    entry.errorAt ??= performance.now()
+    entry.errorCode = safeErrorCode(message.error)
+    entry.errorName = safeErrorName(message.error)
+  })
+  subscribe('undici:client:sendHeaders', (message, entry) => {
+    entry.sendHeadersAt ??= performance.now()
+    const socket = message.socket
+    if (!socket || typeof socket !== 'object' || clientSocketsObserved.has(socket)) return
+    clientSocketsObserved.add(socket)
+    const ownedSocket = socket as Socket
+    const ended = () => { entry.clientSocketEndAt ??= performance.now() }
+    const closed = () => { entry.clientSocketClosedAt ??= performance.now() }
+    ownedSocket.once('end', ended)
+    ownedSocket.once('close', closed)
+    diagnosticSocketUnsubscribers.add(() => { ownedSocket.removeListener('end', ended); ownedSocket.removeListener('close', closed) })
+  })
+
   const observedFetch: typeof fetch = async (input, init) => {
     const url = new URL(typeof input === 'string' || input instanceof URL ? input : input.url)
     const method = (init?.method ?? (input instanceof Request ? input.method : 'GET')).toUpperCase()
     const redirect = init?.redirect ?? (input instanceof Request ? input.redirect : 'follow')
     if (url.origin !== origin || url.username || url.password || url.search || url.hash || !routeAllowed(method, url.pathname) || redirect !== 'error') throw fail('OUTBOUND_DENIED')
     const signal = init?.signal ?? (input instanceof Request ? input.signal : null)
-    const entry: FetchEvidence = { method, path: url.pathname, dispatchedAt: performance.now(), abortedAt: null, signal }
+    const entry: FetchEvidence = { method, path: url.pathname, dispatchedAt: performance.now(), abortedAt: null, signal,
+      clientHeadersAt: null, fetchRejectedAt: null, fetchErrorCode: null }
     fetches.push(entry)
     signal?.addEventListener('abort', () => { entry.abortedAt = performance.now() }, { once: true })
     // Observation only: preserve input/body/signal and use the existing guard.
-    return nativeGuardedFetch(input, init)
+    try {
+      const response = await nativeGuardedFetch(input, init)
+      entry.clientHeadersAt = performance.now()
+      return response
+    } catch (error) {
+      entry.fetchRejectedAt = performance.now()
+      entry.fetchErrorCode = safeErrorCode(error)
+      throw error
+    }
   }
   // Supabase sets no redirect option. Supplying "error" once at this transparent
   // boundary is transport confinement, not a response/deadline stub.
@@ -204,6 +290,7 @@ async function fixture(mode: Mode) {
   async function close(): Promise<Closure> {
     accepting = false
     const beginning = performance.now()
+    cleanupStartedAt = beginning
     for (const controller of refreshControllers) controller.abort()
     for (const timer of timers) clearTimeout(timer)
     timers.clear()
@@ -211,13 +298,22 @@ async function fixture(mode: Mode) {
     server.close(() => { listenerClosed = true })
     server.closeIdleConnections()
     for (const socket of sockets) socket.destroy()
-    await until(() => listenerClosed && sockets.size === 0 && handlers.size === 0 && refreshControllers.size === 0, 2000)
-    const closed = { listenerClosed, sockets: sockets.size, timers: timers.size, handlers: handlers.size, refreshes: refreshControllers.size, elapsedMs: performance.now() - beginning }
+    try {
+      await until(() => listenerClosed && sockets.size === 0 && handlers.size === 0 && refreshControllers.size === 0, 2000)
+    } finally {
+      for (const unsubscribe of diagnosticUnsubscribers) unsubscribe()
+      diagnosticUnsubscribers.clear()
+      for (const unsubscribe of diagnosticSocketUnsubscribers) unsubscribe()
+      diagnosticSocketUnsubscribers.clear()
+    }
+    const closed = { listenerClosed, sockets: sockets.size, timers: timers.size, handlers: handlers.size, refreshes: refreshControllers.size,
+      diagnosticSubscriptions: diagnosticUnsubscribers.size, diagnosticSocketListeners: diagnosticSocketUnsubscribers.size, elapsedMs: performance.now() - beginning }
     expect(server.listening).toBe(false)
     expect(closed.elapsedMs).toBeLessThanOrEqual(2000)
     return closed
   }
-  return { mode, startedAt, origin, requests, fetches, failures, sdkFetch, observedFetch, refreshStatus, close,
+  return { mode, startedAt, origin, requests, fetches, transport, failures, sdkFetch, observedFetch, refreshStatus, close,
+    diagnosticState: () => ({ cleanupStartedAt }),
     stats: () => ({ posts, gets, receipts, originalBodyHash: originalBody === null ? null : hash(originalBody) }) }
 }
 
@@ -228,9 +324,9 @@ function evidence(f: Fixture, extra: Record<string, unknown>, closure: Closure |
   console.info('BX1_H2F_EVIDENCE ' + JSON.stringify({ version: 1, case: f.mode, startedAt: f.startedAt,
     scope: 'NODE_REAL_HTTP_SYNTHETIC_ONLY', node: process.version, sdk: '2.116.0', vitest: '4.1.11',
     rpcDeadlineMs: ADMINISTRATION_RPC_TIMEOUT_MS, controllerDeadlineMs: 15000, fixtureWatchdogMs: STALL_WATCHDOG_MS,
-    ...f.stats(), requests: f.requests, fetches: f.fetches.map(({ method, path, dispatchedAt, abortedAt, signal }) => ({
-      method, path, dispatchedAt, abortedAt, signalAborted: signal?.aborted ?? false,
-    })), failures: f.failures, ...extra, closure, passed, browserProven: false, providerProven: false, wholeA4Passed: false }))
+    ...f.stats(), requests: f.requests, fetches: f.fetches.map(({ method, path, dispatchedAt, abortedAt, signal, clientHeadersAt, fetchRejectedAt, fetchErrorCode }) => ({
+      method, path, dispatchedAt, abortedAt, clientHeadersAt, fetchRejectedAt, fetchErrorCode, signalAborted: signal?.aborted ?? false,
+    })), transport: f.transport, ...f.diagnosticState(), failures: f.failures, ...extra, closure, passed, browserProven: false, providerProven: false, wholeA4Passed: false }))
 }
 async function abortedStall(f: Fixture, start: number, minimum: number, maximum: number) {
   expect(f.requests).toHaveLength(1)
