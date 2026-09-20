@@ -1,11 +1,24 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
-import { PGlite } from '@electric-sql/pglite'
+import pg from 'pg'
 
-// Admitted cloud CI only. No connection string, network, credentials, provider
-// calls or real identities. This proves serial SQL semantics, not Amoy finality.
+// GitHub-hosted PostgreSQL service only. Never a Supabase/project connection.
+// The fixed password belongs solely to the disposable synthetic CI service.
+// This proves serial SQL semantics, not provider authentication or Amoy finality.
 if (process.argv.length !== 2) throw new Error('Fund SQL proof accepts no arguments')
-const db = new PGlite()
+if (process.env.GITHUB_ACTIONS !== 'true') throw new Error('Fund SQL proof requires GitHub-hosted CI')
+const connectionString = process.env.BX1_DEMO_SQL_TEST_URL
+const expectedConnection = 'postgresql://postgres:bx1-synthetic-ci-only@127.0.0.1:5432/bx1_demo_ci'
+if (connectionString !== expectedConnection) throw new Error('Fund SQL proof requires the exact disposable CI database')
+const db = new pg.Client({
+  connectionString,
+  ssl: false,
+  connectionTimeoutMillis: 5000,
+  query_timeout: 15000,
+  statement_timeout: 15000,
+  application_name: 'bx1-testnet-fund-cloud-ci',
+})
+let connected = false
 let begun = false
 let phase = 'initialise'
 let checks = 0
@@ -20,7 +33,7 @@ const files = [
 async function sqlFile(path) {
   phase = path.split('/').at(-1)
   const sql = await readFile(new URL(path, import.meta.url), 'utf8')
-  try { await db.exec(sql) }
+  try { await db.query(sql) }
   catch (error) {
     const position = Number(error?.position)
     if (Number.isInteger(position) && position > 0 && position <= sql.length)
@@ -34,10 +47,13 @@ async function equal(sql, expected, label) {
   checks++
 }
 try {
+  await db.connect(); connected = true
   const version = Number(await scalar('show server_version_num'))
   assert(version >= 170000 && version < 180000, 'Expected pinned PostgreSQL17')
   checks++
-  await db.exec('begin'); begun = true
+  await equal("select current_database() = 'bx1_demo_ci' and current_user = 'postgres' and inet_server_addr() is not null", true, 'exact synthetic service database and actor')
+  await equal("select count(*)::int from pg_namespace where nspname in ('auth','bx1_private','bx1_demo')", 0, 'fresh service has no application schemas')
+  await db.query('begin'); begun = true
   for (const file of files) await sqlFile(file)
   phase = 'empty-schema-boundary'
   await equal('select count(*)::int from bx1_demo.funds', 0, 'migration creates no demo funds')
@@ -49,15 +65,15 @@ try {
   await equal('select count(*)::int from bx1_demo.funds', 0, 'fund lifecycle fixtures rolled back')
   await equal('select count(*)::int from auth.users', 0, 'synthetic identities rolled back')
   await equal('select count(*)::int from bx1_demo.journal_entries', 0, 'synthetic journals rolled back')
-  await db.exec('rollback'); begun = false
+  await db.query('rollback'); begun = false
   await equal("select count(*)::int from pg_namespace where nspname in ('auth','bx1_private','bx1_demo')", 0, 'outer transaction removes every synthetic schema')
-  console.log(`BX1_TESTNET_FUND_SQL_PASS boundaryAssertions=${checks} lifecycleScript=completed cleanup=rolled-back fixture=synthetic-serial-cloud-CI Amoy=not-proven GoTrue=not-proven concurrency=not-proven`)
+  console.log(`BX1_TESTNET_FUND_SQL_PASS boundaryAssertions=${checks} lifecycleScript=completed cleanup=rolled-back fixture=synthetic-serial-cloud-PostgreSQL17 Amoy=not-proven GoTrue=not-proven concurrency=not-proven`)
 } catch (error) {
   const diagnostic = typeof error?.message === 'string' ? error.message.split(/[\r\n]/, 1)[0].slice(0, 180).replace(/[^\x20-\x7e]/g, '?') : 'unavailable'
   const internalPosition = Number(error?.internalPosition)
   console.error(`BX1_TESTNET_FUND_SQL_FAILED phase=${phase} line=${Number.isInteger(error?.fixtureLine) ? error.fixtureLine : 'unknown'} internalPosition=${Number.isInteger(internalPosition) && internalPosition > 0 ? internalPosition : 'unknown'} code=${typeof error?.code === 'string' ? error.code : 'assertion'} diagnostic=${JSON.stringify(diagnostic)}`)
   process.exitCode = 1
 } finally {
-  if (begun) { try { await db.exec('rollback') } catch {} }
-  await db.close()
+  if (begun) { try { await db.query('rollback') } catch {} }
+  if (connected) await db.end()
 }

@@ -19,6 +19,7 @@ async function readBody(request: NextRequest): Promise<unknown> {
   if (!reader) throw new DemoError('Request is empty.', 400)
   const chunks: Uint8Array[] = []; let length = 0
   const bodyDeadline = AbortSignal.any([request.signal, AbortSignal.timeout(5000)])
+  if (bodyDeadline.aborted) { await reader.cancel(); reader.releaseLock(); throw new DemoError('Request was cancelled.', 408) }
   const cancel = () => { void reader.cancel().catch(() => {}) }
   bodyDeadline.addEventListener('abort', cancel, { once: true })
   try {
@@ -60,7 +61,10 @@ export async function POST(request: NextRequest) {
     assertActive()
     if ((DEMO_COMMANDS as readonly string[]).includes(body.command)) {
       const { error } = await client.rpc('bx1_demo_command', { p_command: body.command, p_key: body.key, p_payload: body.payload }).abortSignal(AbortSignal.any([request.signal, AbortSignal.timeout(Math.max(1, deadline - Date.now()))]))
-      if (error) throw new DemoError('The saved state or supplied values do not permit this action. Refresh and check your inputs.')
+      if (error) {
+        const rejected = ['23514', '22023', '42501', '23505', '22P02'].includes(error.code)
+        throw new DemoError(rejected ? 'The saved state or supplied values do not permit this action. Refresh and check your inputs.' : 'The command outcome is unresolved. Refresh and retry only the original saved request.', rejected ? 409 : 503)
+      }
       return cookies.finish(NextResponse.json({ snapshot: await demoSnapshot(client) }))
     }
     const fundId = id.parse(body.payload.fund_id)
@@ -79,7 +83,7 @@ export async function POST(request: NextRequest) {
       const current = (await demoSnapshot(client)).funds.find(item => item.id === fundId)
       if (!current) throw new DemoError('Fund access changed.', 403)
       assertActive()
-      await chainEvidence(client, 'bind', [fund.id, verified.contractAddress, verified.owner, payload.transaction_hash.toLowerCase()])
+      await chainEvidence(client, 'bind', [fund.id, verified.contractAddress, verified.owner, payload.transaction_hash.toLowerCase()], assertActive)
     } else if (body.command === 'prepare_transaction' || body.command === 'verify_transaction') {
       const payload = z.object({ fund_id: id, operation_id: id, transaction_hash: hash.optional() }).strict().parse(body.payload)
       const operation = fund.operations.find(item => item.id === payload.operation_id)
@@ -92,7 +96,7 @@ export async function POST(request: NextRequest) {
         const current = (await demoSnapshot(client)).funds.find(item => item.id === fundId)
         if (!current?.operations.some(item => item.id === operation.id)) throw new DemoError('Operation access changed.', 403)
         assertActive()
-        await chainEvidence(client, 'confirm', [operation.id, payload.transaction_hash.toLowerCase(), verified.blockNumber, verified.contractAddress])
+        await chainEvidence(client, 'confirm', [operation.id, payload.transaction_hash.toLowerCase(), verified.blockNumber, verified.contractAddress], assertActive)
       }
     } else if (body.command === 'reconcile') {
       z.object({ fund_id: id }).strict().parse(body.payload)

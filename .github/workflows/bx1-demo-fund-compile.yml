@@ -32,6 +32,20 @@ jobs:
   compile-and-build:
     runs-on: ubuntu-24.04
     timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: bx1_demo_ci
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: bx1-synthetic-ci-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d bx1_demo_ci"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - name: Check out exact source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -97,9 +111,12 @@ jobs:
       - name: Verify isolated fund SQL state machine
         shell: bash
         working-directory: apps/web
+        env:
+          BX1_DEMO_SQL_TEST_URL: postgresql://postgres:bx1-synthetic-ci-only@127.0.0.1:5432/bx1_demo_ci
         run: node scripts/test-testnet-fund.mjs
 
       - name: Typecheck and build hosted web with compiled artifact
+        if: ${{ !cancelled() }}
         shell: bash
         working-directory: apps/web
         env:

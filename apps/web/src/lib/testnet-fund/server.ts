@@ -27,7 +27,7 @@ export async function demoSnapshot(client: SupabaseClient): Promise<DemoSnapshot
   if (error || !data || !Array.isArray(data.funds)) throw new DemoError('Unable to read the saved fund state.', 503)
   return data as DemoSnapshot
 }
-export async function chainEvidence(client: SupabaseClient, command: 'bind' | 'confirm', params: unknown[]) {
+export async function chainEvidence(client: SupabaseClient, command: 'bind' | 'confirm', params: unknown[], assertActive: () => void) {
   requireDemoEnvironment()
   const session = await client.auth.getSession()
   const token = session.data.session?.access_token
@@ -50,6 +50,7 @@ export async function chainEvidence(client: SupabaseClient, command: 'bind' | 'c
   pool.on('error', () => {})
   try {
     const sql = command === 'bind' ? 'select public.bx1_demo_bind_contract($1,$2,$3,$4,$5,$6)' : 'select public.bx1_demo_confirm_chain($1,$2,$3,$4,$5,$6)'
+    assertActive()
     await pool.query(sql, [...params, verified.data.user.id, claims.session_id])
   } catch { throw new DemoError('Verified chain evidence could not be saved. Do not resend; refresh and verify again.') }
   finally { await pool.end() }
