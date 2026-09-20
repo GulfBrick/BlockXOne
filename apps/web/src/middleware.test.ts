@@ -17,6 +17,23 @@ describe('production middleware containment', () => {
   afterEach(() => vi.unstubAllEnvs())
 
   it.each([
+    ['/workspace/recovery', 'strict-origin'],
+    ['/workspace/recovery?case=11111111-1111-4111-8111-111111111111', 'strict-origin'],
+    ['/workspace/recovery?case=invalid', 'no-referrer'],
+    ['/workspace/recovery?token=private', 'no-referrer'],
+    ['/auth/recovery-command', 'no-referrer'],
+  ])('keeps recovery private with the correct referrer policy on %s', async (path, policy) => {
+    vi.stubEnv('BLOCKXONE_AUTH_MODE', 'supabase')
+    vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_AUTH_MODE', 'supabase')
+    const refreshed = NextResponse.next()
+    vi.mocked(updateSupabaseSession).mockResolvedValueOnce(refreshed)
+    const response = await middleware(new NextRequest(`https://bx1.co.za${path}`))
+    expect(response).toBe(refreshed)
+    expect(response.headers.get('referrer-policy')).toBe(policy)
+    expect(response.headers.get('cache-control')).toBe('private, no-store')
+  })
+
+  it.each([
     '/investor/p2p',
     '/investor/orders/direct',
     '/investor/funds/demo-fund',

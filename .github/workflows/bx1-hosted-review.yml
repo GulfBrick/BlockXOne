@@ -159,6 +159,14 @@ jobs:
           node scripts/test-supabase-administration.mjs
           BX1_CHECK
 
+      - name: Serial recovery containment and five-migration regression
+        timeout-minutes: 5
+        run: |
+          env -i PATH="$PATH" HOME="$HOME" TMPDIR="$RUNNER_TEMP" CI=true TZ=UTC NEXT_TELEMETRY_DISABLED=1 \
+            bash --noprofile --norc -euo pipefail <<'BX1_CHECK'
+          node scripts/test-supabase-recovery.mjs
+          BX1_CHECK
+
       - name: Build with nonfunctional synthetic Supabase configuration
         timeout-minutes: 10
         run: |

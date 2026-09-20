@@ -10,13 +10,19 @@ import {
 import { resolveAuthMode, isLegacyClientAuthDisabled, SUPABASE_ALLOWED_PATHS } from './auth-mode'
 
 describe('native Auth admission', () => {
-  it('adds exactly the two administration paths without changing the prior allowlist', () => {
+  it('admits exactly the reviewed identity, administration and recovery paths', () => {
     expect([...SUPABASE_ALLOWED_PATHS]).toEqual([
       '/login', '/auth/confirm', '/auth/login', '/auth/setup', '/auth/logout',
       '/workspace', '/workspace/access-denied', '/api/wallet/challenge', '/api/wallet/verify',
       '/login/mfa', '/workspace/security', '/auth/mfa-enroll', '/auth/mfa-verify',
       '/workspace/administration', '/auth/admin-command',
+      '/workspace/recovery', '/auth/recovery-command',
     ])
+  })
+  it.each(['/workspace/recovery', '/auth/recovery-command'])('admits only exact recovery path %s in paired mode', pathname => {
+    expect(isProductionWebPathBlocked(pathname, 'production', '', '', 'supabase', 'supabase')).toBe(false)
+    for (const variant of [`${pathname}/`, `${pathname}/extra`, `${pathname}.json`, pathname.toUpperCase(), pathname.replace('recovery', '%72ecovery')]) expect(isProductionWebPathBlocked(variant, 'production', '', '', 'supabase', 'supabase')).toBe(true)
+    for (const [server, client] of [['supabase', ''], ['', 'supabase'], ['', '']]) expect(isProductionWebPathBlocked(pathname, 'production', '', '', server, client)).toBe(true)
   })
   it.each(['/workspace/administration', '/auth/admin-command'])('admits only exact administration path %s in paired mode', pathname => {
     expect(isProductionWebPathBlocked(pathname, 'production', '', '', 'supabase', 'supabase')).toBe(false)

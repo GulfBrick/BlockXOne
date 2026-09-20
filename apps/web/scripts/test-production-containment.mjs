@@ -622,10 +622,10 @@ export async function runProductionContainmentProbe() {
       }
       await assertStatus(origin, '/auth/unknown', 404)
       await assertStatus(origin, '/workspace/unknown', 404)
-      for (const pathname of ['/login/mfa/unknown', '/auth/mfa-enroll/unknown', '/auth/mfa-verify/unknown', '/workspace/security/unknown', '/workspace/administration/unknown', '/auth/admin-command/unknown', '/workspace/Administration', '/auth/Admin-command']) {
+      for (const pathname of ['/login/mfa/unknown', '/auth/mfa-enroll/unknown', '/auth/mfa-verify/unknown', '/workspace/security/unknown', '/workspace/administration/unknown', '/auth/admin-command/unknown', '/workspace/Administration', '/auth/Admin-command', '/workspace/recovery/unknown', '/auth/recovery-command/unknown', '/workspace/Recovery']) {
         await assertStatus(origin, pathname, 404)
       }
-      for (const pathname of ['/login/mfa', '/workspace/security', '/workspace/administration']) {
+      for (const pathname of ['/login/mfa', '/workspace/security', '/workspace/administration', '/workspace/recovery']) {
         const response = await fetch(`${origin}${pathname}`, { redirect: 'manual', signal: AbortSignal.timeout(5_000) })
         await response.body?.cancel()
         if (![303,307].includes(response.status) || new URL(response.headers.get('location') || '/', origin).pathname !== '/login') {
@@ -635,7 +635,7 @@ export async function runProductionContainmentProbe() {
           throw new Error('MFA/security/administration denial must be private/no-store.')
         }
       }
-      for (const pathname of ['/auth/mfa-enroll','/auth/mfa-verify', '/auth/admin-command']) {
+      for (const pathname of ['/auth/mfa-enroll','/auth/mfa-verify', '/auth/admin-command', '/auth/recovery-command']) {
         await assertStatus(origin, pathname, 405)
         for (const forgedOrigin of [undefined, 'null', 'https://foreign.example']) {
           const response = await fetch(`${origin}${pathname}`, { method: 'POST', redirect: 'manual',
@@ -657,6 +657,8 @@ export async function runProductionContainmentProbe() {
       await assertStatus(origin, '/auth/mfa-verify', 404)
       await assertStatus(origin, '/workspace/administration', 404)
       await assertStatus(origin, '/auth/admin-command', 404)
+      await assertStatus(origin, '/workspace/recovery', 404)
+      await assertStatus(origin, '/auth/recovery-command', 404)
     }
   } catch (error) {
     probeError = error

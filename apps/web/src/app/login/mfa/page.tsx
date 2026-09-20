@@ -1,4 +1,5 @@
 import { notFound, redirect } from 'next/navigation'
+import Link from 'next/link'
 import { PublicShell } from '@/components/public/public-shell'
 import { Button } from '@/components/ui/button'
 import { MfaForm } from '@/components/auth/mfa-form'
@@ -37,6 +38,7 @@ export default async function MfaPage({ searchParams }: Props) {
     <p className="text-sm font-semibold uppercase tracking-[0.16em] text-bxo-accent-primary">Secure access</p>
     <h1 className="mt-4 font-ui text-3xl font-medium tracking-tight text-bxo-text-primary sm:text-4xl">Verify your sign-in</h1>
     {unavailable || !view ? <p role="alert" className="mt-6 text-base text-bxo-text-secondary">Verification is temporarily unavailable. Reload before trying again.</p> : <><p className="mt-6 text-base text-bxo-text-secondary">Enter the six-digit code from your authenticator app.</p><MfaForm view={view} continuation={continuation} /></>}
+    <Link href="/workspace/recovery" className="mt-6 inline-flex min-h-11 items-center text-sm text-bxo-accent-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bxo-accent-primary">Lost your authenticator? View recovery containment</Link>
     <form method="post" action="/auth/logout" className="mt-8"><Button type="submit" variant="outline" className="min-h-11">Sign out</Button></form>
   </main></PublicShell>
 }

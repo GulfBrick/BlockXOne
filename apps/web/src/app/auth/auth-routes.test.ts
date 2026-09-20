@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { NextRequest, NextResponse } from 'next/server'
 vi.mock('server-only', () => ({}))
-const mocks = vi.hoisted(() => ({ create: vi.fn(), user: vi.fn(), workspace: vi.fn(), mfaContext: vi.fn(), sufficient: vi.fn(), current: vi.fn(), mfaAction: vi.fn(), adminAction: vi.fn() }))
+const mocks = vi.hoisted(() => ({ create: vi.fn(), user: vi.fn(), workspace: vi.fn(), mfaContext: vi.fn(), sufficient: vi.fn(), current: vi.fn(), mfaAction: vi.fn(), adminAction: vi.fn(), recoveryAction: vi.fn() }))
 vi.mock('@/lib/supabase/server', async (importOriginal) => ({
   ...await importOriginal<object>(), createRequestSupabaseClient: mocks.create,
   readVerifiedUser: mocks.user, readWorkspace: mocks.workspace,
@@ -10,6 +10,8 @@ vi.mock('@/lib/supabase/mfa', () => ({ readMfaContext: mocks.mfaContext, hasRequ
 vi.mock('@/lib/supabase/mfa-actions', async (original) => ({ ...await original<object>(), handleMfaAction: mocks.mfaAction }))
 vi.mock('@/lib/administration/actions', async (original) => ({ ...await original<object>(), handleAdministrationAction: mocks.adminAction }))
 import { GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD } from './[action]/route'
+vi.mock('@/lib/recovery/actions', async original => ({ ...await original<object>(), handleRecoveryAction: mocks.recoveryAction }))
+import { POST as recoveryPost, GET as recoveryGet, PUT as recoveryPut, OPTIONS as recoveryOptions } from './recovery-command/route'
 import { PENDING_INVITE_COOKIE } from '@/lib/supabase/http'
 
 const canonical = 'https://bx1.co.za'
@@ -31,6 +33,70 @@ beforeEach(() => {
   mocks.mfaContext.mockResolvedValue({ fixture: 'trusted-context' })
   mocks.sufficient.mockReturnValue(true)
   mocks.current.mockResolvedValue(true)
+})
+
+describe('dedicated recovery endpoint admission', () => {
+  const fields = { intent: 'request', requestKey: '40000000-0000-4000-8000-000000000001', reason: 'LOST_AUTHENTICATOR' }
+  it('has no state-changing GET and admits only POST', async () => {
+    for (const handler of [recoveryGet, recoveryPut, recoveryOptions]) {
+      const response = handler()
+      expect(response.status).toBe(405)
+      expect(response.headers.get('allow')).toBe('POST')
+      expect(response.headers.get('cache-control')).toContain('no-store')
+    }
+    expect(mocks.create).not.toHaveBeenCalled()
+  })
+  it.each([{ origin: 'null' }, { origin: 'https://evil.test' }, { host: 'evil.test' }, { 'sec-fetch-site': 'cross-site' }])('denies unsafe headers before identity or body work %#', async headers => {
+    expect((await recoveryPost(request('recovery-command', fields, headers as Record<string, string>))).status).toBe(403)
+    expect(mocks.create).not.toHaveBeenCalled()
+    expect(mocks.recoveryAction).not.toHaveBeenCalled()
+  })
+  it('rejects query, duplicate, oversized and non-form input before dispatch', async () => {
+    expect((await recoveryPost(request('recovery-command?target=forged', fields))).status).toBe(400)
+    expect((await recoveryPost(request('recovery-command', fields, { 'content-type': 'application/json' }))).status).toBe(400)
+    expect((await recoveryPost(request('recovery-command', { ...fields, padding: 'x'.repeat(9000) }))).status).toBe(400)
+    const req = request('recovery-command', fields)
+    const duplicate = new NextRequest(req.url, { method: 'POST', headers: req.headers, body: 'intent=request&intent=apply' })
+    expect((await recoveryPost(duplicate)).status).toBe(400)
+    expect(mocks.recoveryAction).not.toHaveBeenCalled()
+  })
+  it('passes one operation deadline and carries refresh cookies to the final result', async () => {
+    mocks.create.mockImplementationOnce(adapter => {
+      adapter.setAll([{ name: 'sb-test.0', value: 'refreshed', options: {} }], {})
+      return { auth }
+    })
+    mocks.recoveryAction.mockResolvedValueOnce(NextResponse.json({ ok: false, error: 'forbidden' }, { status: 403 }))
+    const response = await recoveryPost(request('recovery-command', fields))
+    expect(response.status).toBe(403)
+    expect(mocks.recoveryAction.mock.calls[0][0].toString()).toBe(new URLSearchParams(fields).toString())
+    expect(mocks.recoveryAction.mock.calls[0][2]).toHaveProperty('signal')
+    expect(response.cookies.get('sb-test.0')?.value).toBe('refreshed')
+    expect(response.headers.get('referrer-policy')).toBe('no-referrer')
+  })
+  it('bounds an unfinished input stream and cannot dispatch after cancellation', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date', 'performance'] })
+    try {
+      const cancel = vi.fn()
+      const stream = new ReadableStream<Uint8Array>({ cancel })
+      const req = new NextRequest(`${canonical}/auth/recovery-command`, { method: 'POST', headers: { origin: canonical, host: 'bx1.co.za', 'content-type': 'application/x-www-form-urlencoded' }, body: stream, duplex: 'half' } as RequestInit)
+      const pending = recoveryPost(req)
+      await vi.advanceTimersByTimeAsync(12001)
+      expect((await pending).status).toBe(503)
+      expect(cancel).toHaveBeenCalledOnce()
+      expect(mocks.create).not.toHaveBeenCalled()
+      expect(mocks.recoveryAction).not.toHaveBeenCalled()
+    } finally { vi.useRealTimers() }
+  })
+  it('rejects an already-cancelled request and mismatched modes without an Auth client', async () => {
+    const abort = new AbortController(); abort.abort()
+    const base = request('recovery-command', fields)
+    expect((await recoveryPost(new NextRequest(base.url, { method: 'POST', headers: base.headers, body: new URLSearchParams(fields), signal: abort.signal }))).status).toBe(503)
+    vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_AUTH_MODE', '')
+    expect((await recoveryPost(request('recovery-command', fields))).status).toBe(503)
+    vi.stubEnv('BLOCKXONE_AUTH_MODE', '')
+    expect((await recoveryPost(request('recovery-command', fields))).status).toBe(404)
+    expect(mocks.create).not.toHaveBeenCalled()
+  })
 })
 
 describe('method, mode, origin and body admission', () => {
