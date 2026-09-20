@@ -56,12 +56,19 @@ async function assertAmoy(provider: AmoyWalletProvider): Promise<void> {
   if (quantity(await read(provider, 'eth_chainId'), 'chain ID') !== AMOY_CHAIN_ID) throw new Error('Select Polygon Amoy (80002) in MetaMask. Nothing was sent.')
 }
 
+function providerNonce(value: unknown, label: string): bigint {
+  // MetaMask has returned a numeric pending nonce in the hosted browser. Normalize
+  // only losslessly representable provider nonce counts, never fees, balances or saved nonces.
+  const normalized = typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? hex(BigInt(value)) : value
+  return quantity(normalized, label)
+}
+
 async function noncePair(provider: AmoyWalletProvider, wallet: string): Promise<{ latest: bigint; pending: bigint }> {
   const [latest, pending] = await Promise.all([
     read(provider, 'eth_getTransactionCount', [wallet, 'latest']),
     read(provider, 'eth_getTransactionCount', [wallet, 'pending']),
   ])
-  return { latest: quantity(latest, 'confirmed nonce'), pending: quantity(pending, 'pending nonce') }
+  return { latest: providerNonce(latest, 'confirmed nonce'), pending: providerNonce(pending, 'pending nonce') }
 }
 
 /**
