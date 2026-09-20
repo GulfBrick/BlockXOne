@@ -124,9 +124,9 @@ export async function submitRecoveryCommand(client: SupabaseClient, candidate: R
     if (!intent) return fail('invalid_request')
     const identity = await readIdentity(client, operation)
     if (!identity) return fail('unauthorised')
-    let mfa: VerifiedMfaContext | null = null
+    const mfa: VerifiedMfaContext | null = intent.intent === 'request'
+      ? null : await operation.wait(() => readMfaContext(client))
     if (intent.intent !== 'request') {
-      mfa = await operation.wait(() => readMfaContext(client))
       if (!mfa || !hasCurrentTotp(mfa)) return fail('forbidden')
       if (!await operation.wait(() => isMfaContextCurrent(client, mfa))) return fail('unavailable')
       if (!requireRecentTotp(mfa, Math.floor(Date.now() / 1000)).allowed) return fail('step_up_required')

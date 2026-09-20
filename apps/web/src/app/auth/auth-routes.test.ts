@@ -46,8 +46,9 @@ describe('dedicated recovery endpoint admission', () => {
     }
     expect(mocks.create).not.toHaveBeenCalled()
   })
-  it.each([{ origin: 'null' }, { origin: 'https://evil.test' }, { host: 'evil.test' }, { 'sec-fetch-site': 'cross-site' }])('denies unsafe headers before identity or body work %#', async headers => {
-    expect((await recoveryPost(request('recovery-command', fields, headers as Record<string, string>))).status).toBe(403)
+  const unsafeHeaders: Record<string, string>[] = [{ origin: 'null' }, { origin: 'https://evil.test' }, { host: 'evil.test' }, { 'sec-fetch-site': 'cross-site' }]
+  it.each(unsafeHeaders)('denies unsafe headers before identity or body work %#', async headers => {
+    expect((await recoveryPost(request('recovery-command', fields, headers))).status).toBe(403)
     expect(mocks.create).not.toHaveBeenCalled()
     expect(mocks.recoveryAction).not.toHaveBeenCalled()
   })
@@ -78,7 +79,8 @@ describe('dedicated recovery endpoint admission', () => {
     try {
       const cancel = vi.fn()
       const stream = new ReadableStream<Uint8Array>({ cancel })
-      const req = new NextRequest(`${canonical}/auth/recovery-command`, { method: 'POST', headers: { origin: canonical, host: 'bx1.co.za', 'content-type': 'application/x-www-form-urlencoded' }, body: stream, duplex: 'half' } as RequestInit)
+      const init = { method: 'POST', headers: { origin: canonical, host: 'bx1.co.za', 'content-type': 'application/x-www-form-urlencoded' }, body: stream, duplex: 'half' } satisfies NonNullable<ConstructorParameters<typeof NextRequest>[1]> & { duplex: 'half' }
+      const req = new NextRequest(`${canonical}/auth/recovery-command`, init)
       const pending = recoveryPost(req)
       await vi.advanceTimersByTimeAsync(12001)
       expect((await pending).status).toBe(503)
