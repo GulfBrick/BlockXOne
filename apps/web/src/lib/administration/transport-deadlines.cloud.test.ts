@@ -239,7 +239,7 @@ async function fixture(mode: Mode) {
     const url = new URL(typeof input === 'string' || input instanceof URL ? input : input.url)
     const method = (init?.method ?? (input instanceof Request ? input.method : 'GET')).toUpperCase()
     const redirect = init?.redirect ?? (input instanceof Request ? input.redirect : 'follow')
-    if (url.origin !== origin || url.username || url.password || url.search || url.hash || !routeAllowed(method, url.pathname) || redirect !== 'error') throw fail('OUTBOUND_DENIED')
+    if (url.origin !== origin || url.username || url.password || url.search || url.hash || !routeAllowed(method, url.pathname) || redirect !== 'manual') throw fail('OUTBOUND_DENIED')
     const signal = init?.signal ?? (input instanceof Request ? input.signal : null)
     const entry: FetchEvidence = { method, path: url.pathname, dispatchedAt: performance.now(), abortedAt: null, signal,
       clientHeadersAt: null, fetchRejectedAt: null, fetchErrorCode: null }
@@ -249,6 +249,12 @@ async function fixture(mode: Mode) {
     try {
       const response = await nativeGuardedFetch(input, init)
       entry.clientHeadersAt = performance.now()
+      if ((response.status >= 300 && response.status <= 399) || response.headers.has('location')) {
+        // Manual mode never follows. Reject redirect metadata without reading
+        // or exporting its value; disposal must not block fixture containment.
+        void response.body?.cancel().catch(() => { failures.push('REDIRECT_BODY_CANCEL_FAILED') })
+        throw fail('REDIRECT_DENIED')
+      }
       return response
     } catch (error) {
       entry.fetchRejectedAt = performance.now()
@@ -256,9 +262,10 @@ async function fixture(mode: Mode) {
       throw error
     }
   }
-  // Supabase sets no redirect option. Supplying "error" once at this transparent
-  // boundary is transport confinement, not a response/deadline stub.
-  const sdkFetch: typeof fetch = (input, init) => observedFetch(input, { ...init, redirect: 'error' })
+  // Pinned Node22 lacks Undici#4750's redirect:error lifetime fix. Manual mode
+  // plus rejection above preserves no-follow confinement without that fixture
+  // artifact. This is not proof of the real browser postAdministration adapter.
+  const sdkFetch: typeof fetch = (input, init) => observedFetch(input, { ...init, redirect: 'manual' })
 
   async function refreshStatus(): Promise<unknown> {
     if (!accepting) throw fail('STATUS_AFTER_CLOSE')
@@ -272,7 +279,7 @@ async function fixture(mode: Mode) {
     const watchdog = schedule(() => { failures.push('STATUS_WATCHDOG'); controller.abort() }, 4000)
     const request = (async () => {
       const response = await observedFetch(origin + '/fixture/status', {
-        method: 'GET', redirect: 'error', cache: 'no-store', signal: controller.signal,
+        method: 'GET', redirect: 'manual', cache: 'no-store', signal: controller.signal,
       })
       return await response.json()
     })()
@@ -393,7 +400,7 @@ describe('H2f hosted real-clock HTTP transport proof (not browser or provider ac
       controller = createAdministrationController(initial, {
         post: async (body, signal) => {
           const response = await f.observedFetch(f.origin + '/auth/admin-command', {
-            method: 'POST', redirect: 'error', cache: 'no-store', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body, signal,
+            method: 'POST', redirect: 'manual', cache: 'no-store', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body, signal,
           })
           return response.json()
         },
