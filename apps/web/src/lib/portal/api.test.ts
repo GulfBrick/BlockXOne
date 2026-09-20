@@ -10,6 +10,7 @@ const origin = 'https://block-x-one-portal-test.vercel.app'
 const actor = 'd22789ee-7f73-4acf-a414-3de0b62ea801'
 const snapshot = { actor: { id: actor, email: 'test@example.test', display_name: null, can_review: false }, applications: [], organisations: [], products: [], subscriptions: [], events: [] }
 const command = { command: 'cancel_subscription', key: '113800c3-cf6e-437e-abdf-a3b09a03fcff', payload: { subscription_id: actor } }
+const forgedHeaders: Record<string, string>[] = [{ origin: 'https://evil.test' }, { host: 'evil.test' }]
 function request(body: unknown = command, headers: Record<string, string> = {}) { return new NextRequest(`${origin}/api/portal/command`, { method: 'POST', headers: { origin, host: new URL(origin).host, 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) }) }
 beforeEach(() => {
   vi.stubEnv('NODE_ENV', 'production'); vi.stubEnv('VERCEL_ENV', 'preview'); vi.stubEnv('BLOCKXONE_TESTNET_FUND_DEMO', 'enabled'); vi.stubEnv('BLOCKXONE_AUTH_MODE', 'supabase'); vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_AUTH_MODE', 'supabase'); vi.stubEnv('BLOCKXONE_APP_ORIGIN', origin); vi.stubEnv('SUPABASE_URL', 'https://fegnnnlseuejkrusbbkv.supabase.co')
@@ -26,7 +27,7 @@ describe('portal command endpoint', () => {
     expect(mocks.rpc).toHaveBeenCalledWith('bx1_portal_command', { command: command.command, request_key: command.key, payload: command.payload })
     expect(response.headers.get('cache-control')).toContain('no-store')
   })
-  it.each([{ origin: 'https://evil.test' }, { host: 'evil.test' }])('rejects forged headers before backend %#', async headers => {
+  it.each(forgedHeaders)('rejects forged headers before backend %#', async headers => {
     expect((await POST(request(command, headers))).status).toBe(403)
     expect(mocks.create).not.toHaveBeenCalled()
   })

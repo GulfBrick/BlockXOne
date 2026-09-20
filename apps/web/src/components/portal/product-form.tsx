@@ -10,15 +10,15 @@ import styles from './portal.module.css'
 export function fictionalProductTerms(kind: ProductTerms['asset_type'] = 'FUND'): ProductTerms {
   const realEstate = kind === 'REAL_ESTATE'
   return {
-    asset_type: kind, name: realEstate ? 'Example Property Investment — Test' : 'Example Multi-Asset Fund — Test', issuer_name: 'Example Issuer (fictional test entity)',
+    asset_type: kind, name: realEstate ? 'Example Property Investment (Test)' : 'Example Multi-Asset Fund (Test)', issuer_name: 'Example Issuer (fictional test entity)',
     summary: realEstate ? 'A fictional investment in a demonstration rental property. This product exists only to test the customer investment journey.' : 'A fictional diversified fund for demonstrating onboarding, offering review and investor subscription. No real assets or investment returns are represented.',
     strategy: realEstate ? 'The fictional issuer holds a single synthetic property. The example strategy is long-term rental income and an eventual governed exit. No real property is being offered.' : 'The fictional fund allocates synthetic capital across a diversified investment mandate. All allocations and performance are illustrative descriptions, not live holdings or forecasts.',
-    share_class: 'Class A — Test', currency: 'ZAR_TEST', unit_price_minor: '10000', cap_units: '10000', minimum_units: '10',
+    share_class: 'Class A (Test)', currency: 'ZAR_TEST', unit_price_minor: '10000', cap_units: '10000', minimum_units: '10',
     pricing_basis: 'Fixed synthetic subscription price of 100.00 ZAR_TEST per whole unit. No independent valuation is represented.',
     fees: 'Illustrative management fee: 0% during this test. No real fee will be charged. Production fees require a separately approved schedule.',
     redemption_terms: 'Redemption is subject to the fictional product terms, available synthetic liquidity and a separately governed approval process. This offering does not promise immediate liquidity or a production exit.',
     eligible_countries: ['ZA'], eligible_investor_types: ['INDIVIDUAL', 'ENTITY'],
-    property_address: realEstate ? '1 Example Avenue, Fictional District, Test City — not a real property' : '',
+    property_address: realEstate ? '1 Example Avenue, Fictional District, Test City (not a real property)' : '',
     property_valuation_minor: realEstate ? '100000000' : '0',
     rental_income_policy: realEstate ? 'Any rental income recorded in this test is synthetic. Net fictional income is allocated according to approved investor entitlements; no real tenant rent or bank payment is represented.' : '',
     documents: {

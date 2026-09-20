@@ -109,7 +109,8 @@ describe('hosted TEST registration endpoint', () => {
     expect((await POST(request())).status).toBe(404)
     expect(mocks.create).not.toHaveBeenCalled()
   })
-  it.each([{ origin: 'null' }, { origin: 'https://evil.test' }, { host: 'evil.test' }, { 'sec-fetch-site': 'cross-site' }])('rejects unsafe origin headers %#', async headers => {
+  const unsafeOriginHeaders: Record<string, string>[] = [{ origin: 'null' }, { origin: 'https://evil.test' }, { host: 'evil.test' }, { 'sec-fetch-site': 'cross-site' }]
+  it.each(unsafeOriginHeaders)('rejects unsafe origin headers %#', async headers => {
     expect((await POST(request({}, headers))).status).toBe(403)
     expect(auth.signUp).not.toHaveBeenCalled()
   })
