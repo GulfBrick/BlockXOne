@@ -6,7 +6,7 @@ import type { Bx1Workspace } from '@/lib/supabase/contracts'
 import { DEMO_PROJECT, demoMoney, type DemoFund, type DemoOperation, type DemoSnapshot, type DemoTransaction } from '@/lib/testnet-fund/contracts'
 
 type Provider = { request: (args: { method: string; params?: unknown[] }) => Promise<unknown>; isMetaMask?: boolean; providers?: Provider[] }
-type Props = { initial: DemoSnapshot; workspace: Bx1Workspace; artifactAvailable: boolean }
+type Props = { initial: DemoSnapshot; workspace: Bx1Workspace; artifactAvailable: boolean; chainReady: boolean }
 type PendingTransaction = { hash?: string; wallet: string; unknown?: boolean }
 const inputClass = 'w-full rounded-lg border border-slate-600 bg-slate-950 px-3 py-2.5 text-slate-100'
 const buttonClass = 'rounded-lg border border-cyan-500/40 bg-cyan-400/10 px-4 py-2.5 text-sm font-medium text-cyan-200 hover:bg-cyan-400/20 disabled:cursor-not-allowed disabled:opacity-40'
@@ -22,7 +22,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 function Card({ title, number, children }: { title: string; number: string; children: React.ReactNode }) {
   return <section className="rounded-2xl border border-slate-700 bg-slate-900/60 p-5 sm:p-7"><h2 className="mb-5 flex items-center gap-3 text-xl font-medium text-white"><span className="flex h-8 w-8 items-center justify-center rounded-full bg-cyan-400/10 text-sm text-cyan-300">{number}</span>{title}</h2>{children}</section>
 }
-export function TestnetFundDemo({ initial, workspace, artifactAvailable }: Props) {
+export function TestnetFundDemo({ initial, workspace, artifactAvailable, chainReady }: Props) {
   const [snapshot, setSnapshot] = useState(initial)
   const [fundId, setFundId] = useState(initial.funds[0]?.id ?? '')
   const [busy, setBusy] = useState(false)
@@ -141,7 +141,7 @@ export function TestnetFundDemo({ initial, workspace, artifactAvailable }: Props
   function chainButtons(selected: DemoFund, operation?: DemoOperation) {
     const saved = pending(selected, operation)
     return <div className="mt-3 flex flex-wrap items-center gap-3" data-revision={revision}>
-      <button className={buttonClass} disabled={!hydrated || busy || !artifactAvailable || Boolean(saved) || !wallet} onClick={() => void run(() => sign(selected, operation))}>{operation ? `Sign ${operation.kind.toLowerCase()} in MetaMask` : 'Deploy fund token with MetaMask'}</button>
+      <button className={buttonClass} disabled={!hydrated || busy || !artifactAvailable || !chainReady || Boolean(saved) || !wallet} onClick={() => void run(() => sign(selected, operation))}>{operation ? `Sign ${operation.kind.toLowerCase()} in MetaMask` : 'Deploy fund token with MetaMask'}</button>
       <button className={buttonClass} disabled={busy || !artifactAvailable} onClick={() => void run(() => verify(selected, operation))}>Verify existing transaction</button>
       {saved?.hash ? <a className="break-all text-xs text-cyan-300 underline" href={`https://amoy.polygonscan.com/tx/${saved.hash}`} target="_blank" rel="noreferrer">View submitted transaction</a> : saved?.unknown ? <p className="text-sm text-amber-300">Submission uncertain. Check MetaMask Activity; sending is locked.</p> : null}
     </div>
@@ -154,6 +154,7 @@ export function TestnetFundDemo({ initial, workspace, artifactAvailable }: Props
       <div className="mt-5 flex flex-wrap gap-2 text-xs"><span className="rounded-full bg-cyan-400/10 px-3 py-2 text-cyan-200">AMOY · 80002</span><span className="rounded-full bg-amber-400/10 px-3 py-2 text-amber-200">SYNTHETIC TEST CASH · NO REAL MONEY</span><span className="rounded-full bg-slate-800 px-3 py-2">NON-TRANSFERABLE DEMO UNITS</span></div>
       <div className="mt-6 flex flex-wrap items-center gap-3"><button className={buttonClass} disabled={busy} onClick={() => void run(connect)}>Connect MetaMask / select Amoy</button><button className={buttonClass} disabled={busy} onClick={() => void run(refresh)}>Refresh saved state</button>{wallet ? <span className="break-all text-xs text-slate-400">{wallet}</span> : null}</div>
       {!artifactAvailable ? <p className="mt-4 text-amber-200">Token deployment is unavailable until the cloud-compiled contract artifact is included in this preview.</p> : null}
+      {!chainReady ? <p className="mt-4 text-amber-200">The restricted receipt-verifier connection still needs activation on this preview. Wallet transactions are disabled until it is configured.</p> : null}
       <p role="status" aria-live="polite" className="mt-4 min-h-6 text-sm text-cyan-100">{busy ? 'Working with the hosted platform…' : message}</p>
       {hydrated && localStorage.getItem(`${storagePrefix}unresolved`) ? <button className={buttonClass} disabled={busy} onClick={() => void run(async () => { await refresh(); const saved = JSON.parse(localStorage.getItem(`${storagePrefix}unresolved`) ?? '{}'); if (saved.command && saved.payload) await execute(saved.command, saved.payload); setMessage('Saved request reconciled using its original key.'); })}>Refresh and retry the exact unresolved request</button> : null}
     </header>
@@ -165,7 +166,7 @@ export function TestnetFundDemo({ initial, workspace, artifactAvailable }: Props
           <div className="grid grid-cols-2 gap-4"><Field label="Unit price (synthetic cents)"><input className={inputClass} inputMode="numeric" pattern="[1-9][0-9]*" value={price} onChange={event => setPrice(event.target.value)} required /></Field><Field label="Maximum whole units"><input className={inputClass} inputMode="numeric" pattern="[1-9][0-9]*" value={capacity} onChange={event => setCapacity(event.target.value)} required /></Field></div>
           <p className="text-xs text-slate-400">Price: {demoMoney(price)} per unit. Opening freezes these demo terms.</p><button className={buttonClass} disabled={busy} type="submit">Create fictional fund</button>
         </form>
-        {snapshot.funds.length ? <div className="mt-6 border-t border-slate-700 pt-5"><Field label="Saved fund"><select className={inputClass} value={fund?.id ?? ''} onChange={event => { setFundId(event.target.value); setProof(null) }}>{snapshot.funds.map(item => <option key={item.id} value={item.id}>{item.name} · {item.status}</option>)}</select></Field>{fund?.status === 'DRAFT' ? <button className={`${buttonClass} mt-3`} disabled={busy} onClick={() => command('open_offering', { fund_id: fund.id })}>Open offering and freeze terms</button> : null}</div> : null}
+        {snapshot.funds.length ? <div className="mt-6 border-t border-slate-700 pt-5"><Field label="Saved fund"><select className={inputClass} value={fund?.id ?? ''} onChange={event => { setFundId(event.target.value); setProof(null) }}>{snapshot.funds.map(item => <option key={item.id} value={item.id}>{item.name} · {item.status}</option>)}</select></Field>{fund?.status === 'DRAFT' ? <><button className={`${buttonClass} mt-3`} disabled={busy || !fund.contract_address} onClick={() => command('open_offering', { fund_id: fund.id })}>Open offering and freeze terms</button>{!fund.contract_address ? <p className="mt-2 text-sm text-slate-300">Deploy and verify the fund token in step 3 before opening the offering.</p> : null}</> : null}</div> : null}
       </Card>
       <Card number="02" title="Subscribe and record test funding">
         {fund ? <><p className="mb-4 text-sm text-slate-400">{fund.name} · {demoMoney(fund.unit_price_minor)} per unit · cap {fund.cap_units} units. Subscription uses the selected MetaMask address as the fictional investor wallet.</p><Field label="Whole fund units"><input className={inputClass} inputMode="numeric" value={units} onChange={event => setUnits(event.target.value)} /></Field><button className={`${buttonClass} mt-3`} disabled={busy || !wallet || fund.status !== 'OPEN'} onClick={() => command('subscribe', { fund_id: fund.id, units, investor_wallet: wallet })}>Accept frozen terms and subscribe</button><div className="mt-5 space-y-4">{fund.subscriptions.map(sub => <div key={sub.id} className="rounded-xl border border-slate-700 p-4"><p>{sub.units} units · {demoMoney(sub.amount_minor)}</p><p className="mt-1 text-xs text-slate-400">{sub.status}</p><div className="mt-3 flex flex-wrap gap-2"><button className={buttonClass} disabled={busy || sub.status !== 'SUBSCRIBED'} onClick={() => command('record_test_funding', { fund_id: fund.id, subscription_id: sub.id })}>Record synthetic funding</button><button className={buttonClass} disabled={busy || sub.status !== 'FUNDED' || !fund.contract_address} onClick={() => command('prepare_mint', { fund_id: fund.id, subscription_id: sub.id })}>Approve demo issuance</button></div></div>)}</div></> : <p className="text-slate-400">Create and open a fund to start.</p>}

@@ -3,6 +3,7 @@ import Link from 'next/link'
 import { PublicShell } from '@/components/public/public-shell'
 import { Button } from '@/components/ui/button'
 import { isSupabaseAuthMode } from '@/lib/auth-mode'
+import { isDemoEnvironment } from '@/lib/testnet-fund/contracts'
 import { authDocumentReferrerPolicy } from '@/lib/auth-referrer-policy'
 import { evaluateActionPermission } from '@/lib/authorization/policy'
 import { createPageSupabaseClient } from '@/lib/supabase/page'
@@ -75,6 +76,7 @@ export default async function WorkspacePage() {
   return (
     <PublicShell>
       <main id="main-content" className="mx-auto w-full max-w-5xl px-4 py-12 sm:px-6 sm:py-16 lg:px-8">
+        {isDemoEnvironment(process.env) ? <Link href="/workspace/testnet-fund" className="mb-6 inline-flex rounded-lg border border-cyan-400/40 bg-cyan-400/10 px-5 py-3 text-cyan-200">Open the Amoy fund lifecycle demonstration →</Link> : null}
         <div className="flex flex-wrap items-start justify-between gap-6 border-b border-bxo-border-subtle pb-8">
           <div>
             <p className="text-sm font-semibold uppercase tracking-[0.16em] text-bxo-accent-primary">BlockXOne access</p>

@@ -84,7 +84,9 @@ export async function reconcileFund(fund: DemoFund) {
     const supply = BigInt(await token.totalSupply({ blockTag: block }))
     const balances = await Promise.all(fund.holdings.map(async holding => ({ wallet: holding.investor_wallet, registered: holding.units, onChain: String(await token.balanceOf(holding.investor_wallet, { blockTag: block })) })))
     const journalBalanced = fund.journal.every(entry => entry.lines.reduce((sum, line) => sum + (line.direction === 'DEBIT' ? BigInt(line.amount) : -BigInt(line.amount)), 0n) === 0n)
+    const unitLedgerSupply = fund.journal.filter(entry => entry.unit === 'FUND_UNIT').flatMap(entry => entry.lines).filter(line => line.account === 'UNITS_ISSUED').reduce((sum, line) => sum + (line.direction === 'DEBIT' ? BigInt(line.amount) : -BigInt(line.amount)), 0n)
+    const cashLedgerMinor = fund.journal.filter(entry => entry.unit === 'ZAR_TEST').flatMap(entry => entry.lines).filter(line => line.account === 'SYNTHETIC_CASH').reduce((sum, line) => sum + (line.direction === 'DEBIT' ? BigInt(line.amount) : -BigInt(line.amount)), 0n)
     const registerTotal = fund.holdings.reduce((sum, holding) => sum + BigInt(holding.units), 0n)
-    return { blockNumber: block, supply: String(supply), registeredSupply: fund.issued_units, journalBalanced, balances, matches: journalBalanced && supply === BigInt(fund.issued_units) && registerTotal === supply && balances.every(row => row.registered === row.onChain) }
+    return { blockNumber: block, supply: String(supply), registeredSupply: fund.issued_units, unitLedgerSupply: String(unitLedgerSupply), syntheticCashLedgerMinor: String(cashLedgerMinor), journalBalanced, balances, matches: journalBalanced && supply === BigInt(fund.issued_units) && registerTotal === supply && unitLedgerSupply === supply && cashLedgerMinor === BigInt(fund.synthetic_cash_minor) && balances.every(row => row.registered === row.onChain) }
   } finally { rpc.destroy() }
 }

@@ -52,12 +52,19 @@ export async function chainEvidence(client: SupabaseClient, command: 'bind' | 'c
     const sql = command === 'bind' ? 'select public.bx1_demo_bind_contract($1,$2,$3,$4,$5,$6)' : 'select public.bx1_demo_confirm_chain($1,$2,$3,$4,$5,$6)'
     assertActive()
     await pool.query(sql, [...params, verified.data.user.id, claims.session_id])
-  } catch { throw new DemoError('Verified chain evidence could not be saved. Do not resend; refresh and verify again.') }
-  finally { await pool.end() }
+  } catch (error) {
+    if (error instanceof DemoError) throw error
+    const code = typeof error === 'object' && error !== null && 'code' in error ? error.code : null
+    const rejected = typeof code === 'string' && ['23514', '22023', '42501', '23505', '22P02'].includes(code)
+    throw new DemoError('Verified chain evidence could not be saved. Do not resend; refresh and verify again.', rejected ? 409 : 503)
+  } finally {
+    try { await pool.end() }
+    catch { throw new DemoError('Receipt verification outcome is uncertain. Refresh and verify again; do not resend.', 503) }
+  }
 }
 export async function loadTestnetFundPage() {
   requireDemoEnvironment()
   const client = await createPageSupabaseClient()
   const workspace = await requireDemoAccess(client)
-  return { workspace, snapshot: await demoSnapshot(client), configuration: { chainId: 80002 as const, contractArtifactAvailable: Boolean(demoFundArtifact) } }
+  return { workspace, snapshot: await demoSnapshot(client), configuration: { chainId: 80002 as const, contractArtifactAvailable: Boolean(demoFundArtifact), receiptVerifierConfigured: Boolean(process.env.BLOCKXONE_DEMO_DATABASE_URL) } }
 }
