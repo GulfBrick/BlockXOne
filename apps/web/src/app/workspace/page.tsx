@@ -76,7 +76,7 @@ export default async function WorkspacePage() {
   return (
     <PublicShell>
       <main id="main-content" className="mx-auto w-full max-w-5xl px-4 py-12 sm:px-6 sm:py-16 lg:px-8">
-        {isDemoEnvironment(process.env) ? <Link href="/workspace/testnet-fund" className="mb-6 inline-flex rounded-lg border border-cyan-400/40 bg-cyan-400/10 px-5 py-3 text-cyan-200">Open the Amoy fund lifecycle demonstration →</Link> : null}
+        {isDemoEnvironment(process.env) ? <div className="mb-6 flex flex-wrap gap-3"><Link href="/portal" className="inline-flex min-h-11 rounded-lg bg-cyan-300 px-5 py-3 font-semibold text-slate-950">Open your customer portal →</Link><Link href="/workspace/testnet-fund" className="inline-flex rounded-lg border border-cyan-400/40 px-5 py-3 text-cyan-200">Existing Amoy contract workspace</Link></div> : null}
         <div className="flex flex-wrap items-start justify-between gap-6 border-b border-bxo-border-subtle pb-8">
           <div>
             <p className="text-sm font-semibold uppercase tracking-[0.16em] text-bxo-accent-primary">BlockXOne access</p>

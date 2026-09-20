@@ -1,0 +1,63 @@
+import { describe, expect, it } from 'vitest'
+import { PORTAL_PATHS, evidenceSchema, formatTestMoney, portalCommandSchema, productTermsSchema, subscriptionQuote, type PortalProduct, type ProductTerms } from './contracts'
+import { isSupabaseWebPathAllowed } from '@/lib/auth-mode'
+import { isProductionWebPathBlocked } from '@/lib/release-policy'
+
+const id = 'd22789ee-7f73-4acf-a414-3de0b62ea801'
+const key = '113800c3-cf6e-437e-abdf-a3b09a03fcff'
+const terms: ProductTerms = { asset_type: 'FUND', name: 'Synthetic Balanced Fund', issuer_name: 'Fictional Fund Issuer', summary: 'A wholly synthetic investment product for testing.', strategy: 'A fictional diversified strategy with no real capital.', share_class: 'Class A', currency: 'ZAR_TEST', unit_price_minor: '12345678901234567890', cap_units: '100000', minimum_units: '10', pricing_basis: 'Fixed price for this test offering.', fees: 'No actual charges in this test environment.', redemption_terms: 'Synthetic redemption requires confirmed cancellation of units.', eligible_countries: ['ZA'], eligible_investor_types: ['INDIVIDUAL'], property_address: '', property_valuation_minor: '0', rental_income_policy: '', documents: { memorandum: 'Fictional test memorandum; this is not an actual investment offer.', risks: 'Test-only disclosure: no real money, asset ownership or returns exist.', subscription_terms: 'Acceptance only reserves synthetic units and never proves funding.' } }
+const product: PortalProduct = { id, organisation_id: id, created_by: id, revision: 4, status: 'PUBLISHED', terms, terms_hash: 'a'.repeat(64), reserved_units: '20', created_at: '2026-09-21T00:00:00Z', reviewer_id: null, review_notes: null, reviewed_at: null, published_at: null, review_checks: {} }
+
+describe('customer portal contracts', () => {
+  it('accepts complete typed fund terms', () => expect(productTermsSchema.safeParse(terms).success).toBe(true))
+  it('requires real-estate-specific terms', () => {
+    expect(productTermsSchema.safeParse({ ...terms, asset_type: 'REAL_ESTATE' }).success).toBe(false)
+    expect(productTermsSchema.safeParse({ ...terms, asset_type: 'REAL_ESTATE', property_address: 'Fictional Street 10, Test City', property_valuation_minor: '500000000', rental_income_policy: 'Fictional net rent after disclosed operating costs.' }).success).toBe(true)
+  })
+  it.each(['0', '-1', '1.1', '1e3', '+1', '01', ' 1', '999999999999999999999'])('rejects noncanonical financial quantity %s', unit_price_minor => expect(productTermsSchema.safeParse({ ...terms, unit_price_minor }).success).toBe(false))
+  it('rejects live currency and arbitrary metadata', () => {
+    expect(productTermsSchema.safeParse({ ...terms, currency: 'ZAR' }).success).toBe(false)
+    expect(productTermsSchema.safeParse({ ...terms, metadata: { approved: true } }).success).toBe(false)
+  })
+  it('requires minimum to fit total offering capacity', () => expect(productTermsSchema.safeParse({ ...terms, minimum_units: '100001' }).success).toBe(false))
+  it.each(['minimum_units', 'cap_units', 'property_valuation_minor'])('returns validation errors instead of throwing for malformed %s', field => {
+    expect(productTermsSchema.safeParse({ ...terms, asset_type: 'REAL_ESTATE', [field]: '1.5' }).success).toBe(false)
+    expect(productTermsSchema.safeParse({ ...terms, [field]: 'garbage' }).success).toBe(false)
+  })
+  it('quotes with exact integers above JS safe range', () => expect(subscriptionQuote(product, '10')).toEqual({ amount_minor: '123456789012345678900' }))
+  it.each(['0', '1.5', '-10', '1e2', '01'])('rejects malformed subscription quantity %s', units => expect(subscriptionQuote(product, units)).toHaveProperty('error'))
+  it('enforces state, minimum and outstanding reservation capacity', () => {
+    expect(subscriptionQuote({ ...product, status: 'APPROVED' }, '10')).toHaveProperty('error')
+    expect(subscriptionQuote(product, '9')).toHaveProperty('error')
+    expect(subscriptionQuote(product, '99981')).toHaveProperty('error')
+    expect(subscriptionQuote(product, '99980')).toHaveProperty('amount_minor')
+  })
+  it('binds subscription commands to approved version/hash and explicit acceptance', () => {
+    const payload = { product_id: id, expected_revision: 4, terms_hash: 'a'.repeat(64), units: '10', accepted_documents: true, accepted_risks: true }
+    expect(portalCommandSchema.safeParse({ command: 'subscribe', key, payload }).success).toBe(true)
+    for (const change of [{ expected_revision: 0 }, { terms_hash: '' }, { accepted_documents: false }, { accepted_risks: false }, { investor_id: id }]) expect(portalCommandSchema.safeParse({ command: 'subscribe', key, payload: { ...payload, ...change } }).success).toBe(false)
+  })
+  it('never accepts financial completion or reviewer identity from the browser', () => {
+    expect(portalCommandSchema.safeParse({ command: 'settle', key, payload: { subscription_id: id, paid: true } }).success).toBe(false)
+    expect(portalCommandSchema.safeParse({ command: 'review_application', key, payload: { application_id: id, expected_revision: 1, decision: 'APPROVED', notes: 'Synthetic documents independently reviewed.', checks: { identity: true, ownership: true, screening: true, suitability: true }, reviewer_id: id } }).success).toBe(false)
+  })
+  it('formats minor units without number coercion', () => {
+    expect(formatTestMoney('1')).toBe('0.01 ZAR_TEST')
+    expect(formatTestMoney('123456789012345678901')).toContain('.01 ZAR_TEST')
+    expect(formatTestMoney('NaN')).toBe('Unavailable')
+  })
+  it('bounds and types private document manifests', () => {
+    const document = { id, kind: 'IDENTITY', title: 'Synthetic identity', storage_path: `${id}/${key}`, sha256: 'a'.repeat(64), size: 100, mime_type: 'application/pdf' }
+    expect(evidenceSchema.safeParse(document).success).toBe(true)
+    for (const change of [{ size: 4194305 }, { mime_type: 'text/html' }, { sha256: 'forged' }, { public_url: 'https://example.test' }]) expect(evidenceSchema.safeParse({ ...document, ...change }).success).toBe(false)
+  })
+})
+describe('portal route boundaries', () => {
+  it.each(PORTAL_PATHS)('explicitly admits %s only in native mode', path => {
+    expect(isSupabaseWebPathAllowed(path)).toBe(true)
+    expect(isSupabaseWebPathAllowed(`${path}/extra`)).toBe(false)
+    expect(isProductionWebPathBlocked(path, 'production', '', '', 'supabase', 'supabase')).toBe(false)
+    expect(isProductionWebPathBlocked(path, 'production', '', '', '', '')).toBe(true)
+  })
+  it.each(['/Portal', '/portal/unknown', '/portal%2fproducts', '/portal//products', '/portal/products/'])('denies route alias %s', path => expect(isProductionWebPathBlocked(path, 'production', '', '', 'supabase', 'supabase')).toBe(true))
+})

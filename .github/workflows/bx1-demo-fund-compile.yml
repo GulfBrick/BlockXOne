@@ -4,6 +4,15 @@ on:
   workflow_dispatch:
   push:
     paths:
+      - apps/web/src/lib/portal/**
+      - apps/web/src/components/portal/**
+      - apps/web/src/app/portal/**
+      - apps/web/src/app/api/portal/**
+      - apps/web/src/app/register/**
+      - apps/web/src/app/auth/**
+      - apps/web/scripts/test-portal.mjs
+      - supabase/features/bx1_portal.sql
+      - supabase/tests/bx1_portal.sql
       - contracts/demo/**
       - apps/web/src/lib/testnet-fund/**
       - apps/web/src/components/testnet-fund/**
@@ -15,6 +24,15 @@ on:
       - .github/workflows/bx1-demo-fund-compile.yml
   pull_request:
     paths:
+      - apps/web/src/lib/portal/**
+      - apps/web/src/components/portal/**
+      - apps/web/src/app/portal/**
+      - apps/web/src/app/api/portal/**
+      - apps/web/src/app/register/**
+      - apps/web/src/app/auth/**
+      - apps/web/scripts/test-portal.mjs
+      - supabase/features/bx1_portal.sql
+      - supabase/tests/bx1_portal.sql
       - contracts/demo/**
       - apps/web/src/lib/testnet-fund/**
       - apps/web/src/components/testnet-fund/**
@@ -114,6 +132,13 @@ jobs:
         env:
           BX1_DEMO_SQL_TEST_URL: postgresql://postgres:bx1-synthetic-ci-only@127.0.0.1:5432/bx1_demo_ci
         run: node scripts/test-testnet-fund.mjs
+
+      - name: Verify customer onboarding, offerings and reservations in isolated cloud PostgreSQL
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          BX1_PORTAL_SQL_TEST_URL: postgresql://postgres:bx1-synthetic-ci-only@127.0.0.1:5432/bx1_demo_ci
+        run: node apps/web/scripts/test-portal.mjs
 
       - name: Typecheck and build hosted web with compiled artifact
         if: ${{ !cancelled() }}

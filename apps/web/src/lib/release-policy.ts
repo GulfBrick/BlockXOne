@@ -7,6 +7,7 @@ const PRODUCTION_BLOCKED_PREFIXES = [
   '/api',
   '/auth',
   '/workspace',
+  '/portal',
   '/investor',
   '/operator',
   '/issuer',
@@ -122,7 +123,7 @@ export function isProductionWebPathBlocked(
   if (!isProtectedApplicationPath(normalized)) return false
   // Native identity routes have no legacy/development fallback.
   const nativeFamily = normalized.toLowerCase()
-  if (nativeFamily === '/auth' || nativeFamily.startsWith('/auth/') || nativeFamily === '/workspace' || nativeFamily.startsWith('/workspace/')) return true
+  if (nativeFamily === '/auth' || nativeFamily.startsWith('/auth/') || nativeFamily === '/workspace' || nativeFamily.startsWith('/workspace/') || nativeFamily === '/portal' || nativeFamily.startsWith('/portal/')) return true
   if (
     ['dev', 'development', 'test'].includes(normalizedEnvironment) &&
     (releaseMode || '').trim().toLowerCase() !== 'pilot' &&

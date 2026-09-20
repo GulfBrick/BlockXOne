@@ -1,0 +1,7 @@
+import { PortalPage } from '@/components/portal/portal-page'
+export const dynamic = 'force-dynamic'
+export const metadata = { title: 'Investment opportunity' }
+export default async function Page({ searchParams }: { searchParams: Promise<{ id?: string | string[] }> }) {
+  const { id } = await searchParams
+  return PortalPage({ view: '/portal/opportunities/detail', id: typeof id === 'string' ? id : undefined })
+}
