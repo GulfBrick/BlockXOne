@@ -9,6 +9,9 @@ on:
       - apps/web/src/components/testnet-fund/**
       - apps/web/src/app/api/testnet-fund/**
       - apps/web/src/app/workspace/testnet-fund/**
+      - apps/web/scripts/test-testnet-fund.mjs
+      - supabase/migrations/20260920161000_testnet_fund_demo.sql
+      - supabase/tests/testnet_fund_demo.sql
       - .github/workflows/bx1-demo-fund-compile.yml
   pull_request:
     paths:
@@ -17,6 +20,9 @@ on:
       - apps/web/src/components/testnet-fund/**
       - apps/web/src/app/api/testnet-fund/**
       - apps/web/src/app/workspace/testnet-fund/**
+      - apps/web/scripts/test-testnet-fund.mjs
+      - supabase/migrations/20260920161000_testnet_fund_demo.sql
+      - supabase/tests/testnet_fund_demo.sql
       - .github/workflows/bx1-demo-fund-compile.yml
 
 permissions:
@@ -83,10 +89,15 @@ jobs:
         working-directory: apps/web
         run: npm ci --no-audit --no-fund
 
-      - name: Test isolated hosted fund admission
+      - name: Run the controlled hermetic web suite, including fund admission
         shell: bash
         working-directory: apps/web
-        run: node node_modules/vitest/vitest.mjs run src/lib/testnet-fund/contracts.test.ts
+        run: npm test
+
+      - name: Verify isolated fund SQL state machine
+        shell: bash
+        working-directory: apps/web
+        run: node scripts/test-testnet-fund.mjs
 
       - name: Typecheck and build hosted web with compiled artifact
         shell: bash

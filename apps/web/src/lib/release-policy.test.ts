@@ -16,6 +16,7 @@ describe('native Auth admission', () => {
       '/workspace', '/workspace/access-denied', '/api/wallet/challenge', '/api/wallet/verify',
       '/login/mfa', '/workspace/security', '/auth/mfa-enroll', '/auth/mfa-verify',
       '/workspace/administration', '/auth/admin-command',
+      '/workspace/testnet-fund', '/api/testnet-fund/command',
     ])
   })
   it.each(['/workspace/administration', '/auth/admin-command'])('admits only exact administration path %s in paired mode', pathname => {
