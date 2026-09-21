@@ -8,8 +8,9 @@ if (process.argv.length !== 2 || process.env.GITHUB_ACTIONS !== 'true') throw ne
 const expected = 'postgresql://postgres:bx1-synthetic-ci-only@127.0.0.1:5432/bx1_demo_ci'
 if (process.env.BX1_FUNDING_SQL_TEST_URL !== expected) throw new Error('Funding SQL proof requires the exact disposable CI database')
 const options = { connectionString: expected, ssl: false, connectionTimeoutMillis: 5000, query_timeout: 20000, statement_timeout: 15000, application_name: 'bx1-funding-cloud-ci' }
-const db = new pg.Client(options), peers = []
-let phase = 'initialise', checks = 0, sequence = 0, txSequence = 0, begun = false, committed = false, connected = false
+let db = new pg.Client(options), maintenance
+const peers = []
+let phase = 'initialise', checks = 0, sequence = 0, txSequence = 0, begun = false, committed = false, connected = false, maintenanceConnected = false
 const uid = n => `e1000000-0000-4000-8000-${String(n).padStart(12, '0')}`
 const sid = n => `e2000000-0000-4000-8000-${String(n).padStart(12, '0')}`
 const key = () => `ef300000-0000-4000-8000-${String(++sequence).padStart(12, '0')}`
@@ -112,6 +113,37 @@ async function blocked(pids) {
   while (Date.now() < until) { if (await scalar('select count(*)::int from pg_stat_activity where pid=any($1::int[]) and cardinality(pg_blocking_pids(pid))>0', [pids]) === pids.length) { checks++; return } await new Promise(resolve => setTimeout(resolve, 20)) }
   throw new Error('Statements did not overlap on the actual product/actor lock')
 }
+async function authorityBoundary() {
+  return scalar(`select jsonb_build_object(
+    'membership',(select jsonb_agg(jsonb_build_array(grantor,admin_option,inherit_option,set_option) order by grantor)
+      from pg_auth_members where roleid='bx1_authority_owner'::regrole and member='postgres'::regrole),
+    'schema_acl',(select to_jsonb(array(select a::text from unnest(nspacl) a order by a::text)) from pg_namespace where nspname='bx1_private'),
+    'table_acls',(select jsonb_object_agg(relname,to_jsonb(array(select a::text from unnest(relacl) a order by a::text)))
+      from pg_class where oid in ('bx1_private.persons'::regclass,'bx1_private.person_principals'::regclass)))`)
+}
+async function checkHostedRole(client = db) {
+  eq(await scalar("select current_user='postgres' and session_user='postgres' and not rolsuper and rolbypassrls from pg_roles where rolname=current_user", [], client), true, 'migration/runtime connection is hosted-like postgres, not superuser')
+}
+async function cleanupFixture() {
+  // Maintenance is deliberately unavailable to migration/RPC helpers. It only
+  // prepares the disposable role boundary and restores/removes the fixture.
+  if (maintenanceConnected) {
+    await maintenance.query('rollback')
+    await maintenance.query('alter role postgres superuser')
+    await maintenance.query('drop schema if exists bx1_portal,bx1_private,storage,auth,public cascade; create schema public authorization postgres')
+    await maintenance.query(`do $$ begin
+      if exists(select 1 from pg_auth_members where roleid='bx1_authority_owner'::regrole
+        and member='postgres'::regrole and grantor='bx1_fixture_bootstrap'::regrole) then
+        revoke bx1_authority_owner from postgres granted by bx1_fixture_bootstrap;
+      end if;
+    end $$`)
+    await maintenance.query('reset session authorization; drop role if exists bx1_fixture_bootstrap')
+  } else if (connected) {
+    await admin()
+    await db.query('drop schema if exists bx1_portal,bx1_private,storage,auth,public cascade; create schema public; drop role if exists bx1_fixture_bootstrap')
+  } else throw new Error('Disposable fixture cleanup has no connected maintenance session')
+  committed = false
+}
 
 try {
   await db.connect(); connected = true
@@ -119,7 +151,7 @@ try {
   truth(version >= 170000 && version < 180000, 'pinned PostgreSQL17')
   eq(await scalar("select current_database()='bx1_demo_ci' and current_user='postgres' and inet_server_addr() is not null"), true, 'disposable service')
   eq(await scalar("select count(*)::int from pg_namespace where nspname in ('auth','storage','bx1_private','bx1_portal')"), 0, 'empty fixture database')
-  eq(await scalar("select count(*)::int from pg_roles where rolname in ('anon','authenticated','service_role','bx1_wallet_owner','bx1_wallet_verifier','bx1_authority_owner')"), 0, 'fresh independent cloud service has no prior fixture roles')
+  eq(await scalar("select count(*)::int from pg_roles where rolname in ('anon','authenticated','service_role','bx1_wallet_owner','bx1_wallet_verifier','bx1_authority_owner','bx1_fixture_bootstrap')"), 0, 'fresh independent cloud service has no prior fixture roles')
   await db.query('begin'); begun = true
   await sqlFile('../../../supabase/tests/bx1_identity_workspace.sql')
   await sqlFile('../../../supabase/tests/bx1_mfa_assurance.sql')
@@ -134,7 +166,52 @@ try {
   const fund = await publish(orgId, 'FUND'), estate = await publish(orgId, 'REAL_ESTATE')
   await admin(); await sqlFile('../../../supabase/migrations/20260921160000_portal_authority_accounts.sql')
   await sqlFile('../../../supabase/tests/bx1_portal_authority_accounts.sql')
+  phase = 'hosted-like-migration-role-boundary'
+  // Preserve existing postgres-owned functions: demote the real fixture role
+  // instead of assigning selected objects to an artificial privileged owner.
+  await db.query('create role bx1_fixture_bootstrap nologin superuser')
+  await db.query('commit'); begun = false; committed = true
+  maintenance = new pg.Client({ ...options, application_name: 'bx1-funding-fixture-maintenance' })
+  await maintenance.connect(); maintenanceConnected = true
+  await maintenance.query('set session authorization bx1_fixture_bootstrap')
+  await maintenance.query(`begin;
+    grant anon,authenticated,service_role to postgres with inherit false, set true;
+    grant bx1_authority_owner to postgres with admin true, inherit false, set false;
+    grant bx1_authority_owner to bx1_fixture_bootstrap with admin true, inherit false, set false;
+    grant bx1_authority_owner to postgres with admin false, inherit false, set false granted by bx1_fixture_bootstrap;
+    revoke all on bx1_private.persons,bx1_private.person_principals from postgres;
+    grant select on bx1_private.persons,bx1_private.person_principals to postgres;
+    alter role postgres nosuperuser bypassrls;
+    commit`)
+  // Authenticate a fresh restricted session so no initially-superuser session
+  // authorization privilege remains on any connection used for the proof.
+  await db.end(); connected = false
+  db = new pg.Client(options)
+  await db.connect(); connected = true
+  await checkHostedRole()
+  await db.query('begin'); begun = true
+  eq(await scalar("select count(*)=2 and bool_or(admin_option) and bool_and(not inherit_option and not set_option) from pg_auth_members where roleid='bx1_authority_owner'::regrole and member='postgres'::regrole"), true, 'two grantor-specific authority edges preserve ADMIN access without inheritance or SET')
+  for (const table of ['persons', 'person_principals']) {
+    eq(await scalar('select has_table_privilege(current_user,$1,\'SELECT\')', [`bx1_private.${table}`]), true, `restricted postgres can read ${table}`)
+    eq(await scalar('select has_table_privilege(current_user,$1,\'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER\')', [`bx1_private.${table}`]), false, `restricted postgres has no write or REFERENCES privilege on ${table}`)
+  }
+  await denied('restricted postgres cannot SET ROLE to authority owner', () => db.query('set local role bx1_authority_owner'), '42501')
+  await denied('SELECT-only persons cannot be locked directly', () => db.query('select id from bx1_private.persons for update'), '42501')
+  await denied('SELECT-only principals cannot be locked directly', () => db.query('select auth_user_id from bx1_private.person_principals for update'), '42501')
+  await denied('SELECT-only persons cannot be a new foreign-key target', () => db.query('create table bx1_portal.synthetic_forbidden_person_reference (person_id uuid references bx1_private.persons(id))'), '42501')
+  const originalAuthorityBoundary = await authorityBoundary()
   await sqlFile('../../../supabase/features/bx1_portal_funding.sql')
+  phase = 'hosted-like-migration-preserves-private-boundary'
+  await checkHostedRole()
+  eq(await authorityBoundary(), originalAuthorityBoundary, 'funding migration restores exact authority membership and private schema/table ACLs')
+  eq(await scalar("select count(*)::int from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname in ('bx1_portal','public') and p.prosecdef and p.proowner='postgres'::regrole and p.proname like '%funding%'") > 0, true, 'funding definers retain hosted postgres ownership')
+  eq(await scalar("select count(*)::int from pg_proc p join pg_namespace n on n.oid=p.pronamespace join pg_roles r on r.oid=p.proowner where n.nspname in ('bx1_portal','public','bx1_private') and p.prosecdef and p.proname like '%funding%' and r.rolsuper"), 0, 'no funding definer runs as superuser')
+  eq(await scalar("select proowner='bx1_authority_owner'::regrole and prosecdef from pg_proc where oid='bx1_private.lock_funding_person(uuid,uuid)'::regprocedure"), true, 'narrow person-lock helper uses the existing authority owner')
+  eq(await scalar("select has_function_privilege('postgres','bx1_private.lock_funding_person(uuid,uuid)','EXECUTE')"), true, 'restricted migration owner can invoke the narrow lock helper')
+  for (const role of ['anon', 'authenticated', 'service_role', 'bx1_wallet_owner', 'bx1_wallet_verifier']) eq(await scalar('select has_function_privilege($1,\'bx1_private.lock_funding_person(uuid,uuid)\',\'EXECUTE\')', [role]), false, `${role} cannot invoke person-lock helper`)
+  await denied('authenticated cannot call the authority lock helper directly', async () => { await actor(3); await scalar('select bx1_private.lock_funding_person($1::uuid,null::uuid)', [uid(3)]) }, '42501')
+  await denied('service role cannot call the authority lock helper directly', async () => { await admin(); await db.query('set local role service_role'); await scalar('select bx1_private.lock_funding_person($1::uuid,null::uuid)', [uid(3)]) }, '42501')
+  await admin()
   phase = 'migration-has-no-financial-seeds'
   for (const name of ['routes', 'obligations', 'references', 'verification_expectations', 'observations', 'receipt_claims', 'acceptances', 'journals', 'journal_lines', 'reversals']) {
     eq(await scalar(`select count(*)::int from bx1_portal.funding_${name}`), 0, `${name} has no seeded money`)
@@ -249,7 +326,7 @@ try {
   const retryExpectation = await mint(6, investor, 'REFERENCE', retryRef.id), retryEvidence = facts(retryExpectation, retryOrder.obligation.token_amount_base_units)
   const expiryExpectation = await mint(5, treasury, 'ROUTE', routeFund.id)
   await admin(); await db.query('set constraints all immediate'); await db.query('commit'); begun = false; committed = true
-  for (let n = 0; n < 2; n++) { const client = new pg.Client({ ...options, application_name: `bx1-funding-race-${n}` }); await client.connect(); peers.push(client) }
+  for (let n = 0; n < 2; n++) { const client = new pg.Client({ ...options, application_name: `bx1-funding-race-${n}` }); await client.connect(); peers.push(client); await checkHostedRole(client) }
   const pids = await Promise.all(peers.map(c => scalar('select pg_backend_pid()', [], c)))
   phase = 'two-connection-reference-versus-cancellation'
   await db.query('begin'); begun = true; await db.query('select id from bx1_portal.products where id=$1 for update', [fund.id])
@@ -286,10 +363,13 @@ try {
   await db.query('commit'); begun = false
   eq((await expiring).code, '42501', 'service writer rechecks original caller after actual lock wait')
   eq(await scalar('select count(*)::int from bx1_portal.funding_observations where expectation_id=$1', [expiryExpectation.id]), 0, 'expired authority leaves no observation')
+  await checkHostedRole()
+  eq(await authorityBoundary(), originalAuthorityBoundary, 'runtime actions leave private authority ACLs and membership unchanged')
   phase = 'cleanup'
-  await db.query('drop schema bx1_portal,bx1_private,storage,auth,public cascade; create schema public'); committed = false
+  await cleanupFixture()
   eq(await scalar("select count(*)::int from pg_namespace where nspname in ('auth','storage','bx1_private','bx1_portal')"), 0, 'synthetic schemas removed')
-  console.log(`BX1_FUNDING_SQL_PASS assertions=${checks} bothAssets=canonical-obligation-and-ledger providerFacts=synthetic-only realChainReceipt=not-proven authProvider=not-proven mainnet=not-enabled concurrency=reference-cancellation-observation-retry-session-expiry cleanup=removed`)
+  eq(await scalar("select count(*)::int from pg_roles where rolname='bx1_fixture_bootstrap'"), 0, 'maintenance-only superuser role removed')
+  console.log(`BX1_FUNDING_SQL_PASS assertions=${checks} migrationRole=nosuperuser-bypassrls runtimeDefiners=non-superuser privateAuthority=select-only-restored bothAssets=canonical-obligation-and-ledger providerFacts=synthetic-only realChainReceipt=not-proven authProvider=not-proven mainnet=not-enabled concurrency=reference-cancellation-observation-retry-session-expiry cleanup=removed`)
 } catch (error) {
   const diagnostic = typeof error?.message === 'string' ? error.message.split(/[\r\n]/, 1)[0].slice(0, 220).replace(/[^\x20-\x7e]/g, '?') : 'unavailable'
   console.error(`BX1_FUNDING_SQL_FAILED phase=${phase} line=${error?.fixtureLine ?? 'unknown'} code=${error?.code ?? 'assertion'} diagnostic=${JSON.stringify(diagnostic)}`)
@@ -297,6 +377,7 @@ try {
 } finally {
   if (begun) { try { await db.query('rollback') } catch {} }
   await Promise.all(peers.map(c => c.end().catch(() => {})))
-  if (committed && connected) { try { await admin(); await db.query('drop schema bx1_portal,bx1_private,storage,auth,public cascade; create schema public') } catch { console.error('BX1_FUNDING_CLEANUP_FAILED disposable-service-will-be-destroyed-by-CI'); process.exitCode = 1 } }
+  if (committed) { try { await cleanupFixture() } catch { console.error('BX1_FUNDING_CLEANUP_FAILED disposable-service-will-be-destroyed-by-CI'); process.exitCode = 1 } }
+  if (maintenanceConnected) await maintenance.end().catch(() => {})
   if (connected) await db.end()
 }

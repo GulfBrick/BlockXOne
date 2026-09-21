@@ -1,5 +1,23 @@
 -- P3A: additive TESTNET funding on canonical portal orders. No customer, role,
 -- wallet, token, route or business-data seeds. No real-money or production gate.
+-- Apply atomically. The hosted migrator is not a superuser: private-person FKs
+-- need temporary owner authority, never a permanent write grant on identity.
+create temporary table bx1_funding_original_edges on commit drop as
+select m.grantor,m.admin_option,m.inherit_option,m.set_option
+from pg_catalog.pg_auth_members m
+where m.roleid='bx1_authority_owner'::regrole and m.member=current_user::regrole;
+grant bx1_authority_owner to current_user with inherit true, set true granted by current_user;
+create temporary table bx1_funding_original_schema on commit drop as
+select not has_schema_privilege('bx1_authority_owner','bx1_private','CREATE') added_create,
+  (select coalesce(jsonb_agg(to_jsonb(a) order by grantor,grantee,privilege_type,is_grantable),'[]'::jsonb)
+   from aclexplode(n.nspacl) a) original_acl
+from pg_catalog.pg_namespace n where n.nspname='bx1_private';
+do $$ begin
+  if (select added_create from pg_temp.bx1_funding_original_schema) then
+    grant create on schema bx1_private to bx1_authority_owner;
+  end if;
+end $$;
+
 alter table bx1_portal.organisation_authority_bindings drop constraint organisation_authority_bindings_role_check;
 alter table bx1_portal.organisation_authority_bindings add constraint organisation_authority_bindings_role_check
   check(role in ('OfferingManager','IssuerFundManager','ComplianceOfficer','TreasuryOperator','FinancialController'));
@@ -103,6 +121,46 @@ create index funding_obligation_scope on bx1_portal.funding_obligations(organisa
 create index funding_reference_obligation on bx1_portal.funding_references(obligation_id);
 create index funding_observation_reference on bx1_portal.funding_observations(reference_id,observed_at);
 
+-- Only trusted server-owned funding routines may take these private row locks.
+-- Return no identity data and grant no caller UPDATE capability. FOR SHARE is
+-- required so concurrent trust revocation conflicts with the business action.
+create function bx1_private.lock_funding_person(actor uuid,expected_person uuid default null) returns void
+language plpgsql volatile security definer set search_path='' as $$
+declare linked_person uuid;
+begin
+  select pp.person_id into linked_person from bx1_private.person_principals pp
+    where pp.auth_user_id=actor for share;
+  perform p.id from bx1_private.persons p where p.id=coalesce(expected_person,linked_person) for share;
+end $$;
+revoke all on function bx1_private.lock_funding_person(uuid,uuid) from public,anon,authenticated,service_role,bx1_wallet_owner,bx1_wallet_verifier;
+alter function bx1_private.lock_funding_person(uuid,uuid) owner to bx1_authority_owner;
+grant execute on function bx1_private.lock_funding_person(uuid,uuid) to current_user;
+
+-- Restore every grantor-specific role edge and the original schema ACL before
+-- any funding runtime functions are defined. Abort the migration on drift.
+do $$
+declare edge record; actual jsonb; expected jsonb;
+begin
+  if (select added_create from pg_temp.bx1_funding_original_schema) then
+    revoke create on schema bx1_private from bx1_authority_owner;
+  end if;
+  select original_acl into expected from pg_temp.bx1_funding_original_schema;
+  select coalesce(jsonb_agg(to_jsonb(a) order by grantor,grantee,privilege_type,is_grantable),'[]'::jsonb) into actual
+    from pg_catalog.pg_namespace n cross join lateral aclexplode(n.nspacl) a where n.nspname='bx1_private';
+  if actual is distinct from expected then raise exception 'funding schema ACL not restored'; end if;
+  select * into edge from pg_temp.bx1_funding_original_edges where grantor=current_user::regrole;
+  if found then
+    execute format('grant bx1_authority_owner to %I with admin %s, inherit %s, set %s granted by %I',current_user,
+      case when edge.admin_option then 'true' else 'false' end,
+      case when edge.inherit_option then 'true' else 'false' end,
+      case when edge.set_option then 'true' else 'false' end,current_user);
+  else execute format('revoke bx1_authority_owner from %I granted by %I',current_user,current_user); end if;
+  select coalesce(jsonb_agg(to_jsonb(e) order by grantor),'[]'::jsonb) into expected from pg_temp.bx1_funding_original_edges e;
+  select coalesce(jsonb_agg(to_jsonb(e) order by grantor),'[]'::jsonb) into actual from
+    (select grantor,admin_option,inherit_option,set_option from pg_catalog.pg_auth_members where roleid='bx1_authority_owner'::regrole and member=current_user::regrole) e;
+  if actual is distinct from expected then raise exception 'funding owner edges not restored'; end if;
+end $$;
+
 create function bx1_portal.funding_guard() returns trigger language plpgsql set search_path='' as $$
 begin
   if TG_OP='DELETE' then raise exception 'funding_history_permanent' using errcode='23514'; end if;
@@ -182,8 +240,7 @@ language plpgsql volatile security definer set search_path='' as $$
 begin
   perform id from auth.users where id=actor for share;
   perform id from public.bx1_profiles where id=actor for share;
-  perform auth_user_id from bx1_private.person_principals where auth_user_id=actor for share;
-  perform id from bx1_private.persons where id=person for share;
+  perform bx1_private.lock_funding_person(actor,person);
   if c->>'mode'='ROLE' then
     perform id from public.bx1_organisations where id=(c->>'organisationId')::uuid for share;
     perform id from public.bx1_memberships where user_id=actor and organisation_id=(c->>'organisationId')::uuid and role=c->>'role' for share;
@@ -451,8 +508,7 @@ begin
     perform id from public.bx1_organisations where id=(c->>'organisationId')::uuid for share;
     perform id from public.bx1_memberships where user_id=auth.uid() and organisation_id=(c->>'organisationId')::uuid and role=c->>'role' for share;
   end if;
-  perform auth_user_id from bx1_private.person_principals where auth_user_id=auth.uid() for share;
-  perform id from bx1_private.persons where id=(select person_id from bx1_private.person_principals where auth_user_id=auth.uid()) for share;
+  perform bx1_private.lock_funding_person(auth.uid());
   perform id from bx1_portal.organisations where id=org for share;
   perform a.id from bx1_portal.applications a join bx1_portal.organisations x on x.application_id=a.id where x.id=org for share of a;
   perform id from bx1_portal.organisation_authority_bindings where product_organisation_id=org order by id for share;
@@ -465,7 +521,7 @@ begin
     perform a.id from bx1_portal.applications a join bx1_portal.investment_accounts i on i.application_id=a.id join bx1_portal.funding_obligations o on o.investment_account_id=i.id where o.id=oid for share of a;
     perform u.id from auth.users u join bx1_portal.funding_obligations o on o.investor_id=u.id where o.id=oid for share of u;
     perform p.id from public.bx1_profiles p join bx1_portal.funding_obligations o on o.investor_id=p.id where o.id=oid for share of p;
-    perform pp.auth_user_id from bx1_private.person_principals pp join bx1_portal.funding_obligations o on o.investor_id=pp.auth_user_id where o.id=oid for share of pp;
+    perform bx1_private.lock_funding_person(o.investor_id) from bx1_portal.funding_obligations o where o.id=oid;
   end if;
   if bx1_portal.funding_session() is not true or bx1_portal.valid_operating_context(c) is not true then raise exception 'funding_context_expired' using errcode='42501'; end if;
 end $$;
