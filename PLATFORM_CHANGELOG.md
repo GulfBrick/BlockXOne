@@ -1,14 +1,34 @@
 # BlockXOne platform releases
 
-## 1.1.0-rc.5 — Canonical funding and reconciliation candidate
+## 1.1.0-rc.8 — Integrated branded-entry and funding candidate
 
-- Extend the existing account/subscription records for both fund and real-estate products with exact funding obligations. Do not create a second order, release allocation after uncertain payment, or infer a holding.
-- Add Treasury route/evidence proposals and independent trusted-person Controller approvals, reconciliations, exception decisions and accounting reversals within the existing role dashboards.
-- Bind MetaMask personal-sign claims to the payer, actor, investment account, obligation, route and exact transfer. Signing a claim is not a payment, token approval, KYC decision or institutional mandate.
-- Verify receipts with two fixed Amoy providers, canonical finalized history, pinned ERC20 code/decimals and exact Transfer evidence. Claim each verified transaction/log globally once; browser assertions are never payment facts.
-- Keep append-only observations, balanced token-unit journals and reversals. Partial/excess/unapplied/unknown funding remains explicit. Accounting reversal does not refund tokens.
-- No settlement token, receiving address, issuer authority, test user or financial role is seeded. Missing routes say not to send funds. MAINNET remains unchanged and unadmitted for this adapter.
-- Candidate acceptance is recorded against its own exact cloud source and deployment. Automated fixtures do not prove a real funded investor journey; previous rc.4 evidence is not reassigned.
+- Base this candidate on accepted rc.7 source `57868141d87ac6eeba446be452793017da3f2da8`, retaining the exact branded TEST origin, legacy-alias redirect ordering, registration metadata/header alignment and strict same-origin request admission.
+- Integrate the previously unaccepted rc.5 funding work and its separately reviewed corrections into the same application: existing account/subscription obligations, reviewed TEST token routes, payer-signed receipt claims, independently verified evidence, Treasury/Controller reconciliation and balanced immutable journals/reversals.
+- Preserve all-nine-role and selected-organisation workflow boundaries. No second customer/order model, settlement asset, receiving address, financial authority or privileged test user is seeded. A claim signature is not payment; an accounting reversal is not a refund; funding does not imply issuance or a holding.
+- Keep the existing cloud acceptance workflow, its isolated funding PostgreSQL fixture, exact Edge verifier typecheck and read-only Amoy provider check. A registration-browser-proof dispatch runs only that bounded browser proof, not the funding campaigns.
+- rc.5 was not an accepted or hosted funding release. This integrated candidate requires its own exact-source cloud and hosted evidence; rc.7 registration evidence is retained as history, not reassigned to changed source.
+- MAINNET financial admission remains false. This candidate does not claim completed signup/email delivery, a funded investor journey, governed issuance, servicing, exit or full TESTNET/MAINNET lifecycle parity.
+
+## 1.1.0-rc.7 — Native registration submission repair
+
+- Align registration page metadata and middleware referrer policy for clean forms and validated intent/error presentation state. Native same-origin form POSTs must retain the canonical Origin rather than sending null and being rejected before Supabase signup.
+- Keep unknown, duplicated and token-bearing query states private; do not accept missing, null or foreign request origins. Existing signup validation, email confirmation, account isolation and role grants remain unchanged.
+- Add cloud Chromium proof of the real hosted registration document and browser-generated native POST Origin using an empty, intercepted invalid body. No credentials, consent, accounts, emails or real-world transactions are created by this request-level proof.
+- Based on rc.6 source 259ddc4e555f454faf123f368f0dabc5a2ef33d6; rc.5 funding remains excluded. This correction does not prove email delivery, completed KYC, financial flows or MAINNET parity.
+
+## 1.1.0-rc.6 — Branded TEST entry correction
+
+- Built from published rc.4 source `ff9e716cf09f1743cdb07d423ab60ca0e77eb506`. The unreleased rc.5 funding candidate is excluded; skipping its number does not include or approve its features.
+- Admit only the exact `https://testnet.bx1.co.za` branded origin alongside the existing preview-origin admission, retaining the pinned TEST backend, preview environment and auth/HTTPS gates.
+- Redirect GET/HEAD from the exact previous stable TEST alias to the branded origin before session refresh or host-only callback cookie handling, preserving path/query. Refuse legacy-alias mutation requests without replaying their bodies; do not trust forwarded host headers or change same-origin auth checks.
+- Preserve existing application data, roles, wallet adapter, schemas and contracts. This is not a MAINNET parity release or financial activation. MAIN public navigation is a separately scoped patch on its existing production source.
+- Cloud tests/build and DNS, HTTPS, callback, alias-redirect and hosted sign-in/registration checks must be recorded for this exact candidate. Previous release evidence is not reassigned; a source change alone does not prove the domain is configured or authentication works.
+
+## 1.1.0-rc.5 — Previously unaccepted canonical funding candidate
+
+- Candidate source `a0aca177d9bfc6672fc7e8a1ba113eb45a51ab0b` extended the existing account/subscription records with exact funding obligations, Treasury/Controller review, two-provider Amoy receipt verification and balanced journals/reversals.
+- Its cloud SQL acceptance did not pass; it was not deployed as an accepted funding release. rc.6 and rc.7 deliberately excluded these changes while repairing branded entry and registration.
+- rc.8 integrates this work only with separately reviewed corrections and new exact-source acceptance. The rc.5 version number or source availability is not proof of a working hosted financial flow.
 
 ## 1.1.0-rc.4 — Accurate subscription-state wording
 
@@ -44,3 +64,4 @@
 ### Acceptance still required
 
 Cloud test/build results and authenticated hosted visual checks are recorded against the exact source commit. This candidate alone is not full testnet journey acceptance or MAINNET production admission. Product-organisation integration, financial core, governed issuance, servicing and exit remain subsequent connected workflow work, using this application and release lineage.
+

@@ -5,10 +5,13 @@ import { PublicShell } from '@/components/public/public-shell'
 import { RegistrationForm } from '@/components/portal/registration-form'
 import { isDemoEnvironment } from '@/lib/testnet-fund/contracts'
 import { isRegistrationError, isRegistrationIntent, REGISTRATION_CHECK_EMAIL, REGISTRATION_TERMS_VERSION } from '@/lib/portal/registration'
+import { authDocumentReferrerPolicy } from '@/lib/auth-referrer-policy'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
-export const metadata = { title: 'Create your account | BlockXOne', robots: { index: false, follow: false }, referrer: 'no-referrer' as const }
+export async function generateMetadata({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
+  return { title: 'Create your account | BlockXOne', robots: { index: false, follow: false }, referrer: authDocumentReferrerPolicy('/register', await searchParams) }
+}
 
 export default async function RegisterPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   if (!isDemoEnvironment(process.env)) notFound()

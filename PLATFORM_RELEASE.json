@@ -1,8 +1,8 @@
 {
   "product": "BlockXOne",
-  "version": "1.1.0-rc.5",
+  "version": "1.1.0-rc.8",
   "status": "release-candidate",
-  "baseSource": "ff9e716cf09f1743cdb07d423ab60ca0e77eb506",
+  "baseSource": "57868141d87ac6eeba446be452793017da3f2da8",
   "sourceIdentity": "VERCEL_GIT_COMMIT_SHA",
   "environmentSource": "validated deployment target, canonical origin and Supabase project",
   "sharedEntry": "/login",
@@ -12,5 +12,6 @@
   "schemaChanges": ["supabase/features/bx1_portal_funding.sql"],
   "contractChanges": [],
   "productionFinancialAdmission": false,
-  "scope": "Canonical subscription funding obligations, reviewed TEST token routes, payer-signed receipt claims, independent server verification, Treasury/Controller reconciliation and immutable balanced journals/reversals in the existing role workspaces. No settlement asset, beneficiary or authority is seeded. Actual hosted funding, governed issuance and full mirrored MAINNET lifecycle remain subject to acceptance."
+  "scope": "Integrate canonical subscription funding obligations, reviewed TEST token routes, payer-signed receipt claims, independent server verification, Treasury/Controller reconciliation and immutable balanced journals/reversals into the existing role workspaces, preserving rc.7 branded entry, registration Origin handling and strict same-origin admission. No settlement asset, beneficiary or authority is seeded. Exact cloud acceptance and hosted funding proof remain required; governed issuance, full mirrored lifecycle and MAINNET financial admission are not granted by this candidate."
 }
+

@@ -15,7 +15,7 @@ vi.mock('@/components/public/public-shell', () => ({ PublicShell: ({ children }:
 vi.mock('@/components/portal/registration-form', () => ({ RegistrationForm: () => createElement('p', null, 'server-admitted registration') }))
 vi.mock('@/components/portal/portal-screens', () => ({ PortalScreen: () => createElement('p', null, 'server-admitted portal') }))
 
-import RegisterPage from '@/app/register/page'
+import RegisterPage, { generateMetadata as registrationMetadata } from '@/app/register/page'
 import { PortalPage } from '@/components/portal/portal-page'
 import { loadPortalPage, readPortal } from './server'
 import { APPLICANT_CONTEXT } from './operating-context'
@@ -55,6 +55,27 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllEnvs())
 
 describe('actual customer page admission', () => {
+  it('uses submit-capable HTML metadata for clean registration and fixed retry/intent state', async () => {
+    const queries: Record<string, string | string[] | undefined>[] = [
+      {}, { intent: 'investor' }, { intent: 'wealth-manager' }, { error: 'email_invalid' },
+      { intent: 'investor', error: 'password_mismatch' },
+    ]
+    for (const query of queries) {
+      const metadata = await registrationMetadata({ searchParams: Promise.resolve(query) })
+      expect(metadata.referrer).toBe('strict-origin')
+      expect(metadata.robots).toEqual({ index: false, follow: false })
+    }
+    expect(mocks.create).not.toHaveBeenCalled()
+  })
+  it('keeps token-bearing, unknown, duplicate and non-form registration metadata private', async () => {
+    const queries: Record<string, string | string[] | undefined>[] = [
+      { token_hash: 'synthetic' }, { next: '//evil.test' }, { intent: 'SuperAdmin' },
+      { error: 'raw-provider-detail' }, { intent: ['investor', 'investor'] },
+      { error: ['email_invalid', 'email_invalid'] }, { status: 'check-email' },
+    ]
+    for (const query of queries) expect((await registrationMetadata({ searchParams: Promise.resolve(query) })).referrer).toBe('no-referrer')
+    expect(mocks.create).not.toHaveBeenCalled()
+  })
   it.each(refusedConfigurations)('rejects registration and portal before backend access when %s=%s', async (name, value) => {
     vi.stubEnv(name, value)
     await expect(RegisterPage({ searchParams: Promise.resolve({}) })).rejects.toThrow('NEXT_NOT_FOUND')
