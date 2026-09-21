@@ -12,6 +12,14 @@ const LABELS: Record<string, { label: string; tone: 'positive' | 'warning' | 'da
   SUBSCRIBED: { label: 'Subscription received', tone: 'info' }, PENDING: { label: 'Pending', tone: 'warning' }, FUNDED: { label: 'Synthetic funding recorded', tone: 'info' },
   ISSUED: { label: 'Issued', tone: 'positive' }, ACTIVE: { label: 'Active', tone: 'positive' }, VERIFIED: { label: 'Verified', tone: 'positive' },
   UNVERIFIED: { label: 'Not verified', tone: 'warning' }, REQUIRED: { label: 'Action required', tone: 'warning' }, BLOCKED: { label: 'Not available', tone: 'warning' },
+  PROPOSED: { label: 'Proposed for independent approval', tone: 'warning' }, REVOKED: { label: 'Revoked', tone: 'danger' },
+  INVALID: { label: 'Invalid evidence', tone: 'danger' }, UNAVAILABLE: { label: 'Verification unavailable', tone: 'warning' },
+  EVIDENCE_REVIEW: { label: 'Funding evidence under review', tone: 'warning' }, PARTIAL: { label: 'Partial test-token funding', tone: 'warning' },
+  OVERPAID: { label: 'Excess test-token funding · review required', tone: 'warning' }, RECONCILED: { label: 'Test-token funding reconciled', tone: 'info' },
+  UNAPPLIED: { label: 'Unapplied evidence · reconciliation break', tone: 'danger' }, REVERSED: { label: 'Accounting reversed · not refunded', tone: 'warning' },
+  ACCEPTANCE_PROPOSED: { label: 'Evidence acceptance proposed', tone: 'warning' }, POSTED: { label: 'Test-token journal posted', tone: 'info' },
+  EXCEPTION_PROPOSED: { label: 'Exception awaiting independent decision', tone: 'warning' }, REJECTED_UNPAID: { label: 'Conclusively rejected as unpaid', tone: 'neutral' },
+  RESERVED: { label: 'Units reserved', tone: 'info' },
 }
 export function StatusBadge({ status }: { status: string }) {
   const item = LABELS[status] ?? { label: status.replaceAll('_', ' ').toLowerCase(), tone: 'neutral' }

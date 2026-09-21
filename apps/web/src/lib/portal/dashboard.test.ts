@@ -64,4 +64,14 @@ describe('role and organisation dashboard selection', () => {
     expect(dashboardProjection(reviewer, 'TESTNET', { ...data, operating_context: { mode: 'ROLE', organisationId: organisation, role: 'Investor' } }).availablePaths).not.toContain('/portal/compliance')
     expect(dashboardProjection(reviewer, 'TESTNET', snapshot).availablePaths).not.toContain('/portal/compliance')
   })
+  it.each(['TreasuryOperator', 'FinancialController'] as const)('shows %s funding queues only from connected scoped records', role => {
+    const scope = { organisationId: organisation, organisationName: 'A', role }
+    const bound = { id: productOrganisation, name: 'A', status: 'ACTIVE', roles: [role], native_organisation_id: organisation, authority_source: 'NATIVE_BINDING' as const }
+    expect(dashboardProjection(scope, 'TESTNET', { ...snapshot, organisations: [bound] }).queue).toEqual([])
+    expect(dashboardProjection(scope, 'TESTNET', { ...snapshot, organisations: [bound] }).queueMessage).toContain('could not be loaded')
+    const data = { ...snapshot, organisations: [bound], funding: { routes: [], obligations: [], references: [], journals: [], reversals: [] } }
+    expect(dashboardProjection(scope, 'TESTNET', data).queue[0].value).toBe(0)
+    expect(dashboardProjection({ ...scope, organisationId: otherOrganisation }, 'TESTNET', data).queue).toEqual([])
+    expect(dashboardProjection(scope, 'MAINNET', data).queue).toEqual([])
+  })
 })

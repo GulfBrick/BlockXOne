@@ -1,16 +1,16 @@
 {
   "product": "BlockXOne",
-  "version": "1.1.0-rc.4",
+  "version": "1.1.0-rc.5",
   "status": "release-candidate",
-  "baseSource": "253bd3f81928645614ab0a4be3b6c379ce0b404d",
+  "baseSource": "ff9e716cf09f1743cdb07d423ab60ca0e77eb506",
   "sourceIdentity": "VERCEL_GIT_COMMIT_SHA",
   "environmentSource": "validated deployment target, canonical origin and Supabase project",
   "sharedEntry": "/login",
   "sharedDashboard": "/portal",
   "environments": ["TESTNET", "MAINNET"],
   "brand": "BlockXOne Brand Kit v2.0 Exact Logo",
-  "schemaChanges": [],
+  "schemaChanges": ["supabase/features/bx1_portal_funding.sql"],
   "contractChanges": [],
   "productionFinancialAdmission": false,
-  "scope": "Connected issuer, compliance and investor workspaces; explicit organisation authority and individual investment accounts; context-bound instructions and same-record issuer inbox. No funding, issuance or MAINNET financial activation. Full mirrored lifecycle remains subject to acceptance."
+  "scope": "Canonical subscription funding obligations, reviewed TEST token routes, payer-signed receipt claims, independent server verification, Treasury/Controller reconciliation and immutable balanced journals/reversals in the existing role workspaces. No settlement asset, beneficiary or authority is seeded. Actual hosted funding, governed issuance and full mirrored MAINNET lifecycle remain subject to acceptance."
 }

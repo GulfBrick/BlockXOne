@@ -25,7 +25,7 @@ const otherOrganisation = '99999999-9999-4999-8999-999999999999'
 function snapshot(): PortalSnapshot { return { actor: { id: actor, email: 'synthetic@example.invalid', display_name: 'Synthetic User', can_review: false }, applications: [], organisations: [], products: [], subscriptions: [], events: [], accounts: [], operating_context: APPLICANT_CONTEXT } }
 function account(change: Partial<PortalInvestmentAccount> = {}): PortalInvestmentAccount { return { id: accountId, holder_user_id: actor, application_id: applicationId, kind: 'INDIVIDUAL', status: 'ACTIVE', created_at: '2026-09-20T10:00:00Z', ...change } }
 function operating(role: Bx1Role): PortalOperatingContext { return { mode: 'ROLE', organisationId: nativeOrganisation, role } }
-function order(change: Partial<PortalSubscription> = {}): PortalSubscription { return { id: requestKey, product_id: productId, investment_account_id: accountId, investor_id: actor, product_name: 'Fictional Test Fund', organisation_id: organisation, product_revision: 3, terms_hash: 'ab'.repeat(32), units: '10', amount_minor: '100000', status: 'AWAITING_FUNDING', created_at: '2026-09-20T10:00:00Z', ...change } }
+function order(change: Partial<PortalSubscription> = {}): PortalSubscription { return { id: requestKey, product_id: productId, investment_account_id: accountId, investor_id: actor, product_name: 'Fictional Test Fund', organisation_id: organisation, product_revision: 3, terms_hash: 'ab'.repeat(32), units: '10', amount_minor: '100000', status: 'AWAITING_FUNDING', created_at: '2026-09-20T10:00:00Z', can_cancel: true, ...change } }
 function operatorOrganisation(role: 'OfferingManager' | 'IssuerFundManager' = 'OfferingManager'): PortalOrganisation {
   return { id: organisation, name: 'Fictional Product Organisation', status: 'ACTIVE', roles: [role], native_organisation_id: nativeOrganisation, authority_source: 'NATIVE_BINDING' as const, capabilities: ['create_product', 'save_product', 'submit_product', 'publish_product', 'read_orders'] }
 }
@@ -88,7 +88,7 @@ describe('portal navigation and source-driven surfaces', () => {
     expect(html).not.toContain('Other Private Applicant'); expect(html).not.toContain('Record review decision')
   })
   it('never turns an unfunded reservation into a holding or performance chart', () => {
-    const value = snapshot(); value.subscriptions = [{ id: requestKey, product_id: productId, investor_id: actor, product_name: 'Fictional Test Fund', organisation_id: organisation, product_revision: 3, terms_hash: 'ab'.repeat(32), units: '10', amount_minor: '100000', status: 'AWAITING_FUNDING', created_at: '2026-09-20T10:00:00Z' }]
+    const value = snapshot(); value.subscriptions = [order()]
     const html = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal/portfolio" />)
     expect(html).toContain('Awaiting funding'); expect(html).toContain('Reservations are not holdings'); expect(html).toContain('Cancel unfunded reservation')
     expect(html).not.toContain('Portfolio return'); expect(html).not.toContain('Total assets under management')
@@ -168,7 +168,7 @@ describe('operational landings and one subscription hand-off', () => {
     const html = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal" operatingContext={operating(role)} />)
     expect(html).toContain('Your products and incoming orders.'); expect(html).toContain('Product register'); expect(html).toContain('Incoming subscription orders')
     expect(html).toContain(requestKey); expect(html).toContain(accountId); expect(html).toContain('ab'.repeat(32)); expect(html).toContain('Terms revision 3')
-    expect(html).toContain('Funding verification is not connected'); expect(html).not.toContain('Cancel unfunded reservation')
+    expect(html).toContain('Funding records unavailable'); expect(html).not.toContain('Cancel unfunded reservation')
     expect(html.indexOf('Product register')).toBeLessThan(html.indexOf('Role, hand-offs and signing guidance'))
   })
   it.each(['FUND', 'REAL_ESTATE'] as const)('preserves the %s product and same order across investor and issuer views', kind => {

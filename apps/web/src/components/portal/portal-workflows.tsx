@@ -110,7 +110,8 @@ export function SubscriptionForm({ product, snapshot, onSaved, operatingContext 
   </Panel>
 }
 
-export function SubscriptionCancel({ id, onSaved }: { id: string; onSaved: (snapshot: PortalSnapshot) => void }) {
+export function SubscriptionCancel({ id, onSaved, canCancel }: { id: string; onSaved: (snapshot: PortalSnapshot) => void; canCancel: boolean }) {
   const command = usePortalCommand(onSaved)
+  if (!canCancel) return <p className={styles.muted}>Cancellation is not currently authorised. Funding evidence and unresolved outcomes require finance review before reserved units can be released.</p>
   return <><CommandFeedback command={command} /><button type="button" className={styles.buttonSecondary} disabled={command.busy || command.unknown} onClick={() => { if (window.confirm('Cancel this unfunded test subscription and release its reserved units?')) void command.submit('cancel_subscription', { subscription_id: id }) }}>Cancel unfunded reservation</button></>
 }

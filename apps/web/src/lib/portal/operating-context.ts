@@ -30,6 +30,11 @@ export function portalContextMatches(actual: unknown, expected: PortalOperatingC
 export function portalViewAllowed(view: PortalPath, context: PortalOperatingContext, snapshot: PortalSnapshot): boolean {
   if (view === '/portal' || view === '/portal/onboarding') return true
   if (view.startsWith('/portal/compliance')) return context.mode === 'ROLE' && context.role === 'ComplianceOfficer' && snapshot.actor.can_review
+  if (view === '/portal/orders/detail') {
+    if (context.mode === 'APPLICANT' || context.role === 'Investor') return true
+    return ['OfferingManager', 'IssuerFundManager', 'TreasuryOperator', 'FinancialController'].includes(context.role)
+      && snapshot.organisations.some(org => org.status === 'ACTIVE' && org.native_organisation_id === context.organisationId && org.roles.includes(context.role))
+  }
   if (view.startsWith('/portal/products')) {
     if (context.mode === 'ROLE' && !['OfferingManager', 'IssuerFundManager'].includes(context.role)) return false
     return snapshot.organisations.some(org => org.status === 'ACTIVE' && (context.mode === 'APPLICANT'

@@ -1,8 +1,9 @@
 import { z } from 'zod'
 import type { PortalOperatingContext } from './operating-context'
+import { fundingCommandOptions, type FundingSnapshot } from './funding-contracts'
 
 /** One customer workflow; environment-specific providers never manufacture settlement. */
-export const PORTAL_PATHS = ['/portal', '/portal/onboarding', '/portal/products', '/portal/products/new', '/portal/products/detail', '/portal/compliance', '/portal/compliance/detail', '/portal/opportunities', '/portal/opportunities/detail', '/portal/portfolio'] as const
+export const PORTAL_PATHS = ['/portal', '/portal/onboarding', '/portal/products', '/portal/products/new', '/portal/products/detail', '/portal/compliance', '/portal/compliance/detail', '/portal/opportunities', '/portal/opportunities/detail', '/portal/portfolio', '/portal/orders/detail'] as const
 export type PortalPath = (typeof PORTAL_PATHS)[number]
 export const applicationStatuses = ['DRAFT', 'SUBMITTED', 'CHANGES_REQUIRED', 'APPROVED', 'REJECTED'] as const
 export const productStatuses = ['DRAFT', 'IN_REVIEW', 'CHANGES_REQUIRED', 'APPROVED', 'PUBLISHED'] as const
@@ -23,6 +24,8 @@ export type PortalApplication = {
   review_checks: Record<string, boolean>; provider_mode: 'MANUAL_TEST_REVIEW'; approved_until: string | null;
 }
 export type PortalCapability = 'create_product' | 'save_product' | 'submit_product' | 'publish_product' | 'read_orders' | 'review_product'
+  | 'propose_funding_route' | 'approve_funding_route' | 'revoke_funding_route' | 'open_funding_obligation' | 'propose_funding_acceptance' | 'reconcile_funding'
+  | 'propose_funding_exception' | 'resolve_funding_exception' | 'propose_funding_reversal' | 'approve_funding_reversal'
 export type PortalOrganisation = {
   id: string; name: string; roles: string[]; status: string;
   native_organisation_id?: string | null; capabilities?: PortalCapability[];
@@ -45,12 +48,15 @@ export type PortalProduct = {
   terms: ProductTerms; terms_hash: string; reserved_units: string; created_at: string;
   reviewer_id: string | null; review_notes: string | null; reviewed_at: string | null;
   published_at: string | null; review_checks: Record<string, boolean>;
+  allowed_actions?: string[];
 }
 export type PortalSubscription = {
   id: string; product_id: string; investor_id: string; product_name: string; organisation_id: string;
   product_revision: number; terms_hash: string; units: string; amount_minor: string;
   status: 'AWAITING_FUNDING' | 'CANCELLED'; created_at: string;
   investment_account_id?: string | null; currency?: 'ZAR_TEST';
+  can_cancel?: boolean; funding_obligation_id?: string | null;
+  allowed_actions?: string[];
 }
 export type PortalEvent = { id: string; subject_id: string; kind: string; actor_id: string; created_at: string; summary: string }
 export type PortalSnapshot = {
@@ -59,6 +65,7 @@ export type PortalSnapshot = {
   products: PortalProduct[]; subscriptions: PortalSubscription[]; events: PortalEvent[];
   requests?: { key: string; command: string }[];
   accounts?: PortalInvestmentAccount[]; operating_context?: PortalOperatingContext;
+  funding?: FundingSnapshot;
 }
 export type PortalPageData = { user: { id: string; email: string }; snapshot: PortalSnapshot }
 
@@ -86,6 +93,7 @@ export const portalCommandSchema = z.discriminatedUnion('command', [
   z.object({ command: z.literal('publish_product'), key: id, payload: z.object({ product_id: id, expected_revision: z.number().int().positive() }).strict() }).strict(),
   z.object({ command: z.literal('subscribe'), key: id, payload: z.object({ product_id: id, investment_account_id: id.optional(), expected_revision: z.number().int().positive(), terms_hash: hash, units: positive, accepted_documents: z.literal(true), accepted_risks: z.literal(true) }).strict() }).strict(),
   z.object({ command: z.literal('cancel_subscription'), key: id, payload: z.object({ subscription_id: id }).strict() }).strict(),
+  ...fundingCommandOptions,
 ])
 export type PortalCommand = z.infer<typeof portalCommandSchema>
 export function formatTestMoney(minor: string): string {

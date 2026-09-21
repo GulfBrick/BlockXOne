@@ -25,6 +25,13 @@ describe('strict personal and operational context', () => {
     expect(portalContextMatches({ ...investor, extra: true }, investor)).toBe(false)
     expect(portalContextMatches(undefined, investor)).toBe(false)
   })
+  it('preserves context and canonical subscription identity in funding links', () => {
+    const url = new URL(portalScopeHref('/portal/orders/detail', investor, 'subscription'), 'https://example.invalid')
+    expect(url.pathname).toBe('/portal/orders/detail')
+    expect(url.searchParams.get('id')).toBe('subscription')
+    expect(url.searchParams.get('role')).toBe('Investor')
+    expect(url.searchParams.get('organisation')).toBe(organisation)
+  })
 })
 
 describe('context-preserving navigation', () => {
@@ -50,6 +57,21 @@ describe('context-preserving navigation', () => {
 })
 
 describe('view permissions do not substitute for backend authority', () => {
+  it.each(['OfferingManager', 'IssuerFundManager', 'TreasuryOperator', 'FinancialController'] as const)('requires native bound %s authority for operational funding detail', role => {
+    const context = { ...investor, role }
+    const data: PortalSnapshot = { ...snapshot, organisations: [{ id: 'product-org', name: 'A', status: 'ACTIVE', roles: [role], native_organisation_id: organisation, authority_source: 'NATIVE_BINDING' }] }
+    expect(portalViewAllowed('/portal/orders/detail', context, data)).toBe(true)
+    expect(portalViewAllowed('/portal/orders/detail', { ...context, organisationId: otherOrganisation }, data)).toBe(false)
+    expect(portalViewAllowed('/portal/orders/detail', context, snapshot)).toBe(false)
+  })
+  it.each(['SuperAdmin', 'TransferAgent', 'TokenisationAgent', 'ComplianceOfficer'] as const)('does not promote %s into the funding workflow', role => {
+    expect(portalViewAllowed('/portal/orders/detail', { ...investor, role }, snapshot)).toBe(false)
+  })
+  it('admits own investor detail without granting access to an arbitrary order', () => {
+    expect(portalViewAllowed('/portal/orders/detail', investor, snapshot)).toBe(true)
+    expect(portalViewAllowed('/portal/orders/detail', APPLICANT_CONTEXT, snapshot)).toBe(true)
+    // The detail component still resolves only subscription IDs in the scoped snapshot.
+  })
   it('keeps personal onboarding available but prevents applicant access to reviewer or mapped staff screens', () => {
     const data: PortalSnapshot = { ...snapshot, actor: { ...snapshot.actor, can_review: true }, organisations: [{ id: 'portal-org', name: 'A', status: 'ACTIVE', roles: ['OfferingManager'], native_organisation_id: organisation, authority_source: 'NATIVE_BINDING' }] }
     expect(portalViewAllowed('/portal/onboarding', APPLICANT_CONTEXT, data)).toBe(true)

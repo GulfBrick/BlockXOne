@@ -1,5 +1,15 @@
 # BlockXOne platform releases
 
+## 1.1.0-rc.5 — Canonical funding and reconciliation candidate
+
+- Extend the existing account/subscription records for both fund and real-estate products with exact funding obligations. Do not create a second order, release allocation after uncertain payment, or infer a holding.
+- Add Treasury route/evidence proposals and independent trusted-person Controller approvals, reconciliations, exception decisions and accounting reversals within the existing role dashboards.
+- Bind MetaMask personal-sign claims to the payer, actor, investment account, obligation, route and exact transfer. Signing a claim is not a payment, token approval, KYC decision or institutional mandate.
+- Verify receipts with two fixed Amoy providers, canonical finalized history, pinned ERC20 code/decimals and exact Transfer evidence. Claim each verified transaction/log globally once; browser assertions are never payment facts.
+- Keep append-only observations, balanced token-unit journals and reversals. Partial/excess/unapplied/unknown funding remains explicit. Accounting reversal does not refund tokens.
+- No settlement token, receiving address, issuer authority, test user or financial role is seeded. Missing routes say not to send funds. MAINNET remains unchanged and unadmitted for this adapter.
+- Candidate acceptance is recorded against its own exact cloud source and deployment. Automated fixtures do not prove a real funded investor journey; previous rc.4 evidence is not reassigned.
+
 ## 1.1.0-rc.4 — Accurate subscription-state wording
 
 - Correct dashboard, portfolio and new fictional offering-template language: these records are subscription instructions and requested amounts, not canonical funding obligations or settled holdings.

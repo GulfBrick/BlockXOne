@@ -32,7 +32,12 @@ export function dashboardProjection(scope: DashboardScope, environment: Platform
   if (scope.role === 'Investor') {
     paths.push('/portal/opportunities', '/portal/portfolio')
     const own = snapshot.subscriptions.filter(item => item.investor_id === snapshot.actor.id)
-    queue.push({ label: 'My subscriptions awaiting funding', value: own.filter(item => item.status === 'AWAITING_FUNDING').length, description: 'Your personal customer account across product issuers, not this access organisation. Requests are not funded investments or token holdings.' })
+    queue.push({ label: 'My subscriptions awaiting funding reconciliation', value: own.filter(item => item.status === 'AWAITING_FUNDING' && !snapshot.funding?.obligations.some(obligation => obligation.subscription_id === item.id && obligation.state === 'RECONCILED')).length, description: 'Your personal customer account across product issuers, not this access organisation. Requests and reconciled token payments are not issued holdings.' })
+  }
+  if (productOrganisations.length && ['TreasuryOperator', 'FinancialController'].includes(scope.role)) {
+    if (!snapshot.funding) return { availablePaths: paths, queue, queueMessage: 'Funding records could not be loaded. No payment totals or empty queues are inferred.' }
+    const funding = snapshot.funding.obligations.filter(item => productOrganisations.some(org => org.id === item.organisation_id))
+    queue.push({ label: 'Funding instructions to review', value: funding.filter(item => item.state !== 'RECONCILED' && item.state !== 'CANCELLED').length, description: 'Scoped test-token funding and reconciliation. Not bank cash, issued units or token holdings.' })
   }
   if (productOrganisations.length && ['OfferingManager', 'IssuerFundManager'].includes(scope.role)) {
     paths.push('/portal/products', '/portal/products/new')
