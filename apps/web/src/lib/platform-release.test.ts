@@ -14,7 +14,8 @@ describe('one product version with isolated deployment identity', () => {
     expect(manifest.sharedEntry).toBe('/login')
     expect(manifest.sharedDashboard).toBe('/portal')
     expect(manifest.productionFinancialAdmission).toBe(false)
-    expect(manifest.schemaChanges).toEqual(['supabase/features/bx1_entry.sql'])
+    expect(manifest.schemaChanges).toEqual(['supabase/features/bx1_entry.sql', 'supabase/features/bx1_entry_admission.sql'])
+    expect(manifest.mainnetMissingPrerequisites).toEqual(['supabase/migrations/20260918234447_bx1_controlled_administration.sql', 'supabase/features/bx1_portal.sql', 'supabase/migrations/20260921160000_portal_authority_accounts.sql'])
     expect(manifest.contractChanges).toEqual([])
   })
   it('uses one version for both configured environments', () => {

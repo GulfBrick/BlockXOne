@@ -9,9 +9,10 @@
   "sharedDashboard": "/portal",
   "environments": ["TESTNET", "MAINNET"],
   "brand": "BlockXOne Brand Kit v2.0 Exact Logo",
-  "schemaChanges": ["supabase/features/bx1_entry.sql"],
+  "schemaChanges": ["supabase/features/bx1_entry.sql", "supabase/features/bx1_entry_admission.sql"],
+  "mainnetMissingPrerequisites": ["supabase/migrations/20260918234447_bx1_controlled_administration.sql", "supabase/features/bx1_portal.sql", "supabase/migrations/20260921160000_portal_authority_accounts.sql"],
   "contractChanges": [],
   "productionFinancialAdmission": false,
-  "scope": "Stage 1 candidate: preserve existing identity/security and business history; add distinct signup applications, multiple explicit capacities, guarded entry commands and shared validated hosted identity entry. Legacy application writes delegate to the canonical entry writer. No real roles, settlement routes, financial admission or contracts are granted. Requires additive entry schema before app release; cloud and hosted acceptance pending."
+  "scope": "Stage 1 candidate: preserve existing identity/security and business history; add distinct signup applications, multiple explicit capacities, guarded entry commands and shared validated hosted identity entry. Legacy application writes delegate to the canonical entry writer. MAIN requires the exact missing canonical schema dependencies and an atomic entry-only admission seal, with no new customer-role grants or unadmitted legacy/admin RPCs. No real roles, settlement routes, financial admission or contracts are granted. Requires additive entry schema before app release; cloud and hosted acceptance pending."
 }
 

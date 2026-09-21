@@ -108,10 +108,23 @@ describe('TEST signup confirmation without consuming email-scanner GETs', () => 
     expect(mocks.portal).not.toHaveBeenCalled()
     expect(await response.text()).not.toContain('private-provider-details')
   })
-  it.each([['VERCEL_ENV', 'production'], ['SUPABASE_URL', 'https://oqkevkjbkpugjotihtda.supabase.co'], ['NEXT_PUBLIC_BLOCKXONE_AUTH_MODE', 'legacy']])('rejects signup when the shared identity configuration is inconsistent: %s', async (key, value) => {
+  it.each([['VERCEL_ENV', 'production'], ['SUPABASE_URL', 'https://oqkevkjbkpugjotihtda.supabase.co']])('rejects signup when the shared identity configuration is inconsistent: %s', async (key, value) => {
     vi.stubEnv(key, value)
     expect((await GET(new NextRequest(`${canonical}/auth/confirm?token_hash=${hash}&type=signup`), context('confirm'))).status).toBe(400)
     expect((await POST(post('confirm', {}, { cookie: `${PENDING_INVITE_COOKIE}=${staged()}` }), context('confirm'))).status).toBe(400)
+    expect(auth.verifyOtp).not.toHaveBeenCalled()
+    expect(mocks.portal).not.toHaveBeenCalled()
+  })
+  it('fails closed before parsing signup tokens when server and public auth modes disagree', async () => {
+    vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_AUTH_MODE', 'legacy')
+    const get = await GET(new NextRequest(`${canonical}/auth/confirm?token_hash=${hash}&type=signup`), context('confirm'))
+    const postResult = await POST(post('confirm', {}, { cookie: `${PENDING_INVITE_COOKIE}=${staged()}` }), context('confirm'))
+    for (const response of [get, postResult]) {
+      expect(response.status).toBe(503)
+      expect(response.headers.get('location')).toBeNull()
+      expect(response.headers.get('set-cookie')).toBeNull()
+    }
+    expect(mocks.create).not.toHaveBeenCalled()
     expect(auth.verifyOtp).not.toHaveBeenCalled()
     expect(mocks.portal).not.toHaveBeenCalled()
   })
