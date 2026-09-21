@@ -1,5 +1,11 @@
 # BlockXOne platform releases
 
+## 1.1.0-rc.4 — Accurate subscription-state wording
+
+- Correct dashboard, portfolio and new fictional offering-template language: these records are subscription instructions and requested amounts, not canonical funding obligations or settled holdings.
+- Preserve all saved offering versions, database records and scoped workflow controls. No schema, contract, permission or provider change.
+- rc.3 remains exact source `253bd3f81928645614ab0a4be3b6c379ce0b404d`, cloud run `35555160057`. This correction requires its own cloud and hosted verification; evidence is not silently reassigned.
+
 ## 1.1.0-rc.3 — Connected offering and subscription workspaces
 
 - Replace responsibilities-first landings with operational investor opportunities/orders, issuer products/incoming orders and compliance queues in the existing branded application.

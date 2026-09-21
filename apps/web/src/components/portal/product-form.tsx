@@ -25,7 +25,7 @@ export function fictionalProductTerms(kind: ProductTerms['asset_type'] = 'FUND')
     documents: {
       memorandum: 'FICTIONAL TEST MEMORANDUM. This example product is not an offer of securities or a representation that a real issuer or asset exists. It demonstrates a multi-asset platform workflow using synthetic currency. The issuer, strategy, unit terms and eligibility rules must be reviewed as one version before publication. No live investment performance is shown.',
       risks: 'FICTIONAL TEST RISK DISCLOSURE. Tokenised investments can involve loss of capital, liquidity constraints, valuation uncertainty, counterparty risk, legal uncertainty, smart-contract risk and operational failure. This test does not evaluate or remove those risks. A test review is not regulated advice, legal clearance or an independent contract audit.',
-      subscription_terms: 'FICTIONAL TEST SUBSCRIPTION TERMS. The applicant accepts the exact published offering revision and its document hash. A subscription reserves whole units and creates an obligation in synthetic currency only. Acceptance does not constitute funding, token issuance, legal ownership or a bank payment. Settlement and issuance require separately verified workflow evidence.',
+      subscription_terms: 'FICTIONAL TEST SUBSCRIPTION TERMS. The applicant accepts the exact published offering revision and its document hash. A subscription reserves whole units and records the requested subscription amount in synthetic currency only. Acceptance does not constitute funding, token issuance, legal ownership or a bank payment. Settlement and issuance require separately verified workflow evidence.',
     },
   }
 }

@@ -93,6 +93,16 @@ describe('portal navigation and source-driven surfaces', () => {
     expect(html).toContain('Awaiting funding'); expect(html).toContain('Reservations are not holdings'); expect(html).toContain('Cancel unfunded reservation')
     expect(html).not.toContain('Portfolio return'); expect(html).not.toContain('Total assets under management')
   })
+  it.each(['/portal', '/portal/portfolio'] as const)('describes reservation amounts as requested subscriptions, not financial obligations on %s', view => {
+    const value = snapshot(); value.operating_context = operating('Investor'); value.products = [product()]; value.subscriptions = [order()]
+    const html = renderToStaticMarkup(<PortalScreen data={data(value)} view={view} operatingContext={operating('Investor')} />)
+    expect(html).toContain('Requested subscription amount'); expect(html).toContain('Awaiting-funding instructions only')
+    expect(html).not.toContain('Unfunded test obligations'); expect(html).not.toContain('subscription instructions and funding obligations')
+    if (view === '/portal/portfolio') {
+      expect(html).toContain('These are subscription instructions with reserved units.')
+      expect(html).toContain('A reservation does not confirm funding, token ownership or investment performance.')
+    }
+  })
 })
 
 describe('onboarding and subscription boundaries', () => {
@@ -129,6 +139,12 @@ describe('onboarding and subscription boundaries', () => {
     expect(terms.issuer_name).toContain('fictional')
     expect(terms.documents.memorandum).toContain('FICTIONAL TEST')
     expect(terms.documents.risks.length).toBeGreaterThan(50); expect(terms.documents.subscription_terms.length).toBeGreaterThan(50)
+  })
+  it.each(['FUND', 'REAL_ESTATE'] as const)('does not claim a financial obligation is created by the new %s subscription template', kind => {
+    const terms = fictionalProductTerms(kind).documents.subscription_terms
+    expect(terms).toContain('reserves whole units and records the requested subscription amount in synthetic currency only')
+    expect(terms).not.toMatch(/creates? an obligation/i)
+    expect(terms).toContain('Acceptance does not constitute funding, token issuance, legal ownership or a bank payment.')
   })
   it('formats exact-precision synthetic amounts without floating-point rounding', () => {
     expect(money('900719925474099301')).toBe('R9,007,199,254,740,993.01 test')
