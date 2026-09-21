@@ -2,11 +2,23 @@ name: BX1 platform cloud acceptance
 
 on:
   workflow_dispatch:
+    inputs:
+      mode:
+        description: Cloud acceptance or one fixed-origin empty-form browser proof
+        type: choice
+        options: [acceptance, registration-browser-proof]
+        default: acceptance
+      registration_origin_expectation:
+        description: Expected browser-generated Origin on the current hosted TEST document
+        type: choice
+        options: [null-origin, canonical-origin]
+        default: canonical-origin
   push:
     paths:
       - apps/web/src/middleware*
       - apps/web/src/lib/supabase/middleware*
       - apps/web/src/lib/branded-entry*
+      - apps/web/src/lib/auth-referrer-policy*
       - apps/web/src/lib/platform-release*
       - PLATFORM_RELEASE.json
       - apps/web/src/lib/portal/**
@@ -16,6 +28,7 @@ on:
       - apps/web/src/app/register/**
       - apps/web/src/app/auth/**
       - apps/web/scripts/test-portal.mjs
+      - apps/web/scripts/test-registration-browser.mjs
       - supabase/features/bx1_portal.sql
       - supabase/migrations/20260921160000_portal_authority_accounts.sql
       - supabase/tests/bx1_portal_authority_accounts.sql
@@ -34,6 +47,7 @@ on:
       - apps/web/src/middleware*
       - apps/web/src/lib/supabase/middleware*
       - apps/web/src/lib/branded-entry*
+      - apps/web/src/lib/auth-referrer-policy*
       - apps/web/src/lib/platform-release*
       - PLATFORM_RELEASE.json
       - apps/web/src/lib/portal/**
@@ -43,6 +57,7 @@ on:
       - apps/web/src/app/register/**
       - apps/web/src/app/auth/**
       - apps/web/scripts/test-portal.mjs
+      - apps/web/scripts/test-registration-browser.mjs
       - supabase/features/bx1_portal.sql
       - supabase/migrations/20260921160000_portal_authority_accounts.sql
       - supabase/tests/bx1_portal_authority_accounts.sql
@@ -62,6 +77,7 @@ permissions:
 
 jobs:
   compile-and-build:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.mode != 'registration-browser-proof' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     services:
@@ -175,3 +191,42 @@ jobs:
           set -euo pipefail
           node node_modules/typescript/bin/tsc --noEmit --incremental false
           npm run build
+
+  registration-browser-proof:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'registration-browser-proof' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out exact proof source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+          submodules: false
+          lfs: false
+
+      - name: Select pinned Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22.23.1'
+          check-latest: false
+          package-manager-cache: false
+
+      - name: Install pinned browser tooling only in the ephemeral cloud runner
+        shell: bash
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/bx1-registration-browsers
+        run: |
+          set -euo pipefail
+          npm install --global npm@10.9.8 --no-audit --no-fund
+          test "$(node --version)" = 'v22.23.1'
+          test "$(npm --version)" = '10.9.8'
+          npm install --prefix "$RUNNER_TEMP/bx1-registration-playwright" --ignore-scripts --no-audit --no-fund --save-exact playwright@1.63.0
+          node "$RUNNER_TEMP/bx1-registration-playwright/node_modules/playwright/cli.js" install --with-deps chromium
+
+      - name: Observe native browser Origin with an empty invalid registration body
+        shell: bash
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/bx1-registration-browsers
+          BX1_REGISTRATION_BROWSER_EXPECTATION: ${{ inputs.registration_origin_expectation }}
+        run: node apps/web/scripts/test-registration-browser.mjs

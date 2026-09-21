@@ -10,7 +10,7 @@ describe('one product version with isolated deployment identity', () => {
     expect(platformRelease(main)?.environment).toBe('MAINNET')
   })
   it('admits the exact branded TEST origin with the same release identity', () => {
-    expect(platformRelease(brandedTest)).toEqual({ environment: 'TESTNET', version: '1.1.0-rc.6', source: 'a'.repeat(12) })
+    expect(platformRelease(brandedTest)).toEqual({ environment: 'TESTNET', version: '1.1.0-rc.7', source: 'a'.repeat(12) })
   })
   it.each([
     'http://testnet.bx1.co.za', 'https://testnet.bx1.co.za:444',

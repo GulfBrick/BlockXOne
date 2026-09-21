@@ -74,6 +74,30 @@ describe('branded TEST legacy entry cutover', () => {
     expect(updateSupabaseSession).toHaveBeenCalledOnce()
   })
 
+  it.each([
+    '/register', '/register?intent=investor', '/register?intent=wealth-manager',
+    '/register?error=email_invalid', '/register?intent=investor&error=password_mismatch',
+  ])('allows native POST origins from the branded registration document %s', async path => {
+    const refreshed = NextResponse.next()
+    refreshed.cookies.set('fixture-refresh', 'nonsecret', { httpOnly: true })
+    vi.mocked(updateSupabaseSession).mockResolvedValueOnce(refreshed)
+    const response = await middleware(new NextRequest(`${branded}${path}`, { headers: { host: 'testnet.bx1.co.za' } }))
+    expect(response).toBe(refreshed)
+    expect(response.headers.get('referrer-policy')).toBe('strict-origin')
+    expect(response.headers.get('cache-control')).toBe('private, no-store')
+    expect(response.cookies.get('fixture-refresh')?.value).toBe('nonsecret')
+  })
+
+  it.each([
+    '/register?token_hash=synthetic', '/register?next=https%3A%2F%2Fevil.test',
+    '/register?intent=investor&intent=investor', '/register?error=email_invalid&error=email_invalid',
+    '/register?intent=SuperAdmin', '/register?error=raw-provider-detail', '/register?status=check-email',
+  ])('keeps branded registration token/unknown/duplicate/non-form state private: %s', async path => {
+    const response = await middleware(new NextRequest(`${branded}${path}`, { headers: { host: 'testnet.bx1.co.za' } }))
+    expect(response.headers.get('referrer-policy')).toBe('no-referrer')
+    expect(response.headers.get('cache-control')).toBe('private, no-store')
+  })
+
   it.each([undefined, 'evil.test', 'testnet.bx1.co.za', `${legacyHost}:444`])('refuses a mismatched legacy Host %s instead of trusting forwarded headers', async host => {
     const headers: Record<string, string> = { 'x-forwarded-host': legacyHost, forwarded: `host=${legacyHost};proto=https` }
     if (host) headers.host = host

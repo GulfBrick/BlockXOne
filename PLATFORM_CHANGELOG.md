@@ -1,5 +1,12 @@
 # BlockXOne platform releases
 
+## 1.1.0-rc.7 — Native registration submission repair
+
+- Align registration page metadata and middleware referrer policy for clean forms and validated intent/error presentation state. Native same-origin form POSTs must retain the canonical Origin rather than sending null and being rejected before Supabase signup.
+- Keep unknown, duplicated and token-bearing query states private; do not accept missing, null or foreign request origins. Existing signup validation, email confirmation, account isolation and role grants remain unchanged.
+- Add cloud Chromium proof of the real hosted registration document and browser-generated native POST Origin using an empty, intercepted invalid body. No credentials, consent, accounts, emails or real-world transactions are created by this request-level proof.
+- Based on rc.6 source 259ddc4e555f454faf123f368f0dabc5a2ef33d6; rc.5 funding remains excluded. This correction does not prove email delivery, completed KYC, financial flows or MAINNET parity.
+
 ## 1.1.0-rc.6 — Branded TEST entry correction
 
 - Built from published rc.4 source `ff9e716cf09f1743cdb07d423ab60ca0e77eb506`. The unreleased rc.5 funding candidate is excluded; skipping its number does not include or approve its features.

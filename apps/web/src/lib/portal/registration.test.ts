@@ -85,6 +85,22 @@ describe('registration validation and non-authorizing metadata', () => {
 })
 
 describe('hosted TEST registration endpoint', () => {
+  it('accepts a branded native form origin for safe validation but still rejects Origin:null before any provider call', async () => {
+    const branded = 'https://testnet.bx1.co.za'
+    vi.stubEnv('BLOCKXONE_APP_ORIGIN', branded)
+    const nativeRequest = (origin: string) => new NextRequest(`${branded}/auth/register`, {
+      method: 'POST', headers: { origin, host: 'testnet.bx1.co.za', 'sec-fetch-site': 'same-origin', 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ ...fields, email: '' }),
+    })
+    const validOrigin = await POST(nativeRequest(branded))
+    expect(validOrigin.status).toBe(303)
+    expect(validOrigin.headers.get('location')).toBe(`${branded}/register?error=email_invalid`)
+    const nullOrigin = await POST(nativeRequest('null'))
+    expect(nullOrigin.status).toBe(403)
+    expect(await nullOrigin.json()).toEqual({ ok: false, error: 'Registration request unavailable.' })
+    expect(mocks.create).not.toHaveBeenCalled()
+    expect(auth.signUp).not.toHaveBeenCalled()
+  })
   it('submits to Supabase with canonical confirmation callback and descriptive metadata only', async () => {
     const response = await POST(request({ intent: 'wealth-manager' }))
     expect(auth.signUp).toHaveBeenCalledWith({ email: fields.email, password, options: { emailRedirectTo: `${canonical}/auth/confirm`, data: { portal_intent: 'wealth-manager', registration_terms_version: REGISTRATION_TERMS_VERSION } } })
