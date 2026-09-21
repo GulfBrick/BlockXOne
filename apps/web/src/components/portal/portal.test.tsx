@@ -272,7 +272,9 @@ describe('owned individual investment-account controls', () => {
     expect(html).not.toContain('Accept terms and reserve units</button>')
   })
   it('does not turn entity qualification into a personal account', () => {
-    const value = snapshot(); value.applications = [application({ details: { ...application().details, investor_type: 'ENTITY', company_name: 'Entity Applicant' } })]; value.accounts = [account()]
+    const investorDetails = application().details
+    if (investorDetails.details_version === 2) throw new Error('This fixture must remain an investor application')
+    const value = snapshot(); value.applications = [application({ details: { ...investorDetails, investor_type: 'ENTITY', company_name: 'Entity Applicant' } })]; value.accounts = [account()]
     expect(activeIndividualAccounts(value)).toEqual([])
     const html = renderToStaticMarkup(<InvestmentAccountPanel snapshot={value} onSaved={vi.fn()} />)
     expect(html).toContain('Entity representation requires a mandate'); expect(html).not.toContain('Open individual investment account</button>')

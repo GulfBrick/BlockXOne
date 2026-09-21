@@ -50,7 +50,7 @@ export function applicationSubmissionReady(persona: Persona, details: FormDetail
   return !locked && acknowledged && requiredApplicationEvidence(persona, details.investor_type).every(item => details.documents.some(document => document.kind === item.kind))
 }
 
-export function ApplicationDetailsSummary({ persona, details }: { persona: Persona; details: EntryApplication['details'] }) {
+export function ApplicationDetailsSummary({ persona, details }: { persona: Persona; details: Partial<ApplicationDetails> }) {
   const manager = isWealthManagerDetailsV2(details) ? details : null
   const legacyManager = persona === 'WEALTH_MANAGER' && !manager
   return <div className={styles.stack}>

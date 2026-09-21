@@ -202,16 +202,24 @@ begin
       and b.role=c->>'role' and b.status='ACTIVE' and b.valid_from<=clock_timestamp() and b.valid_until>clock_timestamp());
 end $$;
 
--- The legacy public read is still callable in TEST. Its original owner-only
--- projection hard-coded two operational roles even when no command was allowed.
--- Correct that exact predicate without replacing its other history projections.
+-- The authority migration already replaces the original owner-only legacy read
+-- with this exact scoped delegate. Verify the EFFECTIVE definition, not the old
+-- base-feature text. The scoped_operator correction above therefore governs
+-- both public reads without changing their existing ACLs or funding wrapper.
 do $$
-declare definition text; old_predicate text:='from bx1_portal.organisations o where o.owner_id=v_actor';
+declare actual text; expected text:=$expected$
+declare result jsonb;
 begin
-  definition:=pg_get_functiondef('bx1_portal.read_state()'::regprocedure);
-  if (length(definition)-length(replace(definition,old_predicate,'')))/length(old_predicate)<>1 then
+  result:=bx1_portal.read_scoped('{"mode":"APPLICANT"}'::jsonb);
+  return jsonb_set(result,'{actor,can_review}',to_jsonb(exists(select 1 from public.bx1_memberships m
+    where m.user_id=auth.uid() and m.role='ComplianceOfficer' and m.status='ACTIVE'
+      and bx1_portal.valid_operating_context(jsonb_build_object('mode','ROLE','organisationId',m.organisation_id,'role',m.role)))));
+end $expected$;
+begin
+  select p.prosrc into actual from pg_catalog.pg_proc p where p.oid='bx1_portal.read_state()'::regprocedure
+    and p.prosecdef and p.provolatile='v' and p.proowner='postgres'::regrole;
+  if actual is null or btrim(replace(actual,E'\r',''),E' \n\t') is distinct from btrim(expected,E' \n\t') then
     raise exception 'application_admission_legacy_projection_changed' using errcode='55000'; end if;
-  execute replace(definition,old_predicate,old_predicate||' and bx1_portal.scoped_operator(''{"mode":"APPLICANT"}''::jsonb,o.id)');
 end $$;
 
 create or replace function bx1_portal.entry_read() returns jsonb
