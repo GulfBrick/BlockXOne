@@ -224,12 +224,12 @@ jobs:
         image: postgres:17
         env:
           POSTGRES_DB: bx1_demo_ci
-          POSTGRES_USER: postgres
+          POSTGRES_USER: bx1_ci_bootstrap
           POSTGRES_PASSWORD: bx1-synthetic-ci-only
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U postgres -d bx1_demo_ci"
+          --health-cmd "pg_isready -U bx1_ci_bootstrap -d bx1_demo_ci"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
@@ -256,6 +256,13 @@ jobs:
           test "$(node --version)" = 'v22.23.1'
           test "$(npm --version)" = '10.9.8'
           npm ci --no-audit --no-fund
+      - name: Prepare non-bootstrap postgres for hosted-role permission proof
+        shell: bash
+        env:
+          BX1_FIXTURE_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          set -euo pipefail
+          docker exec "$BX1_FIXTURE_CONTAINER" psql -U bx1_ci_bootstrap -d bx1_demo_ci -v ON_ERROR_STOP=1 -c "CREATE ROLE postgres WITH LOGIN SUPERUSER CREATEDB CREATEROLE BYPASSRLS PASSWORD 'bx1-synthetic-ci-only'; ALTER DATABASE bx1_demo_ci OWNER TO postgres;"
       - name: Verify canonical funding and reconciliation in fresh cloud PostgreSQL
         shell: bash
         env:
@@ -321,4 +328,3 @@ jobs:
           PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/bx1-registration-browsers
           BX1_REGISTRATION_BROWSER_EXPECTATION: ${{ inputs.registration_origin_expectation }}
         run: node apps/web/scripts/test-registration-browser.mjs
-

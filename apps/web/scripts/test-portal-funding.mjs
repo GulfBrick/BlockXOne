@@ -150,6 +150,7 @@ try {
   const version = Number(await scalar('show server_version_num'))
   truth(version >= 170000 && version < 180000, 'pinned PostgreSQL17')
   eq(await scalar("select current_database()='bx1_demo_ci' and current_user='postgres' and inet_server_addr() is not null"), true, 'disposable service')
+  eq(await scalar("select oid<>10 and rolsuper from pg_roles where rolname=current_user"), true, 'CI must provision non-bootstrap postgres before the hosted-role demotion proof')
   eq(await scalar("select count(*)::int from pg_namespace where nspname in ('auth','storage','bx1_private','bx1_portal')"), 0, 'empty fixture database')
   eq(await scalar("select count(*)::int from pg_roles where rolname in ('anon','authenticated','service_role','bx1_wallet_owner','bx1_wallet_verifier','bx1_authority_owner','bx1_fixture_bootstrap')"), 0, 'fresh independent cloud service has no prior fixture roles')
   await db.query('begin'); begun = true
