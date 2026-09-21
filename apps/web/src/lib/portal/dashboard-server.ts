@@ -23,7 +23,7 @@ export async function loadRoleDashboard(query: DashboardQuery) {
   if (workspace && workspace.user.id !== user.id) throw new PortalError('The signed-in account changed.', 403)
   const scopes = workspace ? dashboardScopes(workspace) : []
   const chooseContext = query.mode === undefined && query.organisation === undefined && query.role === undefined && scopes.length > 1
-  const applicant = query.mode === 'applicant' || !workspace || chooseContext
+  const applicant = query.mode === 'applicant' || !workspace || chooseContext || (scopes.length === 0 && query.organisation === undefined && query.role === undefined)
   if (query.mode !== undefined && query.mode !== 'applicant') throw new PortalError('Invalid operating context.', 403)
   if (applicant && (query.organisation !== undefined || query.role !== undefined)) throw new PortalError('No active role assignment is available.', 403)
   const scope = !applicant && workspace ? selectDashboardScope(workspace, query) : null

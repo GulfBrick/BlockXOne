@@ -124,6 +124,19 @@ describe('TEST signup confirmation without consuming email-scanner GETs', () => 
 })
 
 describe('TEST login destinations retain native authority and suspension checks', () => {
+  it('preserves password recovery for a verified applicant with no native staff profile', async () => {
+    mocks.mfaContext.mockResolvedValue(null)
+    const response = await POST(post('setup', { password: 'a-new-unique-passphrase', confirmPassword: 'a-new-unique-passphrase' }), context('setup'))
+    expect(auth.updateUser).toHaveBeenCalledWith({ password: 'a-new-unique-passphrase' })
+    expect(mocks.portal).toHaveBeenCalledTimes(2)
+    expect(response.headers.get('location')).toBe(`${canonical}/portal/onboarding`)
+  })
+  it('never changes an applicant password when authoritative entry denies current access', async () => {
+    mocks.mfaContext.mockResolvedValue(null)
+    mocks.portal.mockRejectedValueOnce(new PortalError('Recovery denied', 403))
+    expect((await POST(post('setup', { password: 'a-new-unique-passphrase', confirmPassword: 'a-new-unique-passphrase' }), context('setup'))).status).toBe(503)
+    expect(auth.updateUser).not.toHaveBeenCalled()
+  })
   it('routes native active members to /portal only after MFA, workspace, and the authoritative portal read', async () => {
     const response = await POST(login(), context('login'))
     expect(mocks.workspace).toHaveBeenCalledTimes(1)

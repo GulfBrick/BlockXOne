@@ -57,6 +57,30 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllEnvs())
 
 describe('actual customer page admission', () => {
+  it('shows explicit Continue, Switch account and Add a capacity for a signed-in person', async () => {
+    const html = renderToStaticMarkup(await RegisterPage({ searchParams: Promise.resolve({ intent: 'wealth-manager' }) }))
+    expect(html).toContain('You are already signed in.')
+    expect(html).toContain('Continue')
+    expect(html).toContain('Switch account')
+    expect(html).toContain('Add a capacity')
+    expect(html).toContain('/auth/logout')
+    expect(html).not.toContain('server-admitted registration')
+    expect(mocks.rpc).not.toHaveBeenCalled()
+  })
+  it('keeps shared registration available while the legacy business demo is disabled', async () => {
+    vi.stubEnv('BLOCKXONE_TESTNET_FUND_DEMO', 'disabled')
+    mocks.user.mockResolvedValueOnce(null)
+    expect(renderToStaticMarkup(await RegisterPage({ searchParams: Promise.resolve({}) }))).toContain('server-admitted registration')
+    await expect(loadPortalPage()).rejects.toMatchObject({ status: 404 })
+  })
+  it('renders shared MAINNET registration without test-evidence claims', async () => {
+    vi.stubEnv('SUPABASE_URL', 'https://oqkevkjbkpugjotihtda.supabase.co'); vi.stubEnv('VERCEL_ENV', 'production'); vi.stubEnv('BLOCKXONE_APP_ORIGIN', 'https://bx1.co.za')
+    mocks.user.mockResolvedValueOnce(null)
+    const html = renderToStaticMarkup(await RegisterPage({ searchParams: Promise.resolve({}) }))
+    expect(html).toContain('Mainnet environment')
+    expect(html).toContain('Account access terms')
+    expect(html).not.toContain('Hosted test environment')
+  })
   it('uses submit-capable HTML metadata for clean registration and fixed retry/intent state', async () => {
     const queries: Record<string, string | string[] | undefined>[] = [
       {}, { intent: 'investor' }, { intent: 'wealth-manager' }, { error: 'email_invalid' },

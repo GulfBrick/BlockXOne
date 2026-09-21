@@ -39,6 +39,13 @@ describe('fresh dashboard authority and environment admission', () => {
     await expect(loadRoleDashboard({ mode: 'applicant', application: otherOrganisation })).rejects.toMatchObject({ status: 403 })
     expect(mocks.portal).not.toHaveBeenCalled()
   })
+  it('offers personal capacity selection when a native profile has no current operating assignment', async () => {
+    mocks.workspace.mockResolvedValue({ user: { ...actor, platformUserId: 'person', displayName: null }, organisations: [] })
+    const result = await loadRoleDashboard({})
+    expect(result.kind).toBe('applicant')
+    expect(result.operatingContext).toEqual(APPLICANT_CONTEXT)
+    expect(result.scopes).toEqual([])
+  })
   it('loads the exact assigned native scope through the scoped business read', async () => {
     const result = await loadRoleDashboard({ organisation, role: 'Investor' })
     expect(result.kind).toBe('role')

@@ -9,6 +9,7 @@ import { PortalError } from './server'
 import { entryActorId, entryFixture } from './entry-test-fixtures'
 const origin = 'https://testnet.bx1.co.za'
 const instruction = { command: 'start_application', key: '44444444-4444-4444-8444-444444444444', payload: { persona: 'WEALTH_MANAGER' } }
+const unsafeHeaders: Record<string, string>[] = [{ origin: 'null' }, { origin: 'https://evil.invalid' }, { 'x-bx1-expected-actor': '' }, { 'x-bx1-expected-actor': '55555555-5555-4555-8555-555555555555' }]
 function request(body: unknown = instruction, headers: Record<string, string> = {}) {
   return new NextRequest(`${origin}/api/portal/entry`, { method: 'POST', headers: { origin, host: 'testnet.bx1.co.za', 'content-type': 'application/json', 'x-bx1-expected-actor': entryActorId, ...headers }, body: JSON.stringify(body) })
 }
@@ -30,7 +31,7 @@ describe('canonical entry command boundary', () => {
     expect(mocks.rpc).toHaveBeenCalledWith('bx1_entry_command', { command: 'start_application', request_key: instruction.key, payload: instruction.payload })
     expect(mocks.read).toHaveBeenCalledTimes(2)
   })
-  it.each([{ origin: 'null' }, { origin: 'https://evil.invalid' }, { 'x-bx1-expected-actor': '' }, { 'x-bx1-expected-actor': '55555555-5555-4555-8555-555555555555' }])('rejects unsafe origin or changed actor %#', async headers => {
+  it.each(unsafeHeaders)('rejects unsafe origin or changed actor %#', async headers => {
     expect((await POST(request(instruction, headers))).status).toBe(403); expect(mocks.rpc).not.toHaveBeenCalled()
   })
   it('rejects role grants or caller-supplied user ids', async () => {

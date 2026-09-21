@@ -18,6 +18,7 @@ export const entrySnapshotSchema = z.object({
   applications: z.array(entryApplicationSchema),
   contexts: z.array(z.object({ context_key: id, organisation_id: id, name: z.string(), roles: z.array(z.enum(BX1_ROLES)) })),
   admission: z.object({ manual_test_review: z.boolean() }),
+  requests: z.array(z.object({ key: id, command: z.enum(['start_application', 'submit_application']), application_id: id })).optional(),
 })
 export type EntrySnapshot = z.infer<typeof entrySnapshotSchema>
 export type EntryApplication = z.infer<typeof entryApplicationSchema>

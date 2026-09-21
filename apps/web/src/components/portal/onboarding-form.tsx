@@ -31,7 +31,7 @@ export function PrivateDocument({ document }: { document: EvidenceDocument }) {
   return <div className={styles.sectionGap}><div className={styles.actions}><FileCheck2 size={18} aria-hidden="true" /><span>{document.title}</span>{url ? <a href={url} target="_blank" rel="noreferrer noopener" className={styles.textLink}>Open private document</a> : <button type="button" className={styles.buttonSecondary} disabled={busy} onClick={() => void prepare()}>{busy ? 'Checking access…' : 'View document'}</button>}</div><p className={styles.muted}>{document.kind.replaceAll('_', ' ')} · {Math.ceil(document.size / 1024)} KB · Private evidence</p>{message ? <p role="status" className={styles.fieldError}>{message}</p> : null}</div>
 }
 
-export function OnboardingForm({ application, environment, onSaved }: { application: EntryApplication; environment: PlatformEnvironment; onSaved: (snapshot: EntrySnapshot) => void }) {
+export function OnboardingForm({ application, environment, onSaved, receipts }: { application: EntryApplication; environment: PlatformEnvironment; onSaved: (snapshot: EntrySnapshot) => void; receipts?: EntrySnapshot['requests'] }) {
   const operatingContext = usePortalOperatingContext()
   const expectedActor = usePortalActorId()
   const persona = application.persona
@@ -42,7 +42,7 @@ export function OnboardingForm({ application, environment, onSaved }: { applicat
   const [file, setFile] = useState<File | null>(null)
   const [uploadBusy, setUploadBusy] = useState(false)
   const [uploadMessage, setUploadMessage] = useState('')
-  const command = useEntryCommand(expectedActor, environment, onSaved)
+  const command = useEntryCommand(expectedActor, environment, onSaved, receipts)
   const editable = !application || ['DRAFT', 'CHANGES_REQUIRED'].includes(application.status)
   const locked = !editable || command.busy || command.unknown || uploadBusy
   function change<K extends keyof ApplicationDetails>(key: K, value: ApplicationDetails[K]) { setDetails(current => ({ ...current, [key]: value })) }

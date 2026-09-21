@@ -1,5 +1,8 @@
--- Stage 1 additive identity-entry cutover. Apply atomically after bx1_portal.sql,
--- 20260921160000_portal_authority_accounts.sql and bx1_portal_funding.sql.
+-- Stage 1 additive identity-entry cutover. Apply atomically after bx1_portal.sql
+-- and 20260921160000_portal_authority_accounts.sql. Where funding already exists,
+-- apply after it and verify its scoped wrappers remain unchanged. A fresh MAIN
+-- entry-only baseline does not install funding and must be sealed in the same
+-- transaction with bx1_entry_admission.sql before any grant becomes visible.
 -- No people, roles, memberships, review routes, money or contract records seeded.
 -- Existing IDs, revisions, decisions and denomination history remain unchanged.
 -- A privileged release owner must separately admit a TESTNET-only manual route;
@@ -116,7 +119,11 @@ begin
         join public.bx1_organisations org on org.id=m.organisation_id
         where m.user_id=v_actor and m.status='ACTIVE' and p.status='ACTIVE' and org.status='ACTIVE'
         group by org.id,org.name) o),'[]'::jsonb),
-    'admission',jsonb_build_object('manual_test_review',bx1_portal.entry_manual_review_enabled()))
+    'admission',jsonb_build_object('manual_test_review',bx1_portal.entry_manual_review_enabled()),
+    'requests',coalesce((select jsonb_agg(jsonb_build_object('key',r.request_key,'command',r.command,'application_id',r.application_id)
+      order by r.created_at desc,r.request_key) from (select request_key,command,application_id,created_at
+      from bx1_portal.entry_requests where actor_id=v_actor and created_at>=clock_timestamp()-interval '7 days'
+      order by created_at desc,request_key limit 1000) r),'[]'::jsonb))
     into result from auth.users u where u.id=v_actor;
   if bx1_portal.fresh_session() is not true then raise exception 'entry_session_changed' using errcode='42501'; end if;
   return result;

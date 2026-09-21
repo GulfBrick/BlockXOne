@@ -4,24 +4,48 @@ import { useEffect, useRef, useState } from 'react'
 import { entryCommandSchema, entrySnapshotSchema, type EntryCommand, type EntrySnapshot } from '@/lib/portal/entry-contracts'
 import type { PlatformEnvironment } from '@/lib/platform-release'
 
+type EntryMarker = { key: string; command: EntryCommand['command']; hash: string }
+type MarkerStorage = Pick<Storage, 'getItem' | 'removeItem'>
+const markerKey = (actorId: string, environment: PlatformEnvironment) => `bx1-entry:${environment}:${actorId}:pending-request`
+function readMarker(raw: string | null): EntryMarker | null {
+  if (!raw) return null
+  const value = JSON.parse(raw) as Partial<EntryMarker> | null
+  if (!value || typeof value.key !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value.key) || !['start_application', 'submit_application'].includes(value.command ?? '') || typeof value.hash !== 'string' || !/^[0-9a-f]{64}$/.test(value.hash)) throw new Error('Your previous request reference needs operator reconciliation. No replacement request was sent.')
+  return value as EntryMarker
+}
+export function reconcileEntryMarker(storage: MarkerStorage, actorId: string, environment: PlatformEnvironment, receipts: NonNullable<EntrySnapshot['requests']>): EntryMarker | null {
+  const storageKey = markerKey(actorId, environment)
+  const marker = readMarker(storage.getItem(storageKey))
+  // Only the server's receipt for this exact actor/environment/key/command can
+  // close an uncertain request after navigation. A similar application cannot.
+  if (marker && receipts.some(receipt => receipt.key === marker.key && receipt.command === marker.command)) { storage.removeItem(storageKey); return null }
+  return marker
+}
+
 /** Persist only the idempotency reference and digest, never applicant evidence. */
-export function useEntryCommand(actorId: string, environment: PlatformEnvironment, onSaved: (snapshot: EntrySnapshot) => void) {
+export function useEntryCommand(actorId: string, environment: PlatformEnvironment, onSaved: (snapshot: EntrySnapshot) => void, receipts: NonNullable<EntrySnapshot['requests']> = []) {
   const [busy, setBusy] = useState(false), [message, setMessage] = useState(''), [unknown, setUnknown] = useState(false)
   const lock = useRef(false), original = useRef<EntryCommand | null>(null)
   const identity = `${environment}:${actorId}`
   const active = useRef<string | null>(identity)
   active.current = identity
   useEffect(() => { active.current = identity; return () => { active.current = null } }, [identity])
+  useEffect(() => {
+    try {
+      const marker = reconcileEntryMarker(sessionStorage, actorId, environment, receipts)
+      if (marker) setMessage('A previous application request is unresolved. Re-enter its original values to retry the saved reference, or refresh to load its committed receipt.')
+      else if (original.current && receipts.some(receipt => receipt.key === original.current?.key && receipt.command === original.current?.command)) { original.current = null; setUnknown(false); setMessage('The hosted receipt confirms your previous request saved.') }
+    } catch (error) { setMessage(error instanceof Error ? error.message : 'Request reconciliation is unavailable.') }
+  }, [actorId, environment, receipts])
   async function dispatch(request: EntryCommand) {
     if (lock.current) return false
     lock.current = true; setBusy(true); setMessage('')
-    const storageKey = `bx1-entry:${identity}:pending-request`
+    const storageKey = markerKey(actorId, environment)
     let sent = false, hadPending = false
     try {
+      const existing = reconcileEntryMarker(sessionStorage, actorId, environment, receipts)
       const raw = sessionStorage.getItem(storageKey)
-      const existing = raw ? JSON.parse(raw) as { key?: unknown; command?: unknown; hash?: unknown } : null
       hadPending = Boolean(existing)
-      if (existing && (typeof existing.key !== 'string' || !/^[0-9a-f-]{36}$/i.test(existing.key) || typeof existing.hash !== 'string' || !/^[0-9a-f]{64}$/.test(existing.hash))) throw new Error('Your previous request reference needs operator reconciliation. No replacement request was sent.')
       const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify({ command: request.command, payload: request.payload, identity })))
       const hash = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('')
       if (existing && (existing.command !== request.command || existing.hash !== hash)) throw new Error('A previous request needs reconciliation. Re-enter its original values to retry the same reference; do not create a replacement application.')

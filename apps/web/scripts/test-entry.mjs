@@ -19,7 +19,7 @@ async function scalar(sql, values = [], client = db) { return Object.values((awa
 async function admin(client = db) { await client.query('reset role') }
 async function actor(n, client = db, extra = {}) {
   await admin(client)
-  await client.query("select set_config('request.jwt.claims',$1,true)", [JSON.stringify({ sub: uid(n), session_id: sid(n), role: 'authenticated', aal: 'aal1', exp: Math.floor(Date.now() / 1000) + 3600, ...extra })])
+  await client.query("select set_config('request.jwt.claims',$1,true)", [JSON.stringify({ sub: uid(n), session_id: sid(n), role: 'authenticated', aal: 'aal1', iss: 'https://fegnnnlseuejkrusbbkv.supabase.co/auth/v1', exp: Math.floor(Date.now() / 1000) + 3600, ...extra })])
   await client.query('set local role authenticated')
 }
 async function sqlFile(path) {
@@ -91,6 +91,7 @@ try {
   await sqlFile('../../../supabase/features/bx1_portal_funding.sql')
   const wrapperDefinitions = await scalar("select jsonb_object_agg(oid::regprocedure::text,md5(pg_get_functiondef(oid))) from pg_proc where oid in ('bx1_portal.execute_scoped(jsonb,text,uuid,jsonb)'::regprocedure,'bx1_portal.read_scoped(jsonb)'::regprocedure,'bx1_portal.execute_scoped_p2(jsonb,text,uuid,jsonb)'::regprocedure)")
   await sqlFile('../../../supabase/features/bx1_entry.sql')
+  await sqlFile('../../../supabase/features/bx1_entry_admission.sql')
   phase = 'additive-cutover-and-default-denial'
   eq(await scalar("select jsonb_build_object('application',(select to_jsonb(a)-array['context_kind','context_organisation_id','origin','created_at'] from bx1_portal.applications a where id=$1),'requests',(select jsonb_agg(to_jsonb(r) order by request_key) from bx1_portal.requests r),'events',(select jsonb_agg(to_jsonb(e) order by id) from bx1_portal.events e),'memberships',(select jsonb_agg(to_jsonb(m) order by id) from public.bx1_memberships m))", [legacyApplication.id]), history, 'historical IDs, decisions, receipts, audit and memberships unchanged')
   eq(await scalar("select jsonb_object_agg(oid::regprocedure::text,md5(pg_get_functiondef(oid))) from pg_proc where oid in ('bx1_portal.execute_scoped(jsonb,text,uuid,jsonb)'::regprocedure,'bx1_portal.read_scoped(jsonb)'::regprocedure,'bx1_portal.execute_scoped_p2(jsonb,text,uuid,jsonb)'::regprocedure)"), wrapperDefinitions, 'outer authority and funding writers unchanged')
@@ -101,6 +102,8 @@ try {
   eq(historicalRead.contexts, [], 'applicant does not acquire native role context')
   await actor(3)
   truth((await scalar("select public.bx1_portal_read_scoped('{\"mode\":\"APPLICANT\"}'::jsonb)")).funding, 'funding projection remains installed after entry cutover')
+  await actor(3, db, { iss: undefined })
+  eq((await scalar("select public.bx1_portal_read_scoped('{\"mode\":\"APPLICANT\"}'::jsonb)")).funding, undefined, 'existing funding issuer gate remains closed for missing issuer')
   await admin()
   for (const table of ['entry_configuration', 'entry_requests']) {
     for (const role of ['anon', 'authenticated', 'service_role']) eq(await scalar("select has_table_privilege($1,$2,'SELECT,INSERT,UPDATE,DELETE')", [role, `bx1_portal.${table}`]), false, `${role} cannot access ${table} directly`)
@@ -112,12 +115,12 @@ try {
   await denied('mainnet cannot enable manual rehearsal review', () => db.query("insert into bx1_portal.entry_configuration(environment,manual_test_review,reviewer_scope,admission_reference) values('MAINNET',true,$1,'synthetic test admission')", [scope]))
   await denied('null routing cannot bypass check', () => db.query("insert into bx1_portal.entry_configuration(environment,manual_test_review,reviewer_scope,admission_reference) values('TESTNET',true,null,'synthetic test admission')"))
   await denied('unknown reviewer route cannot claim legacy compatibility', () => db.query("insert into bx1_portal.entry_configuration(environment,manual_test_review,reviewer_scope,admission_reference) values('TESTNET',true,$1,'synthetic test admission')", [other]))
+  await denied('privileged Storage completion is default closed', () => db.query("insert into storage.objects(bucket_id,name,owner_id) values('bx1-portal-documents',$1,$2)", [`${uid(9)}/unadmitted-upload.pdf`, uid(9)]), '55000')
 
   phase = 'signup-intent-and-no-authority'
   for (const [n, intent] of [[11, 'investor'], [12, 'wealth-manager'], [13, 'SuperAdmin']]) {
     await db.query('insert into auth.users(id,email,email_confirmed_at,raw_user_meta_data) values($1,$2,now(),$3::jsonb)', [uid(n), `entry-${n}@example.invalid`, JSON.stringify({ portal_intent: intent, role: 'SuperAdmin' })])
     await db.query("insert into auth.sessions(id,user_id,not_after,created_at) values($1,$2,now()+interval '1 hour',now()-interval '1 hour')", [sid(n), uid(n)])
-    await db.query("insert into storage.objects(bucket_id,name,owner_id,metadata,user_metadata) select 'bx1-portal-documents',$1||'/synthetic-'||kind||'.pdf',$1,'{\"size\":100,\"mimetype\":\"application/pdf\"}',jsonb_build_object('sha256',repeat('a',64)) from unnest(array['IDENTITY','COMPANY','BENEFICIAL_OWNERS'])kind", [uid(n)])
   }
   const investor = (await read(11)).applications[0], manager = (await read(12)).applications[0]
   eq([investor.persona, manager.persona], ['INVESTOR', 'WEALTH_MANAGER'], 'fresh signup intents become distinct server-owned drafts')
@@ -137,12 +140,16 @@ try {
   eq(state.applications.length, 2, 'one person has both personal capacities')
   eq(state.applications.find(a => a.id === investor.id), investor, 'adding capacity preserves first application exactly')
   eq((await command(11, 'start_application', startPayload, startKey)).applications.length, 2, 'same key replay adds no capacity')
+  truth((await read(11)).requests.some(receipt => receipt.key === startKey && receipt.command === 'start_application' && receipt.application_id === second.id), 'readback carries own durable receipt for uncertain-save refresh recovery')
+  eq((await read(12)).requests.length, 0, 'receipts never cross users')
   eq((await command(11, 'start_application', startPayload)).applications.find(a => a.persona === 'WEALTH_MANAGER').id, second.id, 'new key still resolves same capacity identity')
   await denied('same key changed body rejected', () => command(11, 'start_application', { persona: 'INVESTOR' }, startKey), '23505')
   await denied('caller cannot assign role in entry payload', () => command(11, 'start_application', { persona: 'INVESTOR', role: 'SuperAdmin' }), '22023')
   await denied('caller cannot submit another principal case', () => command(11, 'submit_application', { application_id: manager.id, expected_revision: manager.revision, details: details(11, true) }), '42501')
   await denied('submission is default closed', () => command(11, 'submit_application', { application_id: investor.id, expected_revision: investor.revision, details: details(11) }), '55000')
   await admin(); await db.query("insert into bx1_portal.entry_configuration(environment,manual_test_review,reviewer_scope,admission_reference) values('TESTNET',true,$1,'synthetic entry acceptance fixture')", [scope])
+  for (const n of [11, 12, 13]) await db.query("insert into storage.objects(bucket_id,name,owner_id,metadata,user_metadata) select 'bx1-portal-documents',$1||'/synthetic-'||kind||'.pdf',$1,'{\"size\":100,\"mimetype\":\"application/pdf\"}',jsonb_build_object('sha256',repeat('a',64)) from unnest(array['IDENTITY','COMPANY','BENEFICIAL_OWNERS'])kind", [uid(n)])
+  await denied('TEST configuration cannot invoke MAIN-only ACL seal', () => db.query('select bx1_portal.seal_entry_only_baseline()'), '55000')
   const submitKey = key(), submission = { application_id: investor.id, expected_revision: investor.revision, details: details(11) }
   state = await command(11, 'submit_application', submission, submitKey)
   eq(state.applications.find(a => a.id === investor.id).status, 'SUBMITTED', 'exact investor case submitted')
