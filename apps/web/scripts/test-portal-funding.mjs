@@ -29,35 +29,7 @@ async function actor(n, client = db, extra = {}) {
 }
 async function sqlFile(path) {
   phase = path.split('/').at(-1)
-  let sql = await readFile(new URL(path, import.meta.url), 'utf8')
-  if (path === '../../../supabase/tests/bx1_identity_workspace.sql') {
-    // The preceding portal proof removes its schemas, not cluster-global roles.
-    // Reuse only the exact unprivileged fixture shape; never ALTER existing roles
-    // or silently relax the historical fixture's permission assumptions.
-    const declarations = /create role anon nologin;\r?\ncreate role authenticated nologin;\r?\ncreate role service_role nologin bypassrls;/
-    assert.ok(declarations.test(sql), 'identity fixture role declarations must retain the reviewed shape')
-    sql = sql.replace(declarations, `do $funding_fixture_roles$
-declare expected record; existing record;
-begin
-  if current_database()<>'bx1_demo_ci' or current_user<>'postgres'
-    or exists(select 1 from pg_namespace where nspname in ('auth','storage','bx1_private','bx1_portal')) then
-    raise exception 'funding_fixture_role_bootstrap_requires_empty_disposable_database';
-  end if;
-  for expected in select * from (values ('anon',false),('authenticated',false),('service_role',true)) x(name,bypass) loop
-    select * into existing from pg_roles where rolname=expected.name;
-    if found then
-      if existing.rolcanlogin or existing.rolsuper or existing.rolcreaterole or existing.rolcreatedb
-        or existing.rolreplication or existing.rolbypassrls is distinct from expected.bypass
-        or not existing.rolinherit or existing.rolconfig is not null
-        or exists(select 1 from pg_auth_members where roleid=existing.oid or member=existing.oid) then
-        raise exception 'funding_fixture_existing_role_shape_mismatch';
-      end if;
-    else
-      execute format('create role %I nologin %s',expected.name,case when expected.bypass then 'bypassrls' else 'nobypassrls' end);
-    end if;
-  end loop;
-end $funding_fixture_roles$;`)
-  }
+  const sql = await readFile(new URL(path, import.meta.url), 'utf8')
   try { await db.query(sql) } catch (error) { const p = Number(error.position); if (p > 0 && p <= sql.length) error.fixtureLine = sql.slice(0, p - 1).split('\n').length; throw error }
 }
 async function legacy(n, kind, body) { await actor(n); return scalar('select public.bx1_portal_command($1,$2,$3::jsonb)', [kind, key(), JSON.stringify(body)]) }
@@ -147,6 +119,7 @@ try {
   truth(version >= 170000 && version < 180000, 'pinned PostgreSQL17')
   eq(await scalar("select current_database()='bx1_demo_ci' and current_user='postgres' and inet_server_addr() is not null"), true, 'disposable service')
   eq(await scalar("select count(*)::int from pg_namespace where nspname in ('auth','storage','bx1_private','bx1_portal')"), 0, 'empty fixture database')
+  eq(await scalar("select count(*)::int from pg_roles where rolname in ('anon','authenticated','service_role','bx1_wallet_owner','bx1_wallet_verifier','bx1_authority_owner')"), 0, 'fresh independent cloud service has no prior fixture roles')
   await db.query('begin'); begun = true
   await sqlFile('../../../supabase/tests/bx1_identity_workspace.sql')
   await sqlFile('../../../supabase/tests/bx1_mfa_assurance.sql')
