@@ -194,3 +194,19 @@
 .scopeSelector p { margin: 0 0 14px; color: var(--portal-muted); font-size: 12px; }
 .scopeSelector p:last-child { margin: 14px 0 0; }
 .scopeSelector [aria-current=page] { border-color: var(--portal-cyan); color: var(--portal-cyan); }
+.applicationState { margin: 20px 0; padding: 18px; border-left: 3px solid var(--portal-accent); background: var(--bxo-surface-secondary); border-radius: 0 6px 6px 0; }
+.applicationState h3 { margin: 0; font-size: 15px; line-height: 1.5; }
+.applicationState p { margin: 8px 0 0; font-size: 12px; line-height: 1.75; color: var(--portal-muted); }
+.applicationOwner { font-size: 13px; line-height: 1.6; color: var(--bxo-text-primary); font-weight: 600; margin: 0 0 14px; }
+.applicationRefresh { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; }
+.applicationRefresh p { margin: 0; flex: 1 1 220px; line-height: 1.7; }
+.applicationRefresh [role=status] { flex-basis: 100%; font-size: 12px; color: var(--portal-muted); }
+.applicationRefresh [role=status]:empty { display: none; }
+.applicationHistory { border: 1px solid var(--bxo-border-default); border-radius: 6px; padding: 14px; }
+.applicationHistory summary { display: list-item; min-height: 44px; align-content: center; color: var(--portal-accent); cursor: pointer; font-size: 12px; }
+.applicationChecklist { margin: 12px 0 0; padding: 0; list-style: none; display: grid; gap: 12px; }
+.applicationChecklist li { padding: 12px 14px; border: 1px solid var(--bxo-border-default); border-radius: 6px; font-size: 12px; line-height: 1.65; }
+.applicationChecklist strong { display: block; }
+.applicationChecklist span { color: var(--portal-muted); }
+.applicationChecklist li[data-ready=true] { border-left: 3px solid var(--portal-accent); }
+@media (max-width: 760px) { .applicationRefresh .buttonSecondary { width: 100%; } .applicationState { padding: 15px; } }

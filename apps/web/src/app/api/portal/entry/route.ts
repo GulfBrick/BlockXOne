@@ -39,6 +39,16 @@ export async function POST(request: NextRequest) {
     const { data, error } = await client.rpc('bx1_entry_command', { command, request_key: key, payload }).abortSignal(AbortSignal.timeout(15000))
     if (error) {
       if (error.code === '42501') throw new PortalError('You do not have current authority for this application.', 403)
+      const evidenceErrors: Record<string, string> = {
+        portal_documents_required: 'Attach the required evidence before submitting: identity evidence, plus company and beneficial-owner evidence for a wealth-manager or entity application.',
+        portal_identity_document_required: 'Attach an identity evidence file before submitting your application.',
+        portal_kyb_evidence_required: 'Complete the organisation and representative details, and attach identity, company and beneficial-owner evidence before submitting.',
+        portal_document_upload_not_verified: 'A referenced evidence file could not be verified in your private uploads. Check the upload completed and select the correct file before submitting.',
+        portal_invalid_document: 'Check each evidence file type, size and upload reference before submitting.',
+        portal_invalid_application_version: 'The application questions do not match this saved capacity. Reopen the exact application before submitting.',
+      }
+      if (['22023', '23514'].includes(error.code ?? '') && evidenceErrors[error.message ?? '']) throw new PortalError(evidenceErrors[error.message], 409)
+      if (error.code === '55000' && error.message === 'entry_independent_reviewer_unavailable') throw new PortalError('An independent compliance reviewer has not been assigned to this application route. Your application was not submitted. Contact the BlockXOne onboarding owner to arrange the reviewer, then submit again.', 409)
       if (error.code === '55000') throw new PortalError('This application does not yet have an admitted review route. Your draft is preserved; contact the onboarding owner before submitting.', 409)
       if (['22023', '23514', '23505', '40001', 'P0001'].includes(error.code)) throw new PortalError('The application state changed. Refresh before retrying.', 409)
       throw new PortalError('The result is uncertain. Retry only with the original request reference.', 503)

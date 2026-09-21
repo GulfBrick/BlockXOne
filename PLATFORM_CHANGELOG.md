@@ -1,5 +1,13 @@
 # BlockXOne platform releases
 
+## 1.1.0-rc.10 — Application handoff correction candidate
+
+- Based on released rc.9 `0a77d8c1cef6fb206bfd268a8b3f31bbc3e4e5f4`. Preserve existing identities, application references, private evidence and financial history.
+- Separate wealth-manager organisation/representative facts from investor questions; show truthful draft, submitted, changes-required and decision states in the same branded portal and reviewer screen.
+- Expose privacy-safe independent review assignment availability and block submission into an unstaffed route. Customer admission alone cannot grant new product-management authority through the legacy owner path.
+- Requires additive `supabase/features/bx1_application_admission.sql` after rc.9 in both existing environments before release. MAIN manual review remains unadmitted. No reviewer assignment, real approval, role grant, money movement or contract deployment is part of the source release.
+- Exact-source cloud checks, independent review and hosted UI/approval receipts are required. This candidate is not proof of complete Stage 2, all dashboard workflows, or either investment lifecycle.
+
 ## 1.1.0-rc.9 — Stage 1 entry and identity-context candidate
 
 - Based on rc.8 source `de105558585e803cba36e750798b9c6c6ea658c8`, preserving existing auth/security, portal, account, funding and journal history.

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { PORTAL_PATHS, evidenceSchema, formatTestMoney, portalCommandSchema, productTermsSchema, subscriptionQuote, type PortalProduct, type ProductTerms } from './contracts'
+import { PORTAL_PATHS, applicationDetailsSchema, applicationDraftDetailsSchema, isWealthManagerDetailsV2, evidenceSchema, formatTestMoney, portalCommandSchema, productTermsSchema, subscriptionQuote, type PortalProduct, type ProductTerms } from './contracts'
 import { isSupabaseWebPathAllowed } from '@/lib/auth-mode'
 import { isProductionWebPathBlocked } from '@/lib/release-policy'
 
@@ -9,6 +9,22 @@ const terms: ProductTerms = { asset_type: 'FUND', name: 'Synthetic Balanced Fund
 const product: PortalProduct = { id, organisation_id: id, created_by: id, revision: 4, status: 'PUBLISHED', terms, terms_hash: 'a'.repeat(64), reserved_units: '20', created_at: '2026-09-21T00:00:00Z', reviewer_id: null, review_notes: null, reviewed_at: null, published_at: null, review_checks: {} }
 
 describe('customer portal contracts', () => {
+  const evidence = { id, kind: 'IDENTITY', title: 'Synthetic identity', storage_path: `${id}/${key}`, sha256: 'a'.repeat(64), size: 100, mime_type: 'application/pdf' }
+  const wm = { details_version: 2, full_name: 'Synthetic Representative', country: 'ZA', company_name: 'Synthetic Manager', registration_reference: 'TEST-001', beneficial_owners: 'Fictional owner of the whole organisation.', business_activities: 'Fictional fund management for synthetic testing.', representative_position: 'Director', authority_basis: 'Fictional board authorisation to submit this application.', documents: [evidence], test_data_acknowledged: true }
+  it('accepts WM organisation facts without manufacturing investor facts', () => {
+    expect(applicationDetailsSchema.parse(wm)).toEqual(wm)
+    expect(isWealthManagerDetailsV2(wm)).toBe(true)
+    for (const extra of [{ investor_type: 'ENTITY' }, { source_of_funds: 'Old investment capital source facts.' }, { experience: 'Old investment objectives.' }, { details_version: 3 }, { approved: true }]) expect(applicationDetailsSchema.safeParse({ ...wm, ...extra }).success).toBe(false)
+    for (const field of ['business_activities', 'representative_position', 'authority_basis']) expect(applicationDetailsSchema.safeParse({ ...wm, [field]: '' }).success).toBe(false)
+  })
+  it('keeps legacy evidence meanings and partial drafts without converting their fields', () => {
+    const old = { full_name: 'Historical Applicant', country: 'ZA', investor_type: 'INDIVIDUAL', company_name: '', registration_reference: '', source_of_funds: 'Original investment capital source.', beneficial_owners: '', experience: 'Original investment objectives.', documents: [evidence], test_data_acknowledged: true }
+    expect(applicationDetailsSchema.parse(old)).toEqual(old)
+    expect(isWealthManagerDetailsV2(old)).toBe(false)
+    expect(applicationDraftDetailsSchema.parse({})).toEqual({})
+    expect(applicationDraftDetailsSchema.parse({ details_version: 2, business_activities: wm.business_activities })).toEqual({ details_version: 2, business_activities: wm.business_activities })
+    expect(applicationDetailsSchema.safeParse({ ...old, authority_basis: wm.authority_basis }).success).toBe(false)
+  })
   it('accepts complete typed fund terms', () => expect(productTermsSchema.safeParse(terms).success).toBe(true))
   it('requires real-estate-specific terms', () => {
     expect(productTermsSchema.safeParse({ ...terms, asset_type: 'REAL_ESTATE' }).success).toBe(false)

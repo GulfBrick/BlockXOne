@@ -114,6 +114,7 @@ try {
   await sqlFile('../../../supabase/features/bx1_entry_admission.sql')
   await db.query("insert into bx1_portal.entry_configuration(environment,manual_test_review,admission_reference) values('MAINNET',false,'synthetic cloud Stage 1 MAIN baseline acceptance')")
   await db.query('select bx1_portal.seal_entry_only_baseline()')
+  await sqlFile('../../../supabase/features/bx1_application_admission.sql')
   eq(await functionManifest(signatures), nativeFunctions, 'native auth/MFA/wallet function definitions and owners exactly preserved')
   const grantsAfter = await grantManifest(signatures)
   eq(grantsAfter.filter(grant => grant.grantee !== 'bx1_authority_owner'), nativeGrants, 'all existing native function grants preserved')

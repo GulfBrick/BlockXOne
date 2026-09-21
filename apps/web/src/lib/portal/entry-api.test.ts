@@ -43,6 +43,25 @@ describe('canonical entry command boundary', () => {
     const response = await POST(request())
     expect(response.status).toBe(409); expect((await response.json()).error).toContain('draft is preserved')
   })
+  it('distinguishes missing reviewer assignment without leaking staff details', async () => {
+    mocks.rpc.mockReturnValue({ abortSignal: vi.fn().mockResolvedValue({ data: null, error: { code: '55000', message: 'entry_independent_reviewer_unavailable' } }) })
+    const response = await POST(request())
+    const body = await response.json()
+    expect(response.status).toBe(409)
+    expect(body.error).toContain('independent compliance reviewer has not been assigned')
+    expect(body.error).toContain('was not submitted')
+    expect(body.error).not.toContain('@')
+  })
+  it.each([
+    ['portal_kyb_evidence_required', 'identity, company and beneficial-owner evidence'],
+    ['portal_document_upload_not_verified', 'could not be verified in your private uploads'],
+    ['portal_identity_document_required', 'Attach an identity evidence file'],
+  ])('reports an actionable evidence correction for %s', async (message, explanation) => {
+    mocks.rpc.mockReturnValue({ abortSignal: vi.fn().mockResolvedValue({ data: null, error: { code: '23514', message } }) })
+    const response = await POST(request())
+    expect(response.status).toBe(409)
+    expect((await response.json()).error).toContain(explanation)
+  })
   it('preserves uncertain outcome after a post-command MFA or session failure', async () => {
     mocks.read.mockResolvedValueOnce(entryFixture()).mockRejectedValueOnce(new PortalError('MFA changed', 403))
     const response = await POST(request())

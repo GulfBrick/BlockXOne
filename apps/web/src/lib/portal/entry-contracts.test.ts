@@ -33,4 +33,10 @@ describe('entry application identities and capacities', () => {
     expect(entrySnapshotSchema.safeParse({ ...entryFixture(), contexts: [{ context_key: key, organisation_id: key, name: 'Example', roles: ['WealthManager'] }] }).success).toBe(false)
     expect(entrySnapshotSchema.safeParse({ ...entryFixture(), admission: { manual_test_review: 'true' } }).success).toBe(false)
   })
+  it('requires explicit purpose and privacy-safe review status in saved entry records', () => {
+    expect(entrySnapshotSchema.parse(entryFixture([entryApplication({ persona: 'WEALTH_MANAGER', review_route: 'REVIEWER_UNAVAILABLE' })])).applications[0].admission_purpose).toBe('CUSTOMER_ORGANISATION_ADMISSION')
+    for (const change of [{ admission_purpose: 'AUTO_APPROVED_MANAGER' }, { review_route: 'provider_verified' }]) expect(entrySnapshotSchema.safeParse(entryFixture([entryApplication(change as Partial<ReturnType<typeof entryApplication>>)])).success).toBe(false)
+    const { review_route: _route, ...missing } = entryApplication()
+    expect(entrySnapshotSchema.safeParse({ ...entryFixture(), applications: [missing] }).success).toBe(false)
+  })
 })

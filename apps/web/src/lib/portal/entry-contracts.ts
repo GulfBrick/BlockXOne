@@ -1,17 +1,19 @@
 import { z } from 'zod'
 import { BX1_ROLES } from '@/lib/supabase/contracts'
-import { applicationDetailsSchema, applicationStatuses } from './contracts'
+import { applicationDetailsSchema, applicationDraftDetailsSchema, applicationStatuses } from './contracts'
 
 const id = z.string().uuid()
 export const entryApplicationSchema = z.object({
   id, user_id: id, persona: z.enum(['INVESTOR', 'WEALTH_MANAGER']),
   status: z.enum(applicationStatuses), revision: z.number().int().positive(),
-  details: applicationDetailsSchema.partial(),
+  details: applicationDraftDetailsSchema,
   submitted_at: z.string().nullable(), reviewed_at: z.string().nullable(),
   reviewer_id: id.nullable(), review_notes: z.string().nullable(), organisation_id: id.nullable(),
   review_checks: z.record(z.boolean()), provider_mode: z.enum(['UNASSIGNED', 'MANUAL_TEST_REVIEW']),
   approved_until: z.string().nullable(), context_kind: z.enum(['PERSONAL', 'ORGANISATION']),
   context_organisation_id: id.nullable(), origin: z.enum(['LEGACY', 'SIGNUP', 'SELF_SERVICE']), created_at: z.string().nullable(),
+  admission_purpose: z.enum(['INVESTOR_ADMISSION', 'CUSTOMER_ORGANISATION_ADMISSION', 'LEGACY_REHEARSAL']),
+  review_route: z.enum(['NOT_ADMITTED', 'REVIEWER_UNAVAILABLE', 'AVAILABLE']),
 })
 export const entrySnapshotSchema = z.object({
   entry_version: z.literal(1), actor: z.object({ id, email: z.string() }),

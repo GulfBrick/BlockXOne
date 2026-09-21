@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { entryCommandSchema, entrySnapshotSchema, type EntryCommand, type EntrySnapshot } from '@/lib/portal/entry-contracts'
+import { entryCommandSchema, entrySnapshotSchema, type EntryApplication, type EntryCommand, type EntrySnapshot } from '@/lib/portal/entry-contracts'
 import type { PlatformEnvironment } from '@/lib/platform-release'
 
 type EntryMarker = { key: string; command: EntryCommand['command']; hash: string }
@@ -20,6 +20,43 @@ export function reconcileEntryMarker(storage: MarkerStorage, actorId: string, en
   // close an uncertain request after navigation. A similar application cannot.
   if (marker && receipts.some(receipt => receipt.key === marker.key && receipt.command === marker.command)) { storage.removeItem(storageKey); return null }
   return marker
+}
+
+export function canRefreshEntryApplication(application: EntryApplication | null): boolean {
+  return Boolean(application && ['SUBMITTED', 'APPROVED', 'REJECTED'].includes(application.status))
+}
+
+/** A read never replaces unsaved editable fields or clears an uncertain command marker. */
+export async function readEntryApplicationStatus(actorId: string, application: EntryApplication): Promise<EntrySnapshot> {
+  if (!canRefreshEntryApplication(application)) throw new Error('Finish your edits before refreshing. No application fields were replaced.')
+  const response = await fetch('/api/portal/entry', { credentials: 'same-origin', cache: 'no-store', redirect: 'error', headers: { 'x-bx1-expected-actor': actorId }, signal: AbortSignal.timeout(15000) })
+  if (!response.headers.get('content-type')?.includes('application/json')) throw new Error('Status could not be verified. Your saved application is unchanged.')
+  const result = await response.json()
+  if (!response.ok) throw new Error(typeof result.error === 'string' ? result.error : 'Status could not be refreshed. Sign in again if your session has expired.')
+  const snapshot = entrySnapshotSchema.parse(result.snapshot)
+  const updated = snapshot.applications.find(item => item.id === application.id)
+  if (snapshot.actor.id !== actorId || snapshot.applications.some(item => item.user_id !== actorId) || !updated || updated.revision < application.revision) throw new Error('The returned account or application revision could not be verified. No displayed record was replaced.')
+  return snapshot
+}
+
+export function useEntryStatusRefresh(actorId: string, environment: PlatformEnvironment, application: EntryApplication | null, onRefreshed: (snapshot: EntrySnapshot) => void) {
+  const [busy, setBusy] = useState(false), [message, setMessage] = useState('')
+  const lock = useRef(false)
+  const identity = `${environment}:${actorId}:${application?.id ?? ''}:${application?.revision ?? ''}:${application?.status ?? ''}`
+  const active = useRef<string | null>(identity)
+  active.current = identity
+  useEffect(() => { active.current = identity; return () => { active.current = null } }, [identity])
+  async function refresh() {
+    if (!application || !canRefreshEntryApplication(application) || lock.current) return
+    lock.current = true; setBusy(true); setMessage('')
+    try {
+      const snapshot = await readEntryApplicationStatus(actorId, application)
+      if (active.current !== identity) return
+      setMessage('Saved application status refreshed.'); onRefreshed(snapshot)
+    } catch (error) { if (active.current === identity) setMessage(error instanceof Error ? error.message : 'Status could not be refreshed.') }
+    finally { lock.current = false; if (active.current === identity) setBusy(false) }
+  }
+  return { busy, message, refresh, available: canRefreshEntryApplication(application) }
 }
 
 /** Persist only the idempotency reference and digest, never applicant evidence. */

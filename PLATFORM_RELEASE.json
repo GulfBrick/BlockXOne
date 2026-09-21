@@ -1,18 +1,18 @@
 {
   "product": "BlockXOne",
-  "version": "1.1.0-rc.9",
+  "version": "1.1.0-rc.10",
   "status": "release-candidate",
-  "baseSource": "de105558585e803cba36e750798b9c6c6ea658c8",
+  "baseSource": "0a77d8c1cef6fb206bfd268a8b3f31bbc3e4e5f4",
   "sourceIdentity": "VERCEL_GIT_COMMIT_SHA",
   "environmentSource": "validated deployment target, canonical origin and Supabase project",
   "sharedEntry": "/login",
   "sharedDashboard": "/portal",
   "environments": ["TESTNET", "MAINNET"],
   "brand": "BlockXOne Brand Kit v2.0 Exact Logo",
-  "schemaChanges": ["supabase/features/bx1_entry.sql", "supabase/features/bx1_entry_admission.sql"],
-  "mainnetMissingPrerequisites": ["supabase/migrations/20260918234447_bx1_controlled_administration.sql", "supabase/features/bx1_portal.sql", "supabase/migrations/20260921160000_portal_authority_accounts.sql"],
+  "schemaChanges": ["supabase/features/bx1_application_admission.sql"],
+  "mainnetMissingPrerequisites": [],
   "contractChanges": [],
   "productionFinancialAdmission": false,
-  "scope": "Stage 1 candidate: preserve existing identity/security and business history; add distinct signup applications, multiple explicit capacities, guarded entry commands and shared validated hosted identity entry. Legacy application writes delegate to the canonical entry writer. MAIN requires the exact missing canonical schema dependencies and an atomic entry-only admission seal, with no new customer-role grants or unadmitted legacy/admin RPCs. No real roles, settlement routes, financial admission or contracts are granted. Requires additive entry schema before app release; cloud and hosted acceptance pending."
+  "scope": "Stage 1 application handoff correction candidate: genuine wealth-manager organisation/representative data, truthful application progress and reviewer availability, immutable admission purpose and separate operational assignment. Preserve original legacy records, login, security and funding wrappers. Requires additive application-admission schema after rc.9 before application release. MAIN remains unadmitted for manual review. No people, customer roles, provider approvals, financial operations or contracts are seeded by this release. Cloud and hosted acceptance are recorded separately; full Stage 2 and all-dashboard lifecycle acceptance are not claimed."
 }
 
