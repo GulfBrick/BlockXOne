@@ -42,7 +42,7 @@ const ADDRESS = /^0x[0-9a-f]{40}$/
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const ZERO = `0x${'0'.repeat(40)}`
 const MAX_UINT = (1n << 256n) - 1n
-const reject = (code: string, status = 503): never => { throw new FundingVerificationError(code, status) }
+function reject(code: string, status = 503): never { throw new FundingVerificationError(code, status) }
 function record(value: unknown): Record<string, unknown> { return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : reject('MALFORMED_PROVIDER_RESULT') }
 function quantity(value: unknown): bigint {
   if (typeof value !== 'string' || !/^0x(?:0|[1-9a-f][0-9a-f]*)$/i.test(value)) return reject('MALFORMED_PROVIDER_QUANTITY')

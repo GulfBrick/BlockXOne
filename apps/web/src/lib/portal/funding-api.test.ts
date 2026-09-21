@@ -31,7 +31,7 @@ describe('funding verification proxy', () => {
     expect(await response.json()).toEqual({ snapshot })
     expect(response.headers.get('cache-control')).toContain('no-store')
   })
-  it.each([{ origin: 'https://evil.invalid' }, { host: 'evil.invalid' }, { 'x-bx1-expected-actor': '' }])('rejects unauthentic request boundaries %#', async headers => {
+  it.each<Record<string, string>>([{ origin: 'https://evil.invalid' }, { host: 'evil.invalid' }, { 'x-bx1-expected-actor': '' }])('rejects unauthentic request boundaries %#', async headers => {
     expect((await POST(request(instruction, headers))).status).toBe(403)
     expect(mocks.create).not.toHaveBeenCalled()
   })

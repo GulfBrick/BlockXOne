@@ -20,8 +20,8 @@ describe('native Auth admission', () => {
       '/register', '/auth/register', '/portal', '/portal/onboarding',
       '/portal/products', '/portal/products/new', '/portal/products/detail',
       '/portal/compliance', '/portal/compliance/detail', '/portal/opportunities',
-      '/portal/opportunities/detail', '/portal/portfolio',
-      '/api/portal/command', '/api/portal/documents',
+      '/portal/opportunities/detail', '/portal/portfolio', '/portal/orders/detail',
+      '/api/portal/command', '/api/portal/documents', '/api/portal/funding/verify',
     ])
   })
   it.each(['/workspace/administration', '/auth/admin-command'])('admits only exact administration path %s in paired mode', pathname => {
