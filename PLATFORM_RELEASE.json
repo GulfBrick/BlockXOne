@@ -1,16 +1,16 @@
 {
   "product": "BlockXOne",
-  "version": "1.1.0-rc.2",
+  "version": "1.1.0-rc.3",
   "status": "release-candidate",
-  "baseSource": "c994d26c4e0d3a14bd654012a5c5933cecd34b44",
+  "baseSource": "eec2c52a726bd13b6a13825bae526526b070f771",
   "sourceIdentity": "VERCEL_GIT_COMMIT_SHA",
   "environmentSource": "validated deployment target, canonical origin and Supabase project",
   "sharedEntry": "/login",
   "sharedDashboard": "/portal",
   "environments": ["TESTNET", "MAINNET"],
   "brand": "BlockXOne Brand Kit v2.0 Exact Logo",
-  "schemaChanges": [],
+  "schemaChanges": ["20260921160000_portal_authority_accounts"],
   "contractChanges": [],
   "productionFinancialAdmission": false,
-  "scope": "Nine role dashboards, shared brand shell, assignment-based selection and visible environment/version. Existing test-only business adapters remain guarded. Full financial workflow parity is not yet accepted."
+  "scope": "Connected issuer, compliance and investor workspaces; explicit organisation authority and individual investment accounts; context-bound instructions and same-record issuer inbox. No funding, issuance or MAINNET financial activation. Full mirrored lifecycle remains subject to acceptance."
 }

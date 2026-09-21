@@ -28,7 +28,7 @@ export function dashboardProjection(scope: DashboardScope, environment: Platform
   paths.push('/portal/onboarding')
   // The existing customer feature has product organisations distinct from
   // native access organisations. Never manufacture an ID mapping between them.
-  const productOrganisations = snapshot.organisations.filter(org => org.status === 'ACTIVE' && org.roles.includes(scope.role))
+  const productOrganisations = snapshot.organisations.filter(org => org.status === 'ACTIVE' && org.native_organisation_id === scope.organisationId && org.authority_source === 'NATIVE_BINDING' && org.roles.includes(scope.role))
   if (scope.role === 'Investor') {
     paths.push('/portal/opportunities', '/portal/portfolio')
     const own = snapshot.subscriptions.filter(item => item.investor_id === snapshot.actor.id)
@@ -37,11 +37,11 @@ export function dashboardProjection(scope: DashboardScope, environment: Platform
   if (productOrganisations.length && ['OfferingManager', 'IssuerFundManager'].includes(scope.role)) {
     paths.push('/portal/products', '/portal/products/new')
     const products = snapshot.products.filter(item => productOrganisations.some(org => org.id === item.organisation_id))
-    queue.push({ label: 'My draft products', value: products.filter(item => item.status === 'DRAFT' || item.status === 'CHANGES_REQUIRED').length, description: 'Your approved customer-account product organisations, not the selected access organisation.' },
-      { label: 'My products in review', value: products.filter(item => item.status === 'IN_REVIEW').length, description: 'Submitted versions from your customer-account product organisations awaiting independent review.' })
+    queue.push({ label: 'Draft products', value: products.filter(item => item.status === 'DRAFT' || item.status === 'CHANGES_REQUIRED').length, description: 'Products explicitly bound to this organisation and acting role.' },
+      { label: 'Products in review', value: products.filter(item => item.status === 'IN_REVIEW').length, description: 'Submitted versions awaiting independent review.' })
   }
   // Exact existing TEST adapter scope used by bx1_portal_read; not a new grant.
-  if (scope.role === 'ComplianceOfficer' && scope.organisationId === '0ba2b126-bd85-4cfb-9a1d-83633c9def1e' && snapshot.actor.can_review) {
+  if (scope.role === 'ComplianceOfficer' && snapshot.operating_context?.mode === 'ROLE' && snapshot.operating_context.organisationId === scope.organisationId && snapshot.operating_context.role === scope.role && snapshot.actor.can_review) {
     paths.push('/portal/compliance')
     queue.push({ label: 'Visible products awaiting review', value: snapshot.products.filter(item => item.status === 'IN_REVIEW').length, description: 'Your backend-authorised test review queue. Current evidence review is manual, not provider-backed KYC.' })
   }

@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import type { PortalOperatingContext } from './operating-context'
 
 /** One customer workflow; environment-specific providers never manufacture settlement. */
 export const PORTAL_PATHS = ['/portal', '/portal/onboarding', '/portal/products', '/portal/products/new', '/portal/products/detail', '/portal/compliance', '/portal/compliance/detail', '/portal/opportunities', '/portal/opportunities/detail', '/portal/portfolio'] as const
@@ -21,7 +22,16 @@ export type PortalApplication = {
   reviewer_id: string | null; review_notes: string | null; organisation_id: string | null;
   review_checks: Record<string, boolean>; provider_mode: 'MANUAL_TEST_REVIEW'; approved_until: string | null;
 }
-export type PortalOrganisation = { id: string; name: string; roles: string[]; status: string }
+export type PortalCapability = 'create_product' | 'save_product' | 'submit_product' | 'publish_product' | 'read_orders' | 'review_product'
+export type PortalOrganisation = {
+  id: string; name: string; roles: string[]; status: string;
+  native_organisation_id?: string | null; capabilities?: PortalCapability[];
+  authority_source?: 'NATIVE_BINDING' | 'LEGACY_OWNER';
+}
+export type PortalInvestmentAccount = {
+  id: string; holder_user_id: string; application_id: string; kind: 'INDIVIDUAL';
+  status: 'ACTIVE' | 'SUSPENDED'; created_at: string;
+}
 export type ProductTerms = {
   asset_type: 'FUND' | 'REAL_ESTATE'; name: string; issuer_name: string; summary: string;
   strategy: string; share_class: string; currency: 'ZAR_TEST'; unit_price_minor: string;
@@ -40,6 +50,7 @@ export type PortalSubscription = {
   id: string; product_id: string; investor_id: string; product_name: string; organisation_id: string;
   product_revision: number; terms_hash: string; units: string; amount_minor: string;
   status: 'AWAITING_FUNDING' | 'CANCELLED'; created_at: string;
+  investment_account_id?: string | null; currency?: 'ZAR_TEST';
 }
 export type PortalEvent = { id: string; subject_id: string; kind: string; actor_id: string; created_at: string; summary: string }
 export type PortalSnapshot = {
@@ -47,6 +58,7 @@ export type PortalSnapshot = {
   applications: PortalApplication[]; organisations: PortalOrganisation[];
   products: PortalProduct[]; subscriptions: PortalSubscription[]; events: PortalEvent[];
   requests?: { key: string; command: string }[];
+  accounts?: PortalInvestmentAccount[]; operating_context?: PortalOperatingContext;
 }
 export type PortalPageData = { user: { id: string; email: string }; snapshot: PortalSnapshot }
 
@@ -66,12 +78,13 @@ export const offeringChecks = z.object({ issuer: z.boolean(), terms: z.boolean()
 export const portalCommandSchema = z.discriminatedUnion('command', [
   z.object({ command: z.literal('submit_application'), key: id, payload: z.object({ persona: z.enum(['INVESTOR', 'WEALTH_MANAGER']), expected_revision: z.number().int().min(0), details: applicationDetailsSchema }).strict() }).strict(),
   z.object({ command: z.literal('review_application'), key: id, payload: z.object({ application_id: id, expected_revision: z.number().int().positive(), decision: z.enum(['APPROVED', 'CHANGES_REQUIRED', 'REJECTED']), notes: text(20, 3000), checks: reviewChecks }).strict() }).strict(),
+  z.object({ command: z.literal('create_investment_account'), key: id, payload: z.object({ application_id: id }).strict() }).strict(),
   z.object({ command: z.literal('create_product'), key: id, payload: z.object({ organisation_id: id, terms: productTermsSchema }).strict() }).strict(),
   z.object({ command: z.literal('save_product'), key: id, payload: z.object({ product_id: id, expected_revision: z.number().int().positive(), terms: productTermsSchema }).strict() }).strict(),
   z.object({ command: z.literal('submit_product'), key: id, payload: z.object({ product_id: id, expected_revision: z.number().int().positive() }).strict() }).strict(),
   z.object({ command: z.literal('review_product'), key: id, payload: z.object({ product_id: id, expected_revision: z.number().int().positive(), decision: z.enum(['APPROVED', 'CHANGES_REQUIRED']), notes: text(20, 3000), checks: offeringChecks }).strict() }).strict(),
   z.object({ command: z.literal('publish_product'), key: id, payload: z.object({ product_id: id, expected_revision: z.number().int().positive() }).strict() }).strict(),
-  z.object({ command: z.literal('subscribe'), key: id, payload: z.object({ product_id: id, expected_revision: z.number().int().positive(), terms_hash: hash, units: positive, accepted_documents: z.literal(true), accepted_risks: z.literal(true) }).strict() }).strict(),
+  z.object({ command: z.literal('subscribe'), key: id, payload: z.object({ product_id: id, investment_account_id: id.optional(), expected_revision: z.number().int().positive(), terms_hash: hash, units: positive, accepted_documents: z.literal(true), accepted_risks: z.literal(true) }).strict() }).strict(),
   z.object({ command: z.literal('cancel_subscription'), key: id, payload: z.object({ subscription_id: id }).strict() }).strict(),
 ])
 export type PortalCommand = z.infer<typeof portalCommandSchema>

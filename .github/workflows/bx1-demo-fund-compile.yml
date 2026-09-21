@@ -14,6 +14,8 @@ on:
       - apps/web/src/app/auth/**
       - apps/web/scripts/test-portal.mjs
       - supabase/features/bx1_portal.sql
+      - supabase/migrations/20260921160000_portal_authority_accounts.sql
+      - supabase/tests/bx1_portal_authority_accounts.sql
       - supabase/tests/bx1_portal.sql
       - contracts/demo/**
       - apps/web/src/lib/testnet-fund/**
@@ -36,6 +38,8 @@ on:
       - apps/web/src/app/auth/**
       - apps/web/scripts/test-portal.mjs
       - supabase/features/bx1_portal.sql
+      - supabase/migrations/20260921160000_portal_authority_accounts.sql
+      - supabase/tests/bx1_portal_authority_accounts.sql
       - supabase/tests/bx1_portal.sql
       - contracts/demo/**
       - apps/web/src/lib/testnet-fund/**

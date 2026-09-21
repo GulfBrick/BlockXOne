@@ -3,24 +3,28 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('server-only', () => ({}))
-const mocks = vi.hoisted(() => ({ create: vi.fn(), user: vi.fn(), rpc: vi.fn(), notFound: vi.fn(), redirect: vi.fn() }))
+const mocks = vi.hoisted(() => ({ create: vi.fn(), user: vi.fn(), workspace: vi.fn(), mfa: vi.fn(), sufficient: vi.fn(), current: vi.fn(), rpc: vi.fn(), notFound: vi.fn(), redirect: vi.fn() }))
 vi.mock('next/navigation', () => ({
   notFound: () => { mocks.notFound(); throw new Error('NEXT_NOT_FOUND') },
   redirect: (path: string) => { mocks.redirect(path); throw new Error(`NEXT_REDIRECT:${path}`) },
 }))
 vi.mock('@/lib/supabase/page', () => ({ createPageSupabaseClient: mocks.create }))
-vi.mock('@/lib/supabase/server', () => ({ readVerifiedUser: mocks.user }))
+vi.mock('@/lib/supabase/server', () => ({ readVerifiedUser: mocks.user, readWorkspace: mocks.workspace }))
+vi.mock('@/lib/supabase/mfa', () => ({ readMfaContext: mocks.mfa, hasRequiredMfa: mocks.sufficient, isMfaContextCurrent: mocks.current }))
 vi.mock('@/components/public/public-shell', () => ({ PublicShell: ({ children }: { children: ReactNode }) => createElement('div', null, children) }))
 vi.mock('@/components/portal/registration-form', () => ({ RegistrationForm: () => createElement('p', null, 'server-admitted registration') }))
 vi.mock('@/components/portal/portal-screens', () => ({ PortalScreen: () => createElement('p', null, 'server-admitted portal') }))
 
 import RegisterPage from '@/app/register/page'
 import { PortalPage } from '@/components/portal/portal-page'
-import { loadPortalPage } from './server'
+import { loadPortalPage, readPortal } from './server'
+import { APPLICANT_CONTEXT } from './operating-context'
 
 const origin = 'https://block-x-one-admission-test.vercel.app'
 const user = { id: 'd22789ee-7f73-4acf-a414-3de0b62ea801', email: 'applicant@example.test', email_confirmed_at: '2026-09-21T08:00:00Z', is_anonymous: false }
-const snapshot = { actor: { id: user.id, email: user.email, display_name: null, can_review: false }, applications: [], organisations: [], products: [], subscriptions: [], events: [], requests: [] }
+const organisation = '33333333-3333-4333-8333-333333333333'
+const roleContext = { mode: 'ROLE' as const, organisationId: organisation, role: 'Investor' as const }
+const snapshot = { actor: { id: user.id, email: user.email, display_name: null, can_review: false }, operating_context: APPLICANT_CONTEXT, applications: [], organisations: [], products: [], subscriptions: [], events: [], requests: [] }
 const refusedConfigurations: [string, string][] = [
   ['VERCEL_ENV', 'production'], ['VERCEL_ENV', 'development'], ['VERCEL_ENV', ''],
   ['SUPABASE_URL', 'https://oqkevkjbkpugjotihtda.supabase.co'],
@@ -33,6 +37,7 @@ const refusedConfigurations: [string, string][] = [
 ]
 
 beforeEach(() => {
+  vi.resetAllMocks()
   vi.stubEnv('NODE_ENV', 'production')
   vi.stubEnv('VERCEL_ENV', 'preview')
   vi.stubEnv('BLOCKXONE_TESTNET_FUND_DEMO', 'enabled')
@@ -42,6 +47,9 @@ beforeEach(() => {
   vi.stubEnv('SUPABASE_URL', 'https://fegnnnlseuejkrusbbkv.supabase.co')
   mocks.create.mockResolvedValue({ rpc: mocks.rpc })
   mocks.user.mockResolvedValue(user)
+  mocks.mfa.mockResolvedValue(null)
+  mocks.sufficient.mockReturnValue(true)
+  mocks.current.mockResolvedValue(true)
   mocks.rpc.mockReturnValue({ abortSignal: vi.fn().mockResolvedValue({ data: snapshot, error: null }) })
 })
 afterEach(() => vi.unstubAllEnvs())
@@ -50,7 +58,7 @@ describe('actual customer page admission', () => {
   it.each(refusedConfigurations)('rejects registration and portal before backend access when %s=%s', async (name, value) => {
     vi.stubEnv(name, value)
     await expect(RegisterPage({ searchParams: Promise.resolve({}) })).rejects.toThrow('NEXT_NOT_FOUND')
-    await expect(PortalPage({ view: '/portal' })).rejects.toThrow('NEXT_NOT_FOUND')
+    await expect(PortalPage({ view: '/portal/onboarding', query: { mode: 'applicant' } })).rejects.toThrow('NEXT_NOT_FOUND')
     await expect(loadPortalPage()).rejects.toMatchObject({ status: 404 })
     expect(mocks.create).not.toHaveBeenCalled()
     expect(mocks.user).not.toHaveBeenCalled()
@@ -72,11 +80,13 @@ describe('actual customer page admission', () => {
     expect(mocks.create).not.toHaveBeenCalled()
     expect(mocks.notFound).not.toHaveBeenCalled()
   })
-  it('requires a verified caller and the authoritative portal RPC even in TEST', async () => {
-    const html = renderToStaticMarkup(await PortalPage({ view: '/portal' }))
+  it('requires a verified caller and the exact scoped authoritative portal RPC even in TEST', async () => {
+    const html = renderToStaticMarkup(await PortalPage({ view: '/portal/onboarding', query: { mode: 'applicant' } }))
     expect(html).toContain('server-admitted portal')
-    expect(mocks.user).toHaveBeenCalledTimes(1)
-    expect(mocks.rpc).toHaveBeenCalledWith('bx1_portal_read')
+    expect(mocks.user).toHaveBeenCalledTimes(2)
+    expect(mocks.rpc).toHaveBeenCalledTimes(1)
+    expect(mocks.rpc).toHaveBeenCalledWith('bx1_portal_read_scoped', { operating_context: APPLICANT_CONTEXT })
+    expect(mocks.workspace).not.toHaveBeenCalled()
   })
   it('does not let TEST configuration replace authentication', async () => {
     mocks.user.mockResolvedValueOnce(null)
@@ -85,8 +95,38 @@ describe('actual customer page admission', () => {
   })
   it('does not render portal content when the live backend denies authority', async () => {
     mocks.rpc.mockReturnValueOnce({ abortSignal: vi.fn().mockResolvedValue({ data: null, error: { code: '42501' } }) })
-    const html = renderToStaticMarkup(await PortalPage({ view: '/portal' }))
+    const html = renderToStaticMarkup(await PortalPage({ view: '/portal/onboarding', query: { mode: 'applicant' } }))
     expect(html).not.toContain('server-admitted portal')
     expect(html).toContain('Complete your account access.')
+    expect(mocks.rpc).toHaveBeenCalledTimes(1)
+    expect(mocks.rpc).toHaveBeenCalledWith('bx1_portal_read_scoped', { operating_context: APPLICANT_CONTEXT })
+  })
+  it('admits native business access only through the selected assignment and exact scoped response', async () => {
+    mocks.mfa.mockResolvedValue({ userId: user.id })
+    mocks.workspace.mockResolvedValue({ user: { id: user.id, email: user.email, platformUserId: 'person', displayName: null }, organisations: [{ id: organisation, name: 'Synthetic issuer', roles: ['Investor'] }] })
+    mocks.rpc.mockReturnValue({ abortSignal: vi.fn().mockResolvedValue({ data: { ...snapshot, operating_context: roleContext }, error: null }) })
+    const html = renderToStaticMarkup(await PortalPage({ view: '/portal/portfolio', query: { organisation, role: 'Investor' } }))
+    expect(html).toContain('server-admitted portal')
+    expect(mocks.workspace).toHaveBeenCalledTimes(1)
+    expect(mocks.rpc).toHaveBeenCalledTimes(1)
+    expect(mocks.rpc).toHaveBeenCalledWith('bx1_portal_read_scoped', { operating_context: roleContext })
+    expect(mocks.current).toHaveBeenCalledTimes(1)
+  })
+  it.each([undefined, APPLICANT_CONTEXT, { ...roleContext, organisationId: '44444444-4444-4444-8444-444444444444' }, { ...roleContext, role: 'OfferingManager' }, { ...roleContext, extra: true }])('rejects a same-actor snapshot with missing, different or extra operating context %#', async actualContext => {
+    mocks.rpc.mockReturnValue({ abortSignal: vi.fn().mockResolvedValue({ data: { ...snapshot, operating_context: actualContext }, error: null }) })
+    await expect(readPortal(await mocks.create(), roleContext)).rejects.toMatchObject({ status: 503 })
+    expect(mocks.rpc).toHaveBeenCalledTimes(1)
+    expect(mocks.rpc).toHaveBeenCalledWith('bx1_portal_read_scoped', { operating_context: roleContext })
+  })
+  it.each([null, {}, { ...snapshot, actor: { ...snapshot.actor, id: '55555555-5555-4555-8555-555555555555' } }, { ...snapshot, products: null }])('rejects absent, malformed or other-actor state rather than returning fake empty records %#', async data => {
+    mocks.rpc.mockReturnValue({ abortSignal: vi.fn().mockResolvedValue({ data, error: null }) })
+    await expect(readPortal(await mocks.create(), APPLICANT_CONTEXT)).rejects.toMatchObject({ status: 503 })
+  })
+  it('reports an unavailable saved state without rendering an empty operational workspace', async () => {
+    mocks.rpc.mockReturnValue({ abortSignal: vi.fn().mockResolvedValue({ data: null, error: { code: '57014', message: 'private connection diagnostic' } }) })
+    const html = renderToStaticMarkup(await PortalPage({ view: '/portal/onboarding', query: { mode: 'applicant' } }))
+    expect(html).toContain('Saved portal state is unavailable')
+    expect(html).not.toContain('server-admitted portal')
+    expect(html).not.toContain('private connection diagnostic')
   })
 })

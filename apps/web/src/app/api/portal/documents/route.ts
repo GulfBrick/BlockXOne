@@ -5,6 +5,7 @@ import { PortalError, readPortal, requirePortalEnvironment } from '@/lib/portal/
 import { portalFailure, readPortalBody } from '@/lib/portal/http'
 import { hasCanonicalOrigin, privateResponse, responseCookieAdapter } from '@/lib/supabase/http'
 import { createRequestSupabaseClient } from '@/lib/supabase/server'
+import { portalOperatingContextSchema, portalScopeHref } from '@/lib/portal/operating-context'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -24,8 +25,15 @@ export async function POST(request: NextRequest) {
     if (request.nextUrl.search || !hasCanonicalOrigin(request)) throw new PortalError('Invalid upload origin.', 403)
     const contentType = request.headers.get('content-type') ?? ''
     if (!contentType.startsWith('multipart/form-data;')) throw new PortalError('Select a document to upload.', 415)
+    let rawContext: unknown
+    try { rawContext = JSON.parse(request.headers.get('x-bx1-operating-context') ?? 'null') } catch { throw new PortalError('Invalid operating context.', 403) }
+    const context = portalOperatingContextSchema.safeParse(rawContext)
+    if (!context.success) throw new PortalError('Select your operating context again.', 403)
+    const expectedActor = request.headers.get('x-bx1-expected-actor') ?? ''
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(expectedActor)) throw new PortalError('Refresh your signed-in account before uploading.', 403)
     const client = createRequestSupabaseClient(jar.adapter)
-    const { user } = await readPortal(client)
+    const { user } = await readPortal(client, context.data)
+    if (user.id !== expectedActor) throw new PortalError('The signed-in account changed. Reload before uploading.', 403)
     const body = await readPortalBody(request, maxFile + 16384)
     let form: FormData
     try { form = await new Response(Buffer.from(body), { headers: { 'Content-Type': contentType } }).formData() } catch { throw new PortalError('Invalid document upload.', 400) }
@@ -50,12 +58,14 @@ export async function GET(request: NextRequest) {
     if (request.headers.get('sec-fetch-site') === 'cross-site') throw new PortalError('Open this document from your portal.', 403)
     const params = request.nextUrl.searchParams
     const id = params.get('id') ?? ''
-    if (!/^[0-9a-f-]{36}$/i.test(id) || params.getAll('id').length !== 1 || [...params.keys()].some(k => !['id', 'download'].includes(k)) || params.getAll('download').length > 1 || (params.has('download') && params.get('download') !== '1')) throw new PortalError('Invalid document reference.', 400)
+    if (!/^[0-9a-f-]{36}$/i.test(id) || params.getAll('id').length !== 1 || [...params.keys()].some(k => !['id', 'download', 'mode', 'organisation', 'role'].includes(k)) || ['download','mode','organisation','role'].some(k => params.getAll(k).length > 1) || (params.has('download') && params.get('download') !== '1')) throw new PortalError('Invalid document reference.', 400)
+    const context = portalOperatingContextSchema.safeParse(params.get('mode') === 'applicant' && !params.has('organisation') && !params.has('role') ? { mode: 'APPLICANT' } : !params.has('mode') ? { mode: 'ROLE', organisationId: params.get('organisation'), role: params.get('role') } : null)
+    if (!context.success) throw new PortalError('Invalid operating context.', 403)
     const client = createRequestSupabaseClient(jar.adapter)
-    const { snapshot } = await readPortal(client)
+    const { snapshot } = await readPortal(client, context.data)
     const document = snapshot.applications.flatMap(application => application.details.documents).find(item => item.id === id)
     if (!document || !evidenceSchema.safeParse(document).success) throw new PortalError('Document unavailable for this session.', 404)
-    if (!params.has('download')) return jar.finish(privateResponse(NextResponse.json({ url: `/api/portal/documents?id=${id}&download=1` })))
+    if (!params.has('download')) return jar.finish(privateResponse(NextResponse.json({ url: portalScopeHref(`/api/portal/documents?id=${id}&download=1`, context.data) })))
     const downloaded = await client.storage.from(bucket).download(document.storage_path)
     if (downloaded.error || !downloaded.data || downloaded.data.size !== document.size || downloaded.data.size > maxFile) throw new PortalError('The saved document could not be verified.', 409)
     const bytes = new Uint8Array(await downloaded.data.arrayBuffer())

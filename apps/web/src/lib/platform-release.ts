@@ -1,5 +1,5 @@
 /** One product version; deployment identity and business readiness remain separate. */
-export const PLATFORM_VERSION = '1.1.0-rc.2'
+export const PLATFORM_VERSION = '1.1.0-rc.3'
 export type PlatformEnvironment = 'TESTNET' | 'MAINNET'
 export type PlatformRelease = { version: string; environment: PlatformEnvironment; source: string }
 

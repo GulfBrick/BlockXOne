@@ -9,6 +9,8 @@ if (process.env.BX1_PORTAL_SQL_TEST_URL !== expected) throw new Error('Portal SQ
 const options = { connectionString: expected, ssl: false, connectionTimeoutMillis: 5000, query_timeout: 20000, statement_timeout: 15000, application_name: 'bx1-portal-cloud-ci' }
 const db = new pg.Client(options)
 let phase = 'initialise', checks = 0, begun = false, connected = false, keySequence = 0
+let committedFixture = false
+const proofClients = []
 const uid = n => `e1000000-0000-4000-8000-${String(n).padStart(12, '0')}`
 const sid = n => `e2000000-0000-4000-8000-${String(n).padStart(12, '0')}`
 const key = () => `ef000000-0000-4000-8000-${String(++keySequence).padStart(12, '0')}`
@@ -63,6 +65,46 @@ async function publishProduct(orgId, asset = 'FUND') {
   return (await command(1, 'publish_product', { product_id: p.id, expected_revision: p.revision })).products.find(value => value.id === p.id)
 }
 const subscribe = (p, units = '3') => ({ product_id: p.id, expected_revision: p.revision, terms_hash: p.terms_hash, units, accepted_documents: true, accepted_risks: true })
+const applicant = { mode: 'APPLICANT' }
+const nativeScope = '0ba2b126-bd85-4cfb-9a1d-83633c9def1e'
+const otherScope = 'e3000000-0000-4000-8000-000000000002'
+const roleContext = (role, organisationId = nativeScope) => ({ mode: 'ROLE', organisationId, role })
+async function scopedRead(n, context, client = db) {
+  await actor(n, {}, client)
+  return scalar('select public.bx1_portal_read_scoped($1::jsonb)', [JSON.stringify(context)], client)
+}
+async function scopedCommand(n, context, kind, payload, requestKey = key(), client = db) {
+  await actor(n, {}, client)
+  return scalar('select public.bx1_portal_command_scoped($1,$2,$3::jsonb,$4::jsonb)', [kind, requestKey, JSON.stringify(payload), JSON.stringify(context)], client)
+}
+async function scopedPublishedProduct(orgId, asset, name, cap = '10') {
+  const context = roleContext('OfferingManager')
+  const created = await scopedCommand(1, context, 'create_product', { organisation_id: orgId, terms: { ...terms(asset), name, cap_units: cap } })
+  let p = created.products.find(value => value.terms.name === name)
+  const submitted = await scopedCommand(1, context, 'submit_product', { product_id: p.id, expected_revision: p.revision }); p = submitted.products.find(value => value.id === p.id)
+  const reviewed = await scopedCommand(2, roleContext('ComplianceOfficer'), 'review_product', { product_id: p.id, expected_revision: p.revision, decision: 'APPROVED', notes: 'Independent fictional offering review through explicit native scope.', checks: offeringChecks }); p = reviewed.products.find(value => value.id === p.id)
+  return (await scopedCommand(1, roleContext('IssuerFundManager'), 'publish_product', { product_id: p.id, expected_revision: p.revision })).products.find(value => value.id === p.id)
+}
+async function waitForBlocked(pids) {
+  const deadline = Date.now() + 5000
+  while (Date.now() < deadline) {
+    const blocked = await scalar('select count(*)::int from pg_stat_activity where pid=any($1::int[]) and cardinality(pg_blocking_pids(pid))>0', [pids])
+    if (blocked === pids.length) { checks++; return }
+    await new Promise(resolve => setTimeout(resolve, 20))
+  }
+  throw new Error('Concurrent statements did not overlap on the held capacity/authority lock')
+}
+async function concurrentCall(client, n, context, kind, payload, requestKey) {
+  await client.query('begin')
+  try {
+    const result = await scopedCommand(n, context, kind, payload, requestKey, client)
+    await client.query('commit')
+    return { result }
+  } catch (error) {
+    await client.query('rollback')
+    return { code: error?.code }
+  }
+}
 
 try {
   await db.connect(); connected = true
@@ -187,15 +229,147 @@ try {
   await admin()
   eq(await scalar('select count(*)::int from bx1_portal.subscriptions where status not in (\'AWAITING_FUNDING\',\'CANCELLED\')'), 0, 'no payment/mint status exists')
   eq(await scalar('select count(*)::int from public.bx1_profiles where id=any($1::uuid[])', [[uid(3), uid(6), uid(8)]]), 0, 'approved investor creates no native profile grants')
-  phase = 'rollback'
-  await db.query('rollback'); begun = false
-  eq(await scalar("select count(*)::int from pg_namespace where nspname in ('auth','storage','bx1_private','bx1_portal')"), 0, 'all synthetic schema and fixtures rolled back')
-  console.log(`BX1_PORTAL_SQL_PASS assertions=${checks} fixture=synthetic-cloud-PostgreSQL17 exactAmounts=proven lifecycle=proven authProvider=not-proven documentBytes=not-proven concurrency=not-proven settlement=not-implemented cleanup=rolled-back`)
+  phase = 'scoped-additive-migration'
+  const preserved = await scalar('select jsonb_build_object(\'products\',(select count(*) from bx1_portal.products),\'subscriptions\',(select count(*) from bx1_portal.subscriptions))')
+  await sqlFile('../../../supabase/migrations/20260921160000_portal_authority_accounts.sql')
+  eq(await scalar('select jsonb_build_object(\'products\',(select count(*) from bx1_portal.products),\'subscriptions\',(select count(*) from bx1_portal.subscriptions))'), preserved, 'migration preserves historical product and order rows')
+  for (const table of ['organisation_authority_bindings', 'investment_accounts', 'scoped_requests']) {
+    eq(await scalar(`select count(*)::int from bx1_portal.${table}`), 0, `migration does not seed ${table}`)
+    for (const role of ['anon', 'authenticated', 'service_role']) eq(await scalar('select has_table_privilege($1,$2,\'SELECT,INSERT,UPDATE,DELETE\')', [role, `bx1_portal.${table}`]), false, `${role} no direct ${table}`)
+  }
+  eq((await scopedRead(1, applicant)).organisations[0].authority_source, 'LEGACY_OWNER', 'unbound existing approved owner remains explicit legacy path')
+  await denied('missing context is denied', () => scopedRead(1, null), '42501')
+  await denied('invented native role is denied', () => scopedRead(1, roleContext('SuperAdmin')), '42501')
+  await denied('old public command is no longer callable', () => command(1, 'create_product', { organisation_id: orgId, terms: terms() }), '42501')
+  await denied('private legacy command cannot bypass scoped wrapper', async () => { await actor(1); await scalar('select bx1_portal.execute_command($1,$2,$3)', ['create_product', key(), JSON.stringify({ organisation_id: orgId, terms: terms() })]) }, '42501')
+  await admin(); await sqlFile('../../../supabase/tests/bx1_portal_authority_accounts.sql')
+  phase = 'scoped-authority-and-account-boundaries'
+  const manager = roleContext('OfferingManager'), issuer = roleContext('IssuerFundManager'), investor = roleContext('Investor'), reviewer = roleContext('ComplianceOfficer')
+  const managerState = await scopedRead(1, manager)
+  eq(managerState.operating_context, manager, 'returned context exact')
+  eq(managerState.organisations.map(o => [o.id, o.native_organisation_id, o.roles, o.authority_source]), [[orgId, nativeScope, ['OfferingManager'], 'NATIVE_BINDING']], 'exact binding not name or owner-derived')
+  eq((await scopedRead(1, roleContext('OfferingManager', otherScope))).products.length, 0, 'membership in unrelated scope gives no mapped product data')
+  eq((await scopedRead(1, applicant)).organisations.length, 0, 'binding permanently ends legacy owner authority')
+  eq((await read(2)).applications.length, 0, 'bootstrap read carries no foreign review cases')
+  await denied('legacy owner cannot mutate bound organisation', () => scopedCommand(1, applicant, 'create_product', { organisation_id: orgId, terms: terms() }), '42501')
+  await denied('valid wrong native scope cannot mutate product', () => scopedCommand(1, roleContext('OfferingManager', otherScope), 'create_product', { organisation_id: orgId, terms: terms() }), '42501')
+  await denied('reviewer cannot use operator action', () => scopedCommand(2, reviewer, 'create_product', { organisation_id: orgId, terms: terms() }), '42501')
+  for (const role of ['TransferAgent', 'TokenisationAgent', 'TreasuryOperator', 'FinancialController', 'SuperAdmin']) {
+    const scoped = await scopedRead(1, roleContext(role))
+    eq([scoped.products.length, scoped.subscriptions.length, scoped.organisations.length], [0, 0, 0], `${role} receives no implied product or investor authority`)
+    await denied(`${role} cannot create offerings`, () => scopedCommand(1, roleContext(role), 'create_product', { organisation_id: orgId, terms: terms() }), '42501')
+  }
+  const delegatedProduct = (await scopedCommand(5, manager, 'create_product', { organisation_id: orgId, terms: { ...terms(), name: 'Explicit delegated non-owner draft' } })).products.find(p => p.terms.name === 'Explicit delegated non-owner draft')
+  eq(delegatedProduct.created_by, uid(5), 'explicit native binding authorises a non-owner manager without copying the organisation')
+  const ownApp3 = (await scopedRead(3, investor)).applications[0]
+  const accountKey = key()
+  const account3 = (await scopedCommand(3, investor, 'create_investment_account', { application_id: ownApp3.id }, accountKey)).accounts[0]
+  eq(account3.holder_user_id, uid(3), 'investment account belongs to authenticated investor')
+  eq((await scopedCommand(3, investor, 'create_investment_account', { application_id: ownApp3.id }, accountKey)).accounts.length, 1, 'account replay creates no duplicate')
+  await denied('same idempotency key cannot migrate operating context', () => scopedCommand(3, applicant, 'create_investment_account', { application_id: ownApp3.id }, accountKey), '23505')
+  await denied('cannot open account for another applicant', () => scopedCommand(6, investor, 'create_investment_account', { application_id: ownApp3.id }), '42501')
+  const ownApp6 = (await scopedRead(6, investor)).applications[0]
+  const account6 = (await scopedCommand(6, investor, 'create_investment_account', { application_id: ownApp6.id })).accounts[0]
+  eq((await scopedRead(6, investor)).accounts.length, 1, 'other investor sees only own account')
+  await denied('operator cannot create an investment account through role context', () => scopedCommand(1, manager, 'create_investment_account', { application_id: ownApp3.id }), '42501')
+  await denied('entity approval cannot create an individual account', async () => { await admin(); await db.query("update bx1_portal.applications set details=jsonb_set(details,'{investor_type}','\"ENTITY\"') where id=$1", [ownApp6.id]); await scopedCommand(6, investor, 'create_investment_account', { application_id: ownApp6.id }) }, '42501')
+  await denied('suspended account cannot subscribe', async () => { await admin(); await db.query("update bx1_portal.investment_accounts set status='SUSPENDED' where id=$1", [account3.id]); await scopedCommand(3, investor, 'subscribe', { ...subscribe(fund, '1'), investment_account_id: account3.id }) }, '42501')
+  await denied('subscription requires explicit account', () => scopedCommand(3, investor, 'subscribe', subscribe(fund, '1')), '42501')
+  await denied('foreign account cannot subscribe', () => scopedCommand(3, investor, 'subscribe', { ...subscribe(fund, '1'), investment_account_id: account6.id }), '42501')
+  await denied('revoked mapped authority denies write immediately', async () => { await admin(); await db.query("update bx1_portal.organisation_authority_bindings set status='REVOKED' where product_organisation_id=$1 and role='OfferingManager'", [orgId]); await scopedCommand(1, manager, 'create_product', { organisation_id: orgId, terms: terms() }) }, '42501')
+  await denied('binding tombstone cannot be deleted', async () => { await admin(); await db.query("update bx1_portal.organisation_authority_bindings set status='REVOKED' where product_organisation_id=$1 and role='OfferingManager'", [orgId]); await db.query("delete from bx1_portal.organisation_authority_bindings where product_organisation_id=$1 and role='OfferingManager'", [orgId]) })
+  await denied('revocation cannot restore legacy owner fallback', async () => { await admin(); await db.query("update bx1_portal.organisation_authority_bindings set status='REVOKED' where product_organisation_id=$1", [orgId]); await scopedCommand(1, applicant, 'create_product', { organisation_id: orgId, terms: terms() }) }, '42501')
+  for (const timing of ['EXPIRED', 'FUTURE']) {
+    await denied(`${timing} binding cannot authorise product write`, async () => {
+      await admin(); await db.query("update bx1_portal.organisation_authority_bindings set status='REVOKED' where product_organisation_id=$1 and role='OfferingManager'", [orgId])
+      await db.query("insert into bx1_portal.organisation_authority_bindings(product_organisation_id,native_organisation_id,role,status,valid_from,valid_until,evidence_reference,approval_receipt_id) values($1,$2,'OfferingManager','ACTIVE',clock_timestamp()+($3::int*interval '1 hour'),clock_timestamp()+($4::int*interval '1 hour'),'synthetic-cloud-proof:timed-binding',$5)", [orgId, nativeScope, timing === 'EXPIRED' ? -2 : 1, timing === 'EXPIRED' ? -1 : 2, key()])
+      await scopedCommand(1, manager, 'create_product', { organisation_id: orgId, terms: terms() })
+    }, '42501')
+  }
+  await denied('investment account holder cannot be reassigned', async () => { await admin(); await db.query('update bx1_portal.investment_accounts set holder_user_id=$1 where id=$2', [uid(6), account3.id]) })
+  await db.query('savepoint revoked_read')
+  await admin(); await db.query("update bx1_portal.organisation_authority_bindings set status='REVOKED' where product_organisation_id=$1 and role='ComplianceOfficer'", [orgId])
+  eq((await scopedRead(2, reviewer)).applications.some(a => a.id === wmApp.id), false, 'revoked binding removes organisation case from reviewer')
+  await actor(2); eq(await scalar('select count(*)::int from storage.objects where owner_id=$1', [uid(1)]), 0, 'revoked binding removes direct Storage evidence access')
+  await db.query('rollback to savepoint revoked_read; release savepoint revoked_read')
+  phase = 'two-assets-same-record-inbox'
+  const scopedFund = await scopedPublishedProduct(orgId, 'FUND', 'Scoped synthetic fund')
+  const scopedProperty = await scopedPublishedProduct(orgId, 'REAL_ESTATE', 'Scoped synthetic real estate')
+  const newOrderIds = []
+  for (const product of [scopedFund, scopedProperty]) {
+    const input = { ...subscribe(product, '2'), investment_account_id: account3.id }, requestKey = key()
+    const investorView = await scopedCommand(3, investor, 'subscribe', input, requestKey)
+    const order = investorView.subscriptions.find(s => s.product_id === product.id)
+    const issuerOrder = (await scopedRead(1, issuer)).subscriptions.find(s => s.id === order.id)
+    eq(issuerOrder, order, `${product.terms.asset_type} issuer sees exact same order, account, revision, terms hash and amount`)
+    eq([order.investment_account_id, order.amount_minor, order.currency, order.status], [account3.id, '18014398509481986', 'ZAR_TEST', 'AWAITING_FUNDING'], 'exact account-based instruction, not funded holding')
+    eq((await scopedCommand(3, investor, 'subscribe', input, requestKey)).subscriptions.filter(s => s.product_id === product.id).length, 1, 'same-context retry produces one instruction')
+    newOrderIds.push(order.id)
+  }
+  eq((await scopedRead(6, investor)).subscriptions.filter(s => newOrderIds.includes(s.id)).length, 0, 'second investor sees none of first investor orders')
+  eq((await scopedRead(5, roleContext('OfferingManager', otherScope))).subscriptions.length, 0, 'unrelated organisation issuer sees no orders')
+  await denied('accepted subscription account cannot be reassigned', async () => { await admin(); await db.query('update bx1_portal.subscriptions set investment_account_id=$1 where id=$2', [account6.id, newOrderIds[0]]) })
+  await admin()
+  const auditBaseline = await scalar("select jsonb_build_object('orders',(select count(*) from bx1_portal.subscriptions),'receipts',(select count(*) from bx1_portal.scoped_requests),'events',(select count(*) from bx1_portal.events),'reserved',(select reserved_units::text from bx1_portal.products where id=$1))", [scopedFund.id])
+  await denied('audit insert failure rolls back instruction, account binding, capacity and request receipts', async () => {
+    await admin()
+    await db.query("create function public.synthetic_portal_audit_failure() returns trigger language plpgsql as $$ begin if NEW.kind='subscribe' then raise exception 'synthetic_audit_failure' using errcode='23514'; end if; return NEW; end $$; create trigger synthetic_portal_audit_failure before insert on bx1_portal.events for each row execute function public.synthetic_portal_audit_failure()")
+    await scopedCommand(3, investor, 'subscribe', { ...subscribe(scopedFund, '1'), investment_account_id: account3.id })
+  })
+  await admin(); eq(await scalar("select jsonb_build_object('orders',(select count(*) from bx1_portal.subscriptions),'receipts',(select count(*) from bx1_portal.scoped_requests),'events',(select count(*) from bx1_portal.events),'reserved',(select reserved_units::text from bx1_portal.products where id=$1))", [scopedFund.id]), auditBaseline, 'audit failure leaves all accounting-adjacent state unchanged')
+  const raceProduct = await scopedPublishedProduct(orgId, 'FUND', 'Concurrent capacity synthetic fund', '3')
+  const replayProduct = await scopedPublishedProduct(orgId, 'REAL_ESTATE', 'Concurrent retry synthetic property', '3')
+  await admin(); await db.query('commit'); begun = false; committedFixture = true
+  phase = 'real-two-connection-capacity-and-idempotency'
+  for (let i = 0; i < 2; i++) { const client = new pg.Client({ ...options, application_name: `bx1-portal-concurrency-${i}` }); await client.connect(); proofClients.push(client) }
+  const pids = await Promise.all(proofClients.map(client => scalar('select pg_backend_pid()', [], client)))
+  await db.query('begin'); begun = true
+  await db.query('select id from bx1_portal.products where id=$1 for update', [raceProduct.id])
+  const raceCalls = [concurrentCall(proofClients[0], 3, investor, 'subscribe', { ...subscribe(raceProduct, '2'), investment_account_id: account3.id }, key()), concurrentCall(proofClients[1], 6, investor, 'subscribe', { ...subscribe(raceProduct, '2'), investment_account_id: account6.id }, key())]
+  await waitForBlocked(pids)
+  await db.query('commit'); begun = false
+  const race = await Promise.all(raceCalls)
+  eq(race.filter(v => v.result).length, 1, 'two simultaneous investors receive one capacity winner')
+  eq(race.filter(v => v.code === '23514').length, 1, 'capacity loser rolls back')
+  eq(await scalar('select reserved_units::text from bx1_portal.products where id=$1', [raceProduct.id]), '2', 'capacity never oversubscribed')
+  const replayKey = key(), replayInput = { ...subscribe(replayProduct, '2'), investment_account_id: account3.id }
+  await db.query('begin'); begun = true
+  await db.query('select id from bx1_portal.products where id=$1 for update', [replayProduct.id])
+  const retries = proofClients.map(client => concurrentCall(client, 3, investor, 'subscribe', replayInput, replayKey))
+  await waitForBlocked(pids)
+  await db.query('commit'); begun = false
+  const retryResults = await Promise.all(retries)
+  eq(retryResults.filter(v => v.result).length, 2, 'simultaneous same-context exact retries both resolve')
+  eq(await scalar('select count(*)::int from bx1_portal.subscriptions where product_id=$1', [replayProduct.id]), 1, 'simultaneous retries persist one instruction')
+  eq(await scalar('select count(*)::int from bx1_portal.scoped_requests where actor_id=$1 and request_key=$2', [uid(3), replayKey]), 1, 'simultaneous retries persist one receipt')
+  phase = 'authority-expiry-after-real-lock-wait'
+  // Revoke one synthetic role binding, replace it with a short-lived fixture,
+  // and hold the organisation row past its expiry. No timestamp field is edited.
+  await db.query("update bx1_portal.organisation_authority_bindings set status='REVOKED' where product_organisation_id=$1 and role='IssuerFundManager'", [orgId])
+  const timedBinding = await scalar("insert into bx1_portal.organisation_authority_bindings(product_organisation_id,native_organisation_id,role,status,valid_from,valid_until,evidence_reference,approval_receipt_id) values($1,$2,'IssuerFundManager','ACTIVE',clock_timestamp()-interval '1 hour',clock_timestamp()+interval '2 seconds','synthetic-cloud-proof:wait-expiry',$3) returning id", [orgId, nativeScope, key()])
+  await db.query('begin'); begun = true
+  await db.query('select id from bx1_portal.organisations where id=$1 for update', [orgId])
+  const expiryKey = key(), expiredCall = concurrentCall(proofClients[0], 1, issuer, 'create_product', { organisation_id: orgId, terms: { ...terms(), name: 'Must not survive expiry wait' } }, expiryKey)
+  await waitForBlocked([pids[0]])
+  await db.query('select pg_sleep(greatest(0,extract(epoch from valid_until-clock_timestamp()))+0.1) from bx1_portal.organisation_authority_bindings where id=$1', [timedBinding])
+  await db.query('commit'); begun = false
+  eq((await expiredCall).code, '42501', 'binding expiry after simultaneous lock wait denies write')
+  eq(await scalar('select count(*)::int from bx1_portal.scoped_requests where request_key=$1', [expiryKey]), 0, 'expired authority after wait leaves no accepted receipt')
+  eq(await scalar("select count(*)::int from bx1_portal.products where terms->>'name'='Must not survive expiry wait'"), 0, 'expired authority after wait creates no product')
+  phase = 'cleanup-committed-disposable-fixture'
+  await db.query('drop schema bx1_portal,bx1_private,storage,auth,public cascade; create schema public')
+  committedFixture = false
+  eq(await scalar("select count(*)::int from pg_namespace where nspname in ('auth','storage','bx1_private','bx1_portal')"), 0, 'committed synthetic schemas removed after concurrent proof')
+  console.log(`BX1_PORTAL_SQL_PASS assertions=${checks} fixture=synthetic-cloud-PostgreSQL17 exactAmounts=proven scopedAuthority=proven sameRecordBothAssets=proven auditRollback=proven authProvider=not-proven documentBytes=not-proven concurrency=two-connection-capacity-retry-and-expiry-wait settlement=not-implemented cleanup=synthetic-schemas-removed`)
 } catch (error) {
   const diagnostic = typeof error?.message === 'string' ? error.message.split(/[\r\n]/, 1)[0].slice(0, 200).replace(/[^\x20-\x7e]/g, '?') : 'unavailable'
   console.error(`BX1_PORTAL_SQL_FAILED phase=${phase} line=${error?.fixtureLine ?? 'unknown'} code=${error?.code ?? 'assertion'} diagnostic=${JSON.stringify(diagnostic)}`)
   process.exitCode = 1
 } finally {
   if (begun) { try { await db.query('rollback') } catch {} }
+  await Promise.all(proofClients.map(client => client.end().catch(() => {})))
+  if (committedFixture && connected) {
+    try { await db.query('reset role'); await db.query('drop schema bx1_portal,bx1_private,storage,auth,public cascade; create schema public') } catch { console.error('BX1_PORTAL_CLOUD_CLEANUP_FAILED disposable-service-will-be-destroyed-by-CI'); process.exitCode = 1 }
+  }
   if (connected) await db.end()
 }

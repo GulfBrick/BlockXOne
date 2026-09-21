@@ -1,5 +1,14 @@
 # BlockXOne platform releases
 
+## 1.1.0-rc.3 — Connected offering and subscription workspaces
+
+- Replace responsibilities-first landings with operational investor opportunities/orders, issuer products/incoming orders and compliance queues in the existing branded application.
+- Retain selected role, organisation and environment across pages, private evidence, commands and durable retries. Server and database enforce the same operating context.
+- Add explicit organisation-authority provenance and owned individual investment accounts; no automatic memberships, organisation mappings or approval seeds.
+- Investor instructions and issuer inbox share one subscription record, accepted version/fingerprint and exact units/amount. AWAITING_FUNDING is not a holding, settled payment or token issuance.
+- Additive database cutover revokes unscoped writes; apply only after cloud acceptance and deploy this scoped candidate immediately afterward. Existing logins and saved identifiers remain intact.
+- This candidate does not claim a completed MAINNET parity release or either full settled product journey. Acceptance evidence is retained against the exact source; no previous run is reassigned to this candidate.
+
 ## 1.1.0-rc.2 — Consistent post-MFA dashboard landing
 
 - Keep setup and account-security continuations unchanged while routing a completed MFA sign-in to `/portal` on validated TESTNET/MAINNET deployments.

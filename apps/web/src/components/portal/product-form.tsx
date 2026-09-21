@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import type { PortalOrganisation, PortalProduct, PortalSnapshot, ProductTerms } from '@/lib/portal/contracts'
+import { portalScopeHref, type PortalOperatingContext } from '@/lib/portal/operating-context'
 import { CommandFeedback, usePortalCommand } from './portal-client'
 import { Field, Notice, Panel, money } from './portal-primitives'
 import styles from './portal.module.css'
@@ -29,7 +30,7 @@ export function fictionalProductTerms(kind: ProductTerms['asset_type'] = 'FUND')
   }
 }
 
-export function ProductForm({ organisations, product, onSaved }: { organisations: PortalOrganisation[]; product?: PortalProduct; onSaved: (snapshot: PortalSnapshot) => void }) {
+export function ProductForm({ organisations, product, onSaved, operatingContext }: { organisations: PortalOrganisation[]; product?: PortalProduct; onSaved: (snapshot: PortalSnapshot) => void; operatingContext?: PortalOperatingContext }) {
   const router = useRouter()
   const [terms, setTerms] = useState<ProductTerms>(() => product?.terms ?? fictionalProductTerms())
   const [organisationId, setOrganisationId] = useState(product?.organisation_id ?? organisations[0]?.id ?? '')
@@ -42,7 +43,7 @@ export function ProductForm({ organisations, product, onSaved }: { organisations
     <Notice title="Editable fictional example">The initial content is a clearly labelled test scenario, not a registered legal issuer or approved investment. Review every field before saving. Saving a draft does not publish the offering.</Notice>
     <Panel title={product ? 'Edit product draft' : 'Create a product'} description="Typed asset terms, eligibility and versioned disclosures belong to a single offering record.">
       <CommandFeedback command={command} />
-      <form className={styles.form} onSubmit={async event => { event.preventDefault(); if (!acknowledged) return; const saved = await command.submit(product ? 'save_product' : 'create_product', product ? { product_id: product.id, expected_revision: product.revision, terms } : { organisation_id: organisationId, terms }); if (saved && !product) router.push('/portal/products') }}>
+      <form className={styles.form} onSubmit={async event => { event.preventDefault(); if (!acknowledged) return; const saved = await command.submit(product ? 'save_product' : 'create_product', product ? { product_id: product.id, expected_revision: product.revision, terms } : { organisation_id: organisationId, terms }); if (saved && !product) router.push(portalScopeHref('/portal/products', operatingContext)) }}>
         <fieldset disabled={locked} className={styles.fieldset}><legend>01 · Product and issuer</legend>
           <div className={styles.formRow}><Field label="Managing organisation"><select required disabled={Boolean(product)} value={organisationId} onChange={event => setOrganisationId(event.target.value)}>{organisations.map(org => <option key={org.id} value={org.id}>{org.name}</option>)}</select></Field><Field label="Asset template"><select value={terms.asset_type} onChange={event => changeKind(event.target.value as ProductTerms['asset_type'])}><option value="FUND">Investment fund</option><option value="REAL_ESTATE">Real-estate investment</option></select></Field></div>
           <div className={styles.formRow}><Field label="Product name"><input required minLength={3} maxLength={120} value={terms.name} onChange={event => change('name', event.target.value)} /></Field><Field label="Issuing legal entity" hint="Test environment: use an explicitly fictional entity name."><input required minLength={3} maxLength={160} value={terms.issuer_name} onChange={event => change('issuer_name', event.target.value)} /></Field></div>

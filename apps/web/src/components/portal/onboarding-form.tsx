@@ -3,18 +3,20 @@
 import { useState } from 'react'
 import { FileCheck2, Upload } from 'lucide-react'
 import type { ApplicationDetails, EvidenceDocument, Persona, PortalApplication, PortalSnapshot } from '@/lib/portal/contracts'
-import { CommandFeedback, usePortalCommand } from './portal-client'
+import { CommandFeedback, usePortalActorId, usePortalCommand, usePortalOperatingContext } from './portal-client'
+import { portalScopeHref } from '@/lib/portal/operating-context'
 import { DetailList, Field, FormProgress, Notice, Panel, StatusBadge } from './portal-primitives'
 import styles from './portal.module.css'
 
 const emptyDetails = (): ApplicationDetails => ({ full_name: '', country: 'ZA', investor_type: 'INDIVIDUAL', company_name: '', registration_reference: '', source_of_funds: '', beneficial_owners: '', experience: '', documents: [], test_data_acknowledged: true })
 
 export function PrivateDocument({ document }: { document: EvidenceDocument }) {
+  const operatingContext = usePortalOperatingContext()
   const [url, setUrl] = useState(''), [message, setMessage] = useState(''), [busy, setBusy] = useState(false)
   async function prepare() {
     setBusy(true); setMessage('')
     try {
-      const response = await fetch(`/api/portal/documents?id=${encodeURIComponent(document.id)}`, { credentials: 'same-origin', cache: 'no-store', redirect: 'error', signal: AbortSignal.timeout(15000) })
+      const response = await fetch(portalScopeHref(`/api/portal/documents?id=${encodeURIComponent(document.id)}`, operatingContext), { credentials: 'same-origin', cache: 'no-store', redirect: 'error', signal: AbortSignal.timeout(15000) })
       const result = await response.json()
       if (!response.ok || typeof result.url !== 'string') throw new Error('The private document could not be opened. Your access may have changed.')
       const download = new URL(result.url, window.location.origin)
@@ -27,6 +29,8 @@ export function PrivateDocument({ document }: { document: EvidenceDocument }) {
 }
 
 export function OnboardingForm({ applications, onSaved }: { applications: PortalApplication[]; onSaved: (snapshot: PortalSnapshot) => void }) {
+  const operatingContext = usePortalOperatingContext()
+  const expectedActor = usePortalActorId()
   const [persona, setPersona] = useState<Persona>(applications[0]?.persona ?? 'INVESTOR')
   const application = applications.find(item => item.persona === persona)
   const [details, setDetails] = useState<ApplicationDetails>(() => application?.details ?? emptyDetails())
@@ -48,7 +52,7 @@ export function OnboardingForm({ applications, onSaved }: { applications: Portal
     setUploadBusy(true); setUploadMessage('')
     try {
       const body = new FormData(); body.set('file', file); body.set('kind', uploadKind); body.set('title', uploadTitle.trim())
-      const response = await fetch('/api/portal/documents', { method: 'POST', body, credentials: 'same-origin', cache: 'no-store', redirect: 'error', signal: AbortSignal.timeout(45000) })
+      const response = await fetch('/api/portal/documents', { method: 'POST', body, headers: { 'x-bx1-operating-context': JSON.stringify(operatingContext), 'x-bx1-expected-actor': expectedActor }, credentials: 'same-origin', cache: 'no-store', redirect: 'error', signal: AbortSignal.timeout(45000) })
       const result = await response.json()
       if (!response.ok || !result.document) throw new Error(result.error ?? 'The upload was not confirmed.')
       change('documents', [...details.documents, result.document]); setFile(null); setUploadTitle(''); setUploadMessage('Private evidence uploaded and attached to this application draft.')
