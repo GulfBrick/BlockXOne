@@ -1,5 +1,6 @@
 export const DEMO_CHAIN_ID = 80002 as const
 export const DEMO_PROJECT = 'fegnnnlseuejkrusbbkv'
+export const TESTNET_APP_ORIGIN = 'https://testnet.bx1.co.za' as const
 export type DemoOperation = { id: string; fund_id: string; kind: 'MINT' | 'BURN'; wallet: string; units: string; status: 'PREPARED' | 'CONFIRMED'; transaction_hash: string | null; block_number: string | null }
 export type DemoSubscription = { id: string; investor_wallet: string; units: string; amount_minor: string; status: string; operation_id: string | null }
 export type DemoRedemption = DemoSubscription
@@ -25,6 +26,7 @@ export function isDemoEnvironment(env: Record<string, string | undefined>): bool
   try {
     const origin = new URL(env.BLOCKXONE_APP_ORIGIN ?? '')
     return origin.protocol === 'https:' && origin.origin === env.BLOCKXONE_APP_ORIGIN && !origin.username && !origin.password
-      && origin.hostname.endsWith('.vercel.app') && origin.hostname !== 'block-x-one.vercel.app'
+      && (origin.origin === TESTNET_APP_ORIGIN
+        || (origin.hostname.endsWith('.vercel.app') && origin.hostname !== 'block-x-one.vercel.app'))
   } catch { return false }
 }

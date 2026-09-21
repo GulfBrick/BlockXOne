@@ -4,6 +4,9 @@ on:
   workflow_dispatch:
   push:
     paths:
+      - apps/web/src/middleware*
+      - apps/web/src/lib/supabase/middleware*
+      - apps/web/src/lib/branded-entry*
       - apps/web/src/lib/platform-release*
       - PLATFORM_RELEASE.json
       - apps/web/src/lib/portal/**
@@ -28,6 +31,9 @@ on:
       - .github/workflows/bx1-demo-fund-compile.yml
   pull_request:
     paths:
+      - apps/web/src/middleware*
+      - apps/web/src/lib/supabase/middleware*
+      - apps/web/src/lib/branded-entry*
       - apps/web/src/lib/platform-release*
       - PLATFORM_RELEASE.json
       - apps/web/src/lib/portal/**

@@ -1,5 +1,13 @@
 # BlockXOne platform releases
 
+## 1.1.0-rc.6 — Branded TEST entry correction
+
+- Built from published rc.4 source `ff9e716cf09f1743cdb07d423ab60ca0e77eb506`. The unreleased rc.5 funding candidate is excluded; skipping its number does not include or approve its features.
+- Admit only the exact `https://testnet.bx1.co.za` branded origin alongside the existing preview-origin admission, retaining the pinned TEST backend, preview environment and auth/HTTPS gates.
+- Redirect GET/HEAD from the exact previous stable TEST alias to the branded origin before session refresh or host-only callback cookie handling, preserving path/query. Refuse legacy-alias mutation requests without replaying their bodies; do not trust forwarded host headers or change same-origin auth checks.
+- Preserve existing application data, roles, wallet adapter, schemas and contracts. This is not a MAINNET parity release or financial activation. MAIN public navigation is a separately scoped patch on its existing production source.
+- Cloud tests/build and DNS, HTTPS, callback, alias-redirect and hosted sign-in/registration checks must be recorded for this exact candidate. Previous release evidence is not reassigned; a source change alone does not prove the domain is configured or authentication works.
+
 ## 1.1.0-rc.4 — Accurate subscription-state wording
 
 - Correct dashboard, portfolio and new fictional offering-template language: these records are subscription instructions and requested amounts, not canonical funding obligations or settled holdings.

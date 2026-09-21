@@ -1,8 +1,8 @@
 {
   "product": "BlockXOne",
-  "version": "1.1.0-rc.4",
+  "version": "1.1.0-rc.6",
   "status": "release-candidate",
-  "baseSource": "253bd3f81928645614ab0a4be3b6c379ce0b404d",
+  "baseSource": "ff9e716cf09f1743cdb07d423ab60ca0e77eb506",
   "sourceIdentity": "VERCEL_GIT_COMMIT_SHA",
   "environmentSource": "validated deployment target, canonical origin and Supabase project",
   "sharedEntry": "/login",
@@ -12,5 +12,5 @@
   "schemaChanges": [],
   "contractChanges": [],
   "productionFinancialAdmission": false,
-  "scope": "Connected issuer, compliance and investor workspaces; explicit organisation authority and individual investment accounts; context-bound instructions and same-record issuer inbox. No funding, issuance or MAINNET financial activation. Full mirrored lifecycle remains subject to acceptance."
+  "scope": "Branded TEST entry correction on published rc.4: admit the exact testnet.bx1.co.za origin and redirect the exact previous stable TEST alias before host-only auth cookie handling. Unreleased rc.5 funding changes are excluded. No schema, contract, wallet adapter or MAINNET feature-parity change; no financial activation. Configuration, cloud checks and hosted cutover require separate evidence."
 }
