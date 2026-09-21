@@ -1,0 +1,16 @@
+{
+  "product": "BlockXOne",
+  "version": "1.1.0-rc.7",
+  "status": "release-candidate",
+  "baseSource": "259ddc4e555f454faf123f368f0dabc5a2ef33d6",
+  "sourceIdentity": "VERCEL_GIT_COMMIT_SHA",
+  "environmentSource": "validated deployment target, canonical origin and Supabase project",
+  "sharedEntry": "/login",
+  "sharedDashboard": "/portal",
+  "environments": ["TESTNET", "MAINNET"],
+  "brand": "BlockXOne Brand Kit v2.0 Exact Logo",
+  "schemaChanges": [],
+  "contractChanges": [],
+  "productionFinancialAdmission": false,
+  "scope": "Repair native registration form Origin preservation on the existing branded TEST deployment. Align clean registration metadata and response referrer policy; retain strict same-origin POST admission and token-query privacy. No schema, permissions, credentials, financial actions or MAINNET feature-parity change. Exact hosted browser request proof is separate from user account creation and email delivery."
+}

@@ -1,7 +1,9 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 vi.mock('server-only', () => ({}))
 import { handleMfaAction } from './mfa-actions'
+import { MFA_ENROLL_QR_MAX_CHARACTERS, MFA_ENROLL_RESPONSE_MAX_BYTES } from './mfa-contracts'
+import { createMfaFormController, readMfaResponse } from '@/components/auth/mfa-form'
 
 const now = 1_800_000_000
 const uid = '10000000-0000-4000-8000-000000000001'
@@ -32,9 +34,32 @@ async function expectFailure(response: Response, status: number, error: string) 
   expect(response.headers.get('cache-control')).toContain('no-store')
   expect(response.headers.get('referrer-policy')).toBe('no-referrer')
 }
-beforeEach(() => { vi.spyOn(Date, 'now').mockReturnValue(now * 1000) })
+beforeEach(() => {
+  vi.spyOn(Date, 'now').mockReturnValue(now * 1000)
+  // Baseline is deliberately unqualified; configured deployment tests opt in.
+  vi.stubEnv('BLOCKXONE_APP_ORIGIN', '')
+})
+afterEach(() => { vi.unstubAllEnvs() })
 
 describe('explicit enrollment and safe provider projection', () => {
+  it('round-trips a large synthetic provider SVG through the HTTP parser and transient controller', async () => {
+    const f = fixture()
+    const largeQr = `data:image/svg+xml;utf-8,<svg xmlns="http://www.w3.org/2000/svg">${'<path d="M1 1h1v1H1z"/>'.repeat(18000)}</svg>`
+    expect(largeQr.length).toBeGreaterThan(131072)
+    f.auth.mfa.enroll.mockResolvedValue({ data: { id: fid, type: 'totp', totp: { qr_code: largeQr, secret } }, error: null })
+    const controller = createMfaFormController({
+      view: { state: 'unenrolled', factors: [], hasPendingTotp: false }, continuation: 'security',
+      post: async () => readMfaResponse(await handleMfaAction('mfa-enroll', new URLSearchParams(), f.client), true),
+      navigate: vi.fn(), onChange: vi.fn(),
+    })
+    await controller.enroll()
+    expect(controller.getState().setup?.qrCode.length).toBe(largeQr.length)
+    expect(controller.getState().reloadRequired).toBe(false)
+    controller.clear()
+    expect(controller.getState().setup).toBeUndefined()
+    await controller.enroll()
+    expect(f.auth.mfa.enroll).toHaveBeenCalledOnce()
+  })
   it('returns only a strictly validated one-response enrollment projection', async () => {
     const f = fixture()
     const response = await handleMfaAction('mfa-enroll', new URLSearchParams(), f.client)
@@ -64,13 +89,13 @@ describe('explicit enrollment and safe provider projection', () => {
     f.auth.mfa.enroll.mockResolvedValue({ data, error: null })
     await expectFailure(await handleMfaAction('mfa-enroll', new URLSearchParams(), f.client), 503, 'unavailable')
   })
-  it.each([65536, 65537])('bounds QR characters at the client limit: %s', async (length) => {
+  it.each([MFA_ENROLL_QR_MAX_CHARACTERS, MFA_ENROLL_QR_MAX_CHARACTERS + 1])('bounds QR characters at the client limit: %s', async (length) => {
     const f = fixture()
     const prefix = 'data:image/svg+xml;utf-8,<svg>'
     const boundedQr = `${prefix}${'x'.repeat(length - prefix.length - 6)}</svg>`
     f.auth.mfa.enroll.mockResolvedValue({ data: { id: fid, type: 'totp', totp: { qr_code: boundedQr, secret } }, error: null })
     const response = await handleMfaAction('mfa-enroll', new URLSearchParams(), f.client)
-    if (length > 65536) await expectFailure(response, 503, 'unavailable')
+    if (length > MFA_ENROLL_QR_MAX_CHARACTERS) await expectFailure(response, 503, 'unavailable')
     else expect(await response.json()).toEqual({ ok: true, factorId: fid, qrCode: boundedQr, secret })
   })
   it.each([
@@ -81,11 +106,11 @@ describe('explicit enrollment and safe provider projection', () => {
     const prefix = 'data:image/svg+xml;utf-8,<svg>'
     const emptyBytes = Buffer.byteLength(JSON.stringify({ ok: true, factorId: fid, qrCode: `${prefix}</svg>`, secret }), 'utf8')
     const characterBytes = Buffer.byteLength(JSON.stringify(character), 'utf8') - 2
-    const available = 131072 + extra - emptyBytes
+    const available = MFA_ENROLL_RESPONSE_MAX_BYTES + extra - emptyBytes
     const boundedQr = `${prefix}${character.repeat(Math.floor(available / characterBytes))}${'x'.repeat(available % characterBytes)}</svg>`
     const body = { ok: true, factorId: fid, qrCode: boundedQr, secret }
-    expect(boundedQr.length).toBeLessThanOrEqual(65536)
-    expect(Buffer.byteLength(JSON.stringify(body), 'utf8')).toBe(131072 + extra)
+    expect(boundedQr.length).toBeLessThanOrEqual(MFA_ENROLL_QR_MAX_CHARACTERS)
+    expect(Buffer.byteLength(JSON.stringify(body), 'utf8')).toBe(MFA_ENROLL_RESPONSE_MAX_BYTES + extra)
     f.auth.mfa.enroll.mockResolvedValue({ data: { id: fid, type: 'totp', totp: { qr_code: boundedQr, secret } }, error: null })
     const response = await handleMfaAction('mfa-enroll', new URLSearchParams(), f.client)
     if (extra) await expectFailure(response, 503, 'unavailable')
@@ -111,6 +136,47 @@ describe('mutation-time token continuity', () => {
 })
 
 describe('own-factor verification and fixed continuations', () => {
+  const deployments = [
+    { name: 'TESTNET', origin: 'https://block-x-one-test.vercel.app', supabase: 'https://fegnnnlseuejkrusbbkv.supabase.co', vercel: 'preview' },
+    { name: 'MAINNET', origin: 'https://bx1.co.za', supabase: 'https://oqkevkjbkpugjotihtda.supabase.co', vercel: 'production' },
+  ]
+  it.each(deployments)('lands a verified native $name sign-in on the shared dashboard', async deployment => {
+    vi.stubEnv('BLOCKXONE_AUTH_MODE', 'supabase')
+    vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_AUTH_MODE', 'supabase')
+    vi.stubEnv('BLOCKXONE_APP_ORIGIN', deployment.origin)
+    vi.stubEnv('SUPABASE_URL', deployment.supabase)
+    vi.stubEnv('VERCEL_ENV', deployment.vercel)
+    const f = fixture('verified')
+    const response = await handleMfaAction('mfa-verify', verifyForm(), f.client)
+    expect(await response.json()).toEqual({ ok: true, next: '/portal' })
+    expect(f.auth.mfa.challengeAndVerify).toHaveBeenCalledWith({ factorId: fid, code: '012345' })
+  })
+  it.each(deployments)('preserves setup and security destinations on qualified $name', async deployment => {
+    vi.stubEnv('BLOCKXONE_AUTH_MODE', 'supabase')
+    vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_AUTH_MODE', 'supabase')
+    vi.stubEnv('BLOCKXONE_APP_ORIGIN', deployment.origin)
+    vi.stubEnv('SUPABASE_URL', deployment.supabase)
+    vi.stubEnv('VERCEL_ENV', deployment.vercel)
+    for (const [continuation, next] of [['setup', '/login?setup=1'], ['security', '/workspace/security']]) {
+      const f = fixture('verified')
+      const response = await handleMfaAction('mfa-verify', verifyForm({ continuation }), f.client)
+      expect(await response.json()).toEqual({ ok: true, next })
+    }
+  })
+  it.each([
+    { origin: 'https://bx1.co.za', supabase: 'https://fegnnnlseuejkrusbbkv.supabase.co', vercel: 'production' },
+    { origin: 'https://block-x-one-test.vercel.app', supabase: 'https://oqkevkjbkpugjotihtda.supabase.co', vercel: 'preview' },
+    { origin: 'https://bx1.co.za/portal', supabase: 'https://oqkevkjbkpugjotihtda.supabase.co', vercel: 'production' },
+  ])('retains the existing workspace fallback when deployment identity is unqualified: %j', async deployment => {
+    vi.stubEnv('BLOCKXONE_AUTH_MODE', 'supabase')
+    vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_AUTH_MODE', 'supabase')
+    vi.stubEnv('BLOCKXONE_APP_ORIGIN', deployment.origin)
+    vi.stubEnv('SUPABASE_URL', deployment.supabase)
+    vi.stubEnv('VERCEL_ENV', deployment.vercel)
+    const f = fixture('verified')
+    const response = await handleMfaAction('mfa-verify', verifyForm(), f.client)
+    expect(await response.json()).toEqual({ ok: true, next: '/workspace' })
+  })
   it.each([['workspace', '/workspace'], ['setup', '/login?setup=1'], ['security', '/workspace/security']])('returns only %s continuation after verified live TOTP upgrade', async (continuation, next) => {
     const f = fixture('verified')
     const response = await handleMfaAction('mfa-verify', verifyForm({ continuation }), f.client)
@@ -161,7 +227,7 @@ describe('strict action forms and zero secret logging', () => {
   })
   it('rejects unknown/duplicate fields, invalid factor ID and arbitrary continuation', async () => {
     const f = fixture('verified')
-    for (const form of [new URLSearchParams(), verifyForm({ factorId: 'invalid' }), verifyForm({ continuation: '//evil.test' })]) {
+    for (const form of [new URLSearchParams(), verifyForm({ factorId: 'invalid' }), verifyForm({ continuation: '//evil.test' }), verifyForm({ continuation: '/portal' }), verifyForm({ continuation: 'workspace?next=/portal' })]) {
       await expectFailure(await handleMfaAction('mfa-verify', form, f.client), 400, 'invalid_request')
     }
     const duplicate = verifyForm(); duplicate.append('code', '012345')

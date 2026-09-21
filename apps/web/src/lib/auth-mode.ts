@@ -28,6 +28,13 @@ export const SUPABASE_ALLOWED_PATHS = [
   '/workspace', '/workspace/access-denied',
   '/api/wallet/challenge', '/api/wallet/verify',
   '/login/mfa', '/workspace/security', '/auth/mfa-enroll', '/auth/mfa-verify',
+  '/workspace/administration', '/auth/admin-command',
+  '/workspace/testnet-fund', '/api/testnet-fund/command',
+  '/register', '/auth/register', '/portal', '/portal/onboarding',
+  '/portal/products', '/portal/products/new', '/portal/products/detail',
+  '/portal/compliance', '/portal/compliance/detail', '/portal/opportunities',
+  '/portal/opportunities/detail', '/portal/portfolio',
+  '/api/portal/command', '/api/portal/documents',
 ] as const
 
 export function isSupabaseWebPathAllowed(pathname: string): boolean {

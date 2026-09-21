@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button'
 import { MfaForm } from '@/components/auth/mfa-form'
 import { isSupabaseAuthMode } from '@/lib/auth-mode'
 import { authDocumentReferrerPolicy } from '@/lib/auth-referrer-policy'
+import { platformRelease } from '@/lib/platform-release'
 import { createPageSupabaseClient } from '@/lib/supabase/page'
 import { hasRequiredMfa, readMfaContext, toMfaView } from '@/lib/supabase/mfa'
 import type { MfaView } from '@/lib/supabase/mfa-contracts'
@@ -32,7 +33,7 @@ export default async function MfaPage({ searchParams }: Props) {
   }
   // Next navigation exceptions must never be swallowed by a provider catch.
   if (!unavailable && !signedIn) redirect('/login')
-  if (!unavailable && sufficient) redirect(continuation === 'setup' ? '/login?setup=1' : '/workspace')
+  if (!unavailable && sufficient) redirect(continuation === 'setup' ? '/login?setup=1' : platformRelease(process.env) ? '/portal' : '/workspace')
   return <PublicShell><main id="main-content" className="mx-auto w-full max-w-md px-4 py-16 sm:px-6 sm:py-24">
     <p className="text-sm font-semibold uppercase tracking-[0.16em] text-bxo-accent-primary">Secure access</p>
     <h1 className="mt-4 font-ui text-3xl font-medium tracking-tight text-bxo-text-primary sm:text-4xl">Verify your sign-in</h1>

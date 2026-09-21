@@ -2,8 +2,9 @@ import 'server-only'
 
 import { NextResponse } from 'next/server'
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { platformRelease } from '@/lib/platform-release'
 import { privateResponse } from './http'
-import { MFA_CONTINUATIONS, type MfaContinuation, type MfaErrorCode } from './mfa-contracts'
+import { MFA_CONTINUATIONS, MFA_ENROLL_QR_MAX_CHARACTERS, MFA_ENROLL_RESPONSE_MAX_BYTES, type MfaContinuation, type MfaErrorCode } from './mfa-contracts'
 import { hasRequiredMfa, isMfaContextCurrent, readMfaContext, requireRecentTotp, toMfaView } from './mfa'
 
 const statuses: Record<MfaErrorCode, number> = {
@@ -32,7 +33,7 @@ function enrollmentProjection(value: unknown): { factorId: string; qrCode: strin
   if (!record(value) || !uuid(value.id) || value.type !== 'totp' || !record(value.totp)) return null
   const qrCode = value.totp.qr_code
   const secret = value.totp.secret
-  if (typeof qrCode !== 'string' || qrCode.length > 65536
+  if (typeof qrCode !== 'string' || qrCode.length > MFA_ENROLL_QR_MAX_CHARACTERS
     || !/^data:image\/svg\+xml;utf-8,<svg\b[\s\S]*<\/svg>\s*$/.test(qrCode)
     || typeof secret !== 'string' || !/^[A-Z2-7]{16,128}$/.test(secret)) return null
   return { factorId: value.id, qrCode, secret }
@@ -67,7 +68,7 @@ export async function handleMfaAction(action: string, form: URLSearchParams, cli
       const body = { ok: true, ...enrollment }
       // Keep the entire serialized UTF-8 response within the client's bounded
       // parser, including JSON escaping and multi-byte QR characters.
-      if (Buffer.byteLength(JSON.stringify(body), 'utf8') > 131072) return mfaErrorResponse('unavailable')
+      if (Buffer.byteLength(JSON.stringify(body), 'utf8') > MFA_ENROLL_RESPONSE_MAX_BYTES) return mfaErrorResponse('unavailable')
       return privateResponse(NextResponse.json(body))
     }
     if (view.state === 'unsupported_factor') return mfaErrorResponse('unsupported_factor')
@@ -81,6 +82,7 @@ export async function handleMfaAction(action: string, form: URLSearchParams, cli
     if (error) return providerFailure(error, true)
     const upgraded = await readMfaContext(client)
     if (!upgraded || !hasRequiredMfa(upgraded) || !requireRecentTotp(upgraded, Math.floor(Date.now() / 1000)).allowed) return mfaErrorResponse('unavailable')
-    return privateResponse(NextResponse.json({ ok: true, next: MFA_CONTINUATIONS[destination] }))
+    const next = destination === 'workspace' && platformRelease(process.env) ? '/portal' : MFA_CONTINUATIONS[destination]
+    return privateResponse(NextResponse.json({ ok: true, next }))
   } catch { return mfaErrorResponse('unavailable') }
 }

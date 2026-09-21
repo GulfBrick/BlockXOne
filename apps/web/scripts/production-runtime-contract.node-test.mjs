@@ -13,6 +13,14 @@ const repositoryRoot = path.resolve(webRoot, '..', '..')
 const dockerfile = readFileSync(path.join(repositoryRoot, 'Dockerfile.web'), 'utf8')
 const navbar = readFileSync(path.join(webRoot, 'src', 'components', 'ui', 'navbar.tsx'), 'utf8')
 
+test('only the administration review branch suppresses Vercel Git deployments', () => {
+  const config = JSON.parse(readFileSync(path.join(webRoot, 'vercel.json'), 'utf8'))
+  assert.deepEqual(config.git, { deploymentEnabled: { 'codex/hosted-administration-20260919': false } })
+  assert.equal(config.framework, 'nextjs')
+  assert.equal(config.installCommand, 'npx --yes --package=node@22.23.1 --package=npm@10.9.8 -c "npm ci"')
+  assert.equal(config.buildCommand, 'npx --yes --package=node@22.23.1 --package=npm@10.9.8 -c "npm run build"')
+})
+
 test('standalone Docker builder and runtime retain the complete production build contract', () => {
   const runtimeMarker = 'FROM node:22.23.1-alpine AS runtime'
   const runtimeOffset = dockerfile.indexOf(runtimeMarker)

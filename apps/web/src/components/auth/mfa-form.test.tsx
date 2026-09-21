@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { createMfaCodeInputRef, createMfaFormController, registerMfaPageLifecycle, MfaForm, type MfaFormState } from './mfa-form'
-import type { MfaView } from '@/lib/supabase/mfa-contracts'
+import { createMfaCodeInputRef, createMfaFormController, registerMfaPageLifecycle, readMfaResponse, MfaForm, type MfaFormState } from './mfa-form'
+import { MFA_ENROLL_QR_MAX_CHARACTERS, MFA_ENROLL_RESPONSE_MAX_BYTES, MFA_RESPONSE_MAX_BYTES, type MfaView } from '@/lib/supabase/mfa-contracts'
 
 const factorId = '11111111-1111-4111-8111-111111111111'
 const secondId = '22222222-2222-4222-8222-222222222222'
@@ -23,6 +23,16 @@ function deferred() {
 }
 
 describe('MFA transient controller', () => {
+  it.each([MFA_ENROLL_QR_MAX_CHARACTERS, MFA_ENROLL_QR_MAX_CHARACTERS + 1])('enforces the shared enrollment QR bound: %s', async length => {
+    const f = fixture()
+    const prefix = 'data:image/svg+xml;utf-8,<svg>'
+    f.post.mockResolvedValue({ ...setup, qrCode: `${prefix}${'x'.repeat(length - prefix.length - 6)}</svg>` })
+    await f.controller.enroll()
+    expect(f.controller.getState().reloadRequired).toBe(length > MFA_ENROLL_QR_MAX_CHARACTERS)
+    expect(f.controller.getState().setup?.qrCode.length).toBe(length > MFA_ENROLL_QR_MAX_CHARACTERS ? undefined : length)
+    f.controller.dispose()
+    expect(f.controller.getState().setup).toBeUndefined()
+  })
   it('clears a code input that mounts only after enrollment when detached', () => {
     const input = createMfaCodeInputRef()
     input.clear()
@@ -108,6 +118,15 @@ describe('MFA transient controller', () => {
     expect(f.navigate).toHaveBeenCalledWith('/login?setup=1')
     expect(f.controller.getState().setup).toBeUndefined()
   })
+  it('accepts the exact server-selected shared dashboard destination after verification', async () => {
+    const f = fixture(enrolled, 'workspace')
+    f.post.mockResolvedValue({ ok: true, next: '/portal' })
+    await f.controller.verify(factorId, '012345')
+    expect(f.post.mock.calls[0][1].get('continuation')).toBe('workspace')
+    expect(f.navigate).toHaveBeenCalledOnce()
+    expect(f.navigate).toHaveBeenCalledWith('/portal')
+    expect(f.controller.getState()).toMatchObject({ pending: false, reloadRequired: true })
+  })
   it.each(['12345', '1234567', '123a56', '１２３４５６', ' 123456'])('rejects malformed code %s before POST', async code => {
     const f = fixture(enrolled)
     await f.controller.verify(factorId, code)
@@ -154,7 +173,7 @@ describe('MFA transient controller', () => {
     await request
     expect(f.navigate).not.toHaveBeenCalled()
   })
-  it.each(['https://evil.test', '//evil.test', '/workspace?token=secret', '/admin', '/workspace/'])('rejects unknown next URL %s', async next => {
+  it.each(['https://evil.test', '//evil.test', '/workspace?token=secret', '/admin', '/workspace/', '/portal/', '/portal?next=https://evil.test', '/portal#token', '//portal', '/%70ortal'])('rejects unknown next URL %s', async next => {
     const f = fixture(enrolled)
     f.post.mockResolvedValue({ ok: true, next })
     await f.controller.verify(factorId, '123456')
@@ -185,6 +204,48 @@ describe('MFA transient controller', () => {
     await f.controller.enroll()
     expect(f.controller.getState()).toMatchObject({ error: 'unavailable', reloadRequired: true })
     expect(f.controller.getState().setup).toBeUndefined()
+  })
+})
+
+describe('bounded MFA response transport', () => {
+  const response = (body: string | Uint8Array<ArrayBuffer>, status = 200) => new Response(body, { status, headers: { 'content-type': 'application/json' } })
+  const sized = (bytes: number) => {
+    const emptyBody = JSON.stringify({ ok: true, padding: '' })
+    return JSON.stringify({ ok: true, padding: 'x'.repeat(bytes - emptyBody.length) })
+  }
+  it.each([false, true])('accepts exactly the applicable byte bound, enrollment=%s', async enrollment => {
+    const bound = enrollment ? MFA_ENROLL_RESPONSE_MAX_BYTES : MFA_RESPONSE_MAX_BYTES
+    const result = await readMfaResponse(response(sized(bound)), enrollment) as { padding: string }
+    expect(result.padding.length).toBe(bound - JSON.stringify({ ok: true, padding: '' }).length)
+  })
+  it.each([false, true])('rejects overflow without returning response material, enrollment=%s', async enrollment => {
+    const bound = enrollment ? MFA_ENROLL_RESPONSE_MAX_BYTES : MFA_RESPONSE_MAX_BYTES
+    await expect(readMfaResponse(response(sized(bound + 1)), enrollment)).rejects.toThrow('unavailable')
+  })
+  it('never enlarges failed enrollment or verification response bounds', async () => {
+    await expect(readMfaResponse(response(sized(MFA_RESPONSE_MAX_BYTES + 1), 503), true)).rejects.toThrow('unavailable')
+    await expect(readMfaResponse(response(sized(MFA_RESPONSE_MAX_BYTES + 1)))).rejects.toThrow('unavailable')
+  })
+  it('decodes a multibyte value split across stream chunks', async () => {
+    const bytes = new TextEncoder().encode(JSON.stringify({ ok: false, error: 'unavailable', ignored: '中' }))
+    const boundary = bytes.indexOf(0xe4) + 1
+    const stream = new ReadableStream<Uint8Array>({ start(controller) {
+      controller.enqueue(bytes.slice(0, boundary)); controller.enqueue(bytes.slice(boundary)); controller.close()
+    } })
+    const result = await readMfaResponse(new Response(stream, { headers: { 'content-type': 'application/json' } })) as { error: string }
+    expect(result.error).toBe('unavailable')
+  })
+  it('cancels an overflowing stream', async () => {
+    const cancel = vi.fn()
+    const stream = new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(new Uint8Array(MFA_RESPONSE_MAX_BYTES + 1)) }, cancel })
+    await expect(readMfaResponse(new Response(stream, { headers: { 'content-type': 'application/json' } }))).rejects.toThrow('unavailable')
+    expect(cancel).toHaveBeenCalledOnce()
+  })
+  it('rejects invalid UTF8, incomplete JSON, HTML and success inside failed HTTP', async () => {
+    await expect(readMfaResponse(response(new Uint8Array([0xff])))).rejects.toThrow()
+    await expect(readMfaResponse(response('{"ok":'))).rejects.toThrow()
+    await expect(readMfaResponse(new Response('<html>private</html>'))).rejects.toThrow('unavailable')
+    await expect(readMfaResponse(response('{"ok":true}', 403))).rejects.toThrow('unavailable')
   })
 })
 

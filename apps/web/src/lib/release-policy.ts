@@ -7,6 +7,7 @@ const PRODUCTION_BLOCKED_PREFIXES = [
   '/api',
   '/auth',
   '/workspace',
+  '/portal',
   '/investor',
   '/operator',
   '/issuer',
@@ -65,8 +66,11 @@ function normalizePathname(pathname: string): string {
 }
 
 function isProtectedApplicationPath(pathname: string): boolean {
+  // Classify lookalikes as protected, never as public. This does not normalize
+  // admission: the Supabase allowlist still checks the original exact path.
+  const family = pathname.toLowerCase()
   return PRODUCTION_BLOCKED_PREFIXES.some(
-    (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`)
+    (prefix) => family === prefix || family.startsWith(`${prefix}/`)
   )
 }
 
@@ -118,7 +122,8 @@ export function isProductionWebPathBlocked(
   }
   if (!isProtectedApplicationPath(normalized)) return false
   // Native identity routes have no legacy/development fallback.
-  if (normalized === '/auth' || normalized.startsWith('/auth/') || normalized === '/workspace' || normalized.startsWith('/workspace/')) return true
+  const nativeFamily = normalized.toLowerCase()
+  if (nativeFamily === '/auth' || nativeFamily.startsWith('/auth/') || nativeFamily === '/workspace' || nativeFamily.startsWith('/workspace/') || nativeFamily === '/portal' || nativeFamily.startsWith('/portal/')) return true
   if (
     ['dev', 'development', 'test'].includes(normalizedEnvironment) &&
     (releaseMode || '').trim().toLowerCase() !== 'pilot' &&

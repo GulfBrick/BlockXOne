@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { flushSync } from 'react-dom'
 import Image from 'next/image'
 import { Button } from '@/components/ui/button'
-import type { MfaContinuation, MfaErrorCode, MfaView } from '@/lib/supabase/mfa-contracts'
+import { MFA_ENROLL_QR_MAX_CHARACTERS, MFA_ENROLL_RESPONSE_MAX_BYTES, MFA_RESPONSE_MAX_BYTES, type MfaContinuation, type MfaErrorCode, type MfaView } from '@/lib/supabase/mfa-contracts'
 
 type SetupMaterial = { factorId: string; qrCode: string; secret: string }
 export type MfaFormState = {
@@ -22,7 +22,7 @@ type ControllerOptions = {
 }
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const initialState = (): MfaFormState => ({ pending: false, reloadRequired: false })
-const nextPaths = new Set(['/workspace', '/login?setup=1', '/workspace/security'])
+const nextPaths = new Set(['/portal', '/workspace', '/login?setup=1', '/workspace/security'])
 const errors: Record<MfaErrorCode, string> = {
   invalid_request: 'Unable to verify that code. Check your authenticator and try again.',
   unauthorised: 'Sign in again to continue.',
@@ -70,7 +70,7 @@ export function createMfaFormController(options: ControllerOptions) {
       if (enrollment) {
         if (typeof result.factorId !== 'string' || !uuid.test(result.factorId)
           || typeof result.secret !== 'string' || !/^[A-Z2-7]{16,128}$/.test(result.secret)
-          || typeof result.qrCode !== 'string' || result.qrCode.length > 65536
+          || typeof result.qrCode !== 'string' || result.qrCode.length > MFA_ENROLL_QR_MAX_CHARACTERS
           || !result.qrCode.startsWith('data:image/svg+xml;utf-8,')) { failUnknown(); return }
         emit({ pending: false, reloadRequired: false, setup: { factorId: result.factorId, secret: result.secret, qrCode: result.qrCode } })
       } else {
@@ -107,8 +107,13 @@ export function createMfaFormController(options: ControllerOptions) {
 async function post(path: string, body: URLSearchParams, signal: AbortSignal): Promise<unknown> {
   const response = await fetch(path, { method: 'POST', credentials: 'same-origin', cache: 'no-store', redirect: 'error',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' }, body, signal })
+  return readMfaResponse(response, path === '/auth/mfa-enroll')
+}
+
+export async function readMfaResponse(response: Response, enrollment = false): Promise<unknown> {
   if (!response.headers.get('content-type')?.toLowerCase().startsWith('application/json')) throw new Error('unavailable')
   // Bound even error responses; never put provider HTML/messages into the UI.
+  const maximumBytes = enrollment && response.ok ? MFA_ENROLL_RESPONSE_MAX_BYTES : MFA_RESPONSE_MAX_BYTES
   const reader = response.body?.getReader()
   if (!reader) throw new Error('unavailable')
   let text = ''
@@ -119,7 +124,7 @@ async function post(path: string, body: URLSearchParams, signal: AbortSignal): P
       const chunk = await reader.read()
       if (chunk.done) break
       size += chunk.value.length
-      if (size > 131072) { await reader.cancel(); throw new Error('unavailable') }
+      if (size > maximumBytes) { await reader.cancel(); throw new Error('unavailable') }
       text += decoder.decode(chunk.value, { stream: true })
     }
     text += decoder.decode()
