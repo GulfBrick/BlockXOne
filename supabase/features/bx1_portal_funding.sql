@@ -627,7 +627,7 @@ begin
     result:=jsonb_build_object('observation_id',inserted.id,'status',inserted.status);
     perform set_config('request.jwt.claims',coalesce(old_claims,''),true); return result;
   end if;
-  if e.expires_at<=clock_timestamp() or e.version is distinct from case when e.kind='ROUTE' then r.revision else f.revision end
+  if e.expires_at<=clock_timestamp() or e.version is distinct from (case when e.kind='ROUTE' then r.revision else f.revision end)
     or not(bx1_portal.funding_actions(c,e.kind,e.target_id)?case when e.kind='ROUTE' then 'verify_funding_route' else 'verify_funding_reference' end) then raise exception 'funding_expectation_stale' using errcode='42501'; end if;
   expected_route:=e.expected->'route';
   if expected_route is distinct from jsonb_build_object('id',r.id,'revision',case when e.kind='REFERENCE' then f.claim_route_revision else r.revision end,
