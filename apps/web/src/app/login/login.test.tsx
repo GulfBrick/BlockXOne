@@ -49,12 +49,19 @@ describe('server login/setup admission', () => {
     }
     expect((await generateMetadata({ searchParams: Promise.resolve({ token_hash: 'synthetic' }) })).referrer).toBe('no-referrer')
   })
-  it('shows the real login without legacy portals or public registration', async () => {
+  it('preserves Mainnet login and offers separate branded Testnet login and registration', async () => {
     const html = renderToStaticMarkup(await LoginPage({ searchParams: Promise.resolve({}) }))
     expect(html).toContain('Sign in to BlockXOne')
+    expect(html).toContain('Mainnet · Secure access')
+    expect(html).toContain('Signing in does not enable financial operations')
     expect(html).toContain('action="/auth/login"')
     expect(html).not.toContain('Investor sign in')
-    expect(html).not.toContain('/register')
+    expect(html).toContain('href="https://testnet.bx1.co.za/login"')
+    expect(html).toContain('href="https://testnet.bx1.co.za/register"')
+    expect(html).toContain('accounts and sessions are separate from Mainnet')
+    expect(html).not.toContain('href="/register"')
+    expect(html).not.toContain('action="/auth/register"')
+    expect(html).not.toContain('.vercel.app')
   })
   it('query setup=1 alone never authorizes password setup', async () => {
     mocks.workspace.mockResolvedValue(null)
@@ -67,6 +74,8 @@ describe('server login/setup admission', () => {
     expect(mocks.workspace).toHaveBeenCalledOnce()
     expect(html).toContain('action="/auth/setup"')
     expect(html).not.toContain('name="email"')
+    expect(html).not.toContain('href="https://testnet.bx1.co.za/login"')
+    expect(html).not.toContain('href="https://testnet.bx1.co.za/register"')
   })
   it('renders actionable setup errors only after checking the active workspace', async () => {
     const params = { setup: '1', error: 'password_mismatch' }

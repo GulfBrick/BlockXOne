@@ -7,6 +7,7 @@ import { PublicShell } from '@/components/public/public-shell'
 import { SupabaseAuthForm } from '@/components/auth/supabase-auth-form'
 import { resolveAuthMode } from '@/lib/auth-mode'
 import { authDocumentReferrerPolicy } from '@/lib/auth-referrer-policy'
+import { BRANDED_ENTRY } from '@/lib/branded-entry'
 import { isAuthErrorCode } from '@/lib/supabase/contracts'
 import { LOGIN_EMAIL_COOKIE } from '@/lib/supabase/http'
 import { createPageSupabaseClient } from '@/lib/supabase/page'
@@ -38,13 +39,26 @@ const portals = [
   },
 ]
 
+function TestnetEntryLinks() {
+  return (
+    <section aria-labelledby="testnet-access-title" className="mt-8 border-t border-bxo-border-subtle pt-6">
+      <h2 id="testnet-access-title" className="font-ui text-lg font-medium text-bxo-text-primary">Looking for Testnet?</h2>
+      <p className="mt-3 text-sm leading-6 text-bxo-text-secondary">Use the separate demo environment. Testnet balances have no real-world value; accounts and sessions are separate from Mainnet.</p>
+      <div className="mt-3 flex flex-wrap gap-x-6 gap-y-2">
+        <a href={BRANDED_ENTRY.testnetLogin} className="inline-flex min-h-11 items-center text-sm font-semibold text-bxo-accent-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bxo-accent-primary">Testnet sign in</a>
+        <a href={BRANDED_ENTRY.testnetRegister} className="inline-flex min-h-11 items-center text-sm font-semibold text-bxo-accent-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bxo-accent-primary">Create a Testnet account</a>
+      </div>
+    </section>
+  )
+}
+
 function LoginChooserPage() {
   return (
     <PublicShell>
       <main id="main-content" className="mx-auto max-w-[90rem] px-4 pb-24 pt-14 sm:px-6 sm:pt-20 lg:px-8 lg:pb-32 lg:pt-24">
         <section className="grid gap-10 border-b border-bxo-border-subtle pb-14 sm:pb-20 lg:grid-cols-12 lg:gap-8 lg:pb-24">
           <div className="lg:col-span-2" data-bxo-hero-detail>
-            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-bxo-accent-primary">Secure access</p>
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-bxo-accent-primary">Mainnet · Secure access</p>
             <p className="mt-3 text-xs uppercase tracking-[0.14em] text-bxo-text-tertiary">BXO / Access</p>
           </div>
 
@@ -109,6 +123,7 @@ function LoginChooserPage() {
             ))}
           </div>
         </section>
+        <TestnetEntryLinks />
       </main>
     </PublicShell>
   )
@@ -148,12 +163,14 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
   return (
     <PublicShell>
       <main id="main-content" className="mx-auto w-full max-w-md px-4 py-16 sm:px-6 sm:py-24">
-        <p className="text-sm font-semibold uppercase tracking-[0.16em] text-bxo-accent-primary">Secure access</p>
+        <p className="text-sm font-semibold uppercase tracking-[0.16em] text-bxo-accent-primary">Mainnet · Secure access</p>
         <h1 className="mt-4 font-ui text-3xl font-medium leading-tight tracking-tight text-bxo-text-primary sm:text-4xl">{setup ? 'Set your password' : 'Sign in to BlockXOne'}</h1>
+        {!setup ? <p className="mt-4 text-sm leading-6 text-bxo-text-secondary">This is Mainnet access. Signing in does not enable financial operations; permissions and release controls still apply.</p> : null}
         {unavailable ? <p role="alert" className="mt-6 text-base text-bxo-text-secondary">Access is temporarily unavailable. Please try again.</p>
           : !validSetup ? <p role="alert" className="mt-6 text-base text-bxo-text-secondary">This invitation link is invalid or has expired.</p>
           : <SupabaseAuthForm mode={setup ? 'setup' : 'login'} initialEmail={initialEmail} error={isAuthErrorCode(params.error) ? params.error : undefined} />}
         <Link href="/" className="mt-6 inline-flex min-h-11 items-center text-sm text-bxo-accent-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bxo-accent-primary">Back to home</Link>
+        {!setup ? <TestnetEntryLinks /> : null}
       </main>
     </PublicShell>
   )

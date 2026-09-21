@@ -1,0 +1,102 @@
+name: BX1 branded main entry cloud acceptance
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - codex/branded-main-entry-20260921
+    paths:
+      - apps/web/src/components/public/public-navigation*
+      - apps/web/src/app/login/**
+      - apps/web/src/lib/branded-entry*
+      - apps/web/package.json
+      - apps/web/package-lock.json
+      - apps/web/next.config.js
+      - apps/web/tsconfig.json
+      - apps/web/vitest.config.ts
+      - apps/web/scripts/preflight*
+      - apps/web/scripts/production-url-policy*
+      - apps/web/scripts/run-hermetic-tests*
+      - apps/web/src/test/hermetic-network-guard.ts
+      - .github/workflows/bx1-branded-entry.yml
+  pull_request:
+    paths:
+      - apps/web/src/components/public/public-navigation*
+      - apps/web/src/app/login/**
+      - apps/web/src/lib/branded-entry*
+      - apps/web/package.json
+      - apps/web/package-lock.json
+      - apps/web/next.config.js
+      - apps/web/tsconfig.json
+      - apps/web/vitest.config.ts
+      - apps/web/scripts/preflight*
+      - apps/web/scripts/production-url-policy*
+      - apps/web/scripts/run-hermetic-tests*
+      - apps/web/src/test/hermetic-network-guard.ts
+      - .github/workflows/bx1-branded-entry.yml
+
+permissions:
+  contents: read
+
+jobs:
+  web-acceptance:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Check out exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+          submodules: false
+          lfs: false
+
+      - name: Select pinned Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22.23.1'
+          check-latest: false
+          package-manager-cache: false
+
+      - name: Pin and verify cloud toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --global npm@10.9.8 --no-audit --no-fund
+          test "$(node --version)" = 'v22.23.1'
+          test "$(npm --version)" = '10.9.8'
+
+      - name: Install locked web dependencies
+        shell: bash
+        working-directory: apps/web
+        run: npm ci --no-audit --no-fund
+
+      - name: Run controlled hermetic web suite
+        shell: bash
+        working-directory: apps/web
+        run: npm test
+
+      - name: Typecheck and build existing main web surface
+        if: ${{ !cancelled() }}
+        shell: bash
+        working-directory: apps/web
+        # Synthetic compile configuration only. No hosted keys, database, RPC,
+        # deployment command, financial adapter or production activation.
+        env:
+          CI: 'true'
+          NEXT_TELEMETRY_DISABLED: '1'
+          NODE_ENV: production
+          BLOCKXONE_AUTH_MODE: supabase
+          NEXT_PUBLIC_BLOCKXONE_AUTH_MODE: supabase
+          SUPABASE_URL: https://supabase.blockxone.invalid
+          SUPABASE_PUBLISHABLE_KEY: sb_publishable_00000000000000000000000000000000
+          BLOCKXONE_APP_ORIGIN: https://app.blockxone.invalid
+          SERVER_ACTION_ALLOWED_ORIGINS: app.blockxone.invalid
+          BLOCKXONE_WEB_SURFACE: public
+          NEXT_PUBLIC_BLOCKXONE_WEB_SURFACE: public
+          NEXT_PUBLIC_DEMO_REQUEST_ENABLED: 'false'
+        run: |
+          set -euo pipefail
+          node node_modules/typescript/bin/tsc --noEmit --incremental false
+          npm run build
