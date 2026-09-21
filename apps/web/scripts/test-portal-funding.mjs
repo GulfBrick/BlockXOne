@@ -174,7 +174,7 @@ try {
     eq(s.subscriptions.find(x => x.id === o.subscription.id).status, 'AWAITING_FUNDING', 'funding does not invent issuance/reservation status')
     eq((await read(1, context('IssuerFundManager'))).funding.obligations.find(x => x.id === o.obligation.id).state, 'RECONCILED', 'issuer sees same canonical obligation')
     eq((await read(6)).funding.obligations.some(x => x.id === o.obligation.id), false, 'other investor cannot read funding')
-    await admin(); eq(await scalar("select sum(case when side='DEBIT' then amount_base_units else -amount_base_units end)::text from bx1_portal.funding_journal_lines l join bx1_portal.funding_journals j on j.id=l.journal_id where obligation_id=$1", [o.obligation.id]), '0', 'both journal legs balance exactly')
+    await admin(); eq(await scalar("select sum(case when l.side='DEBIT' then l.amount_base_units else -l.amount_base_units end)::text from bx1_portal.funding_journal_lines l join bx1_portal.funding_journals j on j.id=l.journal_id where j.obligation_id=$1", [o.obligation.id]), '0', 'both journal legs balance exactly')
     completed.push({ o, ref })
   }
   phase = 'receipt-deduplication-and-exceptions'
