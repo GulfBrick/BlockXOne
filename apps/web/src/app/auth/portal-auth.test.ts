@@ -186,4 +186,14 @@ describe('TEST login destinations retain native authority and suspension checks'
     expect((await POST(login(), context('login'))).headers.get('location')).toBe(`${canonical}/login?error=invalid_credentials`)
     expect(mocks.portal).not.toHaveBeenCalled()
   })
+  it('routes a configured MAINNET member to the shared dashboard without TEST RPCs', async () => {
+    const origin = 'https://bx1.co.za'
+    vi.stubEnv('VERCEL_ENV', 'production')
+    vi.stubEnv('BLOCKXONE_APP_ORIGIN', origin)
+    vi.stubEnv('SUPABASE_URL', 'https://oqkevkjbkpugjotihtda.supabase.co')
+    const request = new NextRequest(`${origin}/auth/login`, { method: 'POST', headers: { origin, host: 'bx1.co.za', 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ email: 'person@example.test', password: 'test-password-only' }) })
+    expect((await POST(request, context('login'))).headers.get('location')).toBe(`${origin}/portal`)
+    expect(mocks.portal).not.toHaveBeenCalled()
+    expect(mocks.current).toHaveBeenCalled()
+  })
 })

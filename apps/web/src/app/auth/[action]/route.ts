@@ -9,6 +9,7 @@ import { hasRequiredMfa, isMfaContextCurrent, readMfaContext } from '@/lib/supab
 import { handleMfaAction, mfaErrorResponse } from '@/lib/supabase/mfa-actions'
 import { administrationErrorResponse, handleAdministrationAction } from '@/lib/administration/actions'
 import { isDemoEnvironment } from '@/lib/testnet-fund/contracts'
+import { platformRelease } from '@/lib/platform-release'
 import { PortalError, readPortal } from '@/lib/portal/server'
 
 export const dynamic = 'force-dynamic'
@@ -142,7 +143,7 @@ async function dispatch(request: NextRequest, context: Context): Promise<NextRes
             if (error instanceof PortalError && [401, 403].includes(error.status)) destination = '/workspace/access-denied'
             else throw error
           }
-        } else destination = workspace ? '/workspace' : '/workspace/access-denied'
+        } else destination = workspace ? (platformRelease(process.env) ? '/portal' : '/workspace') : '/workspace/access-denied'
         // Revalidate after every resource read, including the portal RPC.
         if (!await isMfaContextCurrent(client, mfa)) return jar.finish(errorResponse('unavailable', 503))
       } else if (!mfa && portalEnabled) {
@@ -179,7 +180,7 @@ async function dispatch(request: NextRequest, context: Context): Promise<NextRes
       if (!hasRequiredMfa(updated)) return jar.finish(redirect('/login/mfa?continue=setup'))
       const workspace = await readWorkspace(client)
       if (!await isMfaContextCurrent(client, updated)) return jar.finish(errorResponse('unavailable', 503, true))
-      return jar.finish(redirect(workspace ? '/workspace' : '/workspace/access-denied'))
+      return jar.finish(redirect(workspace ? (platformRelease(process.env) ? '/portal' : '/workspace') : '/workspace/access-denied'))
     }
     if (!await readVerifiedUser(client)) return jar.finish(errorResponse('access_denied', 401))
     const { error } = await client.auth.signOut({ scope: 'local' })

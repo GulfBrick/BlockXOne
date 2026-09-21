@@ -1,9 +1,11 @@
-name: BX1 Amoy demo fund cloud compile
+name: BX1 platform cloud acceptance
 
 on:
   workflow_dispatch:
   push:
     paths:
+      - apps/web/src/lib/platform-release*
+      - PLATFORM_RELEASE.json
       - apps/web/src/lib/portal/**
       - apps/web/src/components/portal/**
       - apps/web/src/app/portal/**
@@ -24,6 +26,8 @@ on:
       - .github/workflows/bx1-demo-fund-compile.yml
   pull_request:
     paths:
+      - apps/web/src/lib/platform-release*
+      - PLATFORM_RELEASE.json
       - apps/web/src/lib/portal/**
       - apps/web/src/components/portal/**
       - apps/web/src/app/portal/**
