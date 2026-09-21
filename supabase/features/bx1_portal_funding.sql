@@ -532,7 +532,7 @@ begin
     'allowed_actions',case when bx1_portal.scoped_finance(c,p.organisation_id,'TreasuryOperator') and p.status='PUBLISHED' then '["propose_funding_route"]'::jsonb else '[]'::jsonb end) order by p.created_at,p.id)
     from bx1_portal.products p where bx1_portal.scoped_product_visible(c,p.id) or bx1_portal.scoped_finance(c,p.organisation_id)),'[]'));
   result:=jsonb_set(result,'{subscriptions}',coalesce((select jsonb_agg(jsonb_build_object('id',s.id,'product_id',s.product_id,'investor_id',s.investor_id,'investment_account_id',s.investment_account_id,
-    'product_name',s.accepted_terms->>'name','organisation_id',s.organisation_id,'product_revision',s.product_revision,'terms_hash',s.terms_hash,'currency',s.accepted_terms->>'currency,
+    'product_name',s.accepted_terms->>'name','organisation_id',s.organisation_id,'product_revision',s.product_revision,'terms_hash',s.terms_hash,'currency',s.accepted_terms->>'currency',
     'units',s.units::text,'amount_minor',s.amount_minor::text,'status',s.status,'created_at',s.created_at,'can_cancel',s.investor_id=auth.uid() and (c->>'mode'='APPLICANT' or c->>'role'='Investor') and bx1_portal.funding_can_cancel(s.id),
     'funding_obligation_id',(select id from bx1_portal.funding_obligations where subscription_id=s.id),
     'allowed_actions',case when s.investment_account_id is not null and s.status='AWAITING_FUNDING' and not exists(select 1 from bx1_portal.funding_obligations where subscription_id=s.id)
