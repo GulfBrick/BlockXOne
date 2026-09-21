@@ -6,7 +6,7 @@ import { subscriptionQuote, type PortalApplication, type PortalInvestmentAccount
 import { portalScopeHref, type PortalOperatingContext } from '@/lib/portal/operating-context'
 import { CommandFeedback, usePortalCommand } from './portal-client'
 import { PrivateDocument } from './onboarding-form'
-import { DetailList, Field, Notice, Panel, StatusBadge, dateLabel, money } from './portal-primitives'
+import { DetailList, EmptyState, Field, Notice, Panel, StatusBadge, dateLabel, money } from './portal-primitives'
 import styles from './portal.module.css'
 
 export function currentInvestorApplication(snapshot: PortalSnapshot): PortalApplication | undefined {
