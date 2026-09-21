@@ -8,6 +8,7 @@ import { animate, createScope, stagger } from 'animejs'
 
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
+import type { PlatformEnvironment } from '@/lib/platform-release'
 
 const NAV_LINKS = [
   { href: '/how-it-works', label: 'Platform' },
@@ -17,7 +18,7 @@ const NAV_LINKS = [
   { href: '/security-and-compliance', label: 'Security' },
 ]
 
-export function PublicNavigation({ showPortalAccess }: { showPortalAccess: boolean }) {
+export function PublicNavigation({ showPortalAccess, environment }: { showPortalAccess: boolean; environment?: PlatformEnvironment }) {
   const pathname = usePathname()
   const [mobileOpen, setMobileOpen] = useState(false)
   const triggerRef = useRef<HTMLButtonElement>(null)
@@ -95,6 +96,9 @@ export function PublicNavigation({ showPortalAccess }: { showPortalAccess: boole
 
   const isActive = (href: string) => pathname === href || pathname.startsWith(`${href}/`)
   const workflowIsActive = isActive('/how-it-works') || pathname === '/guided-demo'
+  const counterpart = environment === 'MAINNET'
+    ? { href: 'https://testnet.bx1.co.za', label: 'Testnet · test value' }
+    : environment === 'TESTNET' ? { href: 'https://bx1.co.za', label: 'Mainnet · admission required' } : null
   const primaryAction = workflowIsActive
     ? showPortalAccess
       ? { href: '/login', label: 'Choose workspace' }
@@ -133,6 +137,8 @@ export function PublicNavigation({ showPortalAccess }: { showPortalAccess: boole
       </nav>
 
       <div className="hidden items-center justify-end gap-2 xl:flex" data-bxo-nav-actions>
+        {counterpart ? <a href={counterpart.href} className="px-2 py-3 text-xs text-bxo-text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bxo-accent-primary">{counterpart.label}</a> : null}
+        {environment ? <Button asChild variant="outline" className="bxo-secondary-cta h-11 rounded-sm"><Link href="/register">Register</Link></Button> : null}
         {showPortalAccess ? (
           <Button asChild variant="outline" className="bxo-secondary-cta h-11 rounded-sm">
             <Link href="/login">Sign in</Link>
@@ -186,6 +192,8 @@ export function PublicNavigation({ showPortalAccess }: { showPortalAccess: boole
                 )
               })}
               <div className="my-1 border-t border-bxo-border-subtle" />
+              {environment ? <Link href="/register" className="flex min-h-11 items-center px-3 text-sm font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bxo-accent-primary" data-bxo-menu-item>Register</Link> : null}
+              {counterpart ? <a href={counterpart.href} className="flex min-h-11 items-center px-3 text-sm text-bxo-text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bxo-accent-primary" data-bxo-menu-item>{counterpart.label}</a> : null}
               {showPortalAccess ? (
                 <Link
                   href="/login"

@@ -94,7 +94,7 @@ export default function NewOfferingPage() {
   const [executionReadyTestnets, setExecutionReadyTestnets] = useState<ManagedTestnetChainID[]>([])
   const [selectedTestnetChainID, setSelectedTestnetChainID] = useState<ManagedTestnetChainID>(80002)
   const [assetClass, setAssetClass] = useState<PilotAssetClass>('PRIVATE_DEBT_NOTE')
-  const [runtimeScope, setRuntimeScope] = useState<PilotRuntimeScope>(frontendRuntimeScope)
+  const [runtimeScope, setRuntimeScope] = useState<PilotRuntimeScope | 'MAINNET' | null>(frontendRuntimeScope)
   const offeringIdempotencyKey = useRef('')
   const [form, setForm] = useState({
     name: '',
@@ -249,8 +249,8 @@ export default function NewOfferingPage() {
   const selectedTestnet = managedTestnet(selectedTestnetChainID)
   const testnetExecutionReady = executionReadyTestnets.includes(selectedTestnetChainID)
   const runtimeScopeMatchesFrontend = runtimeScope === frontendRuntimeScope
-  const offeringTargetReady = runtimeScopeMatchesFrontend && (
-    runtimeScope === 'LOCAL_PILOT' ? localPilotExecutionReady : testnetExecutionReady
+  const offeringTargetReady = runtimeScope === 'TESTNET' && runtimeScopeMatchesFrontend && (
+    testnetExecutionReady
   )
   const offeringTargetBlockedMessage = !runtimeScopeMatchesFrontend
     ? `This ${runtimeScope === 'TESTNET' ? 'testnet' : 'private-network'} instrument cannot be offered from the ${frontendRuntimeScope === 'TESTNET' ? 'testnet' : 'private-network'} workspace.`
@@ -518,13 +518,9 @@ export default function NewOfferingPage() {
                     </label>
                     <label className="text-sm font-semibold text-bxo-text-secondary">
                       Network
-                      <select className={fieldClass} value={runtimeScope} disabled aria-readonly="true">
-                        {frontendRuntimeScope === 'LOCAL_PILOT' ? (
-                          <option value="LOCAL_PILOT">
-                            {localPilotExecutionReady
-                              ? 'Private validation network · execution ready'
-                              : 'Private validation network unavailable · strict chain evidence missing'}
-                          </option>
+                      <select className={fieldClass} value={runtimeScope ?? ''} disabled aria-readonly="true">
+                        {frontendRuntimeScope !== 'TESTNET' ? (
+                          <option value={frontendRuntimeScope ?? ''}>Legacy execution unavailable in this environment</option>
                         ) : (
                           <option value="TESTNET">
                             {executionReadyTestnets.length > 0

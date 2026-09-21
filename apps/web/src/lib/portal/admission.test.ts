@@ -15,6 +15,8 @@ vi.mock('@/components/public/public-shell', () => ({ PublicShell: ({ children }:
 vi.mock('@/components/portal/registration-form', () => ({ RegistrationForm: () => createElement('p', null, 'server-admitted registration') }))
 vi.mock('@/components/portal/portal-screens', () => ({ PortalScreen: () => createElement('p', null, 'server-admitted portal') }))
 
+vi.mock('@/components/portal/entry-screen', () => ({ EntryScreen: () => createElement('p', null, 'server-admitted entry') }))
+
 import RegisterPage, { generateMetadata as registrationMetadata } from '@/app/register/page'
 import { PortalPage } from '@/components/portal/portal-page'
 import { loadPortalPage, readPortal } from './server'
@@ -25,6 +27,7 @@ const user = { id: 'd22789ee-7f73-4acf-a414-3de0b62ea801', email: 'applicant@exa
 const organisation = '33333333-3333-4333-8333-333333333333'
 const roleContext = { mode: 'ROLE' as const, organisationId: organisation, role: 'Investor' as const }
 const snapshot = { actor: { id: user.id, email: user.email, display_name: null, can_review: false }, operating_context: APPLICANT_CONTEXT, applications: [], organisations: [], products: [], subscriptions: [], events: [], requests: [] }
+const entrySnapshot = { entry_version: 1, actor: { id: user.id, email: user.email }, applications: [], contexts: [], admission: { manual_test_review: true } }
 const refusedConfigurations: [string, string][] = [
   ['VERCEL_ENV', 'production'], ['VERCEL_ENV', 'development'], ['VERCEL_ENV', ''],
   ['SUPABASE_URL', 'https://oqkevkjbkpugjotihtda.supabase.co'],
@@ -32,7 +35,6 @@ const refusedConfigurations: [string, string][] = [
   ['BLOCKXONE_APP_ORIGIN', 'https://bx1.co.za'],
   ['BLOCKXONE_APP_ORIGIN', 'https://block-x-one.vercel.app'],
   ['BLOCKXONE_APP_ORIGIN', 'https://preview.example.test'],
-  ['BLOCKXONE_TESTNET_FUND_DEMO', 'disabled'],
   ['BLOCKXONE_AUTH_MODE', ''], ['NEXT_PUBLIC_BLOCKXONE_AUTH_MODE', ''],
 ]
 
@@ -50,7 +52,7 @@ beforeEach(() => {
   mocks.mfa.mockResolvedValue(null)
   mocks.sufficient.mockReturnValue(true)
   mocks.current.mockResolvedValue(true)
-  mocks.rpc.mockReturnValue({ abortSignal: vi.fn().mockResolvedValue({ data: snapshot, error: null }) })
+  mocks.rpc.mockImplementation((name: string) => ({ abortSignal: vi.fn().mockResolvedValue({ data: name === 'bx1_entry_read' ? entrySnapshot : snapshot, error: null }) }))
 })
 afterEach(() => vi.unstubAllEnvs())
 
@@ -79,7 +81,7 @@ describe('actual customer page admission', () => {
   it.each(refusedConfigurations)('rejects registration and portal before backend access when %s=%s', async (name, value) => {
     vi.stubEnv(name, value)
     await expect(RegisterPage({ searchParams: Promise.resolve({}) })).rejects.toThrow('NEXT_NOT_FOUND')
-    await expect(PortalPage({ view: '/portal/onboarding', query: { mode: 'applicant' } })).rejects.toThrow('NEXT_NOT_FOUND')
+    expect(renderToStaticMarkup(await PortalPage({ view: '/portal/onboarding', query: { mode: 'applicant' } }))).toContain('Saved portal state is unavailable')
     await expect(loadPortalPage()).rejects.toMatchObject({ status: 404 })
     expect(mocks.create).not.toHaveBeenCalled()
     expect(mocks.user).not.toHaveBeenCalled()
@@ -92,20 +94,22 @@ describe('actual customer page admission', () => {
     vi.stubEnv('BLOCKXONE_RELEASE_MODE', 'pilot')
     vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_RELEASE_MODE', 'pilot')
     await expect(RegisterPage({ searchParams: Promise.resolve({}) })).rejects.toThrow('NEXT_NOT_FOUND')
-    await expect(PortalPage({ view: '/portal/onboarding' })).rejects.toThrow('NEXT_NOT_FOUND')
+    expect(renderToStaticMarkup(await PortalPage({ view: '/portal/onboarding' }))).toContain('Saved portal state is unavailable')
     expect(mocks.create).not.toHaveBeenCalled()
   })
   it('renders registration only with the complete hosted TEST configuration', async () => {
+    mocks.user.mockResolvedValueOnce(null)
     const html = renderToStaticMarkup(await RegisterPage({ searchParams: Promise.resolve({}) }))
     expect(html).toContain('server-admitted registration')
-    expect(mocks.create).not.toHaveBeenCalled()
+    expect(mocks.create).toHaveBeenCalledTimes(1)
     expect(mocks.notFound).not.toHaveBeenCalled()
   })
-  it('requires a verified caller and the exact scoped authoritative portal RPC even in TEST', async () => {
+  it('requires verified identity entry and scoped reads without inferring application type', async () => {
     const html = renderToStaticMarkup(await PortalPage({ view: '/portal/onboarding', query: { mode: 'applicant' } }))
-    expect(html).toContain('server-admitted portal')
-    expect(mocks.user).toHaveBeenCalledTimes(2)
-    expect(mocks.rpc).toHaveBeenCalledTimes(1)
+    expect(html).toContain('server-admitted entry')
+    expect(mocks.user).toHaveBeenCalledTimes(3)
+    expect(mocks.rpc).toHaveBeenCalledTimes(2)
+    expect(mocks.rpc).toHaveBeenCalledWith('bx1_entry_read')
     expect(mocks.rpc).toHaveBeenCalledWith('bx1_portal_read_scoped', { operating_context: APPLICANT_CONTEXT })
     expect(mocks.workspace).not.toHaveBeenCalled()
   })
@@ -120,7 +124,7 @@ describe('actual customer page admission', () => {
     expect(html).not.toContain('server-admitted portal')
     expect(html).toContain('Complete your account access.')
     expect(mocks.rpc).toHaveBeenCalledTimes(1)
-    expect(mocks.rpc).toHaveBeenCalledWith('bx1_portal_read_scoped', { operating_context: APPLICANT_CONTEXT })
+    expect(mocks.rpc).toHaveBeenCalledWith('bx1_entry_read')
   })
   it('admits native business access only through the selected assignment and exact scoped response', async () => {
     mocks.mfa.mockResolvedValue({ userId: user.id })

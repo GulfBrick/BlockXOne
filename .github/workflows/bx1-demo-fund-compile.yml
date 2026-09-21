@@ -20,6 +20,16 @@ on:
       - apps/web/src/lib/branded-entry*
       - apps/web/src/lib/auth-referrer-policy*
       - apps/web/src/lib/platform-release*
+      - apps/web/src/lib/runtime-scope*
+      - apps/web/src/lib/instrument-term-options*
+      - apps/web/src/app/login/**
+      - apps/web/src/app/wm/funds/new/**
+      - apps/web/src/app/tokenisation-agent/deploy/**
+      - apps/web/src/app/tokenisation-agent/mint/**
+      - apps/web/src/components/public/public-shell.tsx
+      - apps/web/src/components/public/public-navigation.tsx
+      - apps/web/scripts/test-entry.mjs
+      - supabase/features/bx1_entry.sql
       - PLATFORM_RELEASE.json
       - apps/web/src/lib/portal/**
       - apps/web/src/components/portal/**
@@ -54,6 +64,16 @@ on:
       - apps/web/src/lib/branded-entry*
       - apps/web/src/lib/auth-referrer-policy*
       - apps/web/src/lib/platform-release*
+      - apps/web/src/lib/runtime-scope*
+      - apps/web/src/lib/instrument-term-options*
+      - apps/web/src/app/login/**
+      - apps/web/src/app/wm/funds/new/**
+      - apps/web/src/app/tokenisation-agent/deploy/**
+      - apps/web/src/app/tokenisation-agent/mint/**
+      - apps/web/src/components/public/public-shell.tsx
+      - apps/web/src/components/public/public-navigation.tsx
+      - apps/web/scripts/test-entry.mjs
+      - supabase/features/bx1_entry.sql
       - PLATFORM_RELEASE.json
       - apps/web/src/lib/portal/**
       - apps/web/src/components/portal/**
@@ -90,6 +110,10 @@ jobs:
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.mode != 'registration-browser-proof' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [TESTNET, MAINNET]
     services:
       postgres:
         image: postgres:17
@@ -149,7 +173,7 @@ jobs:
       - name: Publish compiled artifact and generated web module
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: bx1-amoy-demo-fund-${{ github.sha }}
+          name: bx1-amoy-demo-fund-${{ matrix.target }}-${{ github.sha }}
           if-no-files-found: error
           retention-days: 14
           path: |
@@ -190,10 +214,14 @@ jobs:
           NODE_ENV: production
           BLOCKXONE_AUTH_MODE: supabase
           NEXT_PUBLIC_BLOCKXONE_AUTH_MODE: supabase
-          SUPABASE_URL: https://supabase.blockxone.invalid
+          SUPABASE_URL: ${{ matrix.target == 'TESTNET' && 'https://fegnnnlseuejkrusbbkv.supabase.co' || 'https://oqkevkjbkpugjotihtda.supabase.co' }}
           SUPABASE_PUBLISHABLE_KEY: sb_publishable_00000000000000000000000000000000
-          BLOCKXONE_APP_ORIGIN: https://app.blockxone.invalid
-          SERVER_ACTION_ALLOWED_ORIGINS: app.blockxone.invalid
+          BLOCKXONE_APP_ORIGIN: ${{ matrix.target == 'TESTNET' && 'https://testnet.bx1.co.za' || 'https://bx1.co.za' }}
+          SERVER_ACTION_ALLOWED_ORIGINS: ${{ matrix.target == 'TESTNET' && 'testnet.bx1.co.za' || 'bx1.co.za' }}
+          BLOCKXONE_ENVIRONMENT: ${{ matrix.target }}
+          NEXT_PUBLIC_BLOCKXONE_RUNTIME_SCOPE: ${{ matrix.target }}
+          VERCEL_ENV: ${{ matrix.target == 'TESTNET' && 'preview' || 'production' }}
+          VERCEL_GIT_COMMIT_SHA: ${{ github.sha }}
           BLOCKXONE_WEB_SURFACE: public
           NEXT_PUBLIC_BLOCKXONE_WEB_SURFACE: public
           NEXT_PUBLIC_DEMO_REQUEST_ENABLED: 'false'
@@ -268,6 +296,46 @@ jobs:
         env:
           BX1_FUNDING_SQL_TEST_URL: postgresql://postgres:bx1-synthetic-ci-only@127.0.0.1:5432/bx1_demo_ci
         run: node apps/web/scripts/test-portal-funding.mjs
+
+  entry-sql-acceptance:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.mode != 'registration-browser-proof' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: bx1_demo_ci
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: bx1-synthetic-ci-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d bx1_demo_ci"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Check out exact entry source in isolated cloud fixture
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+          submodules: false
+          lfs: false
+      - name: Select pinned Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22.23.1'
+          check-latest: false
+          package-manager-cache: false
+      - name: Install locked dependencies in cloud
+        working-directory: apps/web
+        run: npm ci --no-audit --no-fund
+      - name: Prove additive mappings and authoritative entry commands
+        env:
+          BX1_PORTAL_SQL_TEST_URL: postgresql://postgres:bx1-synthetic-ci-only@127.0.0.1:5432/bx1_demo_ci
+        run: node apps/web/scripts/test-entry.mjs
 
   amoy-provider-readiness:
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.mode != 'registration-browser-proof' }}

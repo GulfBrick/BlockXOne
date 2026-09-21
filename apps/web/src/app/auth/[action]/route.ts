@@ -8,9 +8,9 @@ import { hasCanonicalOrigin, InvalidAuthRequest, LOGIN_EMAIL_COOKIE, PENDING_INV
 import { hasRequiredMfa, isMfaContextCurrent, readMfaContext } from '@/lib/supabase/mfa'
 import { handleMfaAction, mfaErrorResponse } from '@/lib/supabase/mfa-actions'
 import { administrationErrorResponse, handleAdministrationAction } from '@/lib/administration/actions'
-import { isDemoEnvironment } from '@/lib/testnet-fund/contracts'
-import { platformRelease } from '@/lib/platform-release'
-import { PortalError, readPortal } from '@/lib/portal/server'
+import { identityEnvironmentEnabled, platformRelease } from '@/lib/platform-release'
+import { PortalError } from '@/lib/portal/server'
+import { readEntry } from '@/lib/portal/entry-server'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -19,7 +19,7 @@ type PendingInvite = { tokenHash: string; type: 'invite' | 'recovery' | 'signup'
 const actions = new Set(['confirm', 'login', 'setup', 'logout', 'mfa-enroll', 'mfa-verify', 'admin-command'])
 const tokenPattern = /^[A-Za-z0-9_-]{32,512}$/
 function confirmationType(value: unknown): value is PendingInvite['type'] {
-  return value === 'invite' || value === 'recovery' || (value === 'signup' && isDemoEnvironment(process.env))
+  return value === 'invite' || value === 'recovery' || (value === 'signup' && identityEnvironmentEnabled(process.env))
 }
 
 function htmlPage(title: string, content: string, status = 200, referrerPolicy: AuthReferrerPolicy = 'no-referrer'): NextResponse {
@@ -87,7 +87,7 @@ async function dispatch(request: NextRequest, context: Context): Promise<NextRes
       }
       const pending = readPending(request.cookies.get(PENDING_INVITE_COOKIE)?.value)
       if (request.nextUrl.search || !pending) return invalidInvite()
-      if (pending.type === 'signup') return htmlPage('Confirm your email', '<p>Continue to verify your email address and start your testnet application. Email confirmation does not approve your application or assign a role.</p><form method="post" action="/auth/confirm"><button type="submit">Confirm email and continue</button></form><a href="/login">Return to sign in</a>', 200, authDocumentReferrerPolicy('/auth/confirm', request.nextUrl.searchParams))
+      if (pending.type === 'signup') return htmlPage('Confirm your email', '<p>Continue to verify your email address and start your application in this environment. Email confirmation does not approve your application or assign a role.</p><form method="post" action="/auth/confirm"><button type="submit">Confirm email and continue</button></form><a href="/login">Return to sign in</a>', 200, authDocumentReferrerPolicy('/auth/confirm', request.nextUrl.searchParams))
       return htmlPage('Confirm your access', '<p>Continue to verify your invitation and set your password.</p><form method="post" action="/auth/confirm"><button type="submit">Continue securely</button></form><a href="/">Back to home</a>', 200, authDocumentReferrerPolicy('/auth/confirm', request.nextUrl.searchParams))
     }
     if (!hasCanonicalOrigin(request)) return adminAction ? administrationErrorResponse('invalid_request', 403) : mfaAction ? mfaErrorResponse('invalid_request', 403) : errorResponse('invalid_request', 403, action === 'setup')
@@ -113,7 +113,7 @@ async function dispatch(request: NextRequest, context: Context): Promise<NextRes
         if (mfa && !hasRequiredMfa(mfa)) return jar.finish(clearPending(redirect('/login/mfa')))
         // New users have no native workspace yet. Only the live-session portal
         // RPC can admit onboarding; signup metadata never authorizes this path.
-        try { await readPortal(client) } catch (error) {
+        try { await readEntry(client) } catch (error) {
           if (error instanceof PortalError && [401, 403].includes(error.status)) return jar.finish(clearPending(errorResponse('access_denied', 403)))
           throw error
         }
@@ -135,11 +135,11 @@ async function dispatch(request: NextRequest, context: Context): Promise<NextRes
       }
       const mfa = await readMfaContext(client)
       let destination = !mfa ? '/workspace/access-denied' : '/login/mfa'
-      const portalEnabled = isDemoEnvironment(process.env)
+      const portalEnabled = identityEnvironmentEnabled(process.env)
       if (mfa && hasRequiredMfa(mfa)) {
         const workspace = await readWorkspace(client)
         if (portalEnabled) {
-          try { await readPortal(client); destination = workspace ? '/portal' : '/portal/onboarding' } catch (error) {
+          try { await readEntry(client); destination = workspace ? '/portal' : '/portal/onboarding' } catch (error) {
             if (error instanceof PortalError && [401, 403].includes(error.status)) destination = '/workspace/access-denied'
             else throw error
           }
@@ -147,7 +147,7 @@ async function dispatch(request: NextRequest, context: Context): Promise<NextRes
         // Revalidate after every resource read, including the portal RPC.
         if (!await isMfaContextCurrent(client, mfa)) return jar.finish(errorResponse('unavailable', 503))
       } else if (!mfa && portalEnabled) {
-        try { await readPortal(client); destination = '/portal/onboarding' } catch (error) {
+        try { await readEntry(client); destination = '/portal/onboarding' } catch (error) {
           if (!(error instanceof PortalError) || ![401, 403].includes(error.status)) throw error
           // This includes suspended native users and recovery restrictions;
           // lack of a native MFA context is not itself permission to onboard.
@@ -162,10 +162,14 @@ async function dispatch(request: NextRequest, context: Context): Promise<NextRes
       const validationError = validateSetupPassword(password, form.get('confirmPassword') ?? '')
       if (validationError) return jar.finish(setupRetry(validationError))
       const mfa = await readMfaContext(client)
-      if (!mfa) return jar.finish(errorResponse('access_denied', 403, true))
-      if (!hasRequiredMfa(mfa)) return jar.finish(redirect('/login/mfa?continue=setup'))
-      if (!await readWorkspace(client)) return jar.finish(errorResponse('access_denied', 403, true))
-      if (!await isMfaContextCurrent(client, mfa)) return jar.finish(errorResponse('unavailable', 503, true))
+      if (!mfa && !identityEnvironmentEnabled(process.env)) return jar.finish(errorResponse('access_denied', 403, true))
+      if (mfa && !hasRequiredMfa(mfa)) return jar.finish(redirect('/login/mfa?continue=setup'))
+      const existingWorkspace = mfa ? await readWorkspace(client) : null
+      if (!existingWorkspace) {
+        if (!identityEnvironmentEnabled(process.env)) return jar.finish(errorResponse('access_denied', 403, true))
+        await readEntry(client)
+      }
+      if (mfa && !await isMfaContextCurrent(client, mfa)) return jar.finish(errorResponse('unavailable', 503, true))
       const { error } = await client.auth.updateUser({ password })
       if (error) {
         if (!error.status || error.status >= 500 || error.status === 429) return jar.finish(errorResponse('unavailable', 503, true))
@@ -176,11 +180,16 @@ async function dispatch(request: NextRequest, context: Context): Promise<NextRes
       }
       console.info(JSON.stringify({ event: 'auth_setup_result', code: 'password_saved' }))
       const updated = await readMfaContext(client)
-      if (!updated) return jar.finish(redirect('/workspace/access-denied'))
+      if (!updated) {
+        if (!identityEnvironmentEnabled(process.env)) return jar.finish(redirect('/workspace/access-denied'))
+        await readEntry(client)
+        return jar.finish(redirect('/portal/onboarding'))
+      }
       if (!hasRequiredMfa(updated)) return jar.finish(redirect('/login/mfa?continue=setup'))
       const workspace = await readWorkspace(client)
+      if (!workspace && identityEnvironmentEnabled(process.env)) await readEntry(client)
       if (!await isMfaContextCurrent(client, updated)) return jar.finish(errorResponse('unavailable', 503, true))
-      return jar.finish(redirect(workspace ? (platformRelease(process.env) ? '/portal' : '/workspace') : '/workspace/access-denied'))
+      return jar.finish(redirect(workspace ? (platformRelease(process.env) ? '/portal' : '/workspace') : identityEnvironmentEnabled(process.env) ? '/portal/onboarding' : '/workspace/access-denied'))
     }
     if (!await readVerifiedUser(client)) return jar.finish(errorResponse('access_denied', 401))
     const { error } = await client.auth.signOut({ scope: 'local' })

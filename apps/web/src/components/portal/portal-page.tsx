@@ -9,6 +9,7 @@ import type { PortalPath } from '@/lib/portal/contracts'
 import { PortalScreen } from './portal-screens'
 import { PortalShell } from './portal-shell'
 import { RoleDashboardContent } from './role-dashboard'
+import { EntryScreen } from './entry-screen'
 import styles from './portal.module.css'
 
 export async function PortalPage({ view, id, query = {} }: { view: PortalPath; id?: string; query?: DashboardQuery }) {
@@ -16,13 +17,16 @@ export async function PortalPage({ view, id, query = {} }: { view: PortalPath; i
   let status = 503
   try {
     // Business providers are admitted explicitly; both releases share this shell.
-    if (view !== '/portal') requirePortalEnvironment()
-    data = await loadRoleDashboard(query)
+    if (view !== '/portal' && view !== '/portal/onboarding') requirePortalEnvironment()
+    // Onboarding is always the caller's application workspace, not the selected
+    // staff role's client queue. Existing scoped staff dashboards stay separate.
+    data = await loadRoleDashboard(view === '/portal/onboarding' ? { ...query, mode: 'applicant', organisation: undefined, role: undefined } : query)
     if (data.portal && !portalViewAllowed(view, data.operatingContext, data.portal.snapshot)) throw new PortalError('This action is not available in your selected context.', 403)
-    if (!data.portal && view !== '/portal') throw new PortalError('Saved portal state is unavailable.', 503)
+    if (!data.portal && view !== '/portal' && view !== '/portal/onboarding') throw new PortalError('Saved portal state is unavailable.', 503)
   } catch (error) { data = null; if (error instanceof PortalError) status = error.status }
   if (!data && status === 404) notFound()
   if (!data && status === 401) redirect('/login')
+  if (data?.kind === 'applicant' && (view === '/portal' || view === '/portal/onboarding')) return <EntryScreen key={`${data.entry.actor.id}:${data.release.environment}:${String(query.application ?? '')}:${String(query.add ?? '')}`} initial={data.entry} release={data.release} applicationId={typeof query.application === 'string' ? query.application : undefined} addCapacity={query.add === 'capacity'} chooseContext={data.chooseContext} operationsAvailable={Boolean(data.portal)} />
   if (data?.portal) return <PortalScreen key={`${data.portal.user.id}:${data.release.environment}:${portalContextKey(data.operatingContext)}:${view}:${id ?? ''}`} data={data.portal} view={view} id={id} operatingContext={data.operatingContext} release={data.release} scope={data.kind === 'role' ? data.scope : undefined} scopes={data.scopes} />
   if (data?.kind === 'role') {
     const dashboard = getRoleDashboard(data.scope.role)!

@@ -1,5 +1,14 @@
 # BlockXOne platform releases
 
+## 1.1.0-rc.9 — Stage 1 entry and identity-context candidate
+
+- Based on rc.8 source `de105558585e803cba36e750798b9c6c6ea658c8`, preserving existing auth/security, portal, account, funding and journal history.
+- Correct initial investor/wealth-manager intent, multiple immutable-persona applications, exact selected application commands and explicit authorised capacities in the existing shell. Signed-in registration offers Continue, Switch account and Add a capacity.
+- Share validated hosted identity entry across TESTNET/MAINNET without admitting legacy test-only business commands on MAINNET. Unknown runtime configuration no longer defaults to LOCAL_PILOT; historical records are retained.
+- Requires `supabase/features/bx1_entry.sql` after the existing portal/authority/funding sequence. Review routing is server-owned and default-closed; organisation application review remains Stage 2. Apply and verify schema before releasing dependent routes.
+- Existing cloud workflow now builds both configurations and separately verifies additive entry SQL. Cloud checks and hosted journey acceptance are pending, not claimed by this changelog.
+- No real role grants, settlement routes, fund movements, contract changes or production financial admission. Existing branded deployments remain unchanged until controlled release. Full platform parity and eight-stage completion remain unproven.
+
 ## 1.1.0-rc.8 — Integrated branded-entry and funding candidate
 
 - Base this candidate on accepted rc.7 source `57868141d87ac6eeba446be452793017da3f2da8`, retaining the exact branded TEST origin, legacy-alias redirect ordering, registration metadata/header alignment and strict same-origin request admission.

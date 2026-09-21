@@ -1,17 +1,17 @@
 {
   "product": "BlockXOne",
-  "version": "1.1.0-rc.8",
+  "version": "1.1.0-rc.9",
   "status": "release-candidate",
-  "baseSource": "57868141d87ac6eeba446be452793017da3f2da8",
+  "baseSource": "de105558585e803cba36e750798b9c6c6ea658c8",
   "sourceIdentity": "VERCEL_GIT_COMMIT_SHA",
   "environmentSource": "validated deployment target, canonical origin and Supabase project",
   "sharedEntry": "/login",
   "sharedDashboard": "/portal",
   "environments": ["TESTNET", "MAINNET"],
   "brand": "BlockXOne Brand Kit v2.0 Exact Logo",
-  "schemaChanges": ["supabase/features/bx1_portal_funding.sql"],
+  "schemaChanges": ["supabase/features/bx1_entry.sql"],
   "contractChanges": [],
   "productionFinancialAdmission": false,
-  "scope": "Integrate canonical subscription funding obligations, reviewed TEST token routes, payer-signed receipt claims, independent server verification, Treasury/Controller reconciliation and immutable balanced journals/reversals into the existing role workspaces, preserving rc.7 branded entry, registration Origin handling and strict same-origin admission. No settlement asset, beneficiary or authority is seeded. Exact cloud acceptance and hosted funding proof remain required; governed issuance, full mirrored lifecycle and MAINNET financial admission are not granted by this candidate."
+  "scope": "Stage 1 candidate: preserve existing identity/security and business history; add distinct signup applications, multiple explicit capacities, guarded entry commands and shared validated hosted identity entry. Legacy application writes delegate to the canonical entry writer. No real roles, settlement routes, financial admission or contracts are granted. Requires additive entry schema before app release; cloud and hosted acceptance pending."
 }
 

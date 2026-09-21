@@ -4,7 +4,7 @@ vi.mock('server-only', () => ({}))
 const mocks = vi.hoisted(() => ({ create: vi.fn(), user: vi.fn(), workspace: vi.fn(), mfaContext: vi.fn(), sufficient: vi.fn(), current: vi.fn(), portal: vi.fn() }))
 vi.mock('@/lib/supabase/server', async original => ({ ...await original<object>(), createRequestSupabaseClient: mocks.create, readVerifiedUser: mocks.user, readWorkspace: mocks.workspace }))
 vi.mock('@/lib/supabase/mfa', () => ({ readMfaContext: mocks.mfaContext, hasRequiredMfa: mocks.sufficient, isMfaContextCurrent: mocks.current }))
-vi.mock('@/lib/portal/server', async original => ({ ...await original<object>(), readPortal: mocks.portal }))
+vi.mock('@/lib/portal/entry-server', () => ({ readEntry: mocks.portal }))
 vi.mock('@/lib/supabase/mfa-actions', () => ({ handleMfaAction: vi.fn(), mfaErrorResponse: vi.fn() }))
 vi.mock('@/lib/administration/actions', () => ({ handleAdministrationAction: vi.fn(), administrationErrorResponse: vi.fn() }))
 import { GET, POST } from './[action]/route'
@@ -108,7 +108,7 @@ describe('TEST signup confirmation without consuming email-scanner GETs', () => 
     expect(mocks.portal).not.toHaveBeenCalled()
     expect(await response.text()).not.toContain('private-provider-details')
   })
-  it.each([['VERCEL_ENV', 'production'], ['SUPABASE_URL', 'https://oqkevkjbkpugjotihtda.supabase.co'], ['BLOCKXONE_TESTNET_FUND_DEMO', 'disabled']])('continues rejecting signup outside the TEST gate %s', async (key, value) => {
+  it.each([['VERCEL_ENV', 'production'], ['SUPABASE_URL', 'https://oqkevkjbkpugjotihtda.supabase.co'], ['NEXT_PUBLIC_BLOCKXONE_AUTH_MODE', 'legacy']])('rejects signup when the shared identity configuration is inconsistent: %s', async (key, value) => {
     vi.stubEnv(key, value)
     expect((await GET(new NextRequest(`${canonical}/auth/confirm?token_hash=${hash}&type=signup`), context('confirm'))).status).toBe(400)
     expect((await POST(post('confirm', {}, { cookie: `${PENDING_INVITE_COOKIE}=${staged()}` }), context('confirm'))).status).toBe(400)
@@ -186,14 +186,14 @@ describe('TEST login destinations retain native authority and suspension checks'
     expect((await POST(login(), context('login'))).headers.get('location')).toBe(`${canonical}/login?error=invalid_credentials`)
     expect(mocks.portal).not.toHaveBeenCalled()
   })
-  it('routes a configured MAINNET member to the shared dashboard without TEST RPCs', async () => {
+  it('routes a configured MAINNET member through shared identity without TEST business RPCs', async () => {
     const origin = 'https://bx1.co.za'
     vi.stubEnv('VERCEL_ENV', 'production')
     vi.stubEnv('BLOCKXONE_APP_ORIGIN', origin)
     vi.stubEnv('SUPABASE_URL', 'https://oqkevkjbkpugjotihtda.supabase.co')
     const request = new NextRequest(`${origin}/auth/login`, { method: 'POST', headers: { origin, host: 'bx1.co.za', 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ email: 'person@example.test', password: 'test-password-only' }) })
     expect((await POST(request, context('login'))).headers.get('location')).toBe(`${origin}/portal`)
-    expect(mocks.portal).not.toHaveBeenCalled()
+    expect(mocks.portal).toHaveBeenCalledTimes(1)
     expect(mocks.current).toHaveBeenCalled()
   })
 })

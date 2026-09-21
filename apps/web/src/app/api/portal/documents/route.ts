@@ -63,7 +63,7 @@ export async function GET(request: NextRequest) {
     if (!context.success) throw new PortalError('Invalid operating context.', 403)
     const client = createRequestSupabaseClient(jar.adapter)
     const { snapshot } = await readPortal(client, context.data)
-    const document = snapshot.applications.flatMap(application => application.details.documents).find(item => item.id === id)
+    const document = snapshot.applications.flatMap(application => application.details.documents ?? []).find(item => item.id === id)
     if (!document || !evidenceSchema.safeParse(document).success) throw new PortalError('Document unavailable for this session.', 404)
     if (!params.has('download')) return jar.finish(privateResponse(NextResponse.json({ url: portalScopeHref(`/api/portal/documents?id=${id}&download=1`, context.data) })))
     const downloaded = await client.storage.from(bucket).download(document.storage_path)

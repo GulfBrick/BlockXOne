@@ -1,4 +1,5 @@
 import { managedTestnet } from './managed-testnets'
+import type { BlockXOneRuntimeScope } from './runtime-scope'
 
 export const privateDebtDayCountConventions = [
   'ACT_365',
@@ -22,6 +23,7 @@ export const localPilotAvailability = 'LOCAL_ONLY_NO_REAL_VALUE' as const
 export const stripeTestCurrencies = ['EUR', 'GBP', 'USD', 'ZAR'] as const
 
 type RuntimeScope = 'LOCAL_PILOT' | 'TESTNET'
+type RequestedRuntimeScope = RuntimeScope | BlockXOneRuntimeScope | null
 
 type ChainCatalogRow = {
   chain_id: number
@@ -82,11 +84,11 @@ function isPotentialLocalPilotRow(row: ChainCatalogRow): boolean {
 }
 
 export function evaluateChainCatalog(
-  frontendRuntimeScope: RuntimeScope,
+  frontendRuntimeScope: RequestedRuntimeScope,
   value: unknown
 ): ChainCatalogReadiness {
   const rows = parseChainCatalog(value)
-  if (!rows) {
+  if (!rows || (frontendRuntimeScope !== 'LOCAL_PILOT' && frontendRuntimeScope !== 'TESTNET')) {
     return { localPilotReady: false, executionReadyTestnetChainIDs: [] }
   }
 
@@ -119,7 +121,7 @@ export function evaluateChainCatalog(
 }
 
 export function offeringExecutionConfiguration(
-  runtimeScope: RuntimeScope,
+  runtimeScope: RequestedRuntimeScope,
   selectedTestnetChainID: number | null,
   currency: string
 ): OfferingExecutionConfiguration {
@@ -142,7 +144,7 @@ export function offeringExecutionConfiguration(
 }
 
 export function instrumentExecutionConfiguration(
-  runtimeScope: RuntimeScope,
+  runtimeScope: RequestedRuntimeScope,
   selectedTestnetChainID: number | null
 ): InstrumentExecutionConfiguration {
   if (runtimeScope === 'LOCAL_PILOT') {
@@ -151,6 +153,8 @@ export function instrumentExecutionConfiguration(
       chain_id: localPilotChainID,
     }
   }
+
+  if (runtimeScope !== 'TESTNET') throw new Error('This legacy execution path is not admitted for the configured environment.')
 
   if (
     selectedTestnetChainID === null ||
@@ -169,8 +173,8 @@ export function instrumentExecutionConfiguration(
 
 export function shouldBlockForMissingTestnetManifest(
   creatingOffering: boolean,
-  runtimeScope: 'LOCAL_PILOT' | 'TESTNET',
+  runtimeScope: RequestedRuntimeScope,
   testnetExecutionReady: boolean
 ): boolean {
-  return creatingOffering && runtimeScope === 'TESTNET' && !testnetExecutionReady
+  return creatingOffering && (runtimeScope === 'TESTNET' ? !testnetExecutionReady : runtimeScope !== 'LOCAL_PILOT')
 }

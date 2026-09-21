@@ -10,7 +10,7 @@ export const REGISTRATION_ERRORS = {
   intent_required: 'Choose investor or wealth manager to start your application.',
   password_length: 'Use a password between 12 and 1,024 characters.',
   password_mismatch: 'The passwords do not match. Enter exactly the same password in both fields.',
-  consent_required: 'Read and accept the testnet terms and registration privacy notice to continue.',
+  consent_required: 'Read and accept the account terms and registration privacy notice to continue.',
   password_rejected: 'That password could not be accepted. Choose a different unique passphrase and try again.',
   rate_limited: 'Registration requests are temporarily limited. Wait a few minutes, then try again or check your inbox.',
   unavailable: 'Registration is temporarily unavailable. Check your inbox before trying again; an earlier request may have completed.',
@@ -44,8 +44,8 @@ export function validateRegistrationForm(form: URLSearchParams): RegistrationVal
 }
 
 /** User-editable descriptive metadata. Authorization must use reviewed database assignments. */
-export function registrationMetadata(intent: RegistrationIntent) {
-  return { portal_intent: intent, registration_terms_version: REGISTRATION_TERMS_VERSION }
+export function registrationMetadata(intent: RegistrationIntent, environment: 'TESTNET' | 'MAINNET' = 'TESTNET') {
+  return { portal_intent: intent, registration_terms_version: environment === 'TESTNET' ? REGISTRATION_TERMS_VERSION : 'identity-2026-09-21' }
 }
 
 export function registrationProviderOutcome(error: { code?: string; status?: number } | null): 'check-email' | RegistrationError {

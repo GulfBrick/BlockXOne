@@ -118,9 +118,9 @@ describe('hosted TEST registration endpoint', () => {
     expect(auth.signUp).toHaveBeenCalledTimes(1)
   })
   it.each([
-    ['VERCEL_ENV', 'production'], ['SUPABASE_URL', 'https://oqkevkjbkpugjotihtda.supabase.co'], ['BLOCKXONE_TESTNET_FUND_DEMO', 'disabled'],
+    ['VERCEL_ENV', 'production'], ['SUPABASE_URL', 'https://oqkevkjbkpugjotihtda.supabase.co'], ['NEXT_PUBLIC_BLOCKXONE_RUNTIME_SCOPE', 'MAINNET'],
     ['BLOCKXONE_AUTH_MODE', 'legacy'], ['NEXT_PUBLIC_BLOCKXONE_AUTH_MODE', 'legacy'], ['BLOCKXONE_APP_ORIGIN', 'https://bx1.co.za'],
-  ])('refuses non-test configuration %s=%s before creating a client', async (name, value) => {
+  ])('refuses inconsistent identity configuration %s=%s before creating a client', async (name, value) => {
     vi.stubEnv(name, value)
     expect((await POST(request())).status).toBe(404)
     expect(mocks.create).not.toHaveBeenCalled()
@@ -167,7 +167,7 @@ describe('hosted TEST registration endpoint', () => {
   it('does not replace or sign out an already authenticated account', async () => {
     mocks.user.mockResolvedValueOnce({ id: 'existing-user', email: 'existing@example.test' })
     const response = await POST(request())
-    expect(response.headers.get('location')).toBe(`${canonical}/portal/onboarding`)
+    expect(response.headers.get('location')).toBe(`${canonical}/register`)
     expect(auth.signUp).not.toHaveBeenCalled()
     expect(auth.signOut).not.toHaveBeenCalled()
   })

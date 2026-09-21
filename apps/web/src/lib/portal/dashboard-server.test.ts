@@ -1,10 +1,11 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 vi.mock('server-only', () => ({}))
-const mocks = vi.hoisted(() => ({ client: {}, user: vi.fn(), workspace: vi.fn(), context: vi.fn(), sufficient: vi.fn(), current: vi.fn(), portal: vi.fn() }))
+const mocks = vi.hoisted(() => ({ client: {}, user: vi.fn(), workspace: vi.fn(), context: vi.fn(), sufficient: vi.fn(), current: vi.fn(), portal: vi.fn(), entry: vi.fn() }))
 vi.mock('@/lib/supabase/page', () => ({ createPageSupabaseClient: async () => mocks.client }))
 vi.mock('@/lib/supabase/server', () => ({ readVerifiedUser: mocks.user, readWorkspace: mocks.workspace }))
 vi.mock('@/lib/supabase/mfa', () => ({ readMfaContext: mocks.context, hasRequiredMfa: mocks.sufficient, isMfaContextCurrent: mocks.current }))
 vi.mock('./server', async original => ({ ...await original<object>(), readPortal: mocks.portal }))
+vi.mock('./entry-server', () => ({ readEntry: mocks.entry }))
 import { loadRoleDashboard } from './dashboard-server'
 import { PortalError } from './server'
 import { APPLICANT_CONTEXT, type PortalOperatingContext } from './operating-context'
@@ -22,10 +23,22 @@ beforeEach(() => {
   mocks.user.mockResolvedValue(actor); mocks.context.mockResolvedValue({}); mocks.sufficient.mockReturnValue(true); mocks.current.mockResolvedValue(true)
   mocks.workspace.mockResolvedValue({ user: { ...actor, platformUserId: 'person', displayName: null }, organisations: [{ id: organisation, name: 'A', roles: ['Investor'] }] })
   mocks.portal.mockImplementation(async (_client, context) => portalFor(context))
+  mocks.entry.mockResolvedValue({ entry_version: 1, actor, applications: [], contexts: [], admission: { manual_test_review: true } })
 })
 afterEach(() => vi.unstubAllEnvs())
 
 describe('fresh dashboard authority and environment admission', () => {
+  it('shows a context chooser rather than automatically exercising the first staff role', async () => {
+    mocks.workspace.mockResolvedValue({ user: { ...actor, platformUserId: 'person', displayName: null }, organisations: [{ id: organisation, name: 'A', roles: ['Investor', 'SuperAdmin'] }] })
+    const result = await loadRoleDashboard({})
+    expect(result.kind).toBe('applicant')
+    if (result.kind === 'applicant') expect(result.chooseContext).toBe(true)
+    expect(result.operatingContext).toEqual(APPLICANT_CONTEXT)
+  })
+  it('rejects an unknown application id without falling back to a different capacity', async () => {
+    await expect(loadRoleDashboard({ mode: 'applicant', application: otherOrganisation })).rejects.toMatchObject({ status: 403 })
+    expect(mocks.portal).not.toHaveBeenCalled()
+  })
   it('loads the exact assigned native scope through the scoped business read', async () => {
     const result = await loadRoleDashboard({ organisation, role: 'Investor' })
     expect(result.kind).toBe('role')
@@ -52,8 +65,8 @@ describe('fresh dashboard authority and environment admission', () => {
     expect(mocks.portal).toHaveBeenCalledTimes(1)
     expect(mocks.portal).toHaveBeenCalledWith(mocks.client, APPLICANT_CONTEXT)
     if (result.kind === 'applicant') {
-      expect(result.portal.snapshot.actor.can_review).toBe(false)
-      expect(result.portal.snapshot.organisations).toEqual([])
+      expect(result.portal!.snapshot.actor.can_review).toBe(false)
+      expect(result.portal!.snapshot.organisations).toEqual([])
       expect(result.scopes).toEqual([{ organisationId: organisation, organisationName: 'Review organisation', role: 'ComplianceOfficer' }])
     }
   })
@@ -93,9 +106,12 @@ describe('fresh dashboard authority and environment admission', () => {
       expect(result.queueMessage).toContain('not a zero balance')
     }
   })
-  it('cannot substitute a native workspace for missing personal applicant records', async () => {
+  it('keeps verified identity entry available without inventing unavailable business records', async () => {
     mocks.portal.mockRejectedValue(new PortalError('Unavailable', 503))
-    await expect(loadRoleDashboard({ mode: 'applicant' })).rejects.toMatchObject({ status: 403 })
+    const result = await loadRoleDashboard({ mode: 'applicant' })
+    expect(result.kind).toBe('applicant')
+    expect(result.portal).toBeUndefined()
+    expect(mocks.entry).toHaveBeenCalledTimes(1)
   })
   it('rejects incomplete MFA even for explicit personal applicant mode', async () => {
     mocks.sufficient.mockReturnValue(false)

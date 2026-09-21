@@ -8,7 +8,6 @@ import type { PlatformRelease } from '@/lib/platform-release'
 import type { DashboardScope } from '@/lib/portal/dashboard'
 import { getRoleDashboard } from '@/lib/portal/role-dashboards'
 import { APPLICANT_CONTEXT, portalContextKey, portalScopeHref, type PortalOperatingContext } from '@/lib/portal/operating-context'
-import { OnboardingForm } from './onboarding-form'
 import { PortalCommandProvider } from './portal-client'
 import { ProductForm } from './product-form'
 import { PortalShell, type PortalNavigationKey } from './portal-shell'
@@ -168,7 +167,7 @@ function OperatingPortalScreen({ data, view, id, operatingContext, release, scop
       const legacyOwner = subscription && context.mode === 'APPLICANT' && orderOrganisations.some(org => org.id === subscription.organisation_id)
       return subscription && allowedRole && (owned || assigned || legacyOwner) ? <FundingOrderDetail subscription={subscription} snapshot={snapshot} operatingContext={context} onSaved={setSnapshot} /> : unavailable()
     }
-    if (view === '/portal/onboarding') return <div className={styles.stack}><OnboardingForm applications={ownApplications} onSaved={setSnapshot} />{canInvest ? <InvestmentAccountPanel snapshot={snapshot} onSaved={setSnapshot} operatingContext={operatingContext} /> : null}</div>
+    if (view === '/portal/onboarding') return <Link href="/portal/onboarding?mode=applicant" className={styles.button}>Open my application capacities</Link>
     if (view === '/portal/products/new') return createOrganisations.length ? <ProductForm organisations={createOrganisations} onSaved={setSnapshot} operatingContext={operatingContext} /> : <Panel title="Product access"><EmptyState title="A scoped product-creation mandate is required" description="An organisation name or another role assignment does not grant product-creation access in this operating scope." href={href('/portal')} action="Return to dashboard" /></Panel>
     if (view === '/portal/products') return productWork()
     if (view === '/portal/products/detail') {

@@ -12,7 +12,8 @@ import { LOGIN_EMAIL_COOKIE } from '@/lib/supabase/http'
 import { createPageSupabaseClient } from '@/lib/supabase/page'
 import { readWorkspace } from '@/lib/supabase/server'
 import { hasRequiredMfa, isMfaContextCurrent, readMfaContext } from '@/lib/supabase/mfa'
-import { isDemoEnvironment } from '@/lib/testnet-fund/contracts'
+import { identityEnvironmentEnabled } from '@/lib/platform-release'
+import { readEntry } from '@/lib/portal/entry-server'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -131,9 +132,10 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
         mfaRequired = !hasRequiredMfa(context)
         if (!mfaRequired) {
           validSetup = Boolean(await readWorkspace(client))
+          if (!validSetup && identityEnvironmentEnabled(process.env)) { await readEntry(client); validSetup = true }
           if (!await isMfaContextCurrent(client, context)) throw new Error('Access unavailable')
         }
-      }
+      } else if (identityEnvironmentEnabled(process.env)) { await readEntry(client); validSetup = true }
     }
     catch { unavailable = true }
   }
@@ -154,7 +156,7 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
         {unavailable ? <p role="alert" className="mt-6 text-base text-bxo-text-secondary">Access is temporarily unavailable. Please try again.</p>
           : !validSetup ? <p role="alert" className="mt-6 text-base text-bxo-text-secondary">This invitation link is invalid or has expired.</p>
           : <SupabaseAuthForm mode={setup ? 'setup' : 'login'} initialEmail={initialEmail} error={isAuthErrorCode(params.error) ? params.error : undefined} />}
-        {!setup && !unavailable && isDemoEnvironment(process.env) ? <section aria-labelledby="test-account-title" className="mt-8 border-t border-bxo-border-subtle pt-6"><h2 id="test-account-title" className="text-base font-medium text-bxo-text-primary">New to BlockXOne?</h2><p className="mt-2 text-sm leading-6 text-bxo-text-secondary">Create a personal test login, then apply as an investor or wealth manager. Registration does not grant approval or signing authority.</p><Link href="/register" className="mt-4 inline-flex min-h-11 w-full items-center justify-between gap-3 rounded-lg border border-bxo-accent-border bg-bxo-accent-soft px-4 py-3 text-sm font-semibold text-bxo-accent-primary hover:border-bxo-accent-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bxo-accent-primary">Create your test account<ArrowRight aria-hidden="true" className="h-4 w-4" /></Link></section> : null}
+        {!setup && !unavailable && identityEnvironmentEnabled(process.env) ? <section aria-labelledby="test-account-title" className="mt-8 border-t border-bxo-border-subtle pt-6"><h2 id="test-account-title" className="text-base font-medium text-bxo-text-primary">New to BlockXOne?</h2><p className="mt-2 text-sm leading-6 text-bxo-text-secondary">Create a personal login, then apply as an investor or wealth manager. Registration does not grant approval or signing authority.</p><Link href="/register" className="mt-4 inline-flex min-h-11 w-full items-center justify-between gap-3 rounded-lg border border-bxo-accent-border bg-bxo-accent-soft px-4 py-3 text-sm font-semibold text-bxo-accent-primary hover:border-bxo-accent-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bxo-accent-primary">Create your account<ArrowRight aria-hidden="true" className="h-4 w-4" /></Link></section> : null}
         <Link href="/" className="mt-6 inline-flex min-h-11 items-center text-sm text-bxo-accent-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bxo-accent-primary">Back to home</Link>
       </main>
     </PublicShell>

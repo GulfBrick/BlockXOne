@@ -21,6 +21,8 @@ describe('role and organisation dashboard selection', () => {
   it.each([{ organisation: otherOrganisation, role: 'SuperAdmin' }, { organisation: 'unknown', role: 'Investor' }, { organisation: [organisation], role: 'Investor' }, { organisation, role: ['Investor', 'SuperAdmin'] }, { role: 'SuperAdmin' }, { organisation, role: 'WealthManager' }])('denies invented or ambiguous scope %j', query => expect(selectDashboardScope(workspace, query)).toBeNull())
   it('does not combine roles across organisations', () => expect(dashboardScopes(workspace).filter(scope => scope.organisationId === otherOrganisation).map(scope => scope.role)).toEqual(['Investor']))
   it('offers no fallback for an unassigned user', () => expect(selectDashboardScope({ ...workspace, organisations: [] }, {})).toBeNull())
+  it('requires a deliberate choice when multiple approved roles exist', () => expect(selectDashboardScope(workspace, {})).toBeNull())
+  it('can continue the sole approved role without manufacturing another context', () => expect(selectDashboardScope({ ...workspace, organisations: [{ id: organisation, name: 'A', roles: ['OfferingManager'] }] }, {})?.role).toBe('OfferingManager'))
   it.each(BX1_ROLES)('does not infer connected MAINNET business services for %s', role => {
     const projection = dashboardProjection({ organisationId: organisation, organisationName: 'A', role }, 'MAINNET', snapshot)
     expect(projection.availablePaths.every(path => path.startsWith('/workspace/'))).toBe(true)

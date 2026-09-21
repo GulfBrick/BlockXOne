@@ -19,6 +19,12 @@ beforeEach(() => {
 })
 afterEach(() => vi.unstubAllEnvs())
 describe('private evidence context continuity', () => {
+  it('preserves historical document access alongside a new empty capacity draft', async () => {
+    mocks.read.mockResolvedValue({ user: { id: actor }, snapshot: { ...snapshot, applications: [{ details: {} }, ...snapshot.applications] } })
+    const response = await GET(new NextRequest(`${origin}/api/portal/documents?id=${id}&mode=applicant`))
+    expect(response.status).toBe(200)
+    expect((await response.json()).url).toContain('mode=applicant')
+  })
   it('keeps applicant scope in the authenticated download continuation', async () => {
     const response = await GET(new NextRequest(`${origin}/api/portal/documents?id=${id}&mode=applicant`))
     expect(response.status).toBe(200)

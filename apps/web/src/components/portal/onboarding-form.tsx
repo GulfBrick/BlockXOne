@@ -2,8 +2,11 @@
 
 import { useState } from 'react'
 import { FileCheck2, Upload } from 'lucide-react'
-import type { ApplicationDetails, EvidenceDocument, Persona, PortalApplication, PortalSnapshot } from '@/lib/portal/contracts'
-import { CommandFeedback, usePortalActorId, usePortalCommand, usePortalOperatingContext } from './portal-client'
+import type { ApplicationDetails, EvidenceDocument } from '@/lib/portal/contracts'
+import type { EntryApplication, EntrySnapshot } from '@/lib/portal/entry-contracts'
+import type { PlatformEnvironment } from '@/lib/platform-release'
+import { CommandFeedback, usePortalActorId, usePortalOperatingContext } from './portal-client'
+import { useEntryCommand } from './entry-client'
 import { portalScopeHref } from '@/lib/portal/operating-context'
 import { DetailList, Field, FormProgress, Notice, Panel, StatusBadge } from './portal-primitives'
 import styles from './portal.module.css'
@@ -28,23 +31,21 @@ export function PrivateDocument({ document }: { document: EvidenceDocument }) {
   return <div className={styles.sectionGap}><div className={styles.actions}><FileCheck2 size={18} aria-hidden="true" /><span>{document.title}</span>{url ? <a href={url} target="_blank" rel="noreferrer noopener" className={styles.textLink}>Open private document</a> : <button type="button" className={styles.buttonSecondary} disabled={busy} onClick={() => void prepare()}>{busy ? 'Checking access…' : 'View document'}</button>}</div><p className={styles.muted}>{document.kind.replaceAll('_', ' ')} · {Math.ceil(document.size / 1024)} KB · Private evidence</p>{message ? <p role="status" className={styles.fieldError}>{message}</p> : null}</div>
 }
 
-export function OnboardingForm({ applications, onSaved }: { applications: PortalApplication[]; onSaved: (snapshot: PortalSnapshot) => void }) {
+export function OnboardingForm({ application, environment, onSaved }: { application: EntryApplication; environment: PlatformEnvironment; onSaved: (snapshot: EntrySnapshot) => void }) {
   const operatingContext = usePortalOperatingContext()
   const expectedActor = usePortalActorId()
-  const [persona, setPersona] = useState<Persona>(applications[0]?.persona ?? 'INVESTOR')
-  const application = applications.find(item => item.persona === persona)
-  const [details, setDetails] = useState<ApplicationDetails>(() => application?.details ?? emptyDetails())
+  const persona = application.persona
+  const [details, setDetails] = useState<ApplicationDetails>(() => ({ ...emptyDetails(), ...application.details }))
   const [acknowledged, setAcknowledged] = useState(false)
   const [uploadKind, setUploadKind] = useState('IDENTITY')
   const [uploadTitle, setUploadTitle] = useState('')
   const [file, setFile] = useState<File | null>(null)
   const [uploadBusy, setUploadBusy] = useState(false)
   const [uploadMessage, setUploadMessage] = useState('')
-  const command = usePortalCommand(onSaved)
+  const command = useEntryCommand(expectedActor, environment, onSaved)
   const editable = !application || ['DRAFT', 'CHANGES_REQUIRED'].includes(application.status)
   const locked = !editable || command.busy || command.unknown || uploadBusy
   function change<K extends keyof ApplicationDetails>(key: K, value: ApplicationDetails[K]) { setDetails(current => ({ ...current, [key]: value })) }
-  function choose(next: Persona) { setPersona(next); setDetails(applications.find(item => item.persona === next)?.details ?? emptyDetails()); setAcknowledged(false); setUploadMessage('') }
   async function upload() {
     if (!file || !uploadTitle.trim()) { setUploadMessage('Choose a file and give the evidence a descriptive title.'); return }
     if (!['application/pdf', 'image/png', 'image/jpeg'].includes(file.type) || file.size > 4_194_304 || file.size === 0) { setUploadMessage('Use a PDF, PNG or JPEG between 1 byte and 4 MiB.'); return }
@@ -62,12 +63,12 @@ export function OnboardingForm({ applications, onSaved }: { applications: Portal
   return <div className={styles.wideGrid}>
     <div className={styles.stack}>
       <Notice title="Use fictional test evidence only">This is the same customer onboarding workflow with a manual test-review provider. Do not upload a real identity document or treat a test approval as regulated KYC clearance.</Notice>
-      <Panel title="Your application" description="Choose the relationship you are applying for. This does not assign a platform role.">
-        <Field label="Application type"><select value={persona} disabled={command.busy || command.unknown || uploadBusy} onChange={event => choose(event.target.value as Persona)}><option value="INVESTOR">Investor account</option><option value="WEALTH_MANAGER">Wealth manager / product issuer</option></select></Field>
+      <Panel title={persona === 'INVESTOR' ? 'Investor application' : 'Organisation / representative application'} description="This saved capacity is fixed. Use Add a capacity for a different relationship; this application never changes your assigned roles.">
+        <p className={styles.muted}>Application reference: <span className={styles.mono}>{application.id}</span></p>
         <div className={styles.sectionGap}><FormProgress stages={['Your details', 'Private evidence', 'Independent review']} current={application?.status === 'SUBMITTED' || application?.status === 'APPROVED' ? 2 : details.documents.length ? 1 : 0} /></div>
         {application?.review_notes ? <Notice title="Reviewer feedback" tone="warning">{application.review_notes}</Notice> : null}
         <CommandFeedback command={command} />
-        <form className={`${styles.form} ${styles.sectionGap}`} onSubmit={event => { event.preventDefault(); if (acknowledged) void command.submit('submit_application', { persona, expected_revision: application?.revision ?? 0, details: { ...details, test_data_acknowledged: true } }) }}>
+        <form className={`${styles.form} ${styles.sectionGap}`} onSubmit={event => { event.preventDefault(); if (acknowledged) void command.submit('submit_application', { application_id: application.id, expected_revision: application.revision, details: { ...details, test_data_acknowledged: true } }) }}>
           <fieldset className={styles.fieldset} disabled={locked}><legend>01 · Applicant details</legend>
             <div className={styles.formRow}><Field label="Full name" hint="Use a fictional identity for this environment."><input value={details.full_name} onChange={event => change('full_name', event.target.value)} required minLength={2} maxLength={120} autoComplete="off" placeholder="e.g. Alex Example (test)" /></Field><Field label="Country of residence" hint="Two-letter country code, for example ZA."><input value={details.country} onChange={event => change('country', event.target.value.toUpperCase())} required pattern="[A-Z]{2}" maxLength={2} /></Field></div>
             <Field label="Investor classification"><select value={details.investor_type} onChange={event => change('investor_type', event.target.value as ApplicationDetails['investor_type'])}><option value="INDIVIDUAL">Individual</option><option value="ENTITY">Legal entity</option></select></Field>

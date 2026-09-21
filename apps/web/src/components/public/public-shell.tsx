@@ -2,6 +2,7 @@ import Link from 'next/link'
 
 import { BrandLockup } from '@/components/brand/brand-mark'
 import { isPortalAccessAdvertised } from '@/lib/release-policy'
+import { platformRelease } from '@/lib/platform-release'
 import { PublicMotion } from './public-motion'
 import { PublicNavigation } from './public-navigation'
 
@@ -13,6 +14,7 @@ export function PublicShell({
   topBar?: React.ReactNode
 }) {
   const showPortalAccess = isPortalAccessAdvertised()
+  const environment = platformRelease(process.env)?.environment
 
   return (
     <div className="bxo-public-shell">
@@ -39,7 +41,7 @@ export function PublicShell({
               <BrandLockup presentation="navigation" priority />
             </Link>
 
-            <PublicNavigation showPortalAccess={showPortalAccess} />
+            <PublicNavigation showPortalAccess={showPortalAccess} environment={environment} />
           </div>
         </header>
 

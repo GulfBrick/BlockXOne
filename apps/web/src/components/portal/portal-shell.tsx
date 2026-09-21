@@ -18,8 +18,8 @@ export function portalNavigation(capabilities: PortalNavigationCapabilities, onb
   ]
 }
 
-export function PortalShell({ user, organisationName, capabilities, active, title, description, eyebrow, breadcrumbs = [], actions, children, release, onboardingAvailable = true, operatingContext }: {
-  user: { id: string; email: string }; organisationName?: string; capabilities: PortalNavigationCapabilities; active: PortalNavigationKey;
+export function PortalShell({ user, organisationName, capacityName, capabilities, active, title, description, eyebrow, breadcrumbs = [], actions, children, release, onboardingAvailable = true, operatingContext }: {
+  user: { id: string; email: string }; organisationName?: string; capacityName?: string; capabilities: PortalNavigationCapabilities; active: PortalNavigationKey;
   title: string; description?: string; eyebrow?: string; breadcrumbs?: { label: string; href?: string }[]; actions?: ReactNode; children: ReactNode; release?: PlatformRelease; onboardingAvailable?: boolean; operatingContext?: PortalOperatingContext;
 }) {
   // Existing business screens are still explicitly TEST-only. Native dashboards
@@ -44,7 +44,7 @@ export function PortalShell({ user, organisationName, capabilities, active, titl
     </aside>
     <div className={styles.frame}>
       <header className={styles.topbar}>
-        <div className={styles.topbarContext}><strong>{organisationName || 'Your BlockXOne account'}</strong>Multi-asset investment infrastructure</div>
+        <div className={styles.topbarContext}><strong>{organisationName || 'Your BlockXOne account'}</strong><span>Active capacity: {capacityName ?? (operatingContext?.mode === 'ROLE' ? operatingContext.role : 'Personal / applicant')}</span><Link href="/portal?mode=applicant">Change capacity</Link></div>
         <div className={styles.userArea}><span className={styles.environmentPill}>{testnet ? 'Testnet' : 'Mainnet'} environment</span><span className={styles.userEmail}>{user.email}</span><form action="/auth/logout" method="post"><button className={styles.buttonSecondary} type="submit">Sign out</button></form></div>
       </header>
       <main id="portal-content" tabIndex={-1} className={styles.content}>

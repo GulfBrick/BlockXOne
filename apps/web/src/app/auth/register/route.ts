@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { isDemoEnvironment } from '@/lib/testnet-fund/contracts'
+import { identityEnvironmentEnabled, platformRelease } from '@/lib/platform-release'
 import { registrationMetadata, registrationProviderOutcome, validateRegistrationForm, type RegistrationError } from '@/lib/portal/registration'
 import { canonicalAppOrigin, createRequestSupabaseClient, readVerifiedUser } from '@/lib/supabase/server'
 import { hasCanonicalOrigin, InvalidAuthRequest, privateResponse, readAuthForm, responseCookieAdapter } from '@/lib/supabase/http'
@@ -17,8 +17,8 @@ function reject(status: number) {
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
-  // Registration never targets production, even if the public form is forged.
-  if (!isDemoEnvironment(process.env)) return reject(404)
+  // Registration creates a pending identity, never live investment admission.
+  if (!identityEnvironmentEnabled(process.env)) return reject(404)
   const jar = responseCookieAdapter(request)
   try {
     if (request.nextUrl.pathname !== '/auth/register' || request.nextUrl.search) return reject(400)
@@ -33,12 +33,12 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     if (!validated.ok) return resultRedirect(validated.error)
     const client = createRequestSupabaseClient(jar.adapter)
     // A registration attempt must not replace or sign out an existing signed-in account.
-    if (await readVerifiedUser(client)) return jar.finish(privateResponse(NextResponse.redirect(new URL('/portal/onboarding', canonicalAppOrigin()), 303)))
+    if (await readVerifiedUser(client)) return jar.finish(privateResponse(NextResponse.redirect(new URL('/register', canonicalAppOrigin()), 303)))
     const { email, password, intent } = validated.value
     const { data, error } = await client.auth.signUp({
       email,
       password,
-      options: { emailRedirectTo: new URL('/auth/confirm', canonicalAppOrigin()).toString(), data: registrationMetadata(intent) },
+      options: { emailRedirectTo: new URL('/auth/confirm', canonicalAppOrigin()).toString(), data: registrationMetadata(intent, platformRelease(process.env)!.environment) },
     })
     if (data.session) {
       // Email confirmation is required. Never emit an auto-confirmed session cookie

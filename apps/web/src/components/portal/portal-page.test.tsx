@@ -1,13 +1,14 @@
 import { createElement, type ReactNode } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-const fixture = vi.hoisted(() => ({ load: vi.fn(), guard: vi.fn(), screen: vi.fn() }))
+const fixture = vi.hoisted(() => ({ load: vi.fn(), guard: vi.fn(), screen: vi.fn(), entry: vi.fn() }))
 vi.mock('@/lib/portal/server', () => ({ requirePortalEnvironment: fixture.guard, PortalError: class extends Error { constructor(message: string, public readonly status: number) { super(message) } } }))
 vi.mock('@/lib/portal/dashboard-server', () => ({ loadRoleDashboard: fixture.load }))
 vi.mock('next/navigation', () => ({ redirect: (path: string) => { throw new Error(`REDIRECT:${path}`) }, notFound: () => { throw new Error('NOT_FOUND') }, useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }) }))
 vi.mock('./portal-screens', () => ({ PortalScreen: (props: unknown) => { fixture.screen(props); return createElement('p', null, 'Scoped business screen') } }))
 vi.mock('./portal-shell', () => ({ PortalShell: ({ children }: { children: ReactNode }) => createElement('section', null, children) }))
 vi.mock('./role-dashboard', () => ({ RoleDashboardContent: () => createElement('p', null, 'Contextual role help') }))
+vi.mock('./entry-screen', () => ({ EntryScreen: (props: unknown) => { fixture.entry(props); return createElement('p', null, 'Saved identity capacities') } }))
 import { PortalError } from '@/lib/portal/server'
 import { PortalPage } from './portal-page'
 
@@ -30,7 +31,7 @@ describe('portal server page access and selected context', () => {
   })
   it('returns not-found for disabled business routes before loading data', async () => {
     fixture.guard.mockImplementationOnce(() => { throw new PortalError('Not enabled', 404) })
-    await expect(PortalPage({ view: '/portal/onboarding' })).rejects.toThrow('NOT_FOUND')
+    await expect(PortalPage({ view: '/portal/products' })).rejects.toThrow('NOT_FOUND')
     expect(fixture.load).not.toHaveBeenCalled()
   })
   it('offers sign-in security without granting roles when the selected context lacks access', async () => {
@@ -63,16 +64,17 @@ describe('portal server page access and selected context', () => {
   it('gives explicit personal onboarding its own context and component identity even for a native user', async () => {
     const applicantContext = { mode: 'APPLICANT' as const }
     const data = roleData()
-    fixture.load.mockResolvedValueOnce({ kind: 'applicant', release, scopes: [scope], operatingContext: applicantContext, portal: { ...data.portal, snapshot: { ...data.portal.snapshot, operating_context: applicantContext } } })
+    fixture.load.mockResolvedValueOnce({ kind: 'applicant', entry: { entry_version: 1, actor: user, applications: [], contexts: [], admission: { manual_test_review: true } }, release, scopes: [scope], operatingContext: applicantContext, portal: { ...data.portal, snapshot: { ...data.portal.snapshot, operating_context: applicantContext } } })
     const node = await PortalPage({ view: '/portal/onboarding', query: { mode: 'applicant' } })
     renderToStaticMarkup(node)
-    expect(fixture.load).toHaveBeenCalledWith({ mode: 'applicant' })
-    expect(fixture.screen).toHaveBeenCalledWith(expect.objectContaining({ operatingContext: applicantContext, scope: undefined }))
-    expect(node.key).toContain(':TESTNET:applicant:/portal/onboarding:')
+    expect(fixture.load).toHaveBeenCalledWith({ mode: 'applicant', organisation: undefined, role: undefined })
+    expect(fixture.entry).toHaveBeenCalledWith(expect.objectContaining({ initial: expect.objectContaining({ actor: user }) }))
+    expect(fixture.screen).not.toHaveBeenCalled()
+    expect(node.key).toContain(`${user.id}:TESTNET:`)
   })
   it('denies operational child views in personal applicant mode even with a reviewer-shaped snapshot', async () => {
     const data = roleData()
-    fixture.load.mockResolvedValueOnce({ kind: 'applicant', release, scopes: [scope], operatingContext: { mode: 'APPLICANT' }, portal: { ...data.portal, snapshot: { ...data.portal.snapshot, actor: { ...data.portal.snapshot.actor, can_review: true } } } })
+    fixture.load.mockResolvedValueOnce({ kind: 'applicant', entry: { entry_version: 1, actor: user, applications: [], contexts: [], admission: { manual_test_review: true } }, release, scopes: [scope], operatingContext: { mode: 'APPLICANT' }, portal: { ...data.portal, snapshot: { ...data.portal.snapshot, actor: { ...data.portal.snapshot.actor, can_review: true } } } })
     const html = renderToStaticMarkup(await PortalPage({ view: '/portal/compliance', query: { mode: 'applicant' } }))
     expect(html).toContain('Complete your account access')
     expect(fixture.screen).not.toHaveBeenCalled()

@@ -18,6 +18,9 @@ export function PortalCommandProvider({ snapshot, children, operatingContext = A
 }
 export function usePortalOperatingContext() { return useContext(PortalCommandContext).operatingContext }
 export function usePortalActorId() { return useContext(PortalCommandContext).actorId }
+export function PortalIdentityProvider({ actorId, environment, children }: { actorId: string; environment: PlatformEnvironment; children: ReactNode }) {
+  return <PortalCommandContext.Provider value={{ actorId, environment, operatingContext: APPLICANT_CONTEXT, requests: [] }}>{children}</PortalCommandContext.Provider>
+}
 function readMarker(raw: string | null): Marker | null {
   if (!raw) return null
   let parsed: unknown
@@ -121,6 +124,6 @@ export function usePortalCommand(onSaved: (snapshot: PortalSnapshot) => void) {
   return { busy, message, unknown, submit, retry: () => savedRequest.current ? dispatch(savedRequest.current) : Promise.resolve(false) }
 }
 
-export function CommandFeedback({ command }: { command: ReturnType<typeof usePortalCommand> }) {
+export function CommandFeedback({ command }: { command: Pick<ReturnType<typeof usePortalCommand>, 'busy' | 'message' | 'unknown' | 'retry'> }) {
   return <div className={styles.statusRegion} role="status" aria-live="polite">{command.busy ? 'Saving securely to the hosted platform…' : command.message}{command.unknown ? <div className={styles.sectionGap}><p className={styles.muted}>The result is uncertain. Keep this page open; the original request key is retained so the action is not duplicated.</p><button className={styles.buttonSecondary} disabled={command.busy} type="button" onClick={() => void command.retry()}>Retry the original saved request</button></div> : null}</div>
 }

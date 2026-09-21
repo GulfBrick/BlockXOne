@@ -34,7 +34,7 @@ export const SUPABASE_ALLOWED_PATHS = [
   '/portal/products', '/portal/products/new', '/portal/products/detail',
   '/portal/compliance', '/portal/compliance/detail', '/portal/opportunities',
   '/portal/opportunities/detail', '/portal/portfolio', '/portal/orders/detail',
-  '/api/portal/command', '/api/portal/documents', '/api/portal/funding/verify',
+  '/api/portal/command', '/api/portal/documents', '/api/portal/funding/verify', '/api/portal/entry',
 ] as const
 
 export function isSupabaseWebPathAllowed(pathname: string): boolean {

@@ -11,7 +11,7 @@ export function dashboardScopes(workspace: Bx1Workspace): DashboardScope[] {
 /** Query parameters select an existing assignment; they never create one. */
 export function selectDashboardScope(workspace: Bx1Workspace, query: DashboardQuery): DashboardScope | null {
   const scopes = dashboardScopes(workspace)
-  if (query.organisation === undefined && query.role === undefined) return scopes[0] ?? null
+  if (query.organisation === undefined && query.role === undefined) return scopes.length === 1 ? scopes[0] : null
   if (typeof query.organisation !== 'string' || typeof query.role !== 'string') return null
   return scopes.find(scope => scope.organisationId === query.organisation && scope.role === query.role) ?? null
 }
