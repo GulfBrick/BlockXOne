@@ -118,6 +118,15 @@ describe('MFA transient controller', () => {
     expect(f.navigate).toHaveBeenCalledWith('/login?setup=1')
     expect(f.controller.getState().setup).toBeUndefined()
   })
+  it('accepts the exact server-selected shared dashboard destination after verification', async () => {
+    const f = fixture(enrolled, 'workspace')
+    f.post.mockResolvedValue({ ok: true, next: '/portal' })
+    await f.controller.verify(factorId, '012345')
+    expect(f.post.mock.calls[0][1].get('continuation')).toBe('workspace')
+    expect(f.navigate).toHaveBeenCalledOnce()
+    expect(f.navigate).toHaveBeenCalledWith('/portal')
+    expect(f.controller.getState()).toMatchObject({ pending: false, reloadRequired: true })
+  })
   it.each(['12345', '1234567', '123a56', '１２３４５６', ' 123456'])('rejects malformed code %s before POST', async code => {
     const f = fixture(enrolled)
     await f.controller.verify(factorId, code)
@@ -164,7 +173,7 @@ describe('MFA transient controller', () => {
     await request
     expect(f.navigate).not.toHaveBeenCalled()
   })
-  it.each(['https://evil.test', '//evil.test', '/workspace?token=secret', '/admin', '/workspace/'])('rejects unknown next URL %s', async next => {
+  it.each(['https://evil.test', '//evil.test', '/workspace?token=secret', '/admin', '/workspace/', '/portal/', '/portal?next=https://evil.test', '/portal#token', '//portal', '/%70ortal'])('rejects unknown next URL %s', async next => {
     const f = fixture(enrolled)
     f.post.mockResolvedValue({ ok: true, next })
     await f.controller.verify(factorId, '123456')

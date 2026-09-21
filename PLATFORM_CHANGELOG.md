@@ -1,5 +1,11 @@
 # BlockXOne platform releases
 
+## 1.1.0-rc.2 — Consistent post-MFA dashboard landing
+
+- Keep setup and account-security continuations unchanged while routing a completed MFA sign-in to `/portal` on validated TESTNET/MAINNET deployments.
+- Accept only the exact `/portal` client destination, not query-supplied redirects.
+- The prior rc.1 source `9621da42586bc3423a603469fd662336e144d5a3` passed cloud run `35549941325` (web tests, isolated fund/portal SQL, typecheck/build). This follow-up requires its own cloud result; previous proof is not reassigned to changed source.
+
 ## 1.1.0-rc.1 — Role dashboards
 
 - One shared `/portal` dashboard model for all nine canonical roles in TESTNET and MAINNET.

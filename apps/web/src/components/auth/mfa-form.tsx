@@ -22,7 +22,7 @@ type ControllerOptions = {
 }
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const initialState = (): MfaFormState => ({ pending: false, reloadRequired: false })
-const nextPaths = new Set(['/workspace', '/login?setup=1', '/workspace/security'])
+const nextPaths = new Set(['/portal', '/workspace', '/login?setup=1', '/workspace/security'])
 const errors: Record<MfaErrorCode, string> = {
   invalid_request: 'Unable to verify that code. Check your authenticator and try again.',
   unauthorised: 'Sign in again to continue.',

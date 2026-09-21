@@ -2,6 +2,7 @@ import 'server-only'
 
 import { NextResponse } from 'next/server'
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { platformRelease } from '@/lib/platform-release'
 import { privateResponse } from './http'
 import { MFA_CONTINUATIONS, MFA_ENROLL_QR_MAX_CHARACTERS, MFA_ENROLL_RESPONSE_MAX_BYTES, type MfaContinuation, type MfaErrorCode } from './mfa-contracts'
 import { hasRequiredMfa, isMfaContextCurrent, readMfaContext, requireRecentTotp, toMfaView } from './mfa'
@@ -81,6 +82,7 @@ export async function handleMfaAction(action: string, form: URLSearchParams, cli
     if (error) return providerFailure(error, true)
     const upgraded = await readMfaContext(client)
     if (!upgraded || !hasRequiredMfa(upgraded) || !requireRecentTotp(upgraded, Math.floor(Date.now() / 1000)).allowed) return mfaErrorResponse('unavailable')
-    return privateResponse(NextResponse.json({ ok: true, next: MFA_CONTINUATIONS[destination] }))
+    const next = destination === 'workspace' && platformRelease(process.env) ? '/portal' : MFA_CONTINUATIONS[destination]
+    return privateResponse(NextResponse.json({ ok: true, next }))
   } catch { return mfaErrorResponse('unavailable') }
 }

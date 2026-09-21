@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 vi.mock('server-only', () => ({}))
 import { handleMfaAction } from './mfa-actions'
@@ -34,7 +34,12 @@ async function expectFailure(response: Response, status: number, error: string) 
   expect(response.headers.get('cache-control')).toContain('no-store')
   expect(response.headers.get('referrer-policy')).toBe('no-referrer')
 }
-beforeEach(() => { vi.spyOn(Date, 'now').mockReturnValue(now * 1000) })
+beforeEach(() => {
+  vi.spyOn(Date, 'now').mockReturnValue(now * 1000)
+  // Baseline is deliberately unqualified; configured deployment tests opt in.
+  vi.stubEnv('BLOCKXONE_APP_ORIGIN', '')
+})
+afterEach(() => { vi.unstubAllEnvs() })
 
 describe('explicit enrollment and safe provider projection', () => {
   it('round-trips a large synthetic provider SVG through the HTTP parser and transient controller', async () => {
@@ -131,6 +136,47 @@ describe('mutation-time token continuity', () => {
 })
 
 describe('own-factor verification and fixed continuations', () => {
+  const deployments = [
+    { name: 'TESTNET', origin: 'https://block-x-one-test.vercel.app', supabase: 'https://fegnnnlseuejkrusbbkv.supabase.co', vercel: 'preview' },
+    { name: 'MAINNET', origin: 'https://bx1.co.za', supabase: 'https://oqkevkjbkpugjotihtda.supabase.co', vercel: 'production' },
+  ]
+  it.each(deployments)('lands a verified native $name sign-in on the shared dashboard', async deployment => {
+    vi.stubEnv('BLOCKXONE_AUTH_MODE', 'supabase')
+    vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_AUTH_MODE', 'supabase')
+    vi.stubEnv('BLOCKXONE_APP_ORIGIN', deployment.origin)
+    vi.stubEnv('SUPABASE_URL', deployment.supabase)
+    vi.stubEnv('VERCEL_ENV', deployment.vercel)
+    const f = fixture('verified')
+    const response = await handleMfaAction('mfa-verify', verifyForm(), f.client)
+    expect(await response.json()).toEqual({ ok: true, next: '/portal' })
+    expect(f.auth.mfa.challengeAndVerify).toHaveBeenCalledWith({ factorId: fid, code: '012345' })
+  })
+  it.each(deployments)('preserves setup and security destinations on qualified $name', async deployment => {
+    vi.stubEnv('BLOCKXONE_AUTH_MODE', 'supabase')
+    vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_AUTH_MODE', 'supabase')
+    vi.stubEnv('BLOCKXONE_APP_ORIGIN', deployment.origin)
+    vi.stubEnv('SUPABASE_URL', deployment.supabase)
+    vi.stubEnv('VERCEL_ENV', deployment.vercel)
+    for (const [continuation, next] of [['setup', '/login?setup=1'], ['security', '/workspace/security']]) {
+      const f = fixture('verified')
+      const response = await handleMfaAction('mfa-verify', verifyForm({ continuation }), f.client)
+      expect(await response.json()).toEqual({ ok: true, next })
+    }
+  })
+  it.each([
+    { origin: 'https://bx1.co.za', supabase: 'https://fegnnnlseuejkrusbbkv.supabase.co', vercel: 'production' },
+    { origin: 'https://block-x-one-test.vercel.app', supabase: 'https://oqkevkjbkpugjotihtda.supabase.co', vercel: 'preview' },
+    { origin: 'https://bx1.co.za/portal', supabase: 'https://oqkevkjbkpugjotihtda.supabase.co', vercel: 'production' },
+  ])('retains the existing workspace fallback when deployment identity is unqualified: %j', async deployment => {
+    vi.stubEnv('BLOCKXONE_AUTH_MODE', 'supabase')
+    vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_AUTH_MODE', 'supabase')
+    vi.stubEnv('BLOCKXONE_APP_ORIGIN', deployment.origin)
+    vi.stubEnv('SUPABASE_URL', deployment.supabase)
+    vi.stubEnv('VERCEL_ENV', deployment.vercel)
+    const f = fixture('verified')
+    const response = await handleMfaAction('mfa-verify', verifyForm(), f.client)
+    expect(await response.json()).toEqual({ ok: true, next: '/workspace' })
+  })
   it.each([['workspace', '/workspace'], ['setup', '/login?setup=1'], ['security', '/workspace/security']])('returns only %s continuation after verified live TOTP upgrade', async (continuation, next) => {
     const f = fixture('verified')
     const response = await handleMfaAction('mfa-verify', verifyForm({ continuation }), f.client)
@@ -181,7 +227,7 @@ describe('strict action forms and zero secret logging', () => {
   })
   it('rejects unknown/duplicate fields, invalid factor ID and arbitrary continuation', async () => {
     const f = fixture('verified')
-    for (const form of [new URLSearchParams(), verifyForm({ factorId: 'invalid' }), verifyForm({ continuation: '//evil.test' })]) {
+    for (const form of [new URLSearchParams(), verifyForm({ factorId: 'invalid' }), verifyForm({ continuation: '//evil.test' }), verifyForm({ continuation: '/portal' }), verifyForm({ continuation: 'workspace?next=/portal' })]) {
       await expectFailure(await handleMfaAction('mfa-verify', form, f.client), 400, 'invalid_request')
     }
     const duplicate = verifyForm(); duplicate.append('code', '012345')
