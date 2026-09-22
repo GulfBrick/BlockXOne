@@ -14,7 +14,7 @@ describe('one product version with isolated deployment identity', () => {
     expect(manifest.sharedEntry).toBe('/login')
     expect(manifest.sharedDashboard).toBe('/portal')
     expect(manifest.productionFinancialAdmission).toBe(false)
-    expect(manifest.schemaChanges).toEqual(['supabase/features/bx1_application_admission.sql'])
+    expect(manifest.schemaChanges).toEqual([])
     expect(manifest.mainnetMissingPrerequisites).toEqual([])
     expect(manifest.contractChanges).toEqual([])
   })
