@@ -71,6 +71,10 @@ describe('server-rendered protected workspace', () => {
     const html = renderToStaticMarkup(await WorkspacePage())
     expect(html).toContain('href="/workspace/security"')
     expect(html).toContain('Account security')
+    expect(html).toContain('href="/workspace/administration"')
+    expect(html).toContain('Administration')
+    expect(html).toContain('href="/workspace/recovery"')
+    expect(html).toContain('Recovery containment')
     expect(html).toContain('Financial and token operations are not enabled.')
   })
   it('MFA provider failure does not become unenrolled access', async () => {

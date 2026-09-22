@@ -1,5 +1,10 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "git": {
+    "deploymentEnabled": {
+      "codex/hosted-administration-20260919": false
+    }
+  },
   "framework": "nextjs",
   "installCommand": "npx --yes --package=node@22.23.1 --package=npm@10.9.8 -c \"npm ci\"",
   "buildCommand": "npx --yes --package=node@22.23.1 --package=npm@10.9.8 -c \"npm run build\""

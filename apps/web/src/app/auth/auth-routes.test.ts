@@ -1,14 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { NextRequest, NextResponse } from 'next/server'
 vi.mock('server-only', () => ({}))
-const mocks = vi.hoisted(() => ({ create: vi.fn(), user: vi.fn(), workspace: vi.fn(), mfaContext: vi.fn(), sufficient: vi.fn(), current: vi.fn(), mfaAction: vi.fn() }))
+const mocks = vi.hoisted(() => ({ create: vi.fn(), user: vi.fn(), workspace: vi.fn(), mfaContext: vi.fn(), sufficient: vi.fn(), current: vi.fn(), mfaAction: vi.fn(), adminAction: vi.fn(), recoveryAction: vi.fn() }))
 vi.mock('@/lib/supabase/server', async (importOriginal) => ({
   ...await importOriginal<object>(), createRequestSupabaseClient: mocks.create,
   readVerifiedUser: mocks.user, readWorkspace: mocks.workspace,
 }))
 vi.mock('@/lib/supabase/mfa', () => ({ readMfaContext: mocks.mfaContext, hasRequiredMfa: mocks.sufficient, isMfaContextCurrent: mocks.current }))
 vi.mock('@/lib/supabase/mfa-actions', async (original) => ({ ...await original<object>(), handleMfaAction: mocks.mfaAction }))
+vi.mock('@/lib/administration/actions', async (original) => ({ ...await original<object>(), handleAdministrationAction: mocks.adminAction }))
 import { GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD } from './[action]/route'
+vi.mock('@/lib/recovery/actions', async original => ({ ...await original<object>(), handleRecoveryAction: mocks.recoveryAction }))
+import { POST as recoveryPost, GET as recoveryGet, PUT as recoveryPut, OPTIONS as recoveryOptions } from './recovery-command/route'
 import { PENDING_INVITE_COOKIE } from '@/lib/supabase/http'
 
 const canonical = 'https://bx1.co.za'
@@ -30,6 +33,72 @@ beforeEach(() => {
   mocks.mfaContext.mockResolvedValue({ fixture: 'trusted-context' })
   mocks.sufficient.mockReturnValue(true)
   mocks.current.mockResolvedValue(true)
+})
+
+describe('dedicated recovery endpoint admission', () => {
+  const fields = { intent: 'request', requestKey: '40000000-0000-4000-8000-000000000001', reason: 'LOST_AUTHENTICATOR' }
+  it('has no state-changing GET and admits only POST', async () => {
+    for (const handler of [recoveryGet, recoveryPut, recoveryOptions]) {
+      const response = handler()
+      expect(response.status).toBe(405)
+      expect(response.headers.get('allow')).toBe('POST')
+      expect(response.headers.get('cache-control')).toContain('no-store')
+    }
+    expect(mocks.create).not.toHaveBeenCalled()
+  })
+  const unsafeHeaders: Record<string, string>[] = [{ origin: 'null' }, { origin: 'https://evil.test' }, { host: 'evil.test' }, { 'sec-fetch-site': 'cross-site' }]
+  it.each(unsafeHeaders)('denies unsafe headers before identity or body work %#', async headers => {
+    expect((await recoveryPost(request('recovery-command', fields, headers))).status).toBe(403)
+    expect(mocks.create).not.toHaveBeenCalled()
+    expect(mocks.recoveryAction).not.toHaveBeenCalled()
+  })
+  it('rejects query, duplicate, oversized and non-form input before dispatch', async () => {
+    expect((await recoveryPost(request('recovery-command?target=forged', fields))).status).toBe(400)
+    expect((await recoveryPost(request('recovery-command', fields, { 'content-type': 'application/json' }))).status).toBe(400)
+    expect((await recoveryPost(request('recovery-command', { ...fields, padding: 'x'.repeat(9000) }))).status).toBe(400)
+    const req = request('recovery-command', fields)
+    const duplicate = new NextRequest(req.url, { method: 'POST', headers: req.headers, body: 'intent=request&intent=apply' })
+    expect((await recoveryPost(duplicate)).status).toBe(400)
+    expect(mocks.recoveryAction).not.toHaveBeenCalled()
+  })
+  it('passes one operation deadline and carries refresh cookies to the final result', async () => {
+    mocks.create.mockImplementationOnce(adapter => {
+      adapter.setAll([{ name: 'sb-test.0', value: 'refreshed', options: {} }], {})
+      return { auth }
+    })
+    mocks.recoveryAction.mockResolvedValueOnce(NextResponse.json({ ok: false, error: 'forbidden' }, { status: 403 }))
+    const response = await recoveryPost(request('recovery-command', fields))
+    expect(response.status).toBe(403)
+    expect(mocks.recoveryAction.mock.calls[0][0].toString()).toBe(new URLSearchParams(fields).toString())
+    expect(mocks.recoveryAction.mock.calls[0][2]).toHaveProperty('signal')
+    expect(response.cookies.get('sb-test.0')?.value).toBe('refreshed')
+    expect(response.headers.get('referrer-policy')).toBe('no-referrer')
+  })
+  it('bounds an unfinished input stream and cannot dispatch after cancellation', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date', 'performance'] })
+    try {
+      const cancel = vi.fn()
+      const stream = new ReadableStream<Uint8Array>({ cancel })
+      const init = { method: 'POST', headers: { origin: canonical, host: 'bx1.co.za', 'content-type': 'application/x-www-form-urlencoded' }, body: stream, duplex: 'half' } satisfies NonNullable<ConstructorParameters<typeof NextRequest>[1]> & { duplex: 'half' }
+      const req = new NextRequest(`${canonical}/auth/recovery-command`, init)
+      const pending = recoveryPost(req)
+      await vi.advanceTimersByTimeAsync(12001)
+      expect((await pending).status).toBe(503)
+      expect(cancel).toHaveBeenCalledOnce()
+      expect(mocks.create).not.toHaveBeenCalled()
+      expect(mocks.recoveryAction).not.toHaveBeenCalled()
+    } finally { vi.useRealTimers() }
+  })
+  it('rejects an already-cancelled request and mismatched modes without an Auth client', async () => {
+    const abort = new AbortController(); abort.abort()
+    const base = request('recovery-command', fields)
+    expect((await recoveryPost(new NextRequest(base.url, { method: 'POST', headers: base.headers, body: new URLSearchParams(fields), signal: abort.signal }))).status).toBe(503)
+    vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_AUTH_MODE', '')
+    expect((await recoveryPost(request('recovery-command', fields))).status).toBe(503)
+    vi.stubEnv('BLOCKXONE_AUTH_MODE', '')
+    expect((await recoveryPost(request('recovery-command', fields))).status).toBe(404)
+    expect(mocks.create).not.toHaveBeenCalled()
+  })
 })
 
 describe('method, mode, origin and body admission', () => {
@@ -356,6 +425,87 @@ describe('MFA route admission and shared cookie response', () => {
     const response = await POST(req, context(action))
     expect(response.status).toBe(400)
     expect(await response.json()).toEqual({ ok: false, error: 'invalid_request' })
+    expect(mocks.create).not.toHaveBeenCalled()
+  })
+})
+
+describe('exact administration route and shared parsed form', () => {
+  it('dispatches once with the consumed form and preserves refresh/deletion cookies on safe denials', async () => {
+    mocks.create.mockImplementation(adapter => {
+      mocks.adminAction.mockImplementation(async (form) => {
+        expect(form).toBeInstanceOf(URLSearchParams)
+        expect(form.get('intent')).toBe('apply')
+        adapter.setAll([{ name: 'sb-test.0', value: 'refreshed', options: {} }, { name: 'sb-test.1', value: '', options: { maxAge: 0 } }], { 'X-Test-Refresh': 'administration' })
+        return NextResponse.json({ ok: false, error: 'conflict' }, { status: 409 })
+      })
+      return { auth }
+    })
+    const response = await POST(request('admin-command', { intent: 'apply' }), context('admin-command'))
+    expect(response.status).toBe(409)
+    expect(mocks.create).toHaveBeenCalledTimes(1)
+    expect(mocks.adminAction).toHaveBeenCalledExactlyOnceWith(expect.any(URLSearchParams), { auth })
+    expect(response.cookies.get('sb-test.0')).toMatchObject({ value: 'refreshed', httpOnly: true, secure: true })
+    expect(response.cookies.get('sb-test.1')?.maxAge).toBe(0)
+    expect(response.headers.get('x-test-refresh')).toBe('administration')
+    expect(response.headers.get('cache-control')).toContain('no-store')
+    expect(response.headers.get('referrer-policy')).toBe('no-referrer')
+    expect(await response.json()).toEqual({ ok: false, error: 'conflict' })
+  })
+  it.each(['origin', 'host'])('denies missing/null/foreign %s before client creation', async header => {
+    for (const value of [undefined, 'null', 'https://foreign.test']) {
+      const req = request('admin-command')
+      if (value === undefined) req.headers.delete(header)
+      else req.headers.set(header, value)
+      const response = await POST(req, context('admin-command'))
+      expect(response.status).toBe(403)
+      expect(await response.json()).toEqual({ ok: false, error: 'invalid_request' })
+    }
+    expect(mocks.create).not.toHaveBeenCalled()
+    expect(mocks.adminAction).not.toHaveBeenCalled()
+  })
+  it.each([[GET, 'GET'], [PUT, 'PUT'], [PATCH, 'PATCH'], [DELETE, 'DELETE'], [OPTIONS, 'OPTIONS'], [HEAD, 'HEAD']] as const)('denies non-POST method %# with private JSON', async (handler, method) => {
+    const response = await handler(new NextRequest(`${canonical}/auth/admin-command`, { method }), context('admin-command'))
+    expect(response.status).toBe(405)
+    expect(response.headers.get('allow')).toBe('POST')
+    expect(await response.json()).toEqual({ ok: false, error: 'invalid_request' })
+    expect(mocks.create).not.toHaveBeenCalled()
+  })
+  it.each(['/auth/admin-command/', '/auth/%61dmin-command', '/auth/admin-command/nested', '/auth/Admin-command', '/auth/admin-command?actor=x'])('denies alternate path/query %s even with a forged matching route parameter', async path => {
+    const req = new NextRequest(`${canonical}${path}`, { method: 'POST', headers: { origin: canonical, host: 'bx1.co.za', 'content-type': 'application/x-www-form-urlencoded' }, body: '' })
+    expect((await POST(req, context('admin-command'))).status).toBe(path.includes('?') ? 400 : 404)
+    expect(mocks.create).not.toHaveBeenCalled()
+  })
+  it.each(['intent=apply&intent=apply', 'x='.concat('a'.repeat(8193))])('rejects duplicate or oversized body before any client %#', async body => {
+    const req = new NextRequest(`${canonical}/auth/admin-command`, { method: 'POST', headers: { origin: canonical, host: 'bx1.co.za', 'content-type': 'application/x-www-form-urlencoded' }, body })
+    expect((await POST(req, context('admin-command'))).status).toBe(400)
+    expect(mocks.create).not.toHaveBeenCalled()
+  })
+  it('classifies fatal UTF-8 decoding as invalid only before client creation', async () => {
+    const req = new NextRequest(`${canonical}/auth/admin-command`, { method: 'POST', headers: { origin: canonical, host: 'bx1.co.za', 'content-type': 'application/x-www-form-urlencoded' }, body: new Uint8Array([255]) })
+    const response = await POST(req, context('admin-command'))
+    expect(response.status).toBe(400)
+    expect(await response.json()).toEqual({ ok: false, error: 'invalid_request' })
+    expect(mocks.create).not.toHaveBeenCalled()
+    expect(mocks.adminAction).not.toHaveBeenCalled()
+  })
+  it.each([Error, TypeError])('keeps post-dispatch exception %# unavailable while retaining refreshed cookies', async ErrorType => {
+    mocks.create.mockImplementation(adapter => {
+      mocks.adminAction.mockImplementation(async () => {
+        adapter.setAll([{ name: 'sb-test.0', value: 'refreshed', options: {} }], {})
+        throw new ErrorType('private-database-error')
+      })
+      return { auth }
+    })
+    const response = await POST(request('admin-command'), context('admin-command'))
+    expect(response.status).toBe(503)
+    expect(await response.json()).toEqual({ ok: false, error: 'unavailable' })
+    expect(response.cookies.get('sb-test.0')?.value).toBe('refreshed')
+  })
+  it('fails paired-mode mismatches closed without a server client', async () => {
+    vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_AUTH_MODE', '')
+    expect((await POST(request('admin-command'), context('admin-command'))).status).toBe(503)
+    vi.stubEnv('BLOCKXONE_AUTH_MODE', '')
+    expect((await POST(request('admin-command'), context('admin-command'))).status).toBe(404)
     expect(mocks.create).not.toHaveBeenCalled()
   })
 })

@@ -132,6 +132,8 @@ const nextConfig = {
           { key: 'Pragma', value: 'no-cache' },
           // Native forms need a non-null Origin. Middleware/metadata narrow
           // token-bearing URLs; Auth handlers retain no-referrer by default.
+          // The exact administration document uses the same private policy;
+          // its query selectors are validated by middleware and page metadata.
           { key: 'Referrer-Policy', value: source === '/auth/:path*' ? 'no-referrer' : 'strict-origin' },
           { key: 'X-Robots-Tag', value: 'noindex, nofollow, noarchive' },
         ],

@@ -21,6 +21,8 @@ describe('MFA bootstrap page', () => {
     const html = renderToStaticMarkup(await MfaPage({ searchParams: Promise.resolve({}) }))
     expect(html).toContain('Verify your sign-in')
     expect(html).toContain('action="/auth/logout"')
+    expect(html).toContain('href="/workspace/recovery"')
+    expect(html).toContain('Lost your authenticator? View recovery containment')
     expect(html).not.toContain('NEVER-SERIALIZE')
   })
   it('fixed setup continuation survives challenge render', async () => {

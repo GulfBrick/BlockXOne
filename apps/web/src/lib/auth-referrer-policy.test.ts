@@ -3,6 +3,24 @@ import { authDocumentReferrerPolicy } from './auth-referrer-policy'
 import { AUTH_ERROR_COPY } from './supabase/contracts'
 
 describe('Auth document referrer policy', () => {
+  it('permits only a clean recovery document or exact case selector', () => {
+    const id = '11111111-1111-4111-8111-111111111111'
+    expect(authDocumentReferrerPolicy('/workspace/recovery', {})).toBe('strict-origin')
+    expect(authDocumentReferrerPolicy('/workspace/recovery', { case: id })).toBe('strict-origin')
+    for (const query of [{ case: [id] }, { token: 'private' }, { case: id, role: 'SuperAdmin' }, { case: '' }]) expect(authDocumentReferrerPolicy('/workspace/recovery', query)).toBe('no-referrer')
+    expect(authDocumentReferrerPolicy('/workspace/recovery', new URLSearchParams(`case=${id}&case=${id}`))).toBe('no-referrer')
+    expect(authDocumentReferrerPolicy('/auth/recovery-command', {})).toBe('no-referrer')
+  })
+  it('permits only clean canonical administration selectors for native signout', () => {
+    const id = '11111111-1111-4111-8111-111111111111'
+    for (const query of [{}, { organisation: id }, { proposal: id }, { organisation: id, proposal: id }]) {
+      expect(authDocumentReferrerPolicy('/workspace/administration', query)).toBe('strict-origin')
+      expect(authDocumentReferrerPolicy('/workspace/administration', new URLSearchParams(query as Record<string, string>))).toBe('strict-origin')
+    }
+    for (const query of [{ organisation: [id, id] }, { proposal: [id] }, { token: 'private' }, { organisation: id, role: 'SuperAdmin' }, { organisation: '' }, { proposal: 'invalid' }]) expect(authDocumentReferrerPolicy('/workspace/administration', query)).toBe('no-referrer')
+    expect(authDocumentReferrerPolicy('/workspace/administration', new URLSearchParams(`organisation=${id}&organisation=${id}`))).toBe('no-referrer')
+    expect(authDocumentReferrerPolicy('/auth/admin-command', {})).toBe('no-referrer')
+  })
   it.each(['/login/mfa', '/workspace/security'])('supports clean MFA native signout document %s', path => {
     expect(authDocumentReferrerPolicy(path, {})).toBe('strict-origin')
     for (const key of ['token', 'code', 'next', 'error']) expect(authDocumentReferrerPolicy(path, { [key]: 'private' })).toBe('no-referrer')

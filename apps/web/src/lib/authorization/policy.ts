@@ -73,3 +73,53 @@ export function evaluateActionPermission(
   }
   return { allowed: true }
 }
+
+export const ADMINISTRATION_ACTIONS = Object.freeze([
+  'administration.read', 'administration.propose', 'administration.review',
+  'administration.apply', 'administration.cancel',
+] as const)
+export type AdministrationAction = (typeof ADMINISTRATION_ACTIONS)[number]
+declare const administrationBrand: unique symbol
+export type VerifiedAdministrationContext = { readonly [administrationBrand]: true }
+type AdministrationFacts = {
+  principalId: string; personId: string; organisationId: string;
+  scopeRevision: string; trustRevision: string; state: 'READY' | 'HOLD';
+  grantFrom: number; grantUntil: number
+}
+type AdministrationEntry = AdministrationFacts & { issuedAt: number; expiresAt: number }
+const administrationContexts = new WeakMap<VerifiedAdministrationContext, AdministrationEntry>()
+const authorityUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const authorityRevision = /^[1-9][0-9]{0,18}$/
+
+// Trusted SERVER factory only. The loader supplies fresh validated RPC facts;
+// this is never exported through an HTTP endpoint or invoked with UI claims.
+// No imports of server/context/MFA modules here: server.ts already imports policy.
+export function issueAdministrationContext(facts: AdministrationFacts): VerifiedAdministrationContext | null {
+  const now = Date.now()
+  if (![facts.principalId, facts.personId, facts.organisationId].every(value => typeof value === 'string' && value.length === 36 && authorityUuid.test(value) && value !== '00000000-0000-0000-0000-000000000000')
+    || ![facts.scopeRevision, facts.trustRevision].every(value => authorityRevision.test(value) && BigInt(value) <= 9223372036854775807n)
+    || (facts.state !== 'READY' && facts.state !== 'HOLD')
+    || !Number.isFinite(facts.grantFrom) || !Number.isFinite(facts.grantUntil)
+    || facts.grantFrom > now || facts.grantUntil <= now) return null
+  const handle: VerifiedAdministrationContext = Object.freeze(Object.create(null))
+  administrationContexts.set(handle, { principalId: facts.principalId, personId: facts.personId,
+    organisationId: facts.organisationId, scopeRevision: facts.scopeRevision, trustRevision: facts.trustRevision,
+    state: facts.state, grantFrom: facts.grantFrom, grantUntil: facts.grantUntil,
+    issuedAt: now, expiresAt: Math.min(now + 15_000, facts.grantUntil) })
+  return handle
+}
+
+export function evaluateAdministrationPermission(
+  context: VerifiedAdministrationContext | null, action: string, target: { organisationId: string },
+): { allowed: true } | { allowed: false; reason: 'forbidden' | 'governance_hold' } {
+  const facts = context && administrationContexts.get(context)
+  const now = Date.now()
+  if (!facts || now < facts.issuedAt || now >= facts.expiresAt
+    || !ADMINISTRATION_ACTIONS.some(known => known === action)
+    || !record(target) || Reflect.ownKeys(target).length !== 1
+    || !Object.hasOwn(target, 'organisationId') || target.organisationId !== facts.organisationId) return { allowed: false, reason: 'forbidden' }
+  if (facts.state === 'HOLD' && action !== 'administration.read') return { allowed: false, reason: 'governance_hold' }
+  // Revisions and transition hints are NOT application-side replay gates.
+  // SQL rechecks persons, conflicts, targets, revisions and durable receipts.
+  return { allowed: true }
+}
