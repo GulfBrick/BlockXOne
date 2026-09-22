@@ -12,6 +12,7 @@ import { postPortalCommand, prepareDurablePortalCommand, reconcilePortalMarker }
 import { money } from './portal-primitives'
 
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }) }))
+vi.mock('next/link', () => ({ default: ({ children, ...props }: React.ComponentProps<'a'>) => <a {...props} data-client-navigation="true">{children}</a> }))
 
 const actor = '11111111-1111-4111-8111-111111111111'
 const other = '22222222-2222-4222-8222-222222222222'
@@ -59,6 +60,17 @@ describe('portal navigation and source-driven surfaces', () => {
     expect(mobileNavigation).toContain('href="/workspace"')
     expect(mobileNavigation).toContain('Account workspace')
     expect(mobileNavigation).not.toContain('href="/portal/compliance"')
+  })
+  it('enters account security through a full document request on desktop and mobile', () => {
+    const html = renderToStaticMarkup(<PortalShell user={data().user} capabilities={{ manageProducts: false, reviewCompliance: true, invest: false }} active="overview" title="Overview"><p>Saved content</p></PortalShell>)
+    const securityLinks = html.match(/<a\b[^>]*href="\/workspace\/security"[^>]*>[\s\S]*?<\/a>/g) ?? []
+    expect(securityLinks).toHaveLength(2)
+    for (const link of securityLinks) {
+      expect(link).toContain('Account security')
+      expect(link).not.toContain('data-client-navigation')
+    }
+    // Keep ordinary portal links on the existing client router.
+    expect(html).toMatch(/<a\b[^>]*href="\/portal"[^>]*data-client-navigation="true"/)
   })
   it.each(['Investor', 'ComplianceOfficer', 'TransferAgent', 'TokenisationAgent', 'TreasuryOperator', 'FinancialController', 'SuperAdmin'])('does not infer product authority from %s', role => {
     const value = snapshot(); value.organisations = [{ id: organisation, name: 'Fictional Org', status: 'ACTIVE', roles: [role] }]
@@ -240,6 +252,9 @@ describe('operational landings and one subscription hand-off', () => {
     const html = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal" operatingContext={operating('SuperAdmin')} />)
     expect(html).toContain(`href="/workspace/administration?organisation=${nativeOrganisation}"`)
     expect(html).toContain('href="/workspace/security"'); expect(html).not.toContain('Your subscription orders'); expect(html).not.toContain('href="/portal/opportunities?')
+    const securityLinks = html.match(/<a\b[^>]*href="\/workspace\/security"[^>]*>[\s\S]*?<\/a>/g) ?? []
+    expect(securityLinks).toHaveLength(3)
+    for (const link of securityLinks) expect(link).not.toContain('data-client-navigation')
   })
   it('does not render another context’s events as a generic recent-activity feed', () => {
     const value = snapshot(); value.operating_context = operating('Investor'); value.events = [{ id: requestKey, subject_id: productId, kind: 'PRIVATE_CASE', actor_id: other, created_at: '2026-09-20T10:00:00Z', summary: 'Other reviewer private event' }]

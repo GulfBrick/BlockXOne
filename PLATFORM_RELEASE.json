@@ -1,18 +1,18 @@
 {
   "product": "BlockXOne",
-  "version": "1.1.0-rc.10",
+  "version": "1.1.0-rc.11",
   "status": "release-candidate",
-  "baseSource": "0a77d8c1cef6fb206bfd268a8b3f31bbc3e4e5f4",
+  "baseSource": "6a7d63d15e329140450ee87ff3b32c95605d4db4",
   "sourceIdentity": "VERCEL_GIT_COMMIT_SHA",
   "environmentSource": "validated deployment target, canonical origin and Supabase project",
   "sharedEntry": "/login",
   "sharedDashboard": "/portal",
   "environments": ["TESTNET", "MAINNET"],
   "brand": "BlockXOne Brand Kit v2.0 Exact Logo",
-  "schemaChanges": ["supabase/features/bx1_application_admission.sql"],
+  "schemaChanges": [],
   "mainnetMissingPrerequisites": [],
   "contractChanges": [],
   "productionFinancialAdmission": false,
-  "scope": "Stage 1 application handoff correction candidate: genuine wealth-manager organisation/representative data, truthful application progress and reviewer availability, immutable admission purpose and separate operational assignment. Preserve original legacy records, login, security and funding wrappers. Requires additive application-admission schema after rc.9 before application release. MAIN remains unadmitted for manual review. No people, customer roles, provider approvals, financial operations or contracts are seeded by this release. Cloud and hosted acceptance are recorded separately; full Stage 2 and all-dashboard lifecycle acceptance are not claimed."
+  "scope": "Bounded Stage 1 MFA correction: accept the Supabase QR generator's benign XML preamble while preserving response validation and secret bounds; enter Account security with a full document request from both desktop and mobile navigation. No database, role, credential, funding or contract changes. Existing rc.10 application records and entry acceptance remain preserved. Cloud regression and named-human hosted MFA acceptance are separate; pending authenticators are never automatically deleted or replaced. Full Stage 2 acceptance is not claimed."
 }
 
