@@ -784,7 +784,8 @@ try {
   eq([entityMandate.status, entityMandate.effective, entityMandate.transaction_limit_minor], ['SUBMITTED', false, '0'], 'request has zero trading limit and no authority')
   eq((await scopedCommand(9, applicant, 'request_investing_representative_mandate', entityRequest, entityRequestKey)).investing_representative_mandates[0].id,
     entityMandate.id, 'exact representative request retry is idempotent')
-  eq((await scopedRead(2, reviewer)).investing_representative_mandates.length, 0, 'AAL1 Compliance cannot enumerate entity mandates')
+  await denied('enrolled AAL1 Compliance cannot enter the scoped portal to enumerate entity mandates',
+    () => scopedRead(2, reviewer), '42501')
   eq((await mandateScopedRead(2, reviewer)).investing_representative_mandates.some(value => value.id === entityMandate.id), true, 'AAL2 appointed Compliance sees exact entity case')
   eq((await mandateScopedRead(5, roleContext('ComplianceOfficer', otherScope))).investing_representative_mandates.length, 0, 'unrelated organisation cannot read entity mandate')
   const entityChecks = { appointment: true, legal_entity: true, scope: true }
