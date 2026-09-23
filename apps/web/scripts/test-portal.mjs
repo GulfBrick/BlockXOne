@@ -421,8 +421,13 @@ try {
   eq(await scalar('select count(*)::int from bx1_portal.subscriptions'), historicalOrders + 1, 'denied eligibility writes create no extra reservations')
   await db.query('commit'); begun = false
   phase = 'stage2-reviewer-binding-revocation-race'
+  // The synthetic actor helper uses transaction-local JWT claims and role.
+  // Create the pending case in its own committed transaction so the separate
+  // reviewer connection can see it before the competing binding lock begins.
+  await db.query('begin'); begun = true
   const raceCase = (await scopedCommand(3, investor, 'request_product_eligibility', requestBody(replayProduct, account3))).product_eligibility.find(e => e.product_id === replayProduct.id)
   truth(raceCase?.id, 'separate published product supplies a pending case for real revocation race')
+  await db.query('commit'); begun = false
   await admin(); await db.query('begin'); begun = true
   const reviewBinding = await scalar("select id from bx1_portal.organisation_authority_bindings where product_organisation_id=$1 and native_organisation_id=$2 and role='ComplianceOfficer' and status='ACTIVE' for update", [orgId, nativeScope])
   truth(reviewBinding, 'appointed Compliance binding exists and is locked by competing transaction')
