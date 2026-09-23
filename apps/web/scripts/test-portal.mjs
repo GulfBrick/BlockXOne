@@ -521,7 +521,7 @@ try {
   eq((await mandateScopedRead(2, reviewer)).organisation_mandates.some(value => value.id === mandate.id), true, 'assured Compliance sees exact scoped case')
   await denied('applicant cannot review own mandate', () => scopedCommand(9, applicant, 'review_representative_mandate', mandateReview(mandate)), '42501')
   mandate = (await mandateScopedCommand(2, reviewer, 'review_representative_mandate', mandateReview(mandate, 'CHANGES_REQUIRED'))).organisation_mandates.find(value => value.id === mandate.id)
-  eq(mandate.can_request, true, 'changes required returns case to applicant')
+  eq((await entryRead(9)).organisation_mandates.find(value => value.id === mandate.id).can_request, true, 'changes required returns case to applicant')
   mandate = (await entryCommand(9, 'request_representative_mandate', mandateRequest(mandate.revision, 'synthetic-appointment-reference-9-v2'))).organisation_mandates[0]
   mandate = (await mandateScopedCommand(2, reviewer, 'review_representative_mandate', mandateReview(mandate))).organisation_mandates.find(value => value.id === mandate.id)
   eq([mandate.status, mandate.effective, mandate.next_owner], ['APPROVED', false, 'SUPER_ADMIN'], 'Compliance approval is not a role grant')
