@@ -14,8 +14,8 @@ describe('one product version with isolated deployment identity', () => {
     expect(manifest.sharedEntry).toBe('/login')
     expect(manifest.sharedDashboard).toBe('/portal')
     expect(manifest.productionFinancialAdmission).toBe(false)
-    expect(manifest.schemaChanges).toEqual(['20260923134152_stage2_product_eligibility', '20260923143713_stage2_customer_mandates', '20260923144216_stage2_document_receipts', '20260923161500_stage2_application_document_history', '20260923171126_stage2_entity_investment_accounts', '20260923175822_stage2_superadmin_shell_mfa_boundary'])
-    expect(manifest.mainnetMissingPrerequisites).toEqual(['Live identity-provider evidence, controlled document validation, required MFA for every admission reviewer, trusted distinct-person mappings, and real customer admission are not approved'])
+    expect(manifest.schemaChanges).toEqual(['20260923134152_stage2_product_eligibility', '20260923143713_stage2_customer_mandates', '20260923144216_stage2_document_receipts', '20260923161500_stage2_application_document_history', '20260923171126_stage2_entity_investment_accounts', '20260923175822_stage2_superadmin_shell_mfa_boundary', '20260923205519_stage3_immutable_offering_packages'])
+    expect(manifest.mainnetMissingPrerequisites).toEqual(['Live identity-provider evidence, controlled document validation, required MFA for every admission reviewer, trusted distinct-person mappings, and real customer admission are not approved', 'Issuer appointment, actual e-signature/document evidence, reviewed contract package and independently verified technical readiness are not admitted'])
     expect(manifest.contractChanges).toEqual([])
   })
   it('uses one version for both configured environments', () => {

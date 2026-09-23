@@ -49,18 +49,8 @@ on:
       - supabase/tests/bx1_portal_funding.sql
       - supabase/functions/bx1-funding-verifier/**
       - supabase/features/bx1_portal.sql
-      - supabase/migrations/20260921160000_portal_authority_accounts.sql
-      - supabase/migrations/20260923134152_stage2_product_eligibility.sql
-      - supabase/tests/bx1_product_eligibility.sql
-      - supabase/migrations/20260923143713_stage2_customer_mandates.sql
-      - supabase/tests/bx1_customer_mandates.sql
-      - supabase/migrations/20260923144216_stage2_document_receipts.sql
-      - supabase/tests/bx1_document_receipts.sql
-      - supabase/migrations/20260923171126_stage2_entity_investment_accounts.sql
-      - supabase/migrations/20260923175822_stage2_superadmin_shell_mfa_boundary.sql
-      - supabase/tests/bx1_entity_investment_accounts.sql
-      - supabase/tests/bx1_portal_authority_accounts.sql
-      - supabase/tests/bx1_portal.sql
+      - supabase/migrations/**
+      - supabase/tests/**
       - contracts/demo/**
       - apps/web/src/lib/testnet-fund/**
       - apps/web/src/components/testnet-fund/**
@@ -106,18 +96,8 @@ on:
       - supabase/tests/bx1_portal_funding.sql
       - supabase/functions/bx1-funding-verifier/**
       - supabase/features/bx1_portal.sql
-      - supabase/migrations/20260921160000_portal_authority_accounts.sql
-      - supabase/migrations/20260923134152_stage2_product_eligibility.sql
-      - supabase/tests/bx1_product_eligibility.sql
-      - supabase/migrations/20260923143713_stage2_customer_mandates.sql
-      - supabase/tests/bx1_customer_mandates.sql
-      - supabase/migrations/20260923144216_stage2_document_receipts.sql
-      - supabase/tests/bx1_document_receipts.sql
-      - supabase/migrations/20260923171126_stage2_entity_investment_accounts.sql
-      - supabase/migrations/20260923175822_stage2_superadmin_shell_mfa_boundary.sql
-      - supabase/tests/bx1_entity_investment_accounts.sql
-      - supabase/tests/bx1_portal_authority_accounts.sql
-      - supabase/tests/bx1_portal.sql
+      - supabase/migrations/**
+      - supabase/tests/**
       - contracts/demo/**
       - apps/web/src/lib/testnet-fund/**
       - apps/web/src/components/testnet-fund/**

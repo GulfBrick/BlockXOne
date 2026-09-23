@@ -1,6 +1,6 @@
 {
   "product": "BlockXOne",
-  "version": "1.1.0-rc.15",
+  "version": "1.1.0-rc.16",
   "status": "release-candidate",
   "baseSource": "713d1bf45f1c0c0ad71e25a9f8d15b0037341d6a",
   "sourceIdentity": "VERCEL_GIT_COMMIT_SHA",
@@ -9,10 +9,10 @@
   "sharedDashboard": "/portal",
   "environments": ["TESTNET", "MAINNET"],
   "brand": "BlockXOne Brand Kit v2.0 Exact Logo",
-  "schemaChanges": ["20260923134152_stage2_product_eligibility", "20260923143713_stage2_customer_mandates", "20260923144216_stage2_document_receipts", "20260923161500_stage2_application_document_history", "20260923171126_stage2_entity_investment_accounts", "20260923175822_stage2_superadmin_shell_mfa_boundary"],
-  "mainnetMissingPrerequisites": ["Live identity-provider evidence, controlled document validation, required MFA for every admission reviewer, trusted distinct-person mappings, and real customer admission are not approved"],
+  "schemaChanges": ["20260923134152_stage2_product_eligibility", "20260923143713_stage2_customer_mandates", "20260923144216_stage2_document_receipts", "20260923161500_stage2_application_document_history", "20260923171126_stage2_entity_investment_accounts", "20260923175822_stage2_superadmin_shell_mfa_boundary", "20260923205519_stage3_immutable_offering_packages"],
+  "mainnetMissingPrerequisites": ["Live identity-provider evidence, controlled document validation, required MFA for every admission reviewer, trusted distinct-person mappings, and real customer admission are not approved", "Issuer appointment, actual e-signature/document evidence, reviewed contract package and independently verified technical readiness are not admitted"],
   "contractChanges": [],
   "productionFinancialAdmission": false,
-  "scope": "Stage 2 connected customer-admission increment: preserve existing identity, individual accounts, funding and contract history. Retain approved-individual product eligibility and the separately reviewed TEST customer-manager mandate. Add immutable application-document history with exact version-bound private retrieval; direct Storage reads require current session, MFA and reviewer authority. Initial drafts no longer offer empty history, and failed history reads explain sign-in/access/service states. Add a distinct reviewed legal-entity holder to the existing investment-account identity and a separately requested, independently reviewed and applied representative mandate in the same portal. The entity mandate is limited to account view and a reserved future eligibility-request scope with zero transaction limit; it grants no entity product eligibility, order, wallet, funding or signing authority. Trusted person mappings are required to establish distinct humans; separate emails do not suffice. TEST uses fictional manual evidence, not live KYC or malware scanning. Document-receipt enforcement remains OFF pending hosted credential and byte proof; immutable upload quota can prevent correction after eight objects. Structured beneficial-owner relationships, multi-representative service mandates, entity product eligibility, Sumsub, full document lifecycle and hosted distinct-person acceptance remain required. MAIN business actions stay sealed."
+  "scope": "Stage 3 offering-package increment in the same portal: preserve Stage 1 and Stage 2 identity, admission, account, funding and contract history. Submitted fund and real-estate draft terms gain immutable package references and document-text digests; issuer and Compliance decisions bind to the exact package, while investor eligibility and new subscriptions require that same package. Existing legacy records remain historical, not automatically approved. Publishing, subscriptions and new funding commitments fail closed without independently verified technical readiness; this release does not provide a self-attestation bypass. Issuer appointment for newly admitted customer organisations, actual e-signature and private-document evidence, complete typed product rights, deployment/contract conformance, test settlement, issuance, servicing and exits are not complete. TEST retains fictional manual customer evidence, not live KYC or malware scanning. MAIN business and financial actions remain sealed."
 }
 

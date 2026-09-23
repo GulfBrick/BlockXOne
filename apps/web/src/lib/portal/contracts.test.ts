@@ -6,7 +6,7 @@ import { isProductionWebPathBlocked } from '@/lib/release-policy'
 const id = 'd22789ee-7f73-4acf-a414-3de0b62ea801'
 const key = '113800c3-cf6e-437e-abdf-a3b09a03fcff'
 const terms: ProductTerms = { asset_type: 'FUND', name: 'Synthetic Balanced Fund', issuer_name: 'Fictional Fund Issuer', summary: 'A wholly synthetic investment product for testing.', strategy: 'A fictional diversified strategy with no real capital.', share_class: 'Class A', currency: 'ZAR_TEST', unit_price_minor: '12345678901234567890', cap_units: '100000', minimum_units: '10', pricing_basis: 'Fixed price for this test offering.', fees: 'No actual charges in this test environment.', redemption_terms: 'Synthetic redemption requires confirmed cancellation of units.', eligible_countries: ['ZA'], eligible_investor_types: ['INDIVIDUAL'], property_address: '', property_valuation_minor: '0', rental_income_policy: '', documents: { memorandum: 'Fictional test memorandum; this is not an actual investment offer.', risks: 'Test-only disclosure: no real money, asset ownership or returns exist.', subscription_terms: 'Acceptance only reserves synthetic units and never proves funding.' } }
-const product: PortalProduct = { id, organisation_id: id, created_by: id, revision: 4, status: 'PUBLISHED', terms, terms_hash: 'a'.repeat(64), reserved_units: '20', created_at: '2026-09-21T00:00:00Z', reviewer_id: null, review_notes: null, reviewed_at: null, published_at: null, review_checks: {} }
+const product: PortalProduct = { id, organisation_id: id, created_by: id, revision: 4, status: 'PUBLISHED', terms, terms_hash: 'a'.repeat(64), reserved_units: '20', created_at: '2026-09-21T00:00:00Z', reviewer_id: null, review_notes: null, reviewed_at: null, published_at: null, review_checks: {}, offering_package: { id: key, package_number: 1, origin: 'SUBMITTED', terms_hash: 'a'.repeat(64), document_hashes: { memorandum: 'b'.repeat(64), risks: 'c'.repeat(64), subscription_terms: 'd'.repeat(64) }, submitted_at: '2026-09-21T00:00:00Z', issuer_status: 'APPROVED', compliance_status: 'APPROVED', technical_readiness_status: 'VERIFIED', publishable: false, subscribable: true, can_review_issuer: false } }
 
 describe('customer portal contracts', () => {
   const evidence = { id, kind: 'IDENTITY', title: 'Synthetic identity', storage_path: `${id}/${key}`, sha256: 'a'.repeat(64), size: 100, mime_type: 'application/pdf' }
@@ -56,10 +56,22 @@ describe('customer portal contracts', () => {
     expect(subscriptionQuote(product, '99981')).toHaveProperty('error')
     expect(subscriptionQuote(product, '99980')).toHaveProperty('amount_minor')
   })
+  it('never treats historical status or an unverified package as subscription readiness', () => {
+    expect(subscriptionQuote({ ...product, offering_package: null }, '10')).toHaveProperty('error')
+    expect(subscriptionQuote({ ...product, offering_package: { ...product.offering_package!, technical_readiness_status: 'NOT_VERIFIED', subscribable: false } }, '10')).toHaveProperty('error')
+    expect(subscriptionQuote({ ...product, offering_package: { ...product.offering_package!, terms_hash: 'f'.repeat(64) } }, '10')).toHaveProperty('error')
+  })
   it('binds subscription commands to approved version/hash and explicit acceptance', () => {
-    const payload = { product_id: id, expected_revision: 4, terms_hash: 'a'.repeat(64), units: '10', accepted_documents: true, accepted_risks: true }
+    const payload = { product_id: id, offering_revision_id: key, expected_revision: 4, terms_hash: 'a'.repeat(64), units: '10', accepted_documents: true, accepted_risks: true }
     expect(portalCommandSchema.safeParse({ command: 'subscribe', key, payload }).success).toBe(true)
-    for (const change of [{ expected_revision: 0 }, { terms_hash: '' }, { accepted_documents: false }, { accepted_risks: false }, { investor_id: id }]) expect(portalCommandSchema.safeParse({ command: 'subscribe', key, payload: { ...payload, ...change } }).success).toBe(false)
+    for (const change of [{ offering_revision_id: '' }, { expected_revision: 0 }, { terms_hash: '' }, { accepted_documents: false }, { accepted_risks: false }, { investor_id: id }]) expect(portalCommandSchema.safeParse({ command: 'subscribe', key, payload: { ...payload, ...change } }).success).toBe(false)
+  })
+  it('requires exact immutable package identity for distinct issuer and Compliance decisions', () => {
+    const common = { product_id: id, offering_revision_id: key, expected_revision: 4, terms_hash: 'a'.repeat(64), decision: 'APPROVED', notes: 'Synthetic issuer authority and investor rights have been separately reviewed.' }
+    expect(portalCommandSchema.safeParse({ command: 'review_product', key, payload: { ...common, checks: { issuer: true, terms: true, disclosures: true, eligibility: true } } }).success).toBe(true)
+    expect(portalCommandSchema.safeParse({ command: 'review_offering_issuer', key, payload: { ...common, checks: { issuer_authority: true, terms: true, rights: true } } }).success).toBe(true)
+    expect(portalCommandSchema.safeParse({ command: 'review_offering_issuer', key, payload: { ...common, offering_revision_id: '', checks: { issuer_authority: true, terms: true, rights: true } } }).success).toBe(false)
+    expect(portalCommandSchema.safeParse({ command: 'review_product', key, payload: { ...common, terms_hash: '', checks: { issuer: true, terms: true, disclosures: true, eligibility: true } } }).success).toBe(false)
   })
   it('bounds product eligibility requests to one account, product and case revision', () => {
     const payload = { product_id: id, investment_account_id: key, expected_revision: 0, investor_statement: 'Synthetic investor objectives and product fit for this offering.' }

@@ -7,7 +7,7 @@ import type { Bx1Role } from '@/lib/supabase/contracts'
 import { PortalScreen, productManagementOrganisations } from './portal-screens'
 import { portalNavigation, PortalShell } from './portal-shell'
 import { fictionalProductTerms } from './product-form'
-import { ApplicationReview, InvestmentAccountPanel, ProductActions, ProductEligibilityPanel, ProductReview, SubscriptionForm, activeIndividualAccounts, currentInvestorApplication, currentProductEligibility } from './portal-workflows'
+import { ApplicationReview, InvestmentAccountPanel, IssuerOfferingReview, OfferingPackageEvidence, ProductActions, ProductEligibilityPanel, ProductReview, SubscriptionForm, activeIndividualAccounts, currentInvestorApplication, currentProductEligibility } from './portal-workflows'
 import { postPortalCommand, prepareDurablePortalCommand, reconcilePortalMarker } from './portal-client'
 import { money } from './portal-primitives'
 
@@ -29,9 +29,10 @@ const entityMandateId = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'
 const companyDocumentId = 'ffffffff-ffff-4fff-8fff-ffffffffffff'
 function snapshot(): PortalSnapshot { return { actor: { id: actor, email: 'synthetic@example.invalid', display_name: 'Synthetic User', can_review: false }, applications: [], organisations: [], products: [], subscriptions: [], events: [], accounts: [], product_eligibility: [], operating_context: APPLICANT_CONTEXT } }
 function account(change: Partial<PortalInvestmentAccount> = {}): PortalInvestmentAccount { return { id: accountId, holder_user_id: actor, application_id: applicationId, kind: 'INDIVIDUAL', status: 'ACTIVE', created_at: '2026-09-20T10:00:00Z', ...change } }
-function eligibility(change: Partial<PortalProductEligibility> = {}): PortalProductEligibility { return { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', investment_account_id: accountId, product_id: productId, organisation_id: organisation, product_revision: 3, terms_hash: 'ab'.repeat(32), application_revision: 1, revision: 2, status: 'APPROVED', investor_statement: 'This fictional product fits the synthetic investor objectives and test funds.', submitted_at: '2026-09-20T10:00:00Z', reviewed_at: '2026-09-20T11:00:00Z', reviewer_id: other, review_notes: 'Synthetic offering restrictions and account evidence independently reviewed.', review_checks: { identity: true, product_fit: true, restrictions: true, source_of_funds: true }, approved_until: '2099-01-01T00:00:00Z', effective: true, can_decide: false, can_approve: false, can_revoke: false, holder_user_id: actor, product_name: 'Fictional Test Fund', account_kind: 'INDIVIDUAL', investor_application: application(), ...change } }
+const offeringRevisionId = '0c0c0c0c-0c0c-4c0c-8c0c-0c0c0c0c0c0c'
+function eligibility(change: Partial<PortalProductEligibility> = {}): PortalProductEligibility { return { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', investment_account_id: accountId, product_id: productId, organisation_id: organisation, product_revision: 3, offering_revision_id: offeringRevisionId, terms_hash: 'ab'.repeat(32), application_revision: 1, revision: 2, status: 'APPROVED', investor_statement: 'This fictional product fits the synthetic investor objectives and test funds.', submitted_at: '2026-09-20T10:00:00Z', reviewed_at: '2026-09-20T11:00:00Z', reviewer_id: other, review_notes: 'Synthetic offering restrictions and account evidence independently reviewed.', review_checks: { identity: true, product_fit: true, restrictions: true, source_of_funds: true }, approved_until: '2099-01-01T00:00:00Z', effective: true, can_decide: false, can_approve: false, can_revoke: false, holder_user_id: actor, product_name: 'Fictional Test Fund', account_kind: 'INDIVIDUAL', investor_application: application(), ...change } }
 function operating(role: Bx1Role): PortalOperatingContext { return { mode: 'ROLE', organisationId: nativeOrganisation, role } }
-function order(change: Partial<PortalSubscription> = {}): PortalSubscription { return { id: requestKey, product_id: productId, investment_account_id: accountId, investor_id: actor, product_name: 'Fictional Test Fund', organisation_id: organisation, product_revision: 3, terms_hash: 'ab'.repeat(32), units: '10', amount_minor: '100000', status: 'AWAITING_FUNDING', created_at: '2026-09-20T10:00:00Z', can_cancel: true, ...change } }
+function order(change: Partial<PortalSubscription> = {}): PortalSubscription { return { id: requestKey, product_id: productId, investment_account_id: accountId, investor_id: actor, product_name: 'Fictional Test Fund', organisation_id: organisation, product_revision: 3, offering_revision_id: offeringRevisionId, terms_hash: 'ab'.repeat(32), units: '10', amount_minor: '100000', status: 'AWAITING_FUNDING', created_at: '2026-09-20T10:00:00Z', can_cancel: true, ...change } }
 function operatorOrganisation(role: 'OfferingManager' | 'IssuerFundManager' = 'OfferingManager'): PortalOrganisation {
   return { id: organisation, name: 'Fictional Product Organisation', status: 'ACTIVE', roles: [role], native_organisation_id: nativeOrganisation, authority_source: 'NATIVE_BINDING' as const, capabilities: ['create_product', 'save_product', 'submit_product', 'publish_product', 'read_orders'] }
 }
@@ -69,7 +70,11 @@ function entityMandate(change: Partial<PortalInvestingRepresentativeMandate> = {
   return { id: entityMandateId, investment_account_id: entityAccountId, application_id: entityApplicationId, applicant_user_id: other, representative_user_id: other, entity_party_id: otherOrganisation, entity_name: 'Fictional Holding Company', reviewer_scope_organisation_id: nativeOrganisation, admission_revision: 1, admission_current_revision: 1, admission_approved_until: '2099-01-01T00:00:00Z', cycle: 1, revision: 1, status: 'SUBMITTED', scope: ['ACCOUNT_VIEW', 'REQUEST_ELIGIBILITY'], transaction_limit_minor: '0', evidence_reference: 'Fictional board appointment in the submitted COMPANY document.', appointment_document_id: companyDocumentId, requested_until: new Date(Date.now() + 14 * 86_400_000).toISOString(), submitted_at: '2026-09-23T00:00:00Z', reviewed_at: null, reviewer_user_id: null, review_notes: null, review_checks: {}, approval_receipt_id: null, applied_at: null, applied_by_user_id: null, revoked_at: null, revoke_reason: null, effective: false, next_owner: 'COMPLIANCE', can_request: false, can_review: true, can_apply: false, can_revoke: false, ...change }
 }
 function product(change: Partial<PortalProduct> = {}): PortalProduct {
-  return { id: productId, organisation_id: organisation, created_by: other, revision: 3, status: 'PUBLISHED', terms: fictionalProductTerms(), terms_hash: 'ab'.repeat(32), reserved_units: '0', created_at: '2026-09-20T10:00:00Z', reviewer_id: actor, review_notes: null, reviewed_at: '2026-09-20T11:00:00Z', published_at: '2026-09-20T12:00:00Z', review_checks: {}, ...change }
+  const status = change.status ?? 'PUBLISHED'
+  const submitted = !['DRAFT', 'CHANGES_REQUIRED'].includes(status)
+  return { id: productId, organisation_id: organisation, created_by: other, revision: 3, status, terms: fictionalProductTerms(), terms_hash: 'ab'.repeat(32), reserved_units: '0', created_at: '2026-09-20T10:00:00Z', reviewer_id: actor, review_notes: null, reviewed_at: '2026-09-20T11:00:00Z', published_at: '2026-09-20T12:00:00Z', review_checks: {},
+    offering_package: submitted ? { id: offeringRevisionId, package_number: 1, origin: 'SUBMITTED', terms_hash: 'ab'.repeat(32), document_hashes: { memorandum: 'cd'.repeat(32), risks: 'de'.repeat(32), subscription_terms: 'ef'.repeat(32) }, submitted_at: '2026-09-20T10:00:00Z', issuer_status: status === 'IN_REVIEW' ? 'PENDING' : 'APPROVED', compliance_status: status === 'IN_REVIEW' ? 'PENDING' : 'APPROVED', technical_readiness_status: status === 'PUBLISHED' ? 'VERIFIED' : 'NOT_VERIFIED', publishable: false, subscribable: status === 'PUBLISHED', can_review_issuer: false } : null,
+    offering_history: [], ...change }
 }
 function data(value = snapshot()): PortalPageData { return { user: { id: actor, email: 'synthetic@example.invalid' }, snapshot: value } }
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers() })
@@ -167,7 +172,7 @@ describe('onboarding and subscription boundaries', () => {
   it('binds eligible subscription review to the displayed revision and explicit document/risk acceptance', () => {
     const value = snapshot(); value.applications = [application()]; value.accounts = [account()]; value.product_eligibility = [eligibility()]
     const html = renderToStaticMarkup(<SubscriptionForm product={product()} snapshot={value} onSaved={vi.fn()} />)
-    expect(html).toContain('Revision 3'); expect(html).toContain('displayed terms fingerprint'); expect(html).toContain('risk disclosures')
+    expect(html).toContain('Package 1'); expect(html).toContain(offeringRevisionId); expect(html).toContain('displayed terms fingerprint'); expect(html).toContain('risk disclosures')
     expect(html).toContain('Accept terms and reserve units'); expect(html).toContain('disabled=""'); expect(html).toContain('It does not move cash or issue tokens')
   })
   it('does not allow an authorised reviewer to approve their own application', () => {
@@ -179,6 +184,66 @@ describe('onboarding and subscription boundaries', () => {
     const value = snapshot(); value.actor.can_review = true
     const html = renderToStaticMarkup(<ProductReview product={product({ created_by: actor, status: 'IN_REVIEW' })} snapshot={value} onSaved={vi.fn()} />)
     expect(html).toContain('You created this product and cannot approve it'); expect(html).not.toContain('Record offering decision')
+  })
+  it('shows package text digests and separate decisions without implying signed documents', () => {
+    const item = product({ status: 'IN_REVIEW', offering_history: [{ id: other, package_number: 0, origin: 'LEGACY_PRODUCT_SNAPSHOT', terms_hash: 'fa'.repeat(32), document_hashes: { memorandum: 'fb'.repeat(32), risks: 'fc'.repeat(32), subscription_terms: 'fd'.repeat(32) }, submitted_at: '2026-09-19T00:00:00Z', issuer_status: 'UNVERIFIED_LEGACY', compliance_status: 'UNVERIFIED_LEGACY', technical_readiness_status: 'NOT_VERIFIED' }] })
+    const html = renderToStaticMarkup(<OfferingPackageEvidence product={item} />)
+    expect(html).toContain(offeringRevisionId)
+    expect(html).toContain('cd'.repeat(32)); expect(html).toContain('de'.repeat(32)); expect(html).toContain('ef'.repeat(32))
+    expect(html).toContain('Appointed issuer decision'); expect(html).toContain('Independent Compliance decision')
+    expect(html).toContain('Awaiting technical readiness'); expect(html).toContain('Historical snapshot, approvals unverified')
+    expect(html).not.toContain('Signed memorandum')
+  })
+  it('shows exact-package issuer change rationale to a manager, but not in investor evidence', () => {
+    const original = product({ status: 'IN_REVIEW' })
+    const item = product({ status: 'IN_REVIEW', offering_package: { ...original.offering_package!, issuer_status: 'CHANGES_REQUIRED', issuer_review_notes: 'Correct the synthetic class rights before resubmission.' } })
+    const manager = snapshot(); manager.operating_context = operating('OfferingManager'); manager.organisations = [operatorOrganisation()]; manager.products = [item]
+    const managerHtml = renderToStaticMarkup(<PortalScreen data={data(manager)} view="/portal/products/detail" id={productId} operatingContext={operating('OfferingManager')} />)
+    expect(managerHtml).toContain('Issuer decision rationale')
+    expect(managerHtml).toContain('Correct the synthetic class rights')
+    expect(managerHtml).toContain('Issuer name (unverified)')
+    const investorHtml = renderToStaticMarkup(<OfferingPackageEvidence product={item} />)
+    expect(investorHtml).not.toContain('Correct the synthetic class rights')
+  })
+  it('never offers publication or subscription from workflow status alone', () => {
+    const approved = product({ status: 'APPROVED' })
+    const actions = renderToStaticMarkup(<ProductActions product={approved} onSaved={vi.fn()} availableCommands={['publish_product']} />)
+    expect(actions).toContain('Opening is not available')
+    expect(actions).not.toContain('Open approved offering</button>')
+    const subscription = renderToStaticMarkup(<SubscriptionForm product={product({ offering_package: null })} snapshot={snapshot()} onSaved={vi.fn()} />)
+    expect(subscription).toContain('Offering is not open')
+    expect(subscription).not.toContain('Accept terms and reserve units</button>')
+  })
+  it('shows an issuer decision only when the backend grants exact package review authority', () => {
+    const submitted = product({ status: 'IN_REVIEW' })
+    const noGrant = renderToStaticMarkup(<IssuerOfferingReview product={submitted} snapshot={snapshot()} onSaved={vi.fn()} />)
+    expect(noGrant).toContain('Issuer action unavailable'); expect(noGrant).not.toContain('Record issuer decision</button>')
+    const granted = product({ status: 'IN_REVIEW', offering_package: { ...submitted.offering_package!, can_review_issuer: true }, allowed_actions: ['review_offering_issuer'] })
+    const decision = renderToStaticMarkup(<IssuerOfferingReview product={granted} snapshot={snapshot()} onSaved={vi.fn()} />)
+    expect(decision).toContain('Record issuer decision</button>')
+    expect(decision).toContain('Appointed issuer authority and product mandate verified for this test')
+    expect(decision).toContain('not a complete legal rights schedule or e-signature package')
+  })
+  it('requires a server-granted Compliance action and shows the same package reference', () => {
+    const value = snapshot(); value.actor.can_review = true
+    const submitted = product({ status: 'IN_REVIEW' })
+    const withoutGrant = renderToStaticMarkup(<ProductReview product={submitted} snapshot={value} onSaved={vi.fn()} />)
+    expect(withoutGrant).not.toContain('Record Compliance decision</button>')
+    const granted = product({ status: 'IN_REVIEW', offering_package: { ...submitted.offering_package!, can_review_compliance: true }, allowed_actions: ['review_product'] })
+    const decision = renderToStaticMarkup(<ProductReview product={granted} snapshot={value} onSaved={vi.fn()} />)
+    expect(decision).toContain(offeringRevisionId)
+    expect(decision).toContain('Record Compliance decision</button>')
+    expect(decision).toContain('not issuer approval')
+  })
+  it('shows scoped issuer changes to the manager but never in the investor opportunity', () => {
+    const submitted = product({ status: 'IN_REVIEW' })
+    const item = product({ status: 'CHANGES_REQUIRED', offering_package: { ...submitted.offering_package!, issuer_status: 'CHANGES_REQUIRED', issuer_review_notes: 'Issuer requests a corrected fictional class-rights explanation before another submission.' } })
+    const manager = snapshot(); manager.operating_context = operating('OfferingManager'); manager.organisations = [operatorOrganisation()]; manager.products = [item]
+    const managerHtml = renderToStaticMarkup(<PortalScreen data={data(manager)} view="/portal/products/detail" id={productId} operatingContext={operating('OfferingManager')} />)
+    expect(managerHtml).toContain('Issuer decision rationale'); expect(managerHtml).toContain('corrected fictional class-rights explanation')
+    const investor = snapshot(); investor.applications = [application()]; investor.products = [product({ offering_package: { ...product().offering_package!, issuer_review_notes: 'Private reviewer rationale must not render in investor discovery.' } })]
+    const investorHtml = renderToStaticMarkup(<PortalScreen data={data(investor)} view="/portal/opportunities/detail" id={productId} operatingContext={APPLICANT_CONTEXT} />)
+    expect(investorHtml).not.toContain('Private reviewer rationale')
   })
   it.each(['FUND', 'REAL_ESTATE'] as const)('starts %s from a valid, explicitly fictional editable product template', kind => {
     const terms = fictionalProductTerms(kind)
@@ -214,9 +279,25 @@ describe('operational landings and one subscription hand-off', () => {
     const value = snapshot(); value.operating_context = operating(role); value.organisations = [operatorOrganisation(role)]; value.products = [product()]; value.subscriptions = [order({ investor_id: other })]
     const html = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal" operatingContext={operating(role)} />)
     expect(html).toContain('Your products and incoming orders.'); expect(html).toContain('Product register'); expect(html).toContain('Incoming subscription orders')
-    expect(html).toContain(requestKey); expect(html).toContain(accountId); expect(html).toContain('ab'.repeat(32)); expect(html).toContain('Terms revision 3')
+    expect(html).toContain(requestKey); expect(html).toContain(accountId); expect(html).toContain('ab'.repeat(32)); expect(html).toContain('Recorded product workflow revision 3')
     expect(html).toContain('Funding records unavailable'); expect(html).not.toContain('Cancel unfunded reservation')
     expect(html.indexOf('Product register')).toBeLessThan(html.indexOf('Role, hand-offs and signing guidance'))
+  })
+  it('routes an appointed issuer on a customer organisation to its exact package without manager powers', () => {
+    const original = product({ status: 'IN_REVIEW' })
+    const item = product({ status: 'IN_REVIEW', offering_package: { ...original.offering_package!, can_review_issuer: true }, allowed_actions: ['review_offering_issuer'] })
+    const value = snapshot(); value.operating_context = operating('IssuerFundManager')
+    value.organisations = [{ ...operatorOrganisation('IssuerFundManager'), capabilities: [] }]
+    value.products = [item]
+    const queue = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal" operatingContext={operating('IssuerFundManager')} />)
+    expect(queue).toContain('Packages awaiting your issuer decision')
+    expect(queue).toContain(item.terms.name)
+    expect(queue).not.toContain('Create a product</a>')
+    const detail = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal/products/detail" id={productId} operatingContext={operating('IssuerFundManager')} />)
+    expect(detail).toContain('Record issuer decision')
+    expect(detail).toContain(offeringRevisionId)
+    expect(detail).toContain('Order access unavailable')
+    expect(detail).not.toContain('Open approved offering</button>')
   })
   it.each(['FUND', 'REAL_ESTATE'] as const)('preserves the %s product and same order across investor and issuer views', kind => {
     const item = product({ terms: { ...fictionalProductTerms(kind), name: `Shared ${kind} offering` } })
@@ -308,6 +389,12 @@ describe('owned individual investment-account controls', () => {
     expect(html).toContain('Open individual investment account</button>')
     expect(html.indexOf('<h2>Your investment account</h2>')).toBeLessThan(html.indexOf('<h2>Your subscription orders</h2>'))
     expect(fetch).not.toHaveBeenCalled()
+  })
+  it('does not market a historical published row without a current package and verified opening', () => {
+    const value = snapshot(); value.applications = [application()]; value.products = [product({ offering_package: null, terms: { ...fictionalProductTerms(), name: 'Historical unverified offer' } })]
+    const html = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal/opportunities" operatingContext={APPLICANT_CONTEXT} />)
+    expect(html).not.toContain('Historical unverified offer')
+    expect(html).not.toContain('Accept terms and reserve units')
   })
   it.each([
     { status: 'SUBMITTED' as const }, { approved_until: '2020-01-01T00:00:00Z' },

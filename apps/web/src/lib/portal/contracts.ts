@@ -41,7 +41,7 @@ export type PortalApplication = {
   review_checks: Record<string, boolean>; provider_mode: 'MANUAL_TEST_REVIEW'; approved_until: string | null;
   admission_purpose?: AdmissionPurpose; can_create_entity_account?: boolean;
 }
-export type PortalCapability = 'create_product' | 'save_product' | 'submit_product' | 'publish_product' | 'read_orders' | 'review_product'
+export type PortalCapability = 'create_product' | 'save_product' | 'submit_product' | 'publish_product' | 'read_orders' | 'review_product' | 'review_offering_issuer'
   | 'propose_funding_route' | 'approve_funding_route' | 'revoke_funding_route' | 'open_funding_obligation' | 'propose_funding_acceptance' | 'reconcile_funding'
   | 'propose_funding_exception' | 'resolve_funding_exception' | 'propose_funding_reversal' | 'approve_funding_reversal'
 export type PortalOrganisation = {
@@ -77,7 +77,7 @@ export type PortalInvestingRepresentativeMandate = {
 }
 export type PortalProductEligibility = {
   id: string; investment_account_id: string; product_id: string; organisation_id: string;
-  product_revision: number; terms_hash: string; application_revision: number; revision: number;
+  product_revision: number; offering_revision_id?: string | null; terms_hash: string; application_revision: number; revision: number;
   status: 'SUBMITTED' | 'CHANGES_REQUIRED' | 'APPROVED' | 'REJECTED' | 'REVOKED';
   investor_statement: string; submitted_at: string; reviewed_at: string | null;
   reviewer_id: string | null; review_notes: string | null; review_checks: Record<string, boolean>;
@@ -103,16 +103,32 @@ export type ProductTerms = {
   property_address: string; property_valuation_minor: string; rental_income_policy: string;
   documents: { memorandum: string; risks: string; subscription_terms: string };
 }
+export type PortalOfferingPackage = {
+  id: string; package_number: number; origin: 'SUBMITTED' | 'LEGACY_PRODUCT_SNAPSHOT' | 'LEGACY_ORDER_SNAPSHOT';
+  terms_hash: string; document_hashes: { memorandum: string; risks: string; subscription_terms: string };
+  submitted_at: string;
+  issuer_status: 'PENDING' | 'APPROVED' | 'CHANGES_REQUIRED' | 'UNVERIFIED_LEGACY';
+  compliance_status: 'PENDING' | 'APPROVED' | 'CHANGES_REQUIRED' | 'UNVERIFIED_LEGACY';
+  technical_readiness_status: 'NOT_VERIFIED' | 'VERIFIED';
+  status?: 'IN_REVIEW' | 'CHANGES_REQUIRED' | 'APPROVED_AWAITING_READINESS' | 'AUTHORITY_EXPIRED';
+  product_revision_at_submission?: number;
+  /** Scoped to operators/reviewers; absent from investor discovery. */
+  issuer_review_notes?: string | null; issuer_review_checks?: Record<string, boolean> | null;
+  publishable?: boolean; subscribable?: boolean; can_review_issuer?: boolean; can_review_compliance?: boolean;
+}
 export type PortalProduct = {
   id: string; organisation_id: string; created_by: string; revision: number; status: ProductStatus;
   terms: ProductTerms; terms_hash: string; reserved_units: string; created_at: string;
   reviewer_id: string | null; review_notes: string | null; reviewed_at: string | null;
   published_at: string | null; review_checks: Record<string, boolean>;
   allowed_actions?: string[];
+  /** Absent on older deployments; null means no current submitted package. */
+  offering_package?: PortalOfferingPackage | null;
+  offering_history?: PortalOfferingPackage[];
 }
 export type PortalSubscription = {
   id: string; product_id: string; investor_id: string; product_name: string; organisation_id: string;
-  product_revision: number; terms_hash: string; units: string; amount_minor: string;
+  product_revision: number; offering_revision_id?: string | null; terms_hash: string; units: string; amount_minor: string;
   status: 'AWAITING_FUNDING' | 'CANCELLED'; created_at: string;
   investment_account_id?: string | null; currency?: 'ZAR_TEST';
   can_cancel?: boolean; funding_obligation_id?: string | null;
@@ -181,9 +197,10 @@ export const portalCommandSchema = z.discriminatedUnion('command', [
   z.object({ command: z.literal('create_product'), key: id, payload: z.object({ organisation_id: id, terms: productTermsSchema }).strict() }).strict(),
   z.object({ command: z.literal('save_product'), key: id, payload: z.object({ product_id: id, expected_revision: z.number().int().positive(), terms: productTermsSchema }).strict() }).strict(),
   z.object({ command: z.literal('submit_product'), key: id, payload: z.object({ product_id: id, expected_revision: z.number().int().positive() }).strict() }).strict(),
-  z.object({ command: z.literal('review_product'), key: id, payload: z.object({ product_id: id, expected_revision: z.number().int().positive(), decision: z.enum(['APPROVED', 'CHANGES_REQUIRED']), notes: text(20, 3000), checks: offeringChecks }).strict() }).strict(),
+  z.object({ command: z.literal('review_product'), key: id, payload: z.object({ product_id: id, offering_revision_id: id, expected_revision: z.number().int().positive(), terms_hash: hash, decision: z.enum(['APPROVED', 'CHANGES_REQUIRED']), notes: text(20, 3000), checks: offeringChecks }).strict() }).strict(),
+  z.object({ command: z.literal('review_offering_issuer'), key: id, payload: z.object({ product_id: id, offering_revision_id: id, expected_revision: z.number().int().positive(), terms_hash: hash, decision: z.enum(['APPROVED', 'CHANGES_REQUIRED']), notes: text(20, 3000), checks: z.object({ issuer_authority: z.boolean(), terms: z.boolean(), rights: z.boolean() }).strict() }).strict() }).strict(),
   z.object({ command: z.literal('publish_product'), key: id, payload: z.object({ product_id: id, expected_revision: z.number().int().positive() }).strict() }).strict(),
-  z.object({ command: z.literal('subscribe'), key: id, payload: z.object({ product_id: id, investment_account_id: id.optional(), expected_revision: z.number().int().positive(), terms_hash: hash, units: positive, accepted_documents: z.literal(true), accepted_risks: z.literal(true) }).strict() }).strict(),
+  z.object({ command: z.literal('subscribe'), key: id, payload: z.object({ product_id: id, offering_revision_id: id, investment_account_id: id.optional(), expected_revision: z.number().int().positive(), terms_hash: hash, units: positive, accepted_documents: z.literal(true), accepted_risks: z.literal(true) }).strict() }).strict(),
   z.object({ command: z.literal('cancel_subscription'), key: id, payload: z.object({ subscription_id: id }).strict() }).strict(),
   ...fundingCommandOptions,
 ])
@@ -193,9 +210,16 @@ export function formatTestMoney(minor: string): string {
   const amount = BigInt(minor)
   return `${(amount / 100n).toLocaleString('en-ZA')}.${(amount % 100n).toString().padStart(2, '0')} ZAR_TEST`
 }
+export function isOfferingSubscribable(product: PortalProduct): boolean {
+  const pkg = product.offering_package
+  return product.status === 'PUBLISHED' && pkg?.origin === 'SUBMITTED' && pkg.subscribable === true
+    && pkg.technical_readiness_status === 'VERIFIED' && pkg.issuer_status === 'APPROVED'
+    && pkg.compliance_status === 'APPROVED' && pkg.terms_hash === product.terms_hash
+}
 export function subscriptionQuote(product: PortalProduct, units: string): { amount_minor: string } | { error: string } {
   if (!/^[1-9][0-9]{0,19}$/.test(units)) return { error: 'Enter a positive whole-unit quantity.' }
   if (product.status !== 'PUBLISHED') return { error: 'This offering is not open for subscriptions.' }
+  if (!isOfferingSubscribable(product)) return { error: 'This offering lacks a current approved package and independently verified technical readiness; subscriptions are unavailable.' }
   const quantity = BigInt(units)
   if (quantity < BigInt(product.terms.minimum_units)) return { error: 'The requested quantity is below the minimum subscription.' }
   if (quantity + BigInt(product.reserved_units) > BigInt(product.terms.cap_units)) return { error: 'The requested quantity exceeds the remaining capacity.' }

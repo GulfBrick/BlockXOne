@@ -123,6 +123,7 @@ try {
   await sqlFile('../../../supabase/migrations/20260923144216_stage2_document_receipts.sql')
   await sqlFile('../../../supabase/migrations/20260923171126_stage2_entity_investment_accounts.sql')
   await sqlFile('../../../supabase/migrations/20260923175822_stage2_superadmin_shell_mfa_boundary.sql')
+  await sqlFile('../../../supabase/migrations/20260923205519_stage3_immutable_offering_packages.sql')
   eq(await functionManifest(preservedSignatures), nativeFunctions, 'unrelated native auth/MFA/wallet function definitions and owners exactly preserved')
   const grantsAfter = await grantManifest(signatures)
   eq(grantsAfter.filter(grant => grant.grantee !== 'bx1_authority_owner'), nativeGrants, 'all existing native function grants preserved')
@@ -135,6 +136,10 @@ try {
   for (const table of ['applications', 'organisations', 'organisation_authority_bindings', 'investment_accounts', 'products', 'subscriptions', 'requests', 'events', 'entry_requests']) eq(await scalar(`select count(*)::int from bx1_portal.${table}`), 0, `bootstrap does not seed ${table}`)
   for (const table of ['product_eligibility_cases', 'product_eligibility_receipts']) eq(await scalar(`select count(*)::int from bx1_portal.${table}`), 0, `Stage 2 definition does not seed ${table} in MAIN`)
   for (const table of ['legal_entity_parties', 'investing_representative_mandates', 'investing_representative_receipts']) eq(await scalar(`select count(*)::int from bx1_portal.${table}`), 0, `entity definition does not seed ${table} in MAIN`)
+  for (const table of ['offering_revisions', 'offering_decisions']) eq(await scalar(`select count(*)::int from bx1_portal.${table}`), 0, `Stage 3 definition does not seed ${table} in MAIN`)
+  for (const table of ['offering_revisions', 'offering_decisions']) for (const role of ['anon', 'authenticated', 'service_role']) {
+    for (const privilege of ['SELECT', 'INSERT', 'UPDATE', 'DELETE']) eq(await scalar('select has_table_privilege($1,$2,$3)', [role, `bx1_portal.${table}`, privilege]), false, `${role} has no direct ${privilege} on MAIN ${table}`)
+  }
   eq(await scalar('select count(*)::int from bx1_private.person_principals'), 0, 'dependency creates no person-principal grants')
   eq(await scalar('select count(*)::int from bx1_private.governance_grants'), 0, 'dependency creates no governance grants')
   eq(await scalar("select jsonb_agg(jsonb_build_object('name',polname,'command',polcmd,'roles',polroles,'using',pg_get_expr(polqual,polrelid),'check',pg_get_expr(polwithcheck,polrelid)) order by polname) from pg_policy where polrelid='storage.objects'::regclass and polname like 'synthetic_native_%'"), nativeStoragePolicies, 'pre-existing unrelated Storage policies preserved exactly')
