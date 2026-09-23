@@ -75,6 +75,7 @@ export async function POST(request: NextRequest) {
       ? documentReceiptId(user.id, kind, title, sha256) : randomUUID()
     const document = evidenceSchema.safeParse({ id, kind, title, storage_path: `${user.id}/${id}`, sha256, size: bytes.length, mime_type: mime })
     if (!document.success) throw new PortalError('Check the document type and title.', 400)
+    const uploadSessionId = strictReceipts ? await currentSessionId(client, user.id) : null
     const uploaded = await client.storage.from(bucket).upload(document.data.storage_path, bytes, { contentType: mime, cacheControl: '0', upsert: false, metadata: { sha256: document.data.sha256 } })
     if (!strictReceipts && uploaded.error) throw new PortalError('The private document could not be saved. Your application has not been submitted.', 503)
     if (strictReceipts) {
@@ -86,6 +87,7 @@ export async function POST(request: NextRequest) {
       if (detectedType(storedBytes) !== mime || !Buffer.from(storedBytes).equals(Buffer.from(bytes)))
         throw new PortalError('The saved evidence bytes differ from this upload. Do not submit this document.', 409)
       const sessionId = await currentSessionId(client, user.id)
+      if (sessionId !== uploadSessionId) throw new PortalError('The signed-in session changed while uploading.', 403)
       await registerDocumentReceipt(user.id, sessionId, document.data)
     }
     return jar.finish(privateResponse(NextResponse.json({ document: document.data, validation_state: strictReceipts ? 'SYNTHETIC_UNSCANNED' : 'LEGACY_UNVERIFIED' }, { status: uploaded.error ? 200 : 201 })))

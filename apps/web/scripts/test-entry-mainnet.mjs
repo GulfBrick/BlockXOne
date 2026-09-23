@@ -119,6 +119,7 @@ try {
   await sqlFile('../../../supabase/tests/bx1_product_eligibility.sql')
   await sqlFile('../../../supabase/migrations/20260923143713_stage2_customer_mandates.sql')
   await sqlFile('../../../supabase/tests/bx1_customer_mandates.sql')
+  await sqlFile('../../../supabase/migrations/20260923144216_stage2_document_receipts.sql')
   eq(await functionManifest(signatures), nativeFunctions, 'native auth/MFA/wallet function definitions and owners exactly preserved')
   const grantsAfter = await grantManifest(signatures)
   eq(grantsAfter.filter(grant => grant.grantee !== 'bx1_authority_owner'), nativeGrants, 'all existing native function grants preserved')

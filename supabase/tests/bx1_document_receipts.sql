@@ -8,6 +8,7 @@ declare relation_name text; role_name text; application_a uuid:='ed300000-0000-4
   actor_a uuid:='ed000000-0000-4000-8000-000000000001';
   actor_b uuid:='ed000000-0000-4000-8000-000000000002';
   session_a uuid:='ed100000-0000-4000-8000-000000000001';
+  session_b uuid:='ed100000-0000-4000-8000-000000000002';
   v_receipt_id uuid:='ed200000-0000-4000-8000-000000000001';
   path text; sha text:=repeat('a',64); valid_doc jsonb; fake_doc jsonb;
 begin
@@ -49,7 +50,8 @@ begin
     (actor_a,'receipt-synthetic-a@example.invalid',clock_timestamp(),false),
     (actor_b,'receipt-synthetic-b@example.invalid',clock_timestamp(),false);
   insert into auth.sessions(id,user_id,not_after,created_at) values
-    (session_a,actor_a,clock_timestamp()+interval '1 hour',clock_timestamp());
+    (session_a,actor_a,clock_timestamp()+interval '1 hour',clock_timestamp()),
+    (session_b,actor_b,clock_timestamp()+interval '1 hour',clock_timestamp());
   insert into bx1_portal.applications(id,user_id,persona,status,details,origin,provider_mode) values
     (application_a,actor_a,'INVESTOR','DRAFT','{}','SELF_SERVICE','UNASSIGNED'),
     (application_b,actor_a,'WEALTH_MANAGER','DRAFT','{}','SELF_SERVICE','UNASSIGNED'),
@@ -99,7 +101,7 @@ begin
   end;
   begin
     perform pg_catalog.set_config('request.jwt.claims',pg_catalog.jsonb_build_object(
-      'sub',actor_b,'session_id','ed100000-0000-4000-8000-000000000002','aal','aal1')::text,true);
+      'sub',actor_b,'session_id',session_b,'aal','aal1')::text,true);
     update bx1_portal.applications set status='SUBMITTED',revision=revision+1,
       reviewer_scope='0ba2b126-bd85-4cfb-9a1d-83633c9def1e',
       details=pg_catalog.jsonb_build_object('documents',pg_catalog.jsonb_build_array(valid_doc)),

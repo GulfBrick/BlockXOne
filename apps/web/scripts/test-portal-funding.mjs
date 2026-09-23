@@ -378,6 +378,8 @@ try {
   await sqlFile('../../../supabase/tests/bx1_product_eligibility.sql')
   await sqlFile('../../../supabase/migrations/20260923143713_stage2_customer_mandates.sql')
   await sqlFile('../../../supabase/tests/bx1_customer_mandates.sql')
+  await sqlFile('../../../supabase/migrations/20260923144216_stage2_document_receipts.sql')
+  await sqlFile('../../../supabase/tests/bx1_document_receipts.sql')
   eq(await scalar('select count(*)::int from bx1_portal.subscriptions'), historicalOrders, 'funding-wrapper migration preserves historical orders and obligations')
   await denied('funding prior scoped writer cannot bypass eligibility', async () => {
     await actor(3)

@@ -175,6 +175,8 @@ revoke all on function bx1_private.register_document_receipt(uuid,uuid,uuid,text
 grant execute on function bx1_private.register_document_receipt(uuid,uuid,uuid,text,text,text,integer,text)
   to bx1_document_receipt_writer;
 grant execute on function public.bx1_document_receipts_required() to authenticated;
--- No LOGIN/password or Vercel secret is created by this migration. An owner
--- must provision the role's secret and set enforced=true only after a hosted
--- exact-byte registration and two-user review proof pass.
+-- No LOGIN/password or Vercel secret is created by this migration. Sequence:
+-- disposable cloud SQL proof; provision the dedicated LOGIN and hosted secret;
+-- temporarily enable policy in TEST; run hosted exact-byte/reviewer proof;
+-- retain TEST enforcement only on success, otherwise turn it back off. MAIN
+-- remains sealed pending its separate scanning/admission implementation.

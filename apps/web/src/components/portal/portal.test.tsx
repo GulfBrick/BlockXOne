@@ -399,6 +399,21 @@ describe('customer organisation admission to governed representative mandate', (
     expect(detail).toContain('Record unavailable')
     expect(detail).not.toContain('Other organisation confidential appointment')
   })
+  it('does not treat a case flag as reviewer authority when the active actor lacks the Compliance role projection', () => {
+    const value = snapshot(); value.mandate_queue_available = true; value.organisation_mandates = [representativeMandate()]
+    const html = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal/compliance/detail" id={representativeMandate().id} operatingContext={operating('ComplianceOfficer')} />)
+    expect(html).toContain('Record unavailable')
+    expect(html).not.toContain('SYNTHETIC-APPOINTMENT-001')
+    expect(html).not.toContain('Record appointment decision')
+  })
+  it('blocks a mandate decision against a superseded customer admission revision', () => {
+    const value = snapshot(); value.actor.can_review = true; value.mandate_queue_available = true
+    value.applications = [managerApplication({ revision: 2 })]
+    value.organisation_mandates = [representativeMandate({ admission_revision: 1 })]
+    const html = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal/compliance/detail" id={representativeMandate().id} operatingContext={operating('ComplianceOfficer')} />)
+    expect(html).toContain('Source admission unavailable')
+    expect(html).not.toContain('Record appointment decision')
+  })
   it('does not let an applicant with a separate Compliance role decide their own mandate', () => {
     const value = snapshot(); value.actor.can_review = true; value.mandate_queue_available = true
     value.applications = [managerApplication({ user_id: actor })]
@@ -450,6 +465,9 @@ describe('customer organisation admission to governed representative mandate', (
     const self = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal/compliance/detail" id={reviewed.id} operatingContext={admin} />)
     expect(self).not.toContain('Apply reviewed Offering Manager mandate')
     expect(self).toContain('You cannot decide or apply your own appointment')
+    value.organisation_mandates = [{ ...reviewed, reviewer_user_id: actor }]
+    const sameReviewer = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal/compliance/detail" id={reviewed.id} operatingContext={admin} />)
+    expect(sameReviewer).not.toContain('Apply reviewed Offering Manager mandate')
   })
   it('shows revocation only for an applied case under a server-authorised exact scope', () => {
     const value = snapshot(); value.mandate_queue_available = true; value.organisation_mandates = [representativeMandate({ status: 'APPLIED', revision: 3, can_review: false, can_revoke: true, effective: true, native_organisation_id: otherOrganisation })]
