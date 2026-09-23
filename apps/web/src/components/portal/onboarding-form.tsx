@@ -105,35 +105,52 @@ export function PrivateDocument({ document, history }: { document: Pick<Evidence
   return <div className={styles.sectionGap}><div className={styles.actions}><FileCheck2 size={18} aria-hidden="true" /><span>{document.title}</span>{url ? <a href={url} target="_blank" rel="noreferrer noopener" className={styles.textLink}>Open private document</a> : <button type="button" className={styles.buttonSecondary} disabled={busy} onClick={() => void prepare()}>{busy ? 'Checking access…' : 'View document'}</button>}</div><p className={styles.muted}>{document.kind.replaceAll('_', ' ')} · {Math.ceil(document.size / 1024)} KB · Private evidence</p>{message ? <p role="status" className={styles.fieldError}>{message}</p> : null}</div>
 }
 
+export type ApplicationHistoryFailure = 'SESSION' | 'ACCESS' | 'UNAVAILABLE'
+
+export function applicationHistoryFailure(status: number): ApplicationHistoryFailure {
+  if (status === 401) return 'SESSION'
+  if (status === 403 || status === 404) return 'ACCESS'
+  return 'UNAVAILABLE'
+}
+
+export function ApplicationHistoryFailureNotice({ reason }: { reason: ApplicationHistoryFailure }) {
+  return <div role="status" className={styles.fieldError}>
+    <p>{reason === 'SESSION' ? 'Your sign-in session could not be confirmed. Sign in again, then retry.' : reason === 'ACCESS' ? 'Access to submitted history was not confirmed for this session.' : 'Submitted history could not be loaded. This may be a temporary service problem; retry shortly.'}</p>
+    <p>Check your active capacity and, if authenticator verification is needed, complete it in <a href="/workspace/security" className={styles.textLink}>Account security</a>. If access remains unavailable, ask the onboarding owner to check this application.</p>
+    {reason === 'SESSION' ? <a href="/login" className={styles.textLink}>Sign in again</a> : null}
+  </div>
+}
+
 export function ApplicationDocumentHistory({ applicationId }: { applicationId: string }) {
   const operatingContext = usePortalOperatingContext()
   const scopeKey = `${applicationId}:${JSON.stringify(operatingContext)}`
   const requestGeneration = useRef(0)
   const [loaded, setLoaded] = useState<{ scopeKey: string; value: ApplicationDocumentVersions } | null>(null)
   const [busy, setBusy] = useState(false)
-  const [message, setMessage] = useState('')
+  const [failure, setFailure] = useState<ApplicationHistoryFailure | null>(null)
   useEffect(() => {
     requestGeneration.current += 1
-    setLoaded(null); setBusy(false); setMessage('')
+    setLoaded(null); setBusy(false); setFailure(null)
     return () => { requestGeneration.current += 1 }
   }, [scopeKey])
   async function loadHistory() {
     const request = ++requestGeneration.current
-    setBusy(true); setMessage('')
+    // Revoke the previous client view before rechecking current authority.
+    setLoaded(null); setBusy(true); setFailure(null)
     try {
       const url = portalScopeHref(`/api/portal/documents?application_id=${encodeURIComponent(applicationId)}&history=1`, operatingContext)
       const response = await fetch(url, { credentials: 'same-origin', cache: 'no-store', redirect: 'error', signal: AbortSignal.timeout(15000) })
-      if (!response.ok) throw new Error()
+      if (!response.ok) { if (request === requestGeneration.current) setFailure(applicationHistoryFailure(response.status)); return }
       const parsed = applicationDocumentVersionsSchema.safeParse(await response.json())
       if (!parsed.success || parsed.data.application_id !== applicationId) throw new Error()
       if (request === requestGeneration.current) setLoaded({ scopeKey, value: parsed.data })
-    } catch { if (request === requestGeneration.current) setMessage('Submitted evidence history is unavailable in this operating context. Refresh and try again.') }
+    } catch { if (request === requestGeneration.current) setFailure('UNAVAILABLE') }
     finally { if (request === requestGeneration.current) setBusy(false) }
   }
   const history = loaded?.scopeKey === scopeKey ? loaded.value : null
   return <Panel title="Submitted evidence history" description="Immutable submission versions remain separate from your unsaved draft. Each private download rechecks current authority and the file bytes.">
     <button type="button" className={styles.buttonSecondary} disabled={busy} onClick={() => void loadHistory()}>{busy ? 'Loading submitted versions...' : history ? 'Refresh submitted versions' : 'View submitted versions'}</button>
-    {message ? <p role="status" className={styles.fieldError}>{message}</p> : null}
+    {failure ? <ApplicationHistoryFailureNotice reason={failure} /> : null}
     {history ? history.versions.length ? <div className={`${styles.stack} ${styles.sectionGap}`}>{[...history.versions].sort((a, b) => b.revision - a.revision).map(version => <section key={version.revision} className={styles.panelBody}><h3>Submission revision {version.revision}</h3><p className={styles.muted}>Submitted {dateLabel(version.submitted_at)} · {version.capture_kind === 'MIGRATION_SNAPSHOT' ? 'Preserved historical submission' : 'Recorded submission'}</p>{version.documents.length ? version.documents.map(document => <PrivateDocument key={`${version.revision}:${document.id}`} document={document} history={{ applicationId, revision: version.revision }} />) : <p className={styles.muted}>No evidence files were recorded in this version.</p>}</section>)}</div> : <p className={styles.muted}>No submitted evidence versions are recorded for this application.</p> : null}
   </Panel>
 }
@@ -206,7 +223,7 @@ export function OnboardingForm({ application, environment, onSaved, receipts }: 
         </form>
         </> : <div className={`${styles.stack} ${styles.sectionGap}`}><p className={styles.muted}>Read-only saved application, revision {application.revision}. {application.status === 'SUBMITTED' ? 'A request for changes will reopen editing.' : 'The recorded decision does not alter these submitted answers.'}</p><ApplicationDetailsSummary persona={persona} details={application.details} /><section><h3>Submitted private evidence</h3>{application.details.documents?.length ? application.details.documents.map(document => <PrivateDocument key={document.id} document={document} />) : <p className={styles.muted}>No evidence is recorded.</p>}</section></div>}
       </Panel>
-      <ApplicationDocumentHistory key={application.id} applicationId={application.id} />
+      {application.status !== 'DRAFT' || application.submitted_at ? <ApplicationDocumentHistory key={application.id} applicationId={application.id} /> : null}
     </div>
     <aside className={styles.stack} aria-label="Application progress and responsibility"><Panel title="Application status"><DetailList rows={[{ label: 'Relationship', value: persona === 'INVESTOR' ? 'Investor' : 'Wealth manager / representative' }, { label: 'Status', value: <StatusBadge status={application.status} /> }, { label: 'Saved revision', value: application.revision }, { label: 'Submitted', value: dateLabel(application.submitted_at) }, { label: 'Decision recorded', value: dateLabel(application.reviewed_at) }, { label: 'Review provider', value: application.provider_mode === 'MANUAL_TEST_REVIEW' ? 'Manual test review' : 'Not assigned to this application yet' }, { label: editable ? 'Evidence selected in this browser' : 'Saved evidence files', value: details.documents.length }]} /></Panel><Panel title="Next responsible owner"><p className={styles.applicationOwner}>{next.owner}</p><h3>{next.title}</h3><p className={styles.copy}>{next.description}</p><p className={styles.muted}>Review availability is checked again when you submit. It does not prove a reviewer is currently signed in.</p></Panel><Panel title={editable ? 'Submission checklist' : 'Connected handoff'}><ol className={styles.timeline}><li><strong>{persona === 'INVESTOR' ? 'Investor facts and supporting evidence' : 'Organisation facts and representative evidence'}</strong><p>{editable ? 'Complete each required field and attach fictional evidence. Unsaved browser edits are not in the review queue.' : 'The saved package is displayed read-only at its recorded revision.'}</p></li><li><strong>Independent BlockXOne review</strong><p>{persona === 'INVESTOR' ? 'A permitted reviewer assesses the submitted investor evidence. A product still has its own eligibility rules.' : 'A permitted reviewer assesses the customer organisation, representative and requested services. The customer cannot self-approve.'}</p></li><li><strong>{persona === 'INVESTOR' ? 'Account and product eligibility' : 'Separate operating assignment'}</strong><p>{persona === 'INVESTOR' ? 'An admission decision is not a funded investment or token holding.' : 'Organisation, role, mandate and signing permissions require their own authority. Customer admission does not create them.'}</p></li></ol></Panel></aside>
   </div>

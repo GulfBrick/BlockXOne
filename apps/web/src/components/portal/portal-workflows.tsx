@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import Link from 'next/link'
-import { isWealthManagerDetailsV2, subscriptionQuote, type LegacyApplicationDetails, type PortalApplication, type PortalInvestmentAccount, type PortalProduct, type PortalProductEligibility, type PortalSnapshot } from '@/lib/portal/contracts'
+import { isWealthManagerDetailsV2, subscriptionQuote, type LegacyApplicationDetails, type PortalApplication, type PortalEntityInvestmentAccount, type PortalInvestmentAccount, type PortalInvestingRepresentativeMandate, type PortalProduct, type PortalProductEligibility, type PortalSnapshot } from '@/lib/portal/contracts'
 import { portalScopeHref, type PortalOperatingContext } from '@/lib/portal/operating-context'
 import { CommandFeedback, usePortalCommand } from './portal-client'
 import { ApplicationDetailsSummary, ApplicationDocumentHistory, PrivateDocument } from './onboarding-form'
@@ -13,8 +13,14 @@ export function currentInvestorApplication(snapshot: PortalSnapshot): (PortalApp
   return snapshot.applications.find((item): item is PortalApplication & { details: LegacyApplicationDetails } => item.user_id === snapshot.actor.id && item.persona === 'INVESTOR' && !isWealthManagerDetailsV2(item.details) && item.status === 'APPROVED' && Boolean(item.approved_until) && Date.parse(item.approved_until!) > Date.now())
 }
 
+function currentInvestorApplicationOfType(snapshot: PortalSnapshot, type: 'INDIVIDUAL' | 'ENTITY'): (PortalApplication & { details: LegacyApplicationDetails }) | undefined {
+  return snapshot.applications.find((item): item is PortalApplication & { details: LegacyApplicationDetails } => item.user_id === snapshot.actor.id && item.persona === 'INVESTOR'
+    && !isWealthManagerDetailsV2(item.details) && item.details.investor_type === type && item.status === 'APPROVED'
+    && Boolean(item.approved_until) && Date.parse(item.approved_until!) > Date.now())
+}
+
 export function activeIndividualAccounts(snapshot: PortalSnapshot): PortalInvestmentAccount[] {
-  const application = currentInvestorApplication(snapshot)
+  const application = currentInvestorApplicationOfType(snapshot, 'INDIVIDUAL')
   if (application?.details.investor_type !== 'INDIVIDUAL') return []
   return (snapshot.accounts ?? []).filter(account => account.holder_user_id === snapshot.actor.id
     && account.application_id === application.id && account.kind === 'INDIVIDUAL' && account.status === 'ACTIVE')
@@ -22,7 +28,7 @@ export function activeIndividualAccounts(snapshot: PortalSnapshot): PortalInvest
 
 export function currentProductEligibility(snapshot: PortalSnapshot, product: PortalProduct, account: PortalInvestmentAccount): PortalProductEligibility | undefined {
   if (!Array.isArray(snapshot.product_eligibility) || product.status !== 'PUBLISHED') return undefined
-  const application = currentInvestorApplication(snapshot)
+  const application = currentInvestorApplicationOfType(snapshot, 'INDIVIDUAL')
   if (!application || application.id !== account.application_id || account.holder_user_id !== snapshot.actor.id || account.kind !== 'INDIVIDUAL' || account.status !== 'ACTIVE') return undefined
   const matches = snapshot.product_eligibility.filter(item => item.product_id === product.id && item.investment_account_id === account.id)
   if (matches.length !== 1) return undefined
@@ -33,7 +39,18 @@ export function currentProductEligibility(snapshot: PortalSnapshot, product: Por
 }
 
 export function InvestmentAccountPanel({ snapshot, onSaved, operatingContext }: { snapshot: PortalSnapshot; onSaved: (snapshot: PortalSnapshot) => void; operatingContext?: PortalOperatingContext }) {
-  const application = currentInvestorApplication(snapshot)
+  const ownInvestorApplications = snapshot.applications.filter(item => item.user_id === snapshot.actor.id && item.persona === 'INVESTOR' && !isWealthManagerDetailsV2(item.details))
+  const hasIndividual = ownInvestorApplications.some(item => item.details.investor_type === 'INDIVIDUAL')
+  const entityIds = new Set(ownInvestorApplications.filter(item => item.details.investor_type === 'ENTITY').map(item => item.id))
+  const hasEntity = entityIds.size > 0 || (snapshot.entity_investment_accounts ?? []).some(account => account.can_view || entityIds.has(account.application_id))
+  return <div className={styles.stack}>
+    {hasIndividual || !hasEntity ? <IndividualInvestmentAccountPanel snapshot={snapshot} onSaved={onSaved} operatingContext={operatingContext} /> : null}
+    {hasEntity ? <EntityInvestmentAccountPanel snapshot={snapshot} onSaved={onSaved} operatingContext={operatingContext} /> : null}
+  </div>
+}
+
+function IndividualInvestmentAccountPanel({ snapshot, onSaved, operatingContext }: { snapshot: PortalSnapshot; onSaved: (snapshot: PortalSnapshot) => void; operatingContext?: PortalOperatingContext }) {
+  const application = currentInvestorApplicationOfType(snapshot, 'INDIVIDUAL')
   const accounts = activeIndividualAccounts(snapshot)
   const ownAccounts = (snapshot.accounts ?? []).filter(account => account.holder_user_id === snapshot.actor.id)
   const command = usePortalCommand(onSaved)
@@ -41,7 +58,7 @@ export function InvestmentAccountPanel({ snapshot, onSaved, operatingContext }: 
     <CommandFeedback command={command} />
     {accounts.length ? <DetailList rows={accounts.map((account, index) => ({ label: `Active individual account ${index + 1}`, value: <span className={styles.mono}>{account.id}</span> }))} />
       : !application ? <EmptyState title="Complete investor onboarding" description="A current independent approval is required before an individual investment account can be opened." href={portalScopeHref('/portal/onboarding', operatingContext)} action="Open my onboarding" />
-        : application.details.investor_type !== 'INDIVIDUAL' ? <Notice title="Entity representation requires a mandate">An entity relationship cannot be used as a personal investment account. Entity investment accounts require an explicitly authorised representative mandate.</Notice>
+        : application.details.investor_type !== 'INDIVIDUAL' ? <Notice title="Entity investment account is separate">An entity relationship cannot be used as a personal investment account.</Notice>
           : !Array.isArray(snapshot.accounts) ? <Notice title="Investment-account records are unavailable">Refresh saved state before opening an account. An unavailable response is not evidence that no account exists.</Notice>
             : ownAccounts.some(account => account.application_id === application.id && account.status === 'SUSPENDED') ? <Notice title="Investment account suspended">Contact your authorised reviewer. Opening another account does not replace the suspended account or restore investment authority.</Notice>
               : <div className={styles.stack}><p className={styles.copy}>Your individual investor application is approved. Open an investment account to link future subscription instructions to that approved relationship.</p><button type="button" className={styles.button} disabled={command.busy || command.unknown} onClick={() => void command.submit('create_investment_account', { application_id: application.id })}>Open individual investment account</button></div>}
@@ -49,11 +66,81 @@ export function InvestmentAccountPanel({ snapshot, onSaved, operatingContext }: 
   </Panel>
 }
 
+function entityMandateNextOwner(mandate: PortalInvestingRepresentativeMandate): string {
+  return { APPLICANT: 'Investing representative', COMPLIANCE: 'Independent BlockXOne Compliance Officer', SUPER_ADMIN: 'Authorised BlockXOne Super Admin', NONE: 'No pending mandate action' }[mandate.next_owner]
+}
+
+function EntityInvestmentAccountPanel({ snapshot, onSaved, operatingContext }: { snapshot: PortalSnapshot; onSaved: (snapshot: PortalSnapshot) => void; operatingContext?: PortalOperatingContext }) {
+  const ownEntityApplications = snapshot.applications.filter((item): item is PortalApplication & { details: LegacyApplicationDetails } => item.user_id === snapshot.actor.id && item.persona === 'INVESTOR' && !isWealthManagerDetailsV2(item.details) && item.details.investor_type === 'ENTITY')
+  const currentApplications = ownEntityApplications.filter(item => item.status === 'APPROVED' && Boolean(item.approved_until) && Date.parse(item.approved_until!) > Date.now())
+  const command = usePortalCommand(onSaved)
+  const accountRows = snapshot.entity_investment_accounts
+  const mandateRows = snapshot.investing_representative_mandates
+  const ownApplicationIds = new Set(ownEntityApplications.map(item => item.id))
+  const accounts = (accountRows ?? []).filter(account => account.can_view || ownApplicationIds.has(account.application_id))
+  const canCreate = snapshot.entity_account_route_available === true && Array.isArray(accountRows)
+    ? currentApplications.filter(item => item.can_create_entity_account === true && !accounts.some(account => account.application_id === item.id)) : []
+  return <div className={styles.stack}>
+    <Panel title="Entity investment account" description="The legal entity holds the account. The signed-in person needs a separately reviewed mandate to act for it.">
+      <CommandFeedback command={command} />
+      {snapshot.entity_account_route_available !== true ? <Notice title="Entity-account route not admitted" tone="warning">This environment has not admitted the guarded entity-account route. No account action is available.</Notice>
+        : !Array.isArray(accountRows) || !Array.isArray(mandateRows) ? <Notice title="Entity-account records unavailable" tone="warning">Refresh saved state. An unavailable response does not mean there is no account or mandate.</Notice>
+        : accounts.length || canCreate.length ? <div className={styles.stack}>
+            {accounts.map(account => <EntityAccountCase key={account.id} account={account} mandates={mandateRows} actorId={snapshot.actor.id} application={currentApplications.find(item => item.id === account.application_id)} onSaved={onSaved} />)}
+            {canCreate.map(item => <div key={item.id} className={styles.sectionGap}><p className={styles.copy}>The approved entity admission identifies <strong>{item.details.company_name}</strong>. Opening its account records that legal holder; it does not appoint a representative, grant product eligibility or move funds.</p><button type="button" className={styles.button} disabled={command.busy || command.unknown} onClick={() => void command.submit('create_entity_investment_account', { application_id: item.id })}>Open {item.details.company_name} investment account</button></div>)}
+          </div>
+          : <EmptyState title="Current entity investor admission required" description="Submit or renew an entity investor application and obtain independent approval before opening an entity account. A personal or wealth-manager application is not a substitute." href={portalScopeHref('/portal/onboarding', operatingContext)} action="Open my onboarding" />}
+    </Panel>
+    <Notice title="No entity subscription authority yet">Account opening and a representative appointment do not approve any offering, accept terms, reserve units, authorise payment, move a wallet or create a holding. Entity product eligibility and transaction commands remain separate work.</Notice>
+  </div>
+}
+
+function EntityAccountCase({ account, mandates, actorId, application, onSaved }: {
+  account: PortalEntityInvestmentAccount; mandates: PortalInvestingRepresentativeMandate[]; actorId: string;
+  application?: PortalApplication & { details: LegacyApplicationDetails }; onSaved: (snapshot: PortalSnapshot) => void;
+}) {
+  const [appointmentDocumentId, setAppointmentDocumentId] = useState('')
+  const [evidenceReference, setEvidenceReference] = useState('')
+  const [requestedUntil, setRequestedUntil] = useState('')
+  const command = usePortalCommand(onSaved)
+  const companyDocuments = application?.details.documents.filter(document => document.kind === 'COMPANY') ?? []
+  const selectedDocumentId = companyDocuments.some(document => document.id === appointmentDocumentId) ? appointmentDocumentId : companyDocuments[0]?.id ?? ''
+  const until = Date.parse(requestedUntil)
+  const validUntil = Number.isFinite(until) && until > Date.now() && until <= Date.now() + 30 * 86_400_000
+    && Boolean(application?.approved_until) && until <= Date.parse(application!.approved_until!)
+  const cases = mandates.filter(item => item.investment_account_id === account.id && item.representative_user_id === actorId)
+  const mandate = [...cases].sort((a, b) => b.cycle - a.cycle || b.revision - a.revision)[0]
+  const newCycle = !mandate || mandate.status === 'REVOKED' || mandate.status === 'APPLIED' && !mandate.effective
+  const mayRequest = account.status === 'ACTIVE' && account.can_request_mandate && Boolean(application) && Boolean(companyDocuments.length)
+    && (newCycle || mandate?.can_request === true)
+  return <section className={styles.stack} aria-label={`${account.entity_name} investment account`}>
+    <CommandFeedback command={command} />
+    <DetailList rows={[{ label: 'Legal holder', value: account.entity_name }, { label: 'Registration reference', value: account.registration_reference }, { label: 'Entity account', value: <span className={styles.mono}>{account.id}</span> }, { label: 'Account state', value: <StatusBadge status={account.status} /> }, { label: 'Investor admission expiry', value: dateLabel(account.admission_approved_until) }, { label: 'Account view authority', value: account.can_view ? 'Active representative mandate' : 'Not yet appointed' }]} />
+    {mandate ? <div className={styles.sectionGap}><DetailList rows={[{ label: 'Investing-representative case', value: <span className={styles.mono}>{mandate.id}</span> }, { label: 'Appointment cycle', value: mandate.cycle }, { label: 'Decision state', value: <StatusBadge status={mandate.status} /> }, { label: 'Next responsible owner', value: entityMandateNextOwner(mandate) }, { label: 'Requested expiry', value: dateLabel(mandate.requested_until) }, { label: 'Current scope', value: 'Account view only; eligibility-request scope is reserved for a later workflow' }, { label: 'Transaction limit', value: 'Zero — no subscription, funding or signing authority' }]} />{mandate.review_notes ? <Notice title="Reviewer decision">{mandate.review_notes}</Notice> : null}{mandate.revoke_reason ? <Notice title="Revocation reason" tone="warning">{mandate.revoke_reason}</Notice> : null}</div> : null}
+    {account.status === 'SUSPENDED' ? <Notice title="Entity account suspended" tone="warning">A new appointment cannot override this suspension. Contact the appointed reviewer.</Notice>
+      : account.can_view && mandate?.effective ? <Notice title="Limited representative access active">You can view this entity account. Eligibility-request scope is reserved for a later guarded workflow; no eligibility, order, funding or signing action is enabled here.</Notice>
+        : mandate && !mayRequest ? <Notice title={mandate.status === 'SUBMITTED' ? 'Independent mandate review pending' : mandate.status === 'APPROVED' ? 'Authorised application pending' : 'Mandate action unavailable'}>{mandate.status === 'APPROVED' ? 'Compliance approved the case; a distinct Super Admin must apply it before account access is effective.' : 'This case is not active account authority. Follow the next responsible owner above or refresh the saved state.'}</Notice>
+          : null}
+    {!application && !account.can_view ? <Notice title="Current entity admission required" tone="warning">This account does not have a current approved investor application in your capacity. Renew the admission before requesting an appointment.</Notice> : null}
+    {application && !companyDocuments.length ? <Notice title="Company appointment evidence required" tone="warning">The approved submission has no COMPANY document to bind to this request. This appointment path cannot proceed on the present admission evidence; a separately reviewed new or amended admission is required.</Notice> : null}
+    {mayRequest ? <form className={styles.form} onSubmit={event => { event.preventDefault(); if (!selectedDocumentId || !validUntil || evidenceReference.trim().length < 20) return; void command.submit('request_investing_representative_mandate', { investment_account_id: account.id, expected_revision: newCycle ? 0 : mandate?.revision ?? 0, appointment_document_id: selectedDocumentId, evidence_reference: evidenceReference.trim(), requested_until: new Date(requestedUntil).toISOString() }) }}>
+      <fieldset className={styles.fieldset} disabled={command.busy || command.unknown}><legend>{newCycle ? 'Request investing-representative appointment' : 'Update investing-representative case'}</legend>
+        <Notice title="Reviewed authority, not self-approval">Choose COMPANY evidence already in the exact approved investor submission and explain the appointment. For changes required, you may revise this explanation, expiry or select another submitted COMPANY document; you cannot upload fresh evidence to this case. Compliance must decide it, then a different Super Admin must apply it. The mandate cannot authorise transactions.</Notice>
+        <Field label="Appointment evidence document" hint="Choose the COMPANY document from the exact approved investor application."><select required value={selectedDocumentId} onChange={event => setAppointmentDocumentId(event.target.value)}>{companyDocuments.map(document => <option key={document.id} value={document.id}>{document.title}</option>)}</select></Field>
+        <Field label="Appointment evidence reference" hint="20 to 400 characters. Identify the fictional board or company appointment reflected in the selected evidence."><textarea required minLength={20} maxLength={400} value={evidenceReference} onChange={event => setEvidenceReference(event.target.value)} /></Field>
+        <Field label="Requested end date and time" hint="Within 30 days, before the investor admission expires. Your local time is converted to UTC for the review record."><input type="datetime-local" required value={requestedUntil} onChange={event => setRequestedUntil(event.target.value)} /></Field>
+        {requestedUntil && !validUntil ? <p className={styles.fieldError} role="alert">Choose a future time within 30 days and before the investor admission expires.</p> : null}
+        <button type="submit" className={styles.button} disabled={!selectedDocumentId || evidenceReference.trim().length < 20 || !validUntil}>Submit representative mandate for review</button>
+      </fieldset>
+    </form> : null}
+  </section>
+}
+
 export function ProductEligibilityPanel({ product, snapshot, onSaved, operatingContext }: { product: PortalProduct; snapshot: PortalSnapshot; onSaved: (snapshot: PortalSnapshot) => void; operatingContext?: PortalOperatingContext }) {
   const [accountId, setAccountId] = useState('')
   const [statement, setStatement] = useState('')
   const command = usePortalCommand(onSaved)
-  const approval = currentInvestorApplication(snapshot)
+  const approval = currentInvestorApplicationOfType(snapshot, 'INDIVIDUAL')
   const accounts = activeIndividualAccounts(snapshot)
   const selectedAccount = accounts.find(account => account.id === accountId) ?? accounts[0]
   const matches = selectedAccount && Array.isArray(snapshot.product_eligibility)
@@ -184,7 +271,7 @@ export function SubscriptionForm({ product, snapshot, onSaved, operatingContext 
   const [accountId, setAccountId] = useState('')
   const [acceptedDocuments, setAcceptedDocuments] = useState(false), [acceptedRisks, setAcceptedRisks] = useState(false)
   const command = usePortalCommand(onSaved)
-  const approval = currentInvestorApplication(snapshot)
+  const approval = currentInvestorApplicationOfType(snapshot, 'INDIVIDUAL')
   const accounts = activeIndividualAccounts(snapshot)
   const approvedAccounts = accounts.filter(account => currentProductEligibility(snapshot, product, account))
   const selectedAccountId = accountId || approvedAccounts[0]?.id || ''

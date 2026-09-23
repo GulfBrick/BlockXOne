@@ -717,6 +717,116 @@ try {
       [reviewerDocument.storage_path]), 0, 'expired reviewer session cannot read direct Storage')
     await scalar('select public.bx1_application_document_versions($1::uuid,$2::jsonb)', [receiptApplication, reviewerContext])
   }, '42501')
+  phase = 'entity-investment-account-migration'
+  await admin()
+  const individualAccountsBeforeEntity = await scalar("select count(*)::int from bx1_portal.investment_accounts where kind='INDIVIDUAL'")
+  const individualOrdersBeforeEntity = await scalar('select count(*)::int from bx1_portal.subscriptions')
+  await sqlFile('../../../supabase/migrations/20260923171126_stage2_entity_investment_accounts.sql')
+  await sqlFile('../../../supabase/tests/bx1_entity_investment_accounts.sql')
+  eq(await scalar("select count(*)::int from bx1_portal.investment_accounts where kind='INDIVIDUAL'"), individualAccountsBeforeEntity, 'entity migration preserves individual investment accounts')
+  eq(await scalar('select count(*)::int from bx1_portal.subscriptions'), individualOrdersBeforeEntity, 'entity migration preserves historical orders')
+  eq(await scalar('select bx1_portal.entity_people_independent($1::uuid,$2::uuid)', [uid(9), uid(2)]), true, 'trusted distinct synthetic people pass independent-person gate')
+  eq(await scalar('select bx1_portal.entity_people_independent($1::uuid,$2::uuid)', [uid(9), uid(11)]), false, 'missing person mapping cannot prove independence')
+  await db.query("insert into auth.users(id,email,email_confirmed_at,is_anonymous) values($1,'synthetic-same-human-reviewer@example.invalid',clock_timestamp(),false)", [uid(11)])
+  await db.query("insert into auth.sessions(id,user_id,not_after,created_at) values($1,$2,clock_timestamp()+interval '1 hour',clock_timestamp()-interval '1 hour')", [sid(11), uid(11)])
+  await db.query("insert into public.bx1_profiles(id,display_name) values($1,'Synthetic same-human reviewer')", [uid(11)])
+  await db.query("insert into bx1_private.person_principals(auth_user_id,person_id,status,evidence_reference,bootstrap_receipt_id) values($1,$2,'TRUSTED','synthetic:same-human-principal-11',$3)", [uid(11), uid(30), uid(32)])
+  await db.query("insert into public.bx1_memberships(user_id,organisation_id,role,status) values($1,$2,'ComplianceOfficer','ACTIVE')", [uid(11), nativeScope])
+  await db.query("insert into auth.mfa_factors(id,user_id,status,factor_type) values($1,$2,'verified','totp')", [sid(41), uid(11)])
+  await db.query("update auth.sessions set aal='aal2',factor_id=$1 where user_id=$2", [sid(41), uid(11)])
+  eq(await scalar('select bx1_portal.entity_people_independent($1::uuid,$2::uuid)', [uid(9), uid(11)]), false, 'distinct TEST emails mapped to same trusted human cannot be independent')
+  phase = 'entity-investor-admission'
+  const entityEvidence = ['IDENTITY', 'COMPANY', 'BENEFICIAL_OWNERS'].map((kind, index) => ({
+    id: `ed400000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`,
+    kind, title: `Synthetic legal-entity ${kind} and appointment evidence`,
+    storage_path: `${uid(9)}/ed400000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`, sha256: 'b'.repeat(64),
+    size: 100, mime_type: 'application/pdf',
+  }))
+  for (const doc of entityEvidence) await db.query("insert into storage.objects(bucket_id,name,owner_id,metadata) values('bx1-portal-documents',$1,$2,'{\"size\":100,\"mimetype\":\"application/pdf\"}'::jsonb)", [doc.storage_path, uid(9)])
+  const entityDetails = { ...details(9, true), company_name: 'Synthetic Entity Investor Nine', registration_reference: 'SYNTHETIC-ENTITY-9', documents: entityEvidence }
+  const entityStart = await entryCommand(9, 'start_application', { persona: 'INVESTOR' })
+  let entityApp = entityStart.applications.find(value => value.user_id === uid(9) && value.persona === 'INVESTOR')
+  truth(entityApp?.id, 'same person adds a distinct entity-investor application without merging manager admission')
+  const entitySubmitted = await entryCommand(9, 'submit_application', { application_id: entityApp.id, expected_revision: entityApp.revision, details: entityDetails })
+  entityApp = entitySubmitted.applications.find(value => value.id === entityApp.id)
+  await mandateScopedCommand(2, reviewer, 'review_application', { application_id: entityApp.id,
+    expected_revision: entityApp.revision, decision: 'APPROVED',
+    notes: 'Independent synthetic entity identity, ownership, screening and suitability review.', checks: reviewChecks })
+  entityApp = (await scopedRead(9, applicant)).applications.find(value => value.id === entityApp.id)
+  eq([entityApp.status, entityApp.can_create_entity_account], ['APPROVED', true], 'reviewed entity application enables an account, not investing authority')
+  await db.query('savepoint entity_scope_pause')
+  await admin(); await db.query('update bx1_portal.entry_configuration set manual_test_review=false,reviewer_scope=$1 where singleton', [otherScope])
+  await actor(9); await admin()
+  eq(await scalar('select bx1_portal.entity_application_account_openable($1::uuid)', [entityApp.id]), false, 'scope rotation or admission pause removes entity-account affordance')
+  await db.query('rollback to savepoint entity_scope_pause; release savepoint entity_scope_pause')
+  await denied('entity account cannot be opened from a different application owner', () => scopedCommand(3, applicant, 'create_entity_investment_account', { application_id: entityApp.id }), '42501')
+  const entityAccountKey = key()
+  const entityAccountResult = await scopedCommand(9, applicant, 'create_entity_investment_account', { application_id: entityApp.id }, entityAccountKey)
+  const entityAccount = entityAccountResult.entity_investment_accounts.find(value => value.application_id === entityApp.id)
+  truth(entityAccount?.id, 'approved synthetic entity produces one legal-party investment account')
+  eq([entityAccount.kind, entityAccount.can_view, entityAccount.can_request_mandate], ['ENTITY', false, true], 'account creation alone grants no representative view or transaction')
+  eq((await scopedCommand(9, applicant, 'create_entity_investment_account', { application_id: entityApp.id }, entityAccountKey)).entity_investment_accounts.length,
+    entityAccountResult.entity_investment_accounts.length, 'exact entity account retry is idempotent')
+  await denied('new request key cannot duplicate the legal party/account', () => scopedCommand(9, applicant, 'create_entity_investment_account', { application_id: entityApp.id }), '42501')
+  await admin()
+  eq(await scalar('select count(*)::int from bx1_portal.legal_entity_parties where application_id=$1', [entityApp.id]), 1, 'one immutable legal party binds approved application')
+  eq(await scalar('select count(*)::int from bx1_portal.investment_accounts where application_id=$1 and kind=\'ENTITY\' and holder_user_id is null', [entityApp.id]), 1, 'entity uses same account authority without individual holder')
+  await actor(9); await admin()
+  eq(await scalar('select auth.uid()'), uid(9), 'private semantic guard is evaluated with applicant JWT despite postgres test role')
+  eq(await scalar('select bx1_portal.account_usable($1::jsonb,$2::uuid)', [JSON.stringify(applicant), entityAccount.id]), false, 'entity account cannot pass individual subscription guard')
+  await denied('entity account cannot submit an individual subscription', () => scopedCommand(9, applicant, 'subscribe', { ...subscribe(scopedFund, '1'), investment_account_id: entityAccount.id }), '42501')
+  phase = 'entity-representative-review-and-apply'
+  const entityRequestBody = (revision = 0) => ({ investment_account_id: entityAccount.id,
+    expected_revision: revision, evidence_reference: 'Synthetic board appointment is recorded in the reviewed company evidence.',
+    appointment_document_id: entityEvidence[1].id, requested_until: new Date(Date.now() + 3 * 86400000).toISOString() })
+  const entityRequestKey = key(), entityRequest = entityRequestBody()
+  let entityMandate = (await scopedCommand(9, applicant, 'request_investing_representative_mandate', entityRequest, entityRequestKey)).investing_representative_mandates[0]
+  eq([entityMandate.status, entityMandate.effective, entityMandate.transaction_limit_minor], ['SUBMITTED', false, '0'], 'request has zero trading limit and no authority')
+  eq((await scopedCommand(9, applicant, 'request_investing_representative_mandate', entityRequest, entityRequestKey)).investing_representative_mandates[0].id,
+    entityMandate.id, 'exact representative request retry is idempotent')
+  eq((await scopedRead(2, reviewer)).investing_representative_mandates.length, 0, 'AAL1 Compliance cannot enumerate entity mandates')
+  eq((await mandateScopedRead(2, reviewer)).investing_representative_mandates.some(value => value.id === entityMandate.id), true, 'AAL2 appointed Compliance sees exact entity case')
+  eq((await mandateScopedRead(5, roleContext('ComplianceOfficer', otherScope))).investing_representative_mandates.length, 0, 'unrelated organisation cannot read entity mandate')
+  const entityChecks = { appointment: true, legal_entity: true, scope: true }
+  const entityReview = (row, decision) => ({ mandate_id: row.id, expected_revision: row.revision, decision,
+    notes: 'Independent synthetic appointment, legal entity, and restricted scope reviewed.', checks: entityChecks })
+  await denied('same human under separate assured Compliance login cannot review entity mandate', () => mandateScopedCommand(11, reviewer,
+    'review_investing_representative_mandate', entityReview(entityMandate, 'APPROVED')), '42501')
+  entityMandate = (await mandateScopedCommand(2, reviewer, 'review_investing_representative_mandate', entityReview(entityMandate, 'CHANGES_REQUIRED'))).investing_representative_mandates.find(value => value.id === entityMandate.id)
+  eq(entityMandate.next_owner, 'APPLICANT', 'changes-required returns the same case to applicant')
+  const unsubmittedAppointmentId = 'ed400000-0000-4000-8000-000000000004'
+  await admin(); await db.query("insert into storage.objects(bucket_id,name,owner_id,metadata) values('bx1-portal-documents',$1,$2,'{\"size\":100,\"mimetype\":\"application/pdf\"}'::jsonb)", [`${uid(9)}/${unsubmittedAppointmentId}`, uid(9)])
+  await denied('new uploaded COMPANY object is not correction evidence until approved admission versions it', () => scopedCommand(9, applicant,
+    'request_investing_representative_mandate', { ...entityRequestBody(entityMandate.revision), appointment_document_id: unsubmittedAppointmentId }), '42501')
+  const correctedExplanation = 'Synthetic board appointment provision and signed authority are in the reviewed company evidence.'
+  entityMandate = (await scopedCommand(9, applicant, 'request_investing_representative_mandate', {
+    ...entityRequestBody(entityMandate.revision), evidence_reference: correctedExplanation,
+  })).investing_representative_mandates.find(value => value.id === entityMandate.id)
+  eq([entityMandate.evidence_reference, entityMandate.appointment_document_id], [correctedExplanation, entityEvidence[1].id], 'same-cycle correction changes explanation while retaining approved evidence')
+  entityMandate = (await mandateScopedCommand(2, reviewer, 'review_investing_representative_mandate', entityReview(entityMandate, 'APPROVED'))).investing_representative_mandates.find(value => value.id === entityMandate.id)
+  eq([entityMandate.status, entityMandate.effective], ['APPROVED', false], 'Compliance approval alone grants no representative authority')
+  await denied('reviewing human cannot apply with another role', () => mandateScopedCommand(2, roleContext('SuperAdmin'), 'apply_investing_representative_mandate', { mandate_id: entityMandate.id, expected_revision: entityMandate.revision }), '42501')
+  await denied('mandatory audit failure rolls back representative apply', async () => {
+    await admin()
+    await db.query("create function public.synthetic_entity_audit_failure() returns trigger language plpgsql as $$ begin if NEW.kind='apply_investing_representative_mandate' then raise exception 'synthetic_entity_audit_failure' using errcode='23514'; end if; return NEW; end $$; create trigger synthetic_entity_audit_failure before insert on bx1_portal.events for each row execute function public.synthetic_entity_audit_failure()")
+    await mandateScopedCommand(10, roleContext('SuperAdmin'), 'apply_investing_representative_mandate', { mandate_id: entityMandate.id, expected_revision: entityMandate.revision })
+  }, '23514')
+  await admin(); eq(await scalar('select status from bx1_portal.investing_representative_mandates where id=$1', [entityMandate.id]), 'APPROVED', 'failed mandatory audit leaves mandate unapplied')
+  entityMandate = (await mandateScopedCommand(10, roleContext('SuperAdmin'), 'apply_investing_representative_mandate', { mandate_id: entityMandate.id, expected_revision: entityMandate.revision })).investing_representative_mandates.find(value => value.id === entityMandate.id)
+  eq([entityMandate.status, entityMandate.effective, entityMandate.transaction_limit_minor], ['APPLIED', true, '0'], 'third trusted human applies restricted account mandate')
+  eq((await scopedRead(9, applicant)).entity_investment_accounts.find(value => value.id === entityAccount.id).can_view, true, 'applied representative gains current account view')
+  entityMandate = (await mandateScopedCommand(2, reviewer, 'revoke_investing_representative_mandate', { mandate_id: entityMandate.id,
+    expected_revision: entityMandate.revision, reason: 'Synthetic appointment withdrawn with immediate restricted access removal.' })).investing_representative_mandates.find(value => value.id === entityMandate.id)
+  eq([entityMandate.status, entityMandate.effective], ['REVOKED', false], 'revocation removes entity mandate immediately')
+  eq((await scopedRead(9, applicant)).entity_investment_accounts.find(value => value.id === entityAccount.id).can_view, false, 'revoked representative loses account view')
+  eq((await scopedRead(9, applicant)).entity_investment_accounts.find(value => value.id === entityAccount.id).can_request_mandate, true, 'current admission may request a fresh cycle after revocation')
+  const renewed = (await scopedCommand(9, applicant, 'request_investing_representative_mandate', entityRequestBody(0))).investing_representative_mandates.find(value => value.cycle === 2)
+  truth(renewed?.id && renewed.id !== entityMandate.id, 'reappointment starts a new case and preserves revoked cycle')
+  eq([renewed.status, renewed.effective], ['SUBMITTED', false], 'fresh cycle does not resurrect revoked authority')
+  await admin()
+  eq(await scalar('select count(*)::int from bx1_portal.investing_representative_receipts where mandate_id=$1', [entityMandate.id]), 6, 'request, resubmission, decisions, apply and revoke have immutable receipts')
+  eq(await scalar('select count(*)::int from bx1_portal.investing_representative_receipts where mandate_id=$1', [renewed.id]), 1, 'new cycle has its own initial audit receipt')
+  eq(await scalar('select count(*)::int from bx1_portal.subscriptions'), individualOrdersBeforeEntity, 'entity workflow creates no order or funding record')
   await db.query('commit'); begun = false
   phase = 'cleanup-committed-disposable-fixture'
   await db.query('drop schema bx1_portal,bx1_private,storage,auth,public cascade; create schema public')

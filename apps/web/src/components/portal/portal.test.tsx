@@ -1,7 +1,7 @@
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { PORTAL_PATHS, productTermsSchema, type PortalApplication, type PortalInvestmentAccount, type PortalOrganisation, type PortalOrganisationMandate, type PortalPageData, type PortalProduct, type PortalProductEligibility, type PortalSnapshot, type PortalSubscription } from '@/lib/portal/contracts'
+import { PORTAL_PATHS, productTermsSchema, type PortalApplication, type PortalEntityInvestmentAccount, type PortalInvestmentAccount, type PortalInvestingRepresentativeMandate, type PortalOrganisation, type PortalOrganisationMandate, type PortalPageData, type PortalProduct, type PortalProductEligibility, type PortalSnapshot, type PortalSubscription } from '@/lib/portal/contracts'
 import { APPLICANT_CONTEXT, portalScopeHref, type PortalOperatingContext } from '@/lib/portal/operating-context'
 import type { Bx1Role } from '@/lib/supabase/contracts'
 import { PortalScreen, productManagementOrganisations } from './portal-screens'
@@ -23,6 +23,10 @@ const requestKey = '66666666-6666-4666-8666-666666666666'
 const nativeOrganisation = '77777777-7777-4777-8777-777777777777'
 const accountId = '88888888-8888-4888-8888-888888888888'
 const otherOrganisation = '99999999-9999-4999-8999-999999999999'
+const entityApplicationId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
+const entityAccountId = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'
+const entityMandateId = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'
+const companyDocumentId = 'ffffffff-ffff-4fff-8fff-ffffffffffff'
 function snapshot(): PortalSnapshot { return { actor: { id: actor, email: 'synthetic@example.invalid', display_name: 'Synthetic User', can_review: false }, applications: [], organisations: [], products: [], subscriptions: [], events: [], accounts: [], product_eligibility: [], operating_context: APPLICANT_CONTEXT } }
 function account(change: Partial<PortalInvestmentAccount> = {}): PortalInvestmentAccount { return { id: accountId, holder_user_id: actor, application_id: applicationId, kind: 'INDIVIDUAL', status: 'ACTIVE', created_at: '2026-09-20T10:00:00Z', ...change } }
 function eligibility(change: Partial<PortalProductEligibility> = {}): PortalProductEligibility { return { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', investment_account_id: accountId, product_id: productId, organisation_id: organisation, product_revision: 3, terms_hash: 'ab'.repeat(32), application_revision: 1, revision: 2, status: 'APPROVED', investor_statement: 'This fictional product fits the synthetic investor objectives and test funds.', submitted_at: '2026-09-20T10:00:00Z', reviewed_at: '2026-09-20T11:00:00Z', reviewer_id: other, review_notes: 'Synthetic offering restrictions and account evidence independently reviewed.', review_checks: { identity: true, product_fit: true, restrictions: true, source_of_funds: true }, approved_until: '2099-01-01T00:00:00Z', effective: true, can_decide: false, can_approve: false, can_revoke: false, holder_user_id: actor, product_name: 'Fictional Test Fund', account_kind: 'INDIVIDUAL', investor_application: application(), ...change } }
@@ -52,6 +56,17 @@ function representativeMandate(change: Partial<PortalOrganisationMandate> = {}):
     admission_approved_until: '2099-01-01T00:00:00Z', admission_purpose: 'CUSTOMER_ORGANISATION_ADMISSION',
     effective: false, next_owner: 'COMPLIANCE', can_request: false, can_review: true,
     can_apply: false, can_revoke: false, ...change }
+}
+function entityApplication(change: Partial<PortalApplication> = {}): PortalApplication {
+  const details = application().details
+  if (details.details_version === 2) throw new Error('Expected investor details fixture')
+  return application({ id: entityApplicationId, details: { ...details, investor_type: 'ENTITY', company_name: 'Fictional Holding Company', registration_reference: 'SYNTH-ENTITY-001', beneficial_owners: 'Fictional owner and control evidence.', documents: [{ id: companyDocumentId, kind: 'COMPANY', title: 'Synthetic board appointment', storage_path: `${entityApplicationId}/${companyDocumentId}`, sha256: 'a'.repeat(64), size: 100, mime_type: 'application/pdf' }] }, can_create_entity_account: true, ...change })
+}
+function entityAccount(change: Partial<PortalEntityInvestmentAccount> = {}): PortalEntityInvestmentAccount {
+  return { id: entityAccountId, application_id: entityApplicationId, entity_party_id: otherOrganisation, entity_name: 'Fictional Holding Company', registration_reference: 'SYNTH-ENTITY-001', country: 'ZA', kind: 'ENTITY', status: 'ACTIVE', created_at: '2026-09-23T00:00:00Z', admission_revision: 1, admission_approved_until: '2099-01-01T00:00:00Z', can_request_mandate: true, can_view: false, can_request_eligibility: false, ...change }
+}
+function entityMandate(change: Partial<PortalInvestingRepresentativeMandate> = {}): PortalInvestingRepresentativeMandate {
+  return { id: entityMandateId, investment_account_id: entityAccountId, application_id: entityApplicationId, applicant_user_id: other, representative_user_id: other, entity_party_id: otherOrganisation, entity_name: 'Fictional Holding Company', reviewer_scope_organisation_id: nativeOrganisation, admission_revision: 1, admission_current_revision: 1, admission_approved_until: '2099-01-01T00:00:00Z', cycle: 1, revision: 1, status: 'SUBMITTED', scope: ['ACCOUNT_VIEW', 'REQUEST_ELIGIBILITY'], transaction_limit_minor: '0', evidence_reference: 'Fictional board appointment in the submitted COMPANY document.', appointment_document_id: companyDocumentId, requested_until: new Date(Date.now() + 14 * 86_400_000).toISOString(), submitted_at: '2026-09-23T00:00:00Z', reviewed_at: null, reviewer_user_id: null, review_notes: null, review_checks: {}, approval_receipt_id: null, applied_at: null, applied_by_user_id: null, revoked_at: null, revoke_reason: null, effective: false, next_owner: 'COMPLIANCE', can_request: false, can_review: true, can_apply: false, can_revoke: false, ...change }
 }
 function product(change: Partial<PortalProduct> = {}): PortalProduct {
   return { id: productId, organisation_id: organisation, created_by: other, revision: 3, status: 'PUBLISHED', terms: fictionalProductTerms(), terms_hash: 'ab'.repeat(32), reserved_units: '0', created_at: '2026-09-20T10:00:00Z', reviewer_id: actor, review_notes: null, reviewed_at: '2026-09-20T11:00:00Z', published_at: '2026-09-20T12:00:00Z', review_checks: {}, ...change }
@@ -348,7 +363,7 @@ describe('owned individual investment-account controls', () => {
     const value = snapshot(); value.applications = [application({ details: { ...investorDetails, investor_type: 'ENTITY', company_name: 'Entity Applicant' } })]; value.accounts = [account()]
     expect(activeIndividualAccounts(value)).toEqual([])
     const html = renderToStaticMarkup(<InvestmentAccountPanel snapshot={value} onSaved={vi.fn()} />)
-    expect(html).toContain('Entity representation requires a mandate'); expect(html).not.toContain('Open individual investment account</button>')
+    expect(html).toContain('Entity-account route not admitted'); expect(html).not.toContain('Open individual investment account</button>')
   })
   it('does not suggest replacing a suspended account or treat unavailable account data as an empty list', () => {
     const value = snapshot(); value.applications = [application()]; value.accounts = [account({ status: 'SUSPENDED' })]
@@ -363,6 +378,124 @@ describe('owned individual investment-account controls', () => {
     expect(activeIndividualAccounts(value)).toEqual([])
     const html = renderToStaticMarkup(<SubscriptionForm product={product()} snapshot={value} onSaved={vi.fn()} />)
     expect(html).toContain('Approved investor onboarding required'); expect(html).not.toContain('Accept terms and reserve units</button>')
+  })
+})
+
+describe('entity investment account and limited investing-representative handoff', () => {
+  it('opens an entity account only from a current approved entity application and admitted server route', () => {
+    const value = snapshot(); value.applications = [entityApplication()]; value.entity_account_route_available = true; value.entity_investment_accounts = []; value.investing_representative_mandates = []
+    const html = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal/portfolio" operatingContext={APPLICANT_CONTEXT} />)
+    expect(html).toContain('Open Fictional Holding Company investment account</button>')
+    expect(html).not.toContain('Open individual investment account</button>')
+    expect(html).not.toContain('Your subscription orders')
+    value.applications = [entityApplication({ can_create_entity_account: false })]
+    const denied = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal/portfolio" operatingContext={APPLICANT_CONTEXT} />)
+    expect(denied).not.toContain('Open Fictional Holding Company investment account</button>')
+    value.applications = [entityApplication()]; value.entity_account_route_available = false
+    const sealed = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal/portfolio" operatingContext={APPLICANT_CONTEXT} />)
+    expect(sealed).toContain('Entity-account route not admitted')
+    expect(sealed).not.toContain('Open Fictional Holding Company investment account</button>')
+  })
+  it('shows both personal and entity accounts for one login without merging the pending entity record', () => {
+    const value = snapshot(); value.applications = [application(), entityApplication()]; value.accounts = [account()]
+    value.entity_account_route_available = true; value.entity_investment_accounts = [entityAccount()]; value.investing_representative_mandates = []
+    const html = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal/portfolio" operatingContext={APPLICANT_CONTEXT} />)
+    expect(html).toContain('<h2>Your investment account</h2>')
+    expect(html).toContain('<h2>Entity investment account</h2>')
+    expect(html).toContain(accountId)
+    expect(html).toContain(entityAccountId)
+    expect(html).toContain('Submit representative mandate for review</button>')
+    expect(html).toContain('No entity subscription authority yet')
+  })
+  it('keeps each entity application and account visible before an effective mandate exists', () => {
+    const secondApplicationId = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'
+    const secondAccountId = 'bbbbbbbb-cccc-4ddd-8eee-ffffffffffff'
+    const value = snapshot(); value.applications = [entityApplication(), entityApplication({ id: secondApplicationId, details: { ...entityApplication().details, company_name: 'Second Fictional Entity' } })]
+    value.entity_account_route_available = true; value.entity_investment_accounts = [entityAccount(), entityAccount({ id: secondAccountId, application_id: secondApplicationId, entity_name: 'Second Fictional Entity' })]; value.investing_representative_mandates = []
+    const html = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal/portfolio" operatingContext={APPLICANT_CONTEXT} />)
+    expect(html).toContain(entityAccountId)
+    expect(html).toContain(secondAccountId)
+    expect(html).toContain('Second Fictional Entity')
+    expect(html.match(/Submit representative mandate for review/g)?.length).toBe(2)
+  })
+  it('shows pending review and never converts the entity mandate into an order or holding', () => {
+    const value = snapshot(); value.applications = [entityApplication()]; value.entity_account_route_available = true
+    value.entity_investment_accounts = [entityAccount()]; value.investing_representative_mandates = [entityMandate({ applicant_user_id: actor, representative_user_id: actor })]
+    const portfolio = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal/portfolio" operatingContext={APPLICANT_CONTEXT} />)
+    expect(portfolio).toContain('Independent mandate review pending')
+    expect(portfolio).toContain('Independent BlockXOne Compliance Officer')
+    expect(portfolio).not.toContain('Submit representative mandate for review</button>')
+    expect(portfolio).not.toContain('Your subscription orders')
+    const offering = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal/opportunities" operatingContext={APPLICANT_CONTEXT} />)
+    expect(offering).toContain('Entity product flow not enabled')
+  })
+  it('keeps old cycles terminal and displays the newest pending cycle without using the old revision', () => {
+    const value = snapshot(); value.applications = [entityApplication()]; value.entity_account_route_available = true
+    value.entity_investment_accounts = [entityAccount({ can_request_mandate: false })]
+    value.investing_representative_mandates = [
+      entityMandate({ applicant_user_id: actor, representative_user_id: actor, cycle: 1, revision: 4, status: 'REVOKED', effective: false, revoke_reason: 'Synthetic company appointment ended after review.', next_owner: 'NONE' }),
+      entityMandate({ id: '12121212-1212-4121-8121-121212121212', applicant_user_id: actor, representative_user_id: actor, cycle: 2, revision: 1, status: 'SUBMITTED', effective: false, next_owner: 'COMPLIANCE' }),
+    ]
+    const html = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal/portfolio" operatingContext={APPLICANT_CONTEXT} />)
+    expect(html).toContain('Appointment cycle</dt><dd>2')
+    expect(html).toContain('Independent mandate review pending')
+    expect(html).not.toContain('Synthetic company appointment ended after review.')
+  })
+  it('allows a changes-required explanation to be updated only against the approved COMPANY document set', () => {
+    const value = snapshot(); value.applications = [entityApplication()]; value.entity_account_route_available = true
+    value.entity_investment_accounts = [entityAccount()]
+    value.investing_representative_mandates = [entityMandate({ applicant_user_id: actor, representative_user_id: actor, status: 'CHANGES_REQUIRED', revision: 2, can_request: true, can_review: false, next_owner: 'APPLICANT', review_notes: 'Clarify the fictional board appointment.' })]
+    const html = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal/portfolio" operatingContext={APPLICANT_CONTEXT} />)
+    expect(html).toContain('Update investing-representative case')
+    expect(html).toContain('Clarify the fictional board appointment.')
+    expect(html).toContain('you cannot upload fresh evidence to this case')
+  })
+  it('lets an applied representative inspect only the returned account-view relationship, without trading controls', () => {
+    const value = snapshot(); value.entity_account_route_available = true
+    value.entity_investment_accounts = [entityAccount({ can_view: true, can_request_mandate: false })]
+    value.investing_representative_mandates = [entityMandate({ representative_user_id: actor, status: 'APPLIED', revision: 3, effective: true, next_owner: 'NONE', can_review: false, can_request: false, applied_by_user_id: other, applied_at: '2026-09-23T10:00:00Z' })]
+    const html = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal/portfolio" operatingContext={APPLICANT_CONTEXT} />)
+    expect(html).toContain('Limited representative access active')
+    expect(html).toContain('eligibility-request scope is reserved')
+    expect(html).not.toContain('Your subscription orders')
+    expect(html).not.toContain('Accept terms and reserve units')
+  })
+  it('binds the Compliance queue and review to exact scope, source admission and COMPANY evidence', () => {
+    const value = snapshot(); value.actor.can_review = true; value.entity_mandate_queue_available = true
+    value.applications = [entityApplication({ user_id: other, can_create_entity_account: false })]
+    value.investing_representative_mandates = [entityMandate()]
+    const reviewer = operating('ComplianceOfficer')
+    const queue = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal/compliance" operatingContext={reviewer} />)
+    expect(queue).toContain('Entity investing-representative review')
+    expect(queue).toContain('Fictional Holding Company')
+    const detail = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal/compliance/detail" id={entityMandateId} operatingContext={reviewer} />)
+    expect(detail).toContain('Synthetic board appointment')
+    expect(detail).toContain('Record entity mandate decision</button>')
+    expect(detail).not.toContain('Apply account-view mandate</button>')
+    value.investing_representative_mandates = [entityMandate({ reviewer_scope_organisation_id: otherOrganisation, entity_name: 'Foreign entity private mandate' })]
+    const foreign = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal/compliance/detail" id={entityMandateId} operatingContext={reviewer} />)
+    expect(foreign).toContain('Record unavailable')
+    expect(foreign).not.toContain('Foreign entity private mandate')
+  })
+  it('hides entity mandate cases until staff MFA and route admission are proven', () => {
+    const value = snapshot(); value.actor.can_review = true; value.entity_mandate_queue_available = false; value.entity_mandate_queue_blocked_reason = 'MFA_REQUIRED'
+    value.investing_representative_mandates = [entityMandate({ entity_name: 'Hidden confidential entity' })]
+    const reviewer = operating('ComplianceOfficer')
+    const queue = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal/compliance" operatingContext={reviewer} />)
+    expect(queue).toContain('Authenticator required')
+    expect(queue).not.toContain('Hidden confidential entity')
+    const detail = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal/compliance/detail" id={entityMandateId} operatingContext={reviewer} />)
+    expect(detail).toContain('Record unavailable')
+  })
+  it('reserves application for a separately scoped Super Admin, never the applicant or reviewer', () => {
+    const value = snapshot(); value.entity_mandate_queue_available = true
+    value.investing_representative_mandates = [entityMandate({ status: 'APPROVED', revision: 2, can_review: false, can_apply: true, next_owner: 'SUPER_ADMIN', reviewer_user_id: other })]
+    const admin = operating('SuperAdmin')
+    const detail = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal/compliance/detail" id={entityMandateId} operatingContext={admin} />)
+    expect(detail).toContain('Apply account-view mandate</button>')
+    value.investing_representative_mandates = [entityMandate({ status: 'APPROVED', revision: 2, can_review: false, can_apply: true, next_owner: 'SUPER_ADMIN', reviewer_user_id: actor })]
+    const sameReviewer = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal/compliance/detail" id={entityMandateId} operatingContext={admin} />)
+    expect(sameReviewer).not.toContain('Apply account-view mandate</button>')
   })
 })
 

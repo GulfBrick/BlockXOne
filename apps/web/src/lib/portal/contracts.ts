@@ -39,7 +39,7 @@ export type PortalApplication = {
   details: ApplicationDetails; submitted_at: string | null; reviewed_at: string | null;
   reviewer_id: string | null; review_notes: string | null; organisation_id: string | null;
   review_checks: Record<string, boolean>; provider_mode: 'MANUAL_TEST_REVIEW'; approved_until: string | null;
-  admission_purpose?: AdmissionPurpose;
+  admission_purpose?: AdmissionPurpose; can_create_entity_account?: boolean;
 }
 export type PortalCapability = 'create_product' | 'save_product' | 'submit_product' | 'publish_product' | 'read_orders' | 'review_product'
   | 'propose_funding_route' | 'approve_funding_route' | 'revoke_funding_route' | 'open_funding_obligation' | 'propose_funding_acceptance' | 'reconcile_funding'
@@ -52,6 +52,28 @@ export type PortalOrganisation = {
 export type PortalInvestmentAccount = {
   id: string; holder_user_id: string; application_id: string; kind: 'INDIVIDUAL';
   status: 'ACTIVE' | 'SUSPENDED'; created_at: string;
+}
+/** Legal holder and acting representative are separate. A visible account is not an order mandate. */
+export type PortalEntityInvestmentAccount = {
+  id: string; application_id: string; entity_party_id: string; entity_name: string;
+  registration_reference: string; country: string; kind: 'ENTITY'; status: 'ACTIVE' | 'SUSPENDED';
+  created_at: string; admission_revision: number; admission_approved_until: string | null;
+  can_request_mandate: boolean; can_view: boolean; can_request_eligibility: boolean;
+}
+export type PortalInvestingRepresentativeMandate = {
+  id: string; investment_account_id: string; application_id: string; applicant_user_id: string;
+  representative_user_id: string; entity_party_id: string; entity_name: string;
+  reviewer_scope_organisation_id: string; admission_revision: number; admission_current_revision: number;
+  admission_approved_until: string | null; cycle: number; revision: number;
+  status: 'SUBMITTED' | 'CHANGES_REQUIRED' | 'APPROVED' | 'REJECTED' | 'APPLIED' | 'REVOKED';
+  scope: ('ACCOUNT_VIEW' | 'REQUEST_ELIGIBILITY')[]; transaction_limit_minor: '0';
+  evidence_reference: string; appointment_document_id: string; requested_until: string;
+  submitted_at: string; reviewed_at: string | null; reviewer_user_id: string | null;
+  review_notes: string | null; review_checks: Record<string, boolean>;
+  approval_receipt_id: string | null; applied_at: string | null; applied_by_user_id: string | null;
+  revoked_at: string | null; revoke_reason: string | null; effective: boolean;
+  next_owner: RepresentativeMandateNextOwner;
+  can_request: boolean; can_review: boolean; can_apply: boolean; can_revoke: boolean;
 }
 export type PortalProductEligibility = {
   id: string; investment_account_id: string; product_id: string; organisation_id: string;
@@ -102,8 +124,12 @@ export type PortalSnapshot = {
   applications: PortalApplication[]; organisations: PortalOrganisation[];
   products: PortalProduct[]; subscriptions: PortalSubscription[]; events: PortalEvent[];
   requests?: { key: string; command: string }[];
-  accounts?: PortalInvestmentAccount[]; product_eligibility?: PortalProductEligibility[]; organisation_mandates?: PortalOrganisationMandate[]; operating_context?: PortalOperatingContext;
+  accounts?: PortalInvestmentAccount[]; entity_investment_accounts?: PortalEntityInvestmentAccount[];
+  product_eligibility?: PortalProductEligibility[]; organisation_mandates?: PortalOrganisationMandate[];
+  investing_representative_mandates?: PortalInvestingRepresentativeMandate[]; operating_context?: PortalOperatingContext;
   mandate_queue_available?: boolean; mandate_queue_blocked_reason?: 'MFA_REQUIRED' | 'NOT_ADMITTED' | null;
+  entity_account_route_available?: boolean; entity_account_blocked_reason?: 'NOT_ADMITTED' | null;
+  entity_mandate_queue_available?: boolean; entity_mandate_queue_blocked_reason?: 'MFA_REQUIRED' | 'NOT_ADMITTED' | null;
   funding?: FundingSnapshot;
 }
 export type PortalPageData = { user: { id: string; email: string }; snapshot: PortalSnapshot }
@@ -136,10 +162,16 @@ export const reviewChecks = z.object({ identity: z.boolean(), ownership: z.boole
 export const offeringChecks = z.object({ issuer: z.boolean(), terms: z.boolean(), disclosures: z.boolean(), eligibility: z.boolean() }).strict()
 export const productEligibilityChecks = z.object({ identity: z.boolean(), product_fit: z.boolean(), restrictions: z.boolean(), source_of_funds: z.boolean() }).strict()
 export const representativeMandateChecks = z.object({ appointment: z.boolean(), evidence: z.boolean(), scope: z.boolean() }).strict()
+export const investingRepresentativeChecks = z.object({ appointment: z.boolean(), legal_entity: z.boolean(), scope: z.boolean() }).strict()
 export const portalCommandSchema = z.discriminatedUnion('command', [
   z.object({ command: z.literal('submit_application'), key: id, payload: z.object({ persona: z.enum(['INVESTOR', 'WEALTH_MANAGER']), expected_revision: z.number().int().min(0), details: applicationDetailsSchema }).strict() }).strict(),
   z.object({ command: z.literal('review_application'), key: id, payload: z.object({ application_id: id, expected_revision: z.number().int().positive(), decision: z.enum(['APPROVED', 'CHANGES_REQUIRED', 'REJECTED']), notes: text(20, 3000), checks: reviewChecks }).strict() }).strict(),
   z.object({ command: z.literal('create_investment_account'), key: id, payload: z.object({ application_id: id }).strict() }).strict(),
+  z.object({ command: z.literal('create_entity_investment_account'), key: id, payload: z.object({ application_id: id }).strict() }).strict(),
+  z.object({ command: z.literal('request_investing_representative_mandate'), key: id, payload: z.object({ investment_account_id: id, expected_revision: z.number().int().min(0), evidence_reference: text(20, 400), appointment_document_id: id, requested_until: z.string().datetime({ offset: false }).regex(/Z$/) }).strict() }).strict(),
+  z.object({ command: z.literal('review_investing_representative_mandate'), key: id, payload: z.object({ mandate_id: id, expected_revision: z.number().int().positive(), decision: z.enum(['APPROVED', 'CHANGES_REQUIRED', 'REJECTED']), notes: text(20, 3000), checks: investingRepresentativeChecks }).strict() }).strict(),
+  z.object({ command: z.literal('apply_investing_representative_mandate'), key: id, payload: z.object({ mandate_id: id, expected_revision: z.number().int().positive() }).strict() }).strict(),
+  z.object({ command: z.literal('revoke_investing_representative_mandate'), key: id, payload: z.object({ mandate_id: id, expected_revision: z.number().int().positive(), reason: text(20, 1000) }).strict() }).strict(),
   z.object({ command: z.literal('request_product_eligibility'), key: id, payload: z.object({ product_id: id, investment_account_id: id, expected_revision: z.number().int().min(0), investor_statement: text(20, 2000) }).strict() }).strict(),
   z.object({ command: z.literal('review_product_eligibility'), key: id, payload: z.object({ eligibility_case_id: id, expected_revision: z.number().int().positive(), decision: z.enum(['APPROVED', 'CHANGES_REQUIRED', 'REJECTED']), notes: text(20, 3000), checks: productEligibilityChecks }).strict() }).strict(),
   z.object({ command: z.literal('revoke_product_eligibility'), key: id, payload: z.object({ eligibility_case_id: id, expected_revision: z.number().int().positive(), reason: text(20, 2000) }).strict() }).strict(),

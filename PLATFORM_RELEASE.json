@@ -1,6 +1,6 @@
 {
   "product": "BlockXOne",
-  "version": "1.1.0-rc.14",
+  "version": "1.1.0-rc.15",
   "status": "release-candidate",
   "baseSource": "713d1bf45f1c0c0ad71e25a9f8d15b0037341d6a",
   "sourceIdentity": "VERCEL_GIT_COMMIT_SHA",
@@ -9,10 +9,10 @@
   "sharedDashboard": "/portal",
   "environments": ["TESTNET", "MAINNET"],
   "brand": "BlockXOne Brand Kit v2.0 Exact Logo",
-  "schemaChanges": ["20260923134152_stage2_product_eligibility", "20260923143713_stage2_customer_mandates", "20260923144216_stage2_document_receipts", "20260923161500_stage2_application_document_history"],
+  "schemaChanges": ["20260923134152_stage2_product_eligibility", "20260923143713_stage2_customer_mandates", "20260923144216_stage2_document_receipts", "20260923161500_stage2_application_document_history", "20260923171126_stage2_entity_investment_accounts"],
   "mainnetMissingPrerequisites": ["Live identity-provider evidence, controlled document validation, required MFA for every admission reviewer, trusted distinct-person mappings, and real customer admission are not approved"],
   "contractChanges": [],
   "productionFinancialAdmission": false,
-  "scope": "Stage 2 connected customer-admission increment: retain approved-investor account and product-eligibility controls; add a first-representative TEST customer mandate with separate applicant, MFA-authenticated Compliance decision and MFA-authenticated Super Admin application, without automatic role grants. Native customer-manager role access is rechecked against mandate expiry and revocation. Add a private server-owned document-receipt schema and guarded upload path, but leave receipt enforcement OFF until hosted credential and byte-level proof pass. Add read-only immutable application-document history and exact version-bound server-proxied retrieval for authorised applicant and appointed Compliance reviewer. Direct Storage reads inherit current session, token-MFA and reviewer authority checks, including submitted historical versions. Historic hashes are submitted claims until bytes are verified. Existing identity, funding and contract history are preserved. Manual fictional evidence is not live KYC or malware scanning. Separate demo logins do not prove independent humans; existing admission review still permits AAL1 if no factor is enrolled. Post-binding Compliance access requires a separate active appointment. The immutable eight-object upload quota does not yet support correction after exhaustion. Multiple representatives, entity investment accounts, Sumsub, complete document lifecycle and hosted distinct-person acceptance remain required. MAIN business actions stay sealed."
+  "scope": "Stage 2 connected customer-admission increment: preserve existing identity, individual accounts, funding and contract history. Retain approved-individual product eligibility and the separately reviewed TEST customer-manager mandate. Add immutable application-document history with exact version-bound private retrieval; direct Storage reads require current session, MFA and reviewer authority. Initial drafts no longer offer empty history, and failed history reads explain sign-in/access/service states. Add a distinct reviewed legal-entity holder to the existing investment-account identity and a separately requested, independently reviewed and applied representative mandate in the same portal. The entity mandate is limited to account view and a reserved future eligibility-request scope with zero transaction limit; it grants no entity product eligibility, order, wallet, funding or signing authority. Trusted person mappings are required to establish distinct humans; separate emails do not suffice. TEST uses fictional manual evidence, not live KYC or malware scanning. Document-receipt enforcement remains OFF pending hosted credential and byte proof; immutable upload quota can prevent correction after eight objects. Structured beneficial-owner relationships, multi-representative service mandates, entity product eligibility, Sumsub, full document lifecycle and hosted distinct-person acceptance remain required. MAIN business actions stay sealed."
 }
 

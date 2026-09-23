@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 import type { EntryApplication } from '@/lib/portal/entry-contracts'
 import { entryApplication, entryActorId } from '@/lib/portal/entry-test-fixtures'
 import { applicationDetailsSchema, type LegacyApplicationDetails, type PortalApplication, type PortalSnapshot, type WealthManagerApplicationDetailsV2 } from '@/lib/portal/contracts'
-import { ApplicationDetailsSummary, OnboardingForm, applicationFormDetails, applicationNextStep, applicationSubmissionDetails, applicationSubmissionReady, applicationSubmitLabel, requiredApplicationEvidence, withoutDraftEvidence } from './onboarding-form'
+import { ApplicationDetailsSummary, ApplicationHistoryFailureNotice, OnboardingForm, applicationFormDetails, applicationHistoryFailure, applicationNextStep, applicationSubmissionDetails, applicationSubmissionReady, applicationSubmitLabel, requiredApplicationEvidence, withoutDraftEvidence } from './onboarding-form'
 import { ApplicationReview } from './portal-workflows'
 import { dateLabel } from './portal-primitives'
 
@@ -100,8 +100,33 @@ describe('truthful application state and handoff', () => {
     expect(html).toContain('Draft: not submitted')
     expect(html).toContain('There is no automatic draft save.')
     expect(html).toContain('Selected for this submission')
+    expect(html).not.toContain('Submitted evidence history')
+    expect(html).not.toContain('View submitted versions')
     expect(html).not.toContain('Your application is submitted at revision')
     expect(html).not.toContain('Refresh application status')
+  })
+  it('offers history after a submission, including when changes are requested', () => {
+    for (const status of ['SUBMITTED', 'CHANGES_REQUIRED', 'APPROVED', 'REJECTED'] as const) {
+      const html = form({ status, submitted_at: '2026-09-22T09:30:00Z' })
+      expect(html).toContain('Submitted evidence history')
+      expect(html).toContain('View submitted versions')
+    }
+    expect(form({ status: 'DRAFT', submitted_at: '2026-09-22T09:30:00Z' })).toContain('View submitted versions')
+  })
+  it('gives actionable but non-diagnostic guidance for private-history failures', () => {
+    expect(applicationHistoryFailure(401)).toBe('SESSION')
+    expect(applicationHistoryFailure(403)).toBe('ACCESS')
+    expect(applicationHistoryFailure(404)).toBe('ACCESS')
+    expect(applicationHistoryFailure(503)).toBe('UNAVAILABLE')
+    for (const reason of ['SESSION', 'ACCESS', 'UNAVAILABLE'] as const) {
+      const html = renderToStaticMarkup(createElement(ApplicationHistoryFailureNotice, { reason }))
+      expect(html).toContain('href="/workspace/security"')
+      expect(html).toContain('if authenticator verification is needed')
+      expect(html).not.toContain('MFA is required')
+      expect(html).not.toContain('No submitted evidence versions are recorded')
+    }
+    expect(renderToStaticMarkup(createElement(ApplicationHistoryFailureNotice, { reason: 'SESSION' }))).toContain('href="/login"')
+    expect(renderToStaticMarkup(createElement(ApplicationHistoryFailureNotice, { reason: 'UNAVAILABLE' }))).toContain('temporary service problem')
   })
   it('describes the missing-reviewer blocker without claiming a staffed queue', () => {
     const html = form({ review_route: 'REVIEWER_UNAVAILABLE' })

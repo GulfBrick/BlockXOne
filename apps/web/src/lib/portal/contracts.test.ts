@@ -94,6 +94,23 @@ describe('customer portal contracts', () => {
     expect(portalCommandSchema.safeParse({ command: 'revoke_representative_mandate', key, payload: { mandate_id: id, expected_revision: 3, reason: 'Fictional appointment revoked for controlled authority testing.' } }).success).toBe(true)
     expect(portalCommandSchema.safeParse({ command: 'revoke_representative_mandate', key, payload: { mandate_id: id, expected_revision: 3, reason: 'short' } }).success).toBe(false)
   })
+  it('keeps entity account creation and limited investing representation as distinct guarded commands', () => {
+    expect(portalCommandSchema.safeParse({ command: 'create_entity_investment_account', key, payload: { application_id: id } }).success).toBe(true)
+    expect(portalCommandSchema.safeParse({ command: 'create_entity_investment_account', key, payload: { application_id: id, holder_user_id: id } }).success).toBe(false)
+    const request = { investment_account_id: id, expected_revision: 0, evidence_reference: 'Fictional board appointment recorded in submitted COMPANY evidence.', appointment_document_id: key, requested_until: '2026-10-01T12:00:00Z' }
+    expect(portalCommandSchema.safeParse({ command: 'request_investing_representative_mandate', key, payload: request }).success).toBe(true)
+    for (const change of [{ expected_revision: -1 }, { appointment_document_id: 'not-an-id' }, { requested_until: '2026-10-01' }, { evidence_reference: 'too short' }, { transaction_limit_minor: '1' }]) {
+      expect(portalCommandSchema.safeParse({ command: 'request_investing_representative_mandate', key, payload: { ...request, ...change } }).success).toBe(false)
+    }
+    const review = { mandate_id: id, expected_revision: 1, decision: 'APPROVED', notes: 'Fictional entity appointment and legal holder independently reviewed.', checks: { appointment: true, legal_entity: true, scope: true } }
+    expect(portalCommandSchema.safeParse({ command: 'review_investing_representative_mandate', key, payload: review }).success).toBe(true)
+    expect(portalCommandSchema.safeParse({ command: 'review_investing_representative_mandate', key, payload: { ...review, reviewer_user_id: id } }).success).toBe(false)
+    expect(portalCommandSchema.safeParse({ command: 'review_investing_representative_mandate', key, payload: { ...review, checks: { ...review.checks, cash: true } } }).success).toBe(false)
+    expect(portalCommandSchema.safeParse({ command: 'apply_investing_representative_mandate', key, payload: { mandate_id: id, expected_revision: 2 } }).success).toBe(true)
+    expect(portalCommandSchema.safeParse({ command: 'apply_investing_representative_mandate', key, payload: { mandate_id: id, expected_revision: 2, role: 'Investor' } }).success).toBe(false)
+    expect(portalCommandSchema.safeParse({ command: 'revoke_investing_representative_mandate', key, payload: { mandate_id: id, expected_revision: 3, reason: 'Fictional company appointment is no longer valid for account viewing.' } }).success).toBe(true)
+    expect(portalCommandSchema.safeParse({ command: 'revoke_investing_representative_mandate', key, payload: { mandate_id: id, expected_revision: 3, reason: 'short' } }).success).toBe(false)
+  })
   it('never accepts financial completion or reviewer identity from the browser', () => {
     expect(portalCommandSchema.safeParse({ command: 'settle', key, payload: { subscription_id: id, paid: true } }).success).toBe(false)
     expect(portalCommandSchema.safeParse({ command: 'review_application', key, payload: { application_id: id, expected_revision: 1, decision: 'APPROVED', notes: 'Synthetic documents independently reviewed.', checks: { identity: true, ownership: true, screening: true, suitability: true }, reviewer_id: id } }).success).toBe(false)
