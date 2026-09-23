@@ -35,6 +35,7 @@ begin
   select pg_catalog.pg_get_functiondef('bx1_portal.object_readable(text)'::pg_catalog.regprocedure)
     into storage_body;
   if access_body not like '%fresh_session()%'
+    or access_body not like '%entry_manual_review_enabled()%'
     or access_body not like '%has_session_mfa()%'
     or access_body not like '%has_token_mfa()%'
     or access_body not like '%factor_type%totp%'
@@ -46,6 +47,7 @@ begin
     or lookup_body not like '%application_document_access%'
     or lookup_body not like '%claimed_sha256%'
     or storage_body not like '%fresh_session()%'
+    or storage_body not like '%entry_manual_review_enabled()%'
     or storage_body not like '%has_session_mfa()%'
     or storage_body not like '%has_token_mfa()%'
     or storage_body not like '%application_detail_versions%'

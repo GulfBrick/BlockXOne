@@ -78,7 +78,7 @@ describe('persona-specific application preparation', () => {
     expect(applicationSubmissionReady('WEALTH_MANAGER', { ...prepared, documents: selected }, true, false)).toBe(false)
     const html = form({ persona: 'WEALTH_MANAGER', details: manager, status: 'CHANGES_REQUIRED' })
     expect(html).toContain('Exclude from this submission')
-    expect(html).toContain('Earlier submitted versions and private stored objects are not deleted')
+    expect(html).toContain('Earlier versions and stored objects are not deleted; the separate upload quota still applies')
     expect(html).toContain('Submitted evidence history')
     expect(html).toContain('View submitted versions')
   })

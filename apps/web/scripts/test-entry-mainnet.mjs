@@ -147,6 +147,13 @@ try {
       eq(await scalar("select has_function_privilege($1,$2,'EXECUTE')", [role, signature]), allowed, `${role} effective ${signature} admission`)
     }
   }
+  for (const signature of ['public.bx1_application_document_versions(uuid,jsonb)',
+    'public.bx1_application_document_lookup(uuid,integer,uuid,jsonb)']) {
+    for (const role of ['anon', 'authenticated', 'service_role']) {
+      eq(await scalar("select has_function_privilege($1,$2,'EXECUTE')", [role, signature]), false,
+        `${role} cannot use unadmitted MAIN document history RPC ${signature}`)
+    }
+  }
   for (const signature of ['bx1_private.read_administration(uuid,uuid)', 'bx1_private.execute_administration(uuid,uuid,jsonb)', 'public.bx1_administration_read(uuid,uuid)', 'public.bx1_administration_command(uuid,uuid,jsonb)']) {
     for (const role of ['anon', 'authenticated', 'service_role']) eq(await scalar("select has_function_privilege($1,$2,'EXECUTE')", [role, signature]), false, `${role} cannot use new unadmitted administration RPC/helper`)
   }

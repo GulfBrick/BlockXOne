@@ -487,8 +487,8 @@ try {
   }
   await admin()
   for (const doc of managerDetails.documents) {
-    await db.query('insert into storage.objects(bucket_id,name,owner_id,metadata) values($1,$2,$3,$4::jsonb)',
-      ['bx1-portal-documents', doc.storage_path, uid(9), JSON.stringify({ size: doc.size, mimetype: doc.mime_type })])
+    eq(await scalar("select count(*)::int from storage.objects where bucket_id='bx1-portal-documents' and name=$1 and owner_id=$2 and metadata->>'size'=$3 and metadata->>'mimetype'=$4",
+      [doc.storage_path, uid(9), String(doc.size), doc.mime_type]), 1, 'preseeded manager evidence matches exact owner and metadata')
   }
   const submittedManager = await entryCommand(9, 'submit_application', {
     application_id: managerAppDraft.id, expected_revision: managerAppDraft.revision, details: managerDetails,

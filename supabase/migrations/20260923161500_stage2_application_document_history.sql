@@ -14,7 +14,8 @@ create or replace function bx1_portal.application_document_access(target_applica
 language plpgsql volatile security definer set search_path='' as $$
 declare a bx1_portal.applications;
 begin
-  if target_application is null or bx1_portal.fresh_session() is not true
+  if target_application is null or bx1_portal.entry_manual_review_enabled() is not true
+    or bx1_portal.fresh_session() is not true
     or bx1_private.has_session_mfa() is not true
     or bx1_private.has_token_mfa() is not true then return false; end if;
   select * into a from bx1_portal.applications where id=target_application;
@@ -41,7 +42,8 @@ create or replace function bx1_portal.object_readable(object_name text) returns 
 language plpgsql volatile security definer set search_path='' as $$
 declare v_owner_prefix text; v_app record;
 begin
-  if object_name is null or bx1_portal.fresh_session() is not true
+  if object_name is null or bx1_portal.entry_manual_review_enabled() is not true
+    or bx1_portal.fresh_session() is not true
     or bx1_private.has_session_mfa() is not true
     or bx1_private.has_token_mfa() is not true then return false; end if;
   v_owner_prefix:=pg_catalog.split_part(object_name,'/',1);
@@ -126,6 +128,10 @@ revoke all on function bx1_portal.application_document_access(uuid,jsonb),
   public.bx1_application_document_versions(uuid,jsonb),
   public.bx1_application_document_lookup(uuid,integer,uuid,jsonb)
   from public,anon,authenticated,service_role;
-grant execute on function public.bx1_application_document_versions(uuid,jsonb),
-  public.bx1_application_document_lookup(uuid,integer,uuid,jsonb) to authenticated;
-grant execute on function bx1_portal.object_readable(text) to authenticated;
+-- Do not reopen the MAIN entry-only seal. This release exposes the document
+-- reader only through TEST's explicitly admitted manual-review configuration.
+do $document_history_grants$ begin
+  if bx1_portal.entry_manual_review_enabled() is true then
+    execute 'grant execute on function public.bx1_application_document_versions(uuid,jsonb), public.bx1_application_document_lookup(uuid,integer,uuid,jsonb), bx1_portal.object_readable(text) to authenticated';
+  end if;
+end $document_history_grants$;
