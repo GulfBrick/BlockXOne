@@ -320,8 +320,15 @@ begin
   select * into a from bx1_portal.applications where id=m.application_id;
   select * into o from bx1_portal.organisations where id=m.product_organisation_id;
   applicant_visible:=m.applicant_user_id=auth.uid() and c->>'mode'='APPLICANT';
-  reviewer_visible:=bx1_portal.representative_mandate_actor(c,m.reviewer_scope_organisation_id,'ComplianceOfficer');
-  applier_visible:=bx1_portal.representative_mandate_actor(c,m.reviewer_scope_organisation_id,'SuperAdmin');
+  reviewer_visible:=false;
+  applier_visible:=false;
+  -- Explicit branches avoid evaluating both expensive staff authority paths
+  -- for an applicant or a customer OfferingManager read.
+  if c->>'mode'='ROLE' and c->>'role'='ComplianceOfficer' then
+    reviewer_visible:=bx1_portal.representative_mandate_actor(c,m.reviewer_scope_organisation_id,'ComplianceOfficer');
+  elsif c->>'mode'='ROLE' and c->>'role'='SuperAdmin' then
+    applier_visible:=bx1_portal.representative_mandate_actor(c,m.reviewer_scope_organisation_id,'SuperAdmin');
+  end if;
   if not(applicant_visible or reviewer_visible or applier_visible) then return null; end if;
   request_allowed:=applicant_visible and
     (m.status in ('CHANGES_REQUIRED','REJECTED')
@@ -411,20 +418,31 @@ language plpgsql volatile security definer set search_path='' as $$
 declare result jsonb; cases jsonb; mandate_requests jsonb; queue_available boolean; queue_reason text;
 begin
   result:=bx1_portal.read_scoped_pre_mandate(c);
-  queue_available:=c->>'mode'='ROLE' and c->>'role' in ('ComplianceOfficer','SuperAdmin')
-    and bx1_portal.representative_mandate_actor(c,(c->>'organisationId')::uuid,c->>'role');
+  queue_available:=false;
+  if c->>'mode'='ROLE' and c->>'role' in ('ComplianceOfficer','SuperAdmin') then
+    queue_available:=bx1_portal.representative_mandate_actor(c,(c->>'organisationId')::uuid,c->>'role');
+  end if;
   queue_reason:=case
     when c->>'mode'<>'ROLE' or c->>'role' not in ('ComplianceOfficer','SuperAdmin') then null
     when not exists(select 1 from bx1_portal.entry_configuration cfg where cfg.singleton
       and cfg.environment='TESTNET' and cfg.reviewer_scope=(c->>'organisationId')::uuid) then 'NOT_ADMITTED'
     when not queue_available then 'MFA_REQUIRED'
     else null end;
-  select coalesce(pg_catalog.jsonb_agg(bx1_portal.representative_mandate_projection(c,m.id)
-    order by m.submitted_at,m.id),'[]'::jsonb) into cases
-    from bx1_portal.representative_mandates m
-    where (c->>'mode'='APPLICANT' and m.applicant_user_id=auth.uid())
-      or bx1_portal.representative_mandate_actor(c,m.reviewer_scope_organisation_id,'ComplianceOfficer')
-      or bx1_portal.representative_mandate_actor(c,m.reviewer_scope_organisation_id,'SuperAdmin');
+  -- Branch before scanning cases. SQL OR is not a short-circuit authority
+  -- boundary: for an OfferingManager it can still invoke both staff checks
+  -- for every case, repeatedly traversing native mandate membership guards.
+  if c->>'mode'='APPLICANT' then
+    select coalesce(pg_catalog.jsonb_agg(bx1_portal.representative_mandate_projection(c,m.id)
+      order by m.submitted_at,m.id),'[]'::jsonb) into cases
+      from bx1_portal.representative_mandates m where m.applicant_user_id=auth.uid();
+  elsif queue_available then
+    select coalesce(pg_catalog.jsonb_agg(bx1_portal.representative_mandate_projection(c,m.id)
+      order by m.submitted_at,m.id),'[]'::jsonb) into cases
+      from bx1_portal.representative_mandates m
+      where m.reviewer_scope_organisation_id=(c->>'organisationId')::uuid;
+  else
+    cases:='[]'::jsonb;
+  end if;
   select coalesce(pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object('key',r.request_key,'command',r.command)
     order by r.created_at desc,r.request_key),'[]'::jsonb) into mandate_requests
     from (select * from bx1_portal.representative_mandate_requests

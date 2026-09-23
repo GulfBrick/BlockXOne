@@ -549,15 +549,25 @@ try {
   eq([mandate.status, mandate.effective, mandate.applied_by_user_id], ['APPLIED', true, uid(10)], 'distinct assured admin atomically provisions exact first representative')
   truth(mandate.native_organisation_id, 'new customer has separate native organisation')
   await admin()
+  phase = 'mandate-native-membership-lookup'
   const managedMembershipId = await scalar('select native_membership_id from bx1_portal.representative_mandates where id=$1', [mandate.id])
   const afterMandateExpiry = new Date(Date.parse(mandate.requested_until) + 1000).toISOString()
+  phase = 'mandate-native-asof-expiry'
   eq(await scalar('select bx1_portal.native_membership_effective_at($1,$2::timestamptz)', [managedMembershipId, afterMandateExpiry]), false, 'passive expiry denies exact native membership without waiting for a job')
+  phase = 'mandate-case-asof-expiry'
   eq(await scalar('select bx1_portal.representative_mandate_effective_at($1,$2::timestamptz)', [mandate.id, afterMandateExpiry]), false, 'passive expiry denies reviewed authority at the same instant')
+  phase = 'mandate-native-wallet-access'
   await actor(9); eq(await scalar('select bx1_private.can_access_organisation($1::uuid)', [mandate.native_organisation_id]), true, 'effective mandate permits native workspace and wallet organisation')
+  phase = 'mandate-native-membership-rls'
   eq(await scalar("select count(*)::int from public.bx1_memberships where organisation_id=$1 and role='OfferingManager'", [mandate.native_organisation_id]), 1, 'effective representative membership visible through RLS')
+  phase = 'mandate-workspace-effective-rpc'
   eq((await scalar('select public.bx1_workspace_effective_membership_ids()')).includes(managedMembershipId), true, 'workspace RPC includes only live exact representative membership')
+  phase = 'mandate-entry-effective-context'
   eq((await entryRead(9)).contexts.some(value => value.organisation_id === mandate.native_organisation_id && value.roles.includes('OfferingManager')), true, 'entry context shows effective representative')
-  eq((await scopedRead(9, roleContext('OfferingManager', mandate.native_organisation_id))).organisations.some(value => value.id === managerApp.organisation_id), true, 'manager can operate only exact portal organisation')
+  phase = 'mandate-scoped-customer-read'
+  const managerScoped = await scopedRead(9, roleContext('OfferingManager', mandate.native_organisation_id))
+  eq(managerScoped.organisations.some(value => value.id === managerApp.organisation_id), true, 'manager can operate only exact portal organisation')
+  eq(managerScoped.organisation_mandates.length, 0, 'OfferingManager role read exposes no staff mandate queue')
   phase = 'mandate-product-handoff'
   const newDraft = (await scopedCommand(9, roleContext('OfferingManager', mandate.native_organisation_id), 'create_product', { organisation_id: managerApp.organisation_id, terms: { ...terms(), name: 'Mandated synthetic draft' } })).products.find(value => value.terms.name === 'Mandated synthetic draft')
   truth(newDraft?.id, 'mandated manager can create draft after apply')
