@@ -1021,6 +1021,7 @@ try {
   await db.query('rollback to savepoint customer_issuer_revoked_visibility; release savepoint customer_issuer_revoked_visibility')
   eq((await mandateScopedRead(13, issuerContext)).products.some(value => value.id === inReview.id), false,
     'issuer binding in another native organisation does not expose customer product')
+  await admin()
   eq(await scalar('select count(*)::int from bx1_portal.subscriptions'), legacyOrdersBeforeOffering, 'new package workflow creates no order or funding')
   await db.query('commit'); begun = false
   phase = 'cleanup-committed-disposable-fixture'
