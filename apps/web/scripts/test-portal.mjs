@@ -356,6 +356,84 @@ try {
   eq((await expiredCall).code, '42501', 'binding expiry after simultaneous lock wait denies write')
   eq(await scalar('select count(*)::int from bx1_portal.scoped_requests where request_key=$1', [expiryKey]), 0, 'expired authority after wait leaves no accepted receipt')
   eq(await scalar("select count(*)::int from bx1_portal.products where terms->>'name'='Must not survive expiry wait'"), 0, 'expired authority after wait creates no product')
+  phase = 'stage2-eligibility-authority-only-wrapper'
+  await db.query('begin'); begun = true
+  await admin()
+  await sqlFile('../../../supabase/features/bx1_entry.sql')
+  await sqlFile('../../../supabase/features/bx1_entry_admission.sql')
+  await db.query("insert into bx1_portal.entry_configuration(environment,manual_test_review,reviewer_scope,admission_reference) values('TESTNET',true,$1,'synthetic product-eligibility cloud acceptance')", [nativeScope])
+  await sqlFile('../../../supabase/features/bx1_application_admission.sql')
+  const historicalOrders = await scalar('select count(*)::int from bx1_portal.subscriptions')
+  await sqlFile('../../../supabase/migrations/20260923134152_stage2_product_eligibility.sql')
+  await sqlFile('../../../supabase/tests/bx1_product_eligibility.sql')
+  eq(await scalar('select count(*)::int from bx1_portal.subscriptions'), historicalOrders, 'new gate preserves historical subscription identifiers and history')
+  await denied('direct former scoped writer cannot bypass eligibility', async () => {
+    await actor(3)
+    await scalar('select bx1_portal.execute_scoped_pre_eligibility($1::jsonb,$2,$3,$4::jsonb)', [JSON.stringify(investor), 'subscribe', key(), JSON.stringify({ ...subscribe(scopedFund, '1'), investment_account_id: account3.id })])
+  }, '42501')
+  await denied('published matching fund requires product-specific approval', () => scopedCommand(3, investor, 'subscribe', { ...subscribe(scopedFund, '1'), investment_account_id: account3.id }), '42501')
+  const requestBody = (product, account, revision = 0) => ({ product_id: product.id, investment_account_id: account.id, expected_revision: revision, investor_statement: 'Synthetic suitability and investment objective statement for this exact offering.' })
+  const eligibilityChecks = { identity: true, product_fit: true, restrictions: true, source_of_funds: true }
+  await denied('divergent product and investor-admission reviewer scopes cannot create a private case', async () => {
+    await admin(); await db.query('update bx1_portal.organisations set reviewer_scope=$1 where id=$2', [otherScope, orgId])
+    await scopedCommand(3, investor, 'request_product_eligibility', requestBody(replayProduct, account3))
+  }, '42501')
+  const requested = (await scopedCommand(3, investor, 'request_product_eligibility', requestBody(scopedFund, account3))).product_eligibility[0]
+  eq([requested.status, requested.effective, requested.product_revision, requested.terms_hash], ['SUBMITTED', false, scopedFund.revision, scopedFund.terms_hash], 'request binds current fund terms without granting purchase rights')
+  eq((await scopedRead(6, investor)).product_eligibility.length, 0, 'other investor cannot read private eligibility case')
+  await db.query('savepoint divergent_scope_read')
+  await admin(); await db.query('update bx1_portal.organisations set reviewer_scope=$1 where id=$2', [otherScope, orgId])
+  await db.query("insert into bx1_portal.organisation_authority_bindings(product_organisation_id,native_organisation_id,role,status,valid_from,valid_until,evidence_reference,approval_receipt_id) values($1,$2,'ComplianceOfficer','ACTIVE',clock_timestamp()-interval '1 hour',clock_timestamp()+interval '1 hour','synthetic-cloud-proof:divergent-review-scope',$3)", [orgId, otherScope, key()])
+  const divergentRead = await scopedRead(5, roleContext('ComplianceOfficer', otherScope))
+  eq(divergentRead.product_eligibility.some(e => e.id === requested.id), false, 'product-only reviewer in another organisation cannot read investor source statement')
+  eq(divergentRead.events.some(e => e.subject_id === requested.id), false, 'product-only reviewer cannot read private case event metadata after scope divergence')
+  await db.query('rollback to savepoint divergent_scope_read; release savepoint divergent_scope_read')
+  eq((await scopedRead(4, reviewer)).product_eligibility.some(e => e.id === requested.id), true, 'same-human issuer reviewer has exact role scope before independence denial')
+  await denied('request cannot review itself as investor', () => scopedCommand(3, investor, 'review_product_eligibility', { eligibility_case_id: requested.id, expected_revision: requested.revision, decision: 'APPROVED', notes: 'Synthetic independent product suitability review with complete checked evidence.', checks: eligibilityChecks }), '42501')
+  await denied('same human as issuer cannot independently review', () => scopedCommand(4, reviewer, 'review_product_eligibility', { eligibility_case_id: requested.id, expected_revision: requested.revision, decision: 'APPROVED', notes: 'Synthetic review attempted by the issuer human under another login.', checks: eligibilityChecks }), '42501')
+  await denied('wrong reviewer organisation cannot approve', () => scopedCommand(2, roleContext('ComplianceOfficer', otherScope), 'review_product_eligibility', { eligibility_case_id: requested.id, expected_revision: requested.revision, decision: 'APPROVED', notes: 'Synthetic review attempted through an unrelated organisation scope.', checks: eligibilityChecks }), '42501')
+  const approved = (await scopedCommand(2, reviewer, 'review_product_eligibility', { eligibility_case_id: requested.id, expected_revision: requested.revision, decision: 'APPROVED', notes: 'Independent synthetic test product and customer evidence review.', checks: eligibilityChecks })).product_eligibility[0]
+  eq([approved.status, approved.effective, approved.application_revision], ['APPROVED', true, ownApp3.revision], 'independent decision is current and bound to customer evidence revision')
+  eq((await scopedRead(2, reviewer)).product_eligibility[0].investor_application.id, ownApp3.id, 'appointed reviewer can inspect exact originating investor application')
+  const stage2SubscriptionKey = key(), stage2Input = { ...subscribe(scopedFund, '1'), investment_account_id: account3.id }
+  const afterEligibility = await scopedCommand(3, investor, 'subscribe', stage2Input, stage2SubscriptionKey)
+  await admin(); eq(await scalar('select count(*)::int from bx1_portal.subscriptions'), historicalOrders + 1, 'approved case permits one additional fund instruction without changing old orders')
+  eq((await scopedCommand(3, investor, 'subscribe', stage2Input, stage2SubscriptionKey)).subscriptions.length, afterEligibility.subscriptions.length, 'exact subscription retry remains idempotent')
+  await denied('changing investor admission revision invalidates earlier eligibility', async () => {
+    await admin(); await db.query('update bx1_portal.applications set revision=revision+1 where id=$1', [ownApp3.id])
+    await scopedCommand(3, investor, 'subscribe', { ...subscribe(scopedFund, '1'), investment_account_id: account3.id })
+  }, '42501')
+  await denied('eligibility expiry prevents new reservation', async () => {
+    await admin(); await db.query("update bx1_portal.product_eligibility_cases set reviewed_at=clock_timestamp()-interval '31 days',approved_until=clock_timestamp()-interval '1 day' where id=$1", [approved.id])
+    await scopedCommand(3, investor, 'subscribe', { ...subscribe(scopedFund, '1'), investment_account_id: account3.id })
+  }, '42501')
+  await denied('missing required audit rolls back eligibility revocation', async () => {
+    await admin()
+    await db.query("create function public.synthetic_eligibility_audit_failure() returns trigger language plpgsql as $$ begin if NEW.kind='revoke_product_eligibility' then raise exception 'synthetic_eligibility_audit_failure' using errcode='23514'; end if; return NEW; end $$; create trigger synthetic_eligibility_audit_failure before insert on bx1_portal.events for each row execute function public.synthetic_eligibility_audit_failure()")
+    await scopedCommand(2, reviewer, 'revoke_product_eligibility', { eligibility_case_id: approved.id, expected_revision: approved.revision, reason: 'Synthetic material restriction requires immediate suspension of this approval.' })
+  })
+  eq((await scopedRead(3, investor)).product_eligibility[0].status, 'APPROVED', 'failed mandatory audit did not revoke eligibility')
+  const revoked = (await scopedCommand(2, reviewer, 'revoke_product_eligibility', { eligibility_case_id: approved.id, expected_revision: approved.revision, reason: 'Synthetic material restriction requires immediate suspension of this approval.' })).product_eligibility[0]
+  eq([revoked.status, revoked.effective], ['REVOKED', false], 'independent revocation immediately removes eligibility')
+  await denied('revoked case cannot reserve another unit', () => scopedCommand(3, investor, 'subscribe', { ...subscribe(scopedFund, '1'), investment_account_id: account3.id }), '42501')
+  await denied('revoked case cannot be self-reopened', () => scopedCommand(3, investor, 'request_product_eligibility', requestBody(scopedFund, account3, revoked.revision)))
+  await admin(); eq(await scalar('select count(*)::int from bx1_portal.product_eligibility_receipts where case_id=$1', [approved.id]), 3, 'request, approval and revocation have immutable ordered receipts')
+  eq(await scalar('select count(*)::int from bx1_portal.subscriptions'), historicalOrders + 1, 'denied eligibility writes create no extra reservations')
+  await db.query('commit'); begun = false
+  phase = 'stage2-reviewer-binding-revocation-race'
+  const raceCase = (await scopedCommand(3, investor, 'request_product_eligibility', requestBody(replayProduct, account3))).product_eligibility.find(e => e.product_id === replayProduct.id)
+  truth(raceCase?.id, 'separate published product supplies a pending case for real revocation race')
+  await admin(); await db.query('begin'); begun = true
+  const reviewBinding = await scalar("select id from bx1_portal.organisation_authority_bindings where product_organisation_id=$1 and native_organisation_id=$2 and role='ComplianceOfficer' and status='ACTIVE' for update", [orgId, nativeScope])
+  truth(reviewBinding, 'appointed Compliance binding exists and is locked by competing transaction')
+  const racedReviewKey = key()
+  const racedReview = concurrentCall(proofClients[0], 2, reviewer, 'review_product_eligibility', { eligibility_case_id: raceCase.id, expected_revision: raceCase.revision, decision: 'APPROVED', notes: 'Synthetic review must not survive concurrent authority revocation.', checks: eligibilityChecks }, racedReviewKey)
+  await waitForBlocked([pids[0]])
+  await db.query("update bx1_portal.organisation_authority_bindings set status='REVOKED' where id=$1", [reviewBinding])
+  await db.query('commit'); begun = false
+  eq((await racedReview).code, '42501', 'reviewer binding revoked during lock wait prevents approval')
+  await admin(); eq(await scalar('select status from bx1_portal.product_eligibility_cases where id=$1', [raceCase.id]), 'SUBMITTED', 'failed concurrent review leaves case pending')
+  eq(await scalar('select count(*)::int from bx1_portal.scoped_requests where request_key=$1', [racedReviewKey]), 0, 'failed concurrent review leaves no accepted receipt')
   phase = 'cleanup-committed-disposable-fixture'
   await db.query('drop schema bx1_portal,bx1_private,storage,auth,public cascade; create schema public')
   committedFixture = false

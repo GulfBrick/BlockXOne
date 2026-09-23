@@ -366,6 +366,38 @@ try {
   eq(await scalar('select count(*)::int from bx1_portal.funding_observations where expectation_id=$1', [expiryExpectation.id]), 0, 'expired authority leaves no observation')
   await checkHostedRole()
   eq(await authorityBoundary(), originalAuthorityBoundary, 'runtime actions leave private authority ACLs and membership unchanged')
+  phase = 'stage2-eligibility-over-funding-wrapper'
+  await db.query('begin'); begun = true
+  await admin()
+  await sqlFile('../../../supabase/features/bx1_entry.sql')
+  await sqlFile('../../../supabase/features/bx1_entry_admission.sql')
+  await db.query("insert into bx1_portal.entry_configuration(environment,manual_test_review,reviewer_scope,admission_reference) values('TESTNET',true,$1,'synthetic funding plus eligibility cloud acceptance')", [scope])
+  await sqlFile('../../../supabase/features/bx1_application_admission.sql')
+  const historicalOrders = await scalar('select count(*)::int from bx1_portal.subscriptions')
+  await sqlFile('../../../supabase/migrations/20260923134152_stage2_product_eligibility.sql')
+  await sqlFile('../../../supabase/tests/bx1_product_eligibility.sql')
+  eq(await scalar('select count(*)::int from bx1_portal.subscriptions'), historicalOrders, 'funding-wrapper migration preserves historical orders and obligations')
+  await denied('funding prior scoped writer cannot bypass eligibility', async () => {
+    await actor(3)
+    await scalar('select bx1_portal.execute_scoped_pre_eligibility($1::jsonb,$2,$3,$4::jsonb)', [JSON.stringify(investor), 'subscribe', key(), JSON.stringify({ product_id: fund.id, expected_revision: fund.revision, terms_hash: fund.terms_hash, units: '1', accepted_documents: true, accepted_risks: true, investment_account_id: account3.id })])
+  }, '42501')
+  const eligibilitySubscription = { product_id: fund.id, expected_revision: fund.revision, terms_hash: fund.terms_hash, units: '1', accepted_documents: true, accepted_risks: true, investment_account_id: account3.id }
+  await denied('funding-enabled public subscribe still needs eligibility decision', () => command(3, investor, 'subscribe', eligibilitySubscription), '42501')
+  const requested = (await command(3, investor, 'request_product_eligibility', { product_id: fund.id, investment_account_id: account3.id, expected_revision: 0, investor_statement: 'Synthetic account-specific investment objectives for this test fund.' })).product_eligibility[0]
+  eq([requested.status, requested.effective], ['SUBMITTED', false], 'funding-wrapper request does not itself grant subscription eligibility')
+  const compliance = context('ComplianceOfficer')
+  eq((await read(4, compliance)).product_eligibility.some(e => e.id === requested.id), true, 'same-human issuer has reviewer scope before independence rejection')
+  await denied('funding-wrapper reviewer independence rejects issuer alias', () => command(4, compliance, 'review_product_eligibility', { eligibility_case_id: requested.id, expected_revision: requested.revision, decision: 'APPROVED', notes: 'Synthetic issuer alias must never decide the case independently.', checks: { identity: true, product_fit: true, restrictions: true, source_of_funds: true } }), '42501')
+  const approved = (await command(2, compliance, 'review_product_eligibility', { eligibility_case_id: requested.id, expected_revision: requested.revision, decision: 'APPROVED', notes: 'Independent synthetic customer and product suitability review.', checks: { identity: true, product_fit: true, restrictions: true, source_of_funds: true } })).product_eligibility[0]
+  eq(approved.effective, true, 'independent approval effective for exact app and fund revisions')
+  const nextOrder = await command(3, investor, 'subscribe', eligibilitySubscription)
+  eq(nextOrder.funding.routes.length > 0, true, 'eligibility wrapper preserves funding read projection')
+  await admin(); eq(await scalar('select count(*)::int from bx1_portal.subscriptions'), historicalOrders + 1, 'approved case permits one new order through funding-enabled public RPC')
+  const revoked = (await command(2, compliance, 'revoke_product_eligibility', { eligibility_case_id: approved.id, expected_revision: approved.revision, reason: 'Synthetic product-specific restriction requires immediate revocation of eligibility.' })).product_eligibility[0]
+  eq([revoked.status, revoked.effective], ['REVOKED', false], 'funding-enabled subscription route sees the same revoked case')
+  await denied('funding wrapper cannot bypass product-specific revocation', () => command(3, investor, 'subscribe', eligibilitySubscription), '42501')
+  await admin(); eq(await scalar('select count(*)::int from bx1_portal.subscriptions'), historicalOrders + 1, 'funding wrapper adds no order after revocation')
+  await db.query('commit'); begun = false
   phase = 'cleanup'
   await cleanupFixture()
   eq(await scalar("select count(*)::int from pg_namespace where nspname in ('auth','storage','bx1_private','bx1_portal')"), 0, 'synthetic schemas removed')

@@ -49,6 +49,16 @@ export type PortalInvestmentAccount = {
   id: string; holder_user_id: string; application_id: string; kind: 'INDIVIDUAL';
   status: 'ACTIVE' | 'SUSPENDED'; created_at: string;
 }
+export type PortalProductEligibility = {
+  id: string; investment_account_id: string; product_id: string; organisation_id: string;
+  product_revision: number; terms_hash: string; application_revision: number; revision: number;
+  status: 'SUBMITTED' | 'CHANGES_REQUIRED' | 'APPROVED' | 'REJECTED' | 'REVOKED';
+  investor_statement: string; submitted_at: string; reviewed_at: string | null;
+  reviewer_id: string | null; review_notes: string | null; review_checks: Record<string, boolean>;
+  approved_until: string | null; effective: boolean; can_decide: boolean; can_approve: boolean; can_revoke: boolean;
+  holder_user_id?: string; product_name?: string; account_kind?: string;
+  investor_application?: Pick<PortalApplication, 'id' | 'revision' | 'status' | 'approved_until' | 'details'> | null;
+}
 export type ProductTerms = {
   asset_type: 'FUND' | 'REAL_ESTATE'; name: string; issuer_name: string; summary: string;
   strategy: string; share_class: string; currency: 'ZAR_TEST'; unit_price_minor: string;
@@ -78,7 +88,7 @@ export type PortalSnapshot = {
   applications: PortalApplication[]; organisations: PortalOrganisation[];
   products: PortalProduct[]; subscriptions: PortalSubscription[]; events: PortalEvent[];
   requests?: { key: string; command: string }[];
-  accounts?: PortalInvestmentAccount[]; operating_context?: PortalOperatingContext;
+  accounts?: PortalInvestmentAccount[]; product_eligibility?: PortalProductEligibility[]; operating_context?: PortalOperatingContext;
   funding?: FundingSnapshot;
 }
 export type PortalPageData = { user: { id: string; email: string }; snapshot: PortalSnapshot }
@@ -99,10 +109,14 @@ export const productTermsSchema = z.object({ asset_type: z.enum(['FUND', 'REAL_E
 })
 export const reviewChecks = z.object({ identity: z.boolean(), ownership: z.boolean(), screening: z.boolean(), suitability: z.boolean() }).strict()
 export const offeringChecks = z.object({ issuer: z.boolean(), terms: z.boolean(), disclosures: z.boolean(), eligibility: z.boolean() }).strict()
+export const productEligibilityChecks = z.object({ identity: z.boolean(), product_fit: z.boolean(), restrictions: z.boolean(), source_of_funds: z.boolean() }).strict()
 export const portalCommandSchema = z.discriminatedUnion('command', [
   z.object({ command: z.literal('submit_application'), key: id, payload: z.object({ persona: z.enum(['INVESTOR', 'WEALTH_MANAGER']), expected_revision: z.number().int().min(0), details: applicationDetailsSchema }).strict() }).strict(),
   z.object({ command: z.literal('review_application'), key: id, payload: z.object({ application_id: id, expected_revision: z.number().int().positive(), decision: z.enum(['APPROVED', 'CHANGES_REQUIRED', 'REJECTED']), notes: text(20, 3000), checks: reviewChecks }).strict() }).strict(),
   z.object({ command: z.literal('create_investment_account'), key: id, payload: z.object({ application_id: id }).strict() }).strict(),
+  z.object({ command: z.literal('request_product_eligibility'), key: id, payload: z.object({ product_id: id, investment_account_id: id, expected_revision: z.number().int().min(0), investor_statement: text(20, 2000) }).strict() }).strict(),
+  z.object({ command: z.literal('review_product_eligibility'), key: id, payload: z.object({ eligibility_case_id: id, expected_revision: z.number().int().positive(), decision: z.enum(['APPROVED', 'CHANGES_REQUIRED', 'REJECTED']), notes: text(20, 3000), checks: productEligibilityChecks }).strict() }).strict(),
+  z.object({ command: z.literal('revoke_product_eligibility'), key: id, payload: z.object({ eligibility_case_id: id, expected_revision: z.number().int().positive(), reason: text(20, 2000) }).strict() }).strict(),
   z.object({ command: z.literal('create_product'), key: id, payload: z.object({ organisation_id: id, terms: productTermsSchema }).strict() }).strict(),
   z.object({ command: z.literal('save_product'), key: id, payload: z.object({ product_id: id, expected_revision: z.number().int().positive(), terms: productTermsSchema }).strict() }).strict(),
   z.object({ command: z.literal('submit_product'), key: id, payload: z.object({ product_id: id, expected_revision: z.number().int().positive() }).strict() }).strict(),

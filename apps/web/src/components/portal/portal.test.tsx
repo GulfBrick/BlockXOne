@@ -1,13 +1,13 @@
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { PORTAL_PATHS, productTermsSchema, type PortalApplication, type PortalInvestmentAccount, type PortalOrganisation, type PortalPageData, type PortalProduct, type PortalSnapshot, type PortalSubscription } from '@/lib/portal/contracts'
+import { PORTAL_PATHS, productTermsSchema, type PortalApplication, type PortalInvestmentAccount, type PortalOrganisation, type PortalPageData, type PortalProduct, type PortalProductEligibility, type PortalSnapshot, type PortalSubscription } from '@/lib/portal/contracts'
 import { APPLICANT_CONTEXT, portalScopeHref, type PortalOperatingContext } from '@/lib/portal/operating-context'
 import type { Bx1Role } from '@/lib/supabase/contracts'
 import { PortalScreen, productManagementOrganisations } from './portal-screens'
 import { portalNavigation, PortalShell } from './portal-shell'
 import { fictionalProductTerms } from './product-form'
-import { ApplicationReview, InvestmentAccountPanel, ProductActions, ProductReview, SubscriptionForm, activeIndividualAccounts, currentInvestorApplication } from './portal-workflows'
+import { ApplicationReview, InvestmentAccountPanel, ProductActions, ProductEligibilityPanel, ProductReview, SubscriptionForm, activeIndividualAccounts, currentInvestorApplication, currentProductEligibility } from './portal-workflows'
 import { postPortalCommand, prepareDurablePortalCommand, reconcilePortalMarker } from './portal-client'
 import { money } from './portal-primitives'
 
@@ -23,8 +23,9 @@ const requestKey = '66666666-6666-4666-8666-666666666666'
 const nativeOrganisation = '77777777-7777-4777-8777-777777777777'
 const accountId = '88888888-8888-4888-8888-888888888888'
 const otherOrganisation = '99999999-9999-4999-8999-999999999999'
-function snapshot(): PortalSnapshot { return { actor: { id: actor, email: 'synthetic@example.invalid', display_name: 'Synthetic User', can_review: false }, applications: [], organisations: [], products: [], subscriptions: [], events: [], accounts: [], operating_context: APPLICANT_CONTEXT } }
+function snapshot(): PortalSnapshot { return { actor: { id: actor, email: 'synthetic@example.invalid', display_name: 'Synthetic User', can_review: false }, applications: [], organisations: [], products: [], subscriptions: [], events: [], accounts: [], product_eligibility: [], operating_context: APPLICANT_CONTEXT } }
 function account(change: Partial<PortalInvestmentAccount> = {}): PortalInvestmentAccount { return { id: accountId, holder_user_id: actor, application_id: applicationId, kind: 'INDIVIDUAL', status: 'ACTIVE', created_at: '2026-09-20T10:00:00Z', ...change } }
+function eligibility(change: Partial<PortalProductEligibility> = {}): PortalProductEligibility { return { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', investment_account_id: accountId, product_id: productId, organisation_id: organisation, product_revision: 3, terms_hash: 'ab'.repeat(32), application_revision: 1, revision: 2, status: 'APPROVED', investor_statement: 'This fictional product fits the synthetic investor objectives and test funds.', submitted_at: '2026-09-20T10:00:00Z', reviewed_at: '2026-09-20T11:00:00Z', reviewer_id: other, review_notes: 'Synthetic offering restrictions and account evidence independently reviewed.', review_checks: { identity: true, product_fit: true, restrictions: true, source_of_funds: true }, approved_until: '2099-01-01T00:00:00Z', effective: true, can_decide: false, can_approve: false, can_revoke: false, holder_user_id: actor, product_name: 'Fictional Test Fund', account_kind: 'INDIVIDUAL', investor_application: application(), ...change } }
 function operating(role: Bx1Role): PortalOperatingContext { return { mode: 'ROLE', organisationId: nativeOrganisation, role } }
 function order(change: Partial<PortalSubscription> = {}): PortalSubscription { return { id: requestKey, product_id: productId, investment_account_id: accountId, investor_id: actor, product_name: 'Fictional Test Fund', organisation_id: organisation, product_revision: 3, terms_hash: 'ab'.repeat(32), units: '10', amount_minor: '100000', status: 'AWAITING_FUNDING', created_at: '2026-09-20T10:00:00Z', can_cancel: true, ...change } }
 function operatorOrganisation(role: 'OfferingManager' | 'IssuerFundManager' = 'OfferingManager'): PortalOrganisation {
@@ -130,7 +131,7 @@ describe('onboarding and subscription boundaries', () => {
     expect(html).toContain('Eligibility does not match'); expect(html).not.toContain('Accept terms and reserve units')
   })
   it('binds eligible subscription review to the displayed revision and explicit document/risk acceptance', () => {
-    const value = snapshot(); value.applications = [application()]; value.accounts = [account()]
+    const value = snapshot(); value.applications = [application()]; value.accounts = [account()]; value.product_eligibility = [eligibility()]
     const html = renderToStaticMarkup(<SubscriptionForm product={product()} snapshot={value} onSaved={vi.fn()} />)
     expect(html).toContain('Revision 3'); expect(html).toContain('displayed terms fingerprint'); expect(html).toContain('risk disclosures')
     expect(html).toContain('Accept terms and reserve units'); expect(html).toContain('disabled=""'); expect(html).toContain('It does not move cash or issue tokens')
@@ -264,6 +265,32 @@ describe('operational landings and one subscription hand-off', () => {
 })
 
 describe('owned individual investment-account controls', () => {
+  it('connects an approved applicant to account creation from the actual portfolio route', () => {
+    const value = snapshot(); value.applications = [application()]
+    const fetch = vi.fn(); vi.stubGlobal('fetch', fetch)
+    const html = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal/portfolio" operatingContext={APPLICANT_CONTEXT} />)
+    expect(html).toContain('Your investment account and instructions.')
+    expect(html).toContain('<h2>Your investment account</h2>')
+    expect(html).toContain('Open individual investment account</button>')
+    expect(html.indexOf('<h2>Your investment account</h2>')).toBeLessThan(html.indexOf('<h2>Your subscription orders</h2>'))
+    expect(fetch).not.toHaveBeenCalled()
+  })
+  it.each([
+    { status: 'SUBMITTED' as const }, { approved_until: '2020-01-01T00:00:00Z' },
+    { user_id: other }, { persona: 'WEALTH_MANAGER' as const },
+  ])('does not offer account creation on the portfolio route without owned, current investor approval: %j', change => {
+    const value = snapshot(); value.applications = [application(change)]
+    const html = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal/portfolio" operatingContext={APPLICANT_CONTEXT} />)
+    expect(html).toContain('Complete investor onboarding')
+    expect(html).toContain('href="/portal/onboarding?mode=applicant"')
+    expect(html).not.toContain('Open individual investment account</button>')
+  })
+  it('keeps account creation unavailable when approved applicant account records did not load', () => {
+    const value = snapshot(); value.applications = [application()]; value.accounts = undefined
+    const html = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal/portfolio" operatingContext={APPLICANT_CONTEXT} />)
+    expect(html).toContain('Investment-account records are unavailable')
+    expect(html).not.toContain('Open individual investment account</button>')
+  })
   it('offers explicit creation only after current individual investor approval', () => {
     const value = snapshot(); value.applications = [application()]
     const fetch = vi.fn(); vi.stubGlobal('fetch', fetch)
@@ -274,7 +301,7 @@ describe('owned individual investment-account controls', () => {
     const value = snapshot(); value.applications = [application()]
     const html = renderToStaticMarkup(<SubscriptionForm product={product()} snapshot={value} onSaved={vi.fn()} />)
     expect(html).toContain('An active individual investment account is required'); expect(html).not.toContain('Accept terms and reserve units</button>')
-    value.accounts = [account()]
+    value.accounts = [account()]; value.product_eligibility = [eligibility()]
     const ready = renderToStaticMarkup(<SubscriptionForm product={product()} snapshot={value} onSaved={vi.fn()} />)
     expect(ready).toContain('Investing account'); expect(ready).toContain(accountId); expect(ready).toContain('Accept terms and reserve units</button>')
   })
@@ -307,6 +334,147 @@ describe('owned individual investment-account controls', () => {
     expect(activeIndividualAccounts(value)).toEqual([])
     const html = renderToStaticMarkup(<SubscriptionForm product={product()} snapshot={value} onSaved={vi.fn()} />)
     expect(html).toContain('Approved investor onboarding required'); expect(html).not.toContain('Accept terms and reserve units</button>')
+  })
+})
+
+describe('product-specific investor eligibility and independent review', () => {
+  it('connects the published offering to an account-specific request before subscription', () => {
+    const value = snapshot(); value.applications = [application()]; value.accounts = [account()]; value.products = [product()]
+    const html = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal/opportunities/detail" id={productId} operatingContext={APPLICANT_CONTEXT} />)
+    expect(html).toContain('<h2>Product eligibility</h2>')
+    expect(html).toContain('Submit for product eligibility review</button>')
+    expect(html).toContain('Product eligibility review required')
+    expect(html).not.toContain('Accept terms and reserve units</button>')
+  })
+  it('does not offer an eligibility request without an approved individual investment account', () => {
+    const value = snapshot(); value.applications = [application()]
+    const html = renderToStaticMarkup(<ProductEligibilityPanel product={product()} snapshot={value} onSaved={vi.fn()} operatingContext={APPLICANT_CONTEXT} />)
+    expect(html).toContain('Investment account required')
+    expect(html).toContain('href="/portal/portfolio?mode=applicant"')
+    expect(html).not.toContain('Submit for product eligibility review</button>')
+  })
+  it('fails closed when product eligibility data is unavailable', () => {
+    const value = snapshot(); value.applications = [application()]; value.accounts = [account()]; value.products = [product()]; value.product_eligibility = undefined
+    const html = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal/opportunities/detail" id={productId} operatingContext={APPLICANT_CONTEXT} />)
+    expect(html).toContain('Product eligibility records are unavailable')
+    expect(html).not.toContain('Submit for product eligibility review</button>')
+    expect(html).not.toContain('Accept terms and reserve units</button>')
+  })
+  it('does not call an unavailable reviewer case list empty', () => {
+    const value = snapshot(); value.actor.can_review = true; value.operating_context = operating('ComplianceOfficer'); value.product_eligibility = undefined
+    const queue = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal/compliance" operatingContext={operating('ComplianceOfficer')} />)
+    expect(queue).toContain('Product eligibility records are unavailable')
+    expect(queue).not.toContain('No cases are waiting for review')
+  })
+  it.each([
+    { product_revision: 2 }, { terms_hash: 'cd'.repeat(32) }, { application_revision: 2 }, { approved_until: '2020-01-01T00:00:00Z' },
+    { effective: false }, { investment_account_id: other }, { holder_user_id: other }, { status: 'CHANGES_REQUIRED' as const },
+  ])('does not turn an outdated or unrelated case into subscription authority: %j', change => {
+    const value = snapshot(); value.applications = [application()]; value.accounts = [account()]; value.product_eligibility = [eligibility(change)]
+    expect(currentProductEligibility(value, product(), account())).toBeUndefined()
+    const html = renderToStaticMarkup(<SubscriptionForm product={product()} snapshot={value} onSaved={vi.fn()} />)
+    expect(html).toContain('Product eligibility review required')
+    expect(html).not.toContain('Accept terms and reserve units</button>')
+  })
+  it('reopens the investor request when approved terms changed, without treating prior approval as current', () => {
+    const value = snapshot(); value.applications = [application()]; value.accounts = [account()]; value.product_eligibility = [eligibility({ product_revision: 2 })]
+    const html = renderToStaticMarkup(<ProductEligibilityPanel product={product()} snapshot={value} onSaved={vi.fn()} />)
+    expect(html).toContain('Previous approval is no longer current')
+    expect(html).toContain('Submit for product eligibility review</button>')
+    expect(html).not.toContain('Product eligibility approved')
+  })
+  it('lets the investor replace a submitted case when its recorded context became stale', () => {
+    const value = snapshot(); value.applications = [application()]; value.accounts = [account()]; value.product_eligibility = [eligibility({ status: 'SUBMITTED', product_revision: 2, effective: false })]
+    const html = renderToStaticMarkup(<ProductEligibilityPanel product={product()} snapshot={value} onSaved={vi.fn()} />)
+    expect(html).toContain('Case context changed')
+    expect(html).toContain('Submit for product eligibility review</button>')
+    expect(html).not.toContain('Independent review pending')
+  })
+  it('offers subscription only for the approved case matching this account and published terms', () => {
+    const value = snapshot(); value.applications = [application()]; value.accounts = [account()]; value.product_eligibility = [eligibility()]
+    expect(currentProductEligibility(value, product(), account())?.id).toBe(eligibility().id)
+    const html = renderToStaticMarkup(<SubscriptionForm product={product()} snapshot={value} onSaved={vi.fn()} />)
+    expect(html).toContain('Investing account')
+    expect(html).toContain('Accept terms and reserve units</button>')
+  })
+  it('treats revoked product eligibility as terminal for the investor', () => {
+    const value = snapshot(); value.applications = [application()]; value.accounts = [account()]; value.product_eligibility = [eligibility({ status: 'REVOKED', effective: false, can_revoke: false })]
+    expect(currentProductEligibility(value, product(), account())).toBeUndefined()
+    const request = renderToStaticMarkup(<ProductEligibilityPanel product={product()} snapshot={value} onSaved={vi.fn()} />)
+    expect(request).toContain('Product eligibility revoked')
+    expect(request).toContain('a new request cannot reopen it')
+    expect(request).not.toContain('Submit for product eligibility review</button>')
+    const subscribe = renderToStaticMarkup(<SubscriptionForm product={product()} snapshot={value} onSaved={vi.fn()} />)
+    expect(subscribe).not.toContain('Accept terms and reserve units</button>')
+  })
+  it('denies a reviewer decision on their own eligibility case', () => {
+    const value = snapshot(); value.actor.can_review = true; value.operating_context = operating('ComplianceOfficer'); value.products = [product()]
+    const own = eligibility({ status: 'SUBMITTED', effective: false, holder_user_id: actor, investor_application: application(), can_decide: true, can_approve: true })
+    value.product_eligibility = [own]
+    const html = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal/compliance/detail" id={own.id} operatingContext={operating('ComplianceOfficer')} />)
+    expect(html).toContain('You cannot review your own product eligibility case')
+    expect(html).not.toContain('Record eligibility decision</button>')
+  })
+  it('denies a product creator acting as reviewer on an investor eligibility case', () => {
+    const value = snapshot(); value.actor.can_review = true; value.operating_context = operating('ComplianceOfficer'); value.products = [product({ created_by: actor })]
+    const submitted = eligibility({ status: 'SUBMITTED', effective: false, holder_user_id: other, investor_application: application({ user_id: other }), can_decide: true, can_approve: true })
+    value.product_eligibility = [submitted]
+    const detail = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal/compliance/detail" id={submitted.id} operatingContext={operating('ComplianceOfficer')} />)
+    expect(detail).toContain('You created this offering and cannot review its investor eligibility')
+    expect(detail).not.toContain('Record eligibility decision</button>')
+  })
+  it('connects a separate compliance reviewer to the scoped case and source investor evidence', () => {
+    const value = snapshot(); value.actor.can_review = true; value.operating_context = operating('ComplianceOfficer'); value.products = [product()]
+    const submitted = eligibility({ status: 'SUBMITTED', effective: false, holder_user_id: other, investor_application: application({ user_id: other }), can_decide: true, can_approve: true })
+    value.product_eligibility = [submitted]
+    const queue = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal/compliance" operatingContext={operating('ComplianceOfficer')} />)
+    expect(queue).toContain('Product eligibility')
+    expect(queue).toContain('Review eligibility')
+    const detail = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal/compliance/detail" id={submitted.id} operatingContext={operating('ComplianceOfficer')} />)
+    expect(detail).toContain('Approved investor admission evidence')
+    expect(detail).toContain('Investor statement')
+    expect(detail).toContain('Record eligibility decision</button>')
+  })
+  it('offers a reasoned revocation only when the backend grants that exact reviewer action', () => {
+    const value = snapshot(); value.actor.can_review = true; value.operating_context = operating('ComplianceOfficer'); value.products = [product()]
+    const approved = eligibility({ holder_user_id: other, investor_application: application({ user_id: other }), can_decide: false, can_approve: false, can_revoke: true })
+    value.product_eligibility = [approved]
+    const queue = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal/compliance" operatingContext={operating('ComplianceOfficer')} />)
+    expect(queue).toContain('Inspect approval')
+    const detail = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal/compliance/detail" id={approved.id} operatingContext={operating('ComplianceOfficer')} />)
+    expect(detail).toContain('Revocation reason')
+    expect(detail).toContain('Revoke product eligibility</button>')
+    value.product_eligibility = [{ ...approved, can_revoke: false }]
+    const denied = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal/compliance/detail" id={approved.id} operatingContext={operating('ComplianceOfficer')} />)
+    expect(denied).not.toContain('Revoke product eligibility</button>')
+  })
+  it('cannot approve when the reviewer lacks access to source investor evidence', () => {
+    const value = snapshot(); value.actor.can_review = true; value.operating_context = operating('ComplianceOfficer'); value.products = [product()]
+    const submitted = eligibility({ status: 'SUBMITTED', effective: false, holder_user_id: other, investor_application: null, can_decide: true, can_approve: false })
+    value.product_eligibility = [submitted]
+    const detail = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal/compliance/detail" id={submitted.id} operatingContext={operating('ComplianceOfficer')} />)
+    expect(detail).toContain('Source documents are outside this review scope')
+    expect(detail).toContain('Approval unavailable for this case')
+    expect(detail).toContain('value="APPROVED" disabled=""')
+    expect(detail).toContain('Request further information')
+    expect(detail).not.toContain('Approved investor admission evidence')
+  })
+  it('hides decision controls when the server-derived reviewer permission is false', () => {
+    const value = snapshot(); value.actor.can_review = true; value.operating_context = operating('ComplianceOfficer'); value.products = [product()]
+    const submitted = eligibility({ status: 'SUBMITTED', effective: false, holder_user_id: other, investor_application: application({ user_id: other }), can_decide: false, can_approve: false })
+    value.product_eligibility = [submitted]
+    const detail = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal/compliance/detail" id={submitted.id} operatingContext={operating('ComplianceOfficer')} />)
+    expect(detail).toContain('Current independent review authority is required')
+    expect(detail).not.toContain('Record eligibility decision</button>')
+  })
+  it('does not surface another organisation’s eligibility case in the reviewer queue or detail', () => {
+    const value = snapshot(); value.actor.can_review = true; value.operating_context = operating('ComplianceOfficer'); value.products = [product()]
+    const foreign = eligibility({ organisation_id: otherOrganisation, holder_user_id: other })
+    value.product_eligibility = [foreign]
+    const queue = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal/compliance" operatingContext={operating('ComplianceOfficer')} />)
+    expect(queue).not.toContain(foreign.id)
+    const detail = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal/compliance/detail" id={foreign.id} operatingContext={operating('ComplianceOfficer')} />)
+    expect(detail).toContain('This record is not available in your current operating scope')
   })
 })
 

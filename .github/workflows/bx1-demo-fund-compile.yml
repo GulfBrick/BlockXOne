@@ -50,6 +50,8 @@ on:
       - supabase/functions/bx1-funding-verifier/**
       - supabase/features/bx1_portal.sql
       - supabase/migrations/20260921160000_portal_authority_accounts.sql
+      - supabase/migrations/20260923134152_stage2_product_eligibility.sql
+      - supabase/tests/bx1_product_eligibility.sql
       - supabase/tests/bx1_portal_authority_accounts.sql
       - supabase/tests/bx1_portal.sql
       - contracts/demo/**
@@ -98,6 +100,8 @@ on:
       - supabase/functions/bx1-funding-verifier/**
       - supabase/features/bx1_portal.sql
       - supabase/migrations/20260921160000_portal_authority_accounts.sql
+      - supabase/migrations/20260923134152_stage2_product_eligibility.sql
+      - supabase/tests/bx1_product_eligibility.sql
       - supabase/tests/bx1_portal_authority_accounts.sql
       - supabase/tests/bx1_portal.sql
       - contracts/demo/**

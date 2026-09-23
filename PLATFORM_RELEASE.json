@@ -1,18 +1,18 @@
 {
   "product": "BlockXOne",
-  "version": "1.1.0-rc.11",
+  "version": "1.1.0-rc.12",
   "status": "release-candidate",
-  "baseSource": "6a7d63d15e329140450ee87ff3b32c95605d4db4",
+  "baseSource": "713d1bf45f1c0c0ad71e25a9f8d15b0037341d6a",
   "sourceIdentity": "VERCEL_GIT_COMMIT_SHA",
   "environmentSource": "validated deployment target, canonical origin and Supabase project",
   "sharedEntry": "/login",
   "sharedDashboard": "/portal",
   "environments": ["TESTNET", "MAINNET"],
   "brand": "BlockXOne Brand Kit v2.0 Exact Logo",
-  "schemaChanges": [],
-  "mainnetMissingPrerequisites": [],
+  "schemaChanges": ["20260923134152_stage2_product_eligibility"],
+  "mainnetMissingPrerequisites": ["Live identity-provider evidence, controlled document validation, and real customer admission are not approved"],
   "contractChanges": [],
   "productionFinancialAdmission": false,
-  "scope": "Bounded Stage 1 MFA correction: accept the Supabase QR generator's benign XML preamble while preserving response validation and secret bounds; enter Account security with a full document request from both desktop and mobile navigation. No database, role, credential, funding or contract changes. Existing rc.10 application records and entry acceptance remain preserved. Cloud regression and named-human hosted MFA acceptance are separate; pending authenticators are never automatically deleted or replaced. Full Stage 2 acceptance is not claimed."
+  "scope": "Bounded Stage 2 customer-to-offering increment: connect an approved investor to account creation and require a separate, independently reviewed, revision-bound product eligibility case before any new subscription. Revocation blocks new subscriptions, but does not cancel previously accepted orders or determine how their funding must be handled; that policy and reconciliation remain a Stage 4 gate. Existing identity, funding and contract history are preserved. Manual fictional TEST evidence is not live KYC. Entity mandates, document scanning, provider integration and hosted distinct-human acceptance remain required; MAIN business actions stay sealed."
 }
 

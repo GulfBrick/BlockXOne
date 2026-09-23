@@ -53,6 +53,28 @@ describe('customer portal contracts', () => {
     expect(portalCommandSchema.safeParse({ command: 'subscribe', key, payload }).success).toBe(true)
     for (const change of [{ expected_revision: 0 }, { terms_hash: '' }, { accepted_documents: false }, { accepted_risks: false }, { investor_id: id }]) expect(portalCommandSchema.safeParse({ command: 'subscribe', key, payload: { ...payload, ...change } }).success).toBe(false)
   })
+  it('bounds product eligibility requests to one account, product and case revision', () => {
+    const payload = { product_id: id, investment_account_id: key, expected_revision: 0, investor_statement: 'Synthetic investor objectives and product fit for this offering.' }
+    expect(portalCommandSchema.safeParse({ command: 'request_product_eligibility', key, payload }).success).toBe(true)
+    expect(portalCommandSchema.safeParse({ command: 'request_product_eligibility', key, payload: { ...payload, expected_revision: 3 } }).success).toBe(true)
+    for (const change of [{ expected_revision: -1 }, { investor_statement: 'Too short' }, { investment_account_id: 'another investor' }, { effective: true }]) {
+      expect(portalCommandSchema.safeParse({ command: 'request_product_eligibility', key, payload: { ...payload, ...change } }).success).toBe(false)
+    }
+  })
+  it('requires a reason and exact manual checks for an independent product eligibility decision', () => {
+    const payload = { eligibility_case_id: id, expected_revision: 2, decision: 'APPROVED', notes: 'Synthetic evidence and offering restrictions independently reviewed.', checks: { identity: true, product_fit: true, restrictions: true, source_of_funds: true } }
+    expect(portalCommandSchema.safeParse({ command: 'review_product_eligibility', key, payload }).success).toBe(true)
+    for (const change of [{ expected_revision: 0 }, { notes: 'Too short' }, { reviewer_id: id }, { checks: { ...payload.checks, screening: true } }]) {
+      expect(portalCommandSchema.safeParse({ command: 'review_product_eligibility', key, payload: { ...payload, ...change } }).success).toBe(false)
+    }
+  })
+  it('requires the exact case revision and a recorded reason for eligibility revocation', () => {
+    const payload = { eligibility_case_id: id, expected_revision: 3, reason: 'Synthetic independent reviewer found the account is no longer eligible.' }
+    expect(portalCommandSchema.safeParse({ command: 'revoke_product_eligibility', key, payload }).success).toBe(true)
+    for (const change of [{ expected_revision: 0 }, { reason: 'Too short' }, { product_id: id }, { status: 'REVOKED' }]) {
+      expect(portalCommandSchema.safeParse({ command: 'revoke_product_eligibility', key, payload: { ...payload, ...change } }).success).toBe(false)
+    }
+  })
   it('never accepts financial completion or reviewer identity from the browser', () => {
     expect(portalCommandSchema.safeParse({ command: 'settle', key, payload: { subscription_id: id, paid: true } }).success).toBe(false)
     expect(portalCommandSchema.safeParse({ command: 'review_application', key, payload: { application_id: id, expected_revision: 1, decision: 'APPROVED', notes: 'Synthetic documents independently reviewed.', checks: { identity: true, ownership: true, screening: true, suitability: true }, reviewer_id: id } }).success).toBe(false)
