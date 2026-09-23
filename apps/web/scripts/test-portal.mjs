@@ -722,6 +722,7 @@ try {
   const individualAccountsBeforeEntity = await scalar("select count(*)::int from bx1_portal.investment_accounts where kind='INDIVIDUAL'")
   const individualOrdersBeforeEntity = await scalar('select count(*)::int from bx1_portal.subscriptions')
   await sqlFile('../../../supabase/migrations/20260923171126_stage2_entity_investment_accounts.sql')
+  await sqlFile('../../../supabase/migrations/20260923175822_stage2_superadmin_shell_mfa_boundary.sql')
   await sqlFile('../../../supabase/tests/bx1_entity_investment_accounts.sql')
   eq(await scalar("select count(*)::int from bx1_portal.investment_accounts where kind='INDIVIDUAL'"), individualAccountsBeforeEntity, 'entity migration preserves individual investment accounts')
   eq(await scalar('select count(*)::int from bx1_portal.subscriptions'), individualOrdersBeforeEntity, 'entity migration preserves historical orders')
@@ -732,6 +733,10 @@ try {
   await db.query("insert into public.bx1_profiles(id,display_name) values($1,'Synthetic same-human reviewer')", [uid(11)])
   await db.query("insert into bx1_private.person_principals(auth_user_id,person_id,status,evidence_reference,bootstrap_receipt_id) values($1,$2,'TRUSTED','synthetic:same-human-principal-11',$3)", [uid(11), uid(30), uid(32)])
   await db.query("insert into public.bx1_memberships(user_id,organisation_id,role,status) values($1,$2,'ComplianceOfficer','ACTIVE')", [uid(11), nativeScope])
+  await db.query("insert into auth.users(id,email,email_confirmed_at,is_anonymous) values($1,'synthetic-unenrolled-admin@example.invalid',clock_timestamp(),false)", [uid(12)])
+  await db.query("insert into auth.sessions(id,user_id,not_after,created_at) values($1,$2,clock_timestamp()+interval '1 hour',clock_timestamp()-interval '1 hour')", [sid(12), uid(12)])
+  await db.query("insert into public.bx1_profiles(id,display_name) values($1,'Synthetic unenrolled Super Admin')", [uid(12)])
+  await db.query("insert into public.bx1_memberships(user_id,organisation_id,role,status) values($1,$2,'SuperAdmin','ACTIVE')", [uid(12), nativeScope])
   eq(await scalar('select bx1_portal.entity_people_independent($1::uuid,$2::uuid)', [uid(9), uid(11)]), false, 'distinct TEST emails mapped to same trusted human cannot be independent')
   phase = 'entity-investor-admission'
   const entityEvidence = ['IDENTITY', 'COMPANY', 'BENEFICIAL_OWNERS'].map((kind, index) => ({
@@ -794,6 +799,11 @@ try {
     entityMandate.id, 'exact representative request retry is idempotent')
   await denied('enrolled AAL1 Compliance cannot enter the scoped portal to enumerate entity mandates',
     () => scopedRead(2, reviewer), '42501')
+  const unenrolledAdminShell = await scopedRead(12, roleContext('SuperAdmin'))
+  eq([unenrolledAdminShell.actor.id, unenrolledAdminShell.applications.length,
+    unenrolledAdminShell.organisation_mandates.length, unenrolledAdminShell.investing_representative_mandates.length,
+    unenrolledAdminShell.entity_mandate_queue_available, unenrolledAdminShell.entity_mandate_queue_blocked_reason],
+    [uid(12), 0, 0, 0, false, 'MFA_REQUIRED'], 'unenrolled AAL1 Super Admin reaches shell without customer case details')
   eq((await mandateScopedRead(2, reviewer)).investing_representative_mandates.some(value => value.id === entityMandate.id), true, 'AAL2 appointed Compliance sees exact entity case')
   await admin()
   await db.query("insert into auth.mfa_factors(id,user_id,status,factor_type) values($1,$2,'verified','totp')", [sid(42), uid(5)])
@@ -822,6 +832,8 @@ try {
   eq([entityMandate.evidence_reference, entityMandate.appointment_document_id], [correctedExplanation, entityEvidence[1].id], 'same-cycle correction changes explanation while retaining approved evidence')
   entityMandate = (await mandateScopedCommand(2, reviewer, 'review_investing_representative_mandate', entityReview(entityMandate, 'APPROVED'))).investing_representative_mandates.find(value => value.id === entityMandate.id)
   eq([entityMandate.status, entityMandate.effective], ['APPROVED', false], 'Compliance approval alone grants no representative authority')
+  await denied('AAL1 Super Admin cannot apply approved representative mandate', () => scopedCommand(10, roleContext('SuperAdmin'),
+    'apply_investing_representative_mandate', { mandate_id: entityMandate.id, expected_revision: entityMandate.revision }), '42501')
   await denied('reviewing human cannot apply with another role', () => mandateScopedCommand(2, roleContext('SuperAdmin'), 'apply_investing_representative_mandate', { mandate_id: entityMandate.id, expected_revision: entityMandate.revision }), '42501')
   await denied('mandatory audit failure rolls back representative apply', async () => {
     await admin()
