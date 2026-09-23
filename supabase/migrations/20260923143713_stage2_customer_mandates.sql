@@ -337,9 +337,17 @@ begin
   revoke_allowed:=(reviewer_visible or applier_visible) and m.status='APPLIED'
     and bx1_portal.independent_of(m.applicant_user_id);
   next_actor:=case
-    when request_allowed then 'APPLICANT'
-    when review_allowed then 'COMPLIANCE'
-    when apply_allowed then 'SUPER_ADMIN'
+    -- The queue owner is a property of the case, not the current reader's
+    -- permission to perform that owner's action. The can_* fields above
+    -- remain actor-relative and are the only UI action affordances.
+    when m.status in ('CHANGES_REQUIRED','REJECTED')
+      and bx1_portal.representative_mandate_admission_current(m.id,true,false) then 'APPLICANT'
+    when m.status='APPROVED' and m.requested_until<=clock_timestamp()
+      and bx1_portal.representative_mandate_admission_current(m.id,true,false) then 'APPLICANT'
+    when m.status='SUBMITTED'
+      and bx1_portal.representative_mandate_admission_current(m.id,true) then 'COMPLIANCE'
+    when m.status='APPROVED' and m.approval_receipt_id is not null
+      and bx1_portal.representative_mandate_admission_current(m.id,true) then 'SUPER_ADMIN'
     else 'NONE' end;
   return pg_catalog.jsonb_build_object(
     'id',m.id,'application_id',m.application_id,'applicant_user_id',m.applicant_user_id,
