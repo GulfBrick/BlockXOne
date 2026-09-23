@@ -457,6 +457,7 @@ try {
   await admin()
   await sqlFile('../../../supabase/migrations/20260923143713_stage2_customer_mandates.sql')
   await sqlFile('../../../supabase/tests/bx1_customer_mandates.sql')
+  phase = 'mandate-fixture-identity'
   await actor(1); eq(await scalar('select bx1_private.can_access_organisation($1::uuid)', [nativeScope]), true, 'legacy native membership remains effective')
   await admin()
   await db.query("insert into auth.users(id,email,email_confirmed_at,is_anonymous) values($1,'synthetic-mandate-admin@example.invalid',clock_timestamp(),false)", [uid(10)])
@@ -469,6 +470,7 @@ try {
   await db.query("insert into bx1_private.persons(id,label,status,evidence_reference,bootstrap_receipt_id) values($1,'Synthetic test human 9','TRUSTED','synthetic:test-human-9',$2)", [uid(30), uid(31)])
   await db.query("insert into bx1_private.person_principals(auth_user_id,person_id,status,evidence_reference,bootstrap_receipt_id) values($1,$2,'TRUSTED','synthetic:test-principal-9',$3)", [uid(9), uid(30), uid(31)])
   await admin(); eq(await scalar('select count(distinct person_id)::int from bx1_private.person_principals where auth_user_id=any($1::uuid[])', [[uid(9), uid(2), uid(10)]]), 3, 'applicant reviewer and applier are three mapped synthetic humans')
+  phase = 'mandate-customer-admission'
   eq((await entryRead(9)).applications.length, 0, 'fresh manager starts with no assumed capacity')
   const startedManager = await entryCommand(9, 'start_application', { persona: 'WEALTH_MANAGER' })
   const managerAppDraft = startedManager.applications.find(value => value.user_id === uid(9) && value.persona === 'WEALTH_MANAGER')
@@ -500,6 +502,7 @@ try {
   eq(await scalar("select count(*)::int from public.bx1_memberships where user_id=$1 and role='OfferingManager'", [uid(9)]), 0, 'customer admission did not grant OfferingManager')
   eq((await scopedRead(9, applicant)).organisations.some(value => value.id === managerApp.organisation_id), false, 'new customer cannot inherit historical applicant-owner product capability')
   await denied('new admitted applicant cannot create product before separate mandate', () => scopedCommand(9, applicant, 'create_product', { organisation_id: managerApp.organisation_id, terms: terms() }), '42501')
+  phase = 'mandate-request-and-queue'
   const mandateRequest = (revision = 0, evidence = 'synthetic-appointment-reference-9-v1') => ({
     application_id: managerApp.id, expected_revision: revision, evidence_reference: evidence,
     requested_until: new Date(Date.now() + 3 * 86400000).toISOString(),
@@ -517,6 +520,7 @@ try {
     await db.query("insert into auth.mfa_factors(id,user_id,status,factor_type) values($1,$2,'verified','totp')", [sid(20 + n), uid(n)])
     await db.query("update auth.sessions set aal='aal2',factor_id=$1 where user_id=$2", [sid(20 + n), uid(n)])
   }
+  phase = 'mandate-independent-review'
   const approvedChecks = { appointment: true, evidence: true, scope: true }
   const mandateReview = (caseRow, decision = 'APPROVED') => ({
     mandate_id: caseRow.id, expected_revision: caseRow.revision, decision,
@@ -530,6 +534,7 @@ try {
   mandate = (await mandateScopedCommand(2, reviewer, 'review_representative_mandate', mandateReview(mandate))).organisation_mandates.find(value => value.id === mandate.id)
   eq([mandate.status, mandate.effective, mandate.next_owner], ['APPROVED', false, 'SUPER_ADMIN'], 'Compliance approval is not a role grant')
   await admin(); eq(await scalar("select count(*)::int from public.bx1_memberships where user_id=$1 and role='OfferingManager'", [uid(9)]), 0, 'approved mandate still has no native role')
+  phase = 'mandate-distinct-apply-and-audit-rollback'
   await db.query("insert into public.bx1_memberships(user_id,organisation_id,role,status) values($1,$2,'SuperAdmin','ACTIVE')", [uid(2), nativeScope])
   await denied('same human reviewer cannot apply with a second role', () => mandateScopedCommand(2, roleContext('SuperAdmin'), 'apply_representative_mandate', { mandate_id: mandate.id, expected_revision: mandate.revision }), '42501')
   await denied('unrelated tenant cannot apply', () => scopedCommand(5, roleContext('ComplianceOfficer', otherScope), 'apply_representative_mandate', { mandate_id: mandate.id, expected_revision: mandate.revision }), '42501')
@@ -540,6 +545,7 @@ try {
   })
   await admin(); eq(await scalar("select count(*)::int from public.bx1_memberships where user_id=$1 and role='OfferingManager'", [uid(9)]), 0, 'audit failure leaves no native role')
   mandate = (await mandateScopedCommand(10, roleContext('SuperAdmin'), 'apply_representative_mandate', { mandate_id: mandate.id, expected_revision: mandate.revision })).organisation_mandates.find(value => value.id === mandate.id)
+  phase = 'mandate-native-authority-and-expiry'
   eq([mandate.status, mandate.effective, mandate.applied_by_user_id], ['APPLIED', true, uid(10)], 'distinct assured admin atomically provisions exact first representative')
   truth(mandate.native_organisation_id, 'new customer has separate native organisation')
   await admin()
@@ -552,10 +558,12 @@ try {
   eq((await scalar('select public.bx1_workspace_effective_membership_ids()')).includes(managedMembershipId), true, 'workspace RPC includes only live exact representative membership')
   eq((await entryRead(9)).contexts.some(value => value.organisation_id === mandate.native_organisation_id && value.roles.includes('OfferingManager')), true, 'entry context shows effective representative')
   eq((await scopedRead(9, roleContext('OfferingManager', mandate.native_organisation_id))).organisations.some(value => value.id === managerApp.organisation_id), true, 'manager can operate only exact portal organisation')
+  phase = 'mandate-product-handoff'
   const newDraft = (await scopedCommand(9, roleContext('OfferingManager', mandate.native_organisation_id), 'create_product', { organisation_id: managerApp.organisation_id, terms: { ...terms(), name: 'Mandated synthetic draft' } })).products.find(value => value.terms.name === 'Mandated synthetic draft')
   truth(newDraft?.id, 'mandated manager can create draft after apply')
   const inReview = (await scopedCommand(9, roleContext('OfferingManager', mandate.native_organisation_id), 'submit_product', { product_id: newDraft.id, expected_revision: newDraft.revision })).products.find(value => value.id === newDraft.id)
   await denied('customer admission did not silently appoint product Compliance reviewer', () => mandateScopedCommand(2, reviewer, 'review_product', { product_id: inReview.id, expected_revision: inReview.revision, decision: 'APPROVED', notes: 'Synthetic attempt without separately appointed product Compliance scope.', checks: offeringChecks }), '42501')
+  phase = 'mandate-revocation'
   const revokedMandate = (await mandateScopedCommand(2, reviewer, 'revoke_representative_mandate', { mandate_id: mandate.id, expected_revision: mandate.revision, reason: 'Synthetic reviewed authority withdrawn after demonstration.' })).organisation_mandates.find(value => value.id === mandate.id)
   eq([revokedMandate.status, revokedMandate.effective], ['REVOKED', false], 'scoped revocation removes mandate authority')
   await admin(); eq(await scalar("select status from public.bx1_memberships where id=(select native_membership_id from bx1_portal.representative_mandates where id=$1)", [mandate.id]), 'SUSPENDED', 'exact native membership suspended on revoke')
@@ -566,6 +574,7 @@ try {
   eq((await entryRead(9)).contexts.some(value => value.organisation_id === mandate.native_organisation_id), false, 'revoked representative removed from entry contexts')
   await denied('revoked manager cannot continue existing product draft', () => scopedCommand(9, roleContext('OfferingManager', mandate.native_organisation_id), 'save_product', { product_id: inReview.id, expected_revision: inReview.revision, terms: terms() }), '42501')
   await admin()
+  phase = 'document-receipt-proof'
   await sqlFile('../../../supabase/migrations/20260923144216_stage2_document_receipts.sql')
   await sqlFile('../../../supabase/tests/bx1_document_receipts.sql')
   await db.query('commit'); begun = false
