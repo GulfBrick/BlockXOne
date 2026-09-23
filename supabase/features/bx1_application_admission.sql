@@ -243,17 +243,121 @@ begin
   return result;
 end $$;
 
--- Existing evidence access is unchanged. Archived documents remain available to
--- their owner, and only the currently scoped reviewer of that same application.
+-- The version table is private. A caller may see only its own application's
+-- immutable manifests, or a submitted application's currently appointed
+-- Compliance reviewer in the exact native scope with verified TOTP/AAL2.
+-- This is independent of Storage path possession and does not attest bytes.
+create function bx1_portal.application_document_access(target_application uuid,operating_context jsonb) returns boolean
+language plpgsql volatile security definer set search_path='' as $$
+declare a bx1_portal.applications;
+begin
+  if target_application is null or bx1_portal.fresh_session() is not true
+    or bx1_private.has_session_mfa() is not true
+    or bx1_private.has_token_mfa() is not true then return false; end if;
+  select * into a from bx1_portal.applications where id=target_application;
+  if a.id is null then return false; end if;
+  if operating_context='{"mode":"APPLICANT"}'::jsonb then return a.user_id=auth.uid(); end if;
+  if a.status='DRAFT' or a.reviewer_scope is null
+    or operating_context->>'mode' is distinct from 'ROLE'
+    or operating_context->>'role' is distinct from 'ComplianceOfficer'
+    or operating_context->>'organisationId' is distinct from a.reviewer_scope::text
+    or auth.jwt()->>'aal' is distinct from 'aal2'
+    or not exists(select 1 from auth.sessions s join auth.mfa_factors f
+      on f.id=s.factor_id and f.user_id=s.user_id
+      where s.id::text=auth.jwt()->>'session_id' and s.user_id=auth.uid()
+        and s.aal::text='aal2' and f.status::text='verified' and f.factor_type::text='totp')
+    then return false; end if;
+  return bx1_portal.scoped_reviewer(operating_context,a.reviewer_scope,a.organisation_id);
+end $$;
+
+-- Storage's pre-existing SELECT policies call this function. Never trust a
+-- caller-supplied path as reviewer authority: match an immutable submission
+-- manifest for that path and the application's actual owner, then apply the
+-- same current AAL2/TOTP and scoped appointment rule as the history RPC.
+-- This helper deliberately does not query storage.objects (RLS recursion).
 create or replace function bx1_portal.object_readable(object_name text) returns boolean
-language sql volatile security definer set search_path='' as $$
-  select bx1_portal.fresh_session() and (split_part(object_name,'/',1)=auth.uid()::text or exists(
-    select 1 from bx1_portal.applications a where a.status<>'DRAFT' and bx1_portal.scoped_reviewer(
-      jsonb_build_object('mode','ROLE','organisationId',a.reviewer_scope,'role','ComplianceOfficer'),a.reviewer_scope,a.organisation_id)
-      and (exists(select 1 from jsonb_array_elements(a.details->'documents') d where d->>'storage_path'=object_name)
-        or exists(select 1 from bx1_portal.application_detail_versions v cross join lateral jsonb_array_elements(v.details->'documents') d
-          where v.application_id=a.id and d->>'storage_path'=object_name))));
-$$;
+language plpgsql volatile security definer set search_path='' as $$
+declare v_owner_prefix text; v_app record;
+begin
+  if object_name is null or bx1_portal.fresh_session() is not true
+    or bx1_private.has_session_mfa() is not true
+    or bx1_private.has_token_mfa() is not true then return false; end if;
+  v_owner_prefix:=pg_catalog.split_part(object_name,'/',1);
+  if v_owner_prefix=auth.uid()::text then return true; end if;
+  if v_owner_prefix !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    then return false; end if;
+  for v_app in select a.id,a.reviewer_scope from bx1_portal.applications a
+    where a.user_id=v_owner_prefix::uuid and a.status<>'DRAFT' and a.reviewer_scope is not null loop
+    if exists(select 1 from bx1_portal.application_detail_versions v
+      cross join lateral pg_catalog.jsonb_array_elements(case
+        when pg_catalog.jsonb_typeof(v.details->'documents')='array' then v.details->'documents'
+        else '[]'::jsonb end) d(item)
+      where v.application_id=v_app.id and d.item->>'storage_path'=object_name) then
+      if bx1_portal.application_document_access(v_app.id,pg_catalog.jsonb_build_object(
+        'mode','ROLE','organisationId',v_app.reviewer_scope::text,'role','ComplianceOfficer')) is true
+        then return true; end if;
+    end if;
+  end loop;
+  return false;
+end $$;
+
+-- A version list deliberately omits Storage paths. Hashes in older rows are
+-- submitted claims, not independent byte-verification or scan evidence.
+create function public.bx1_application_document_versions(application_id uuid,operating_context jsonb) returns jsonb
+language plpgsql volatile security definer set search_path='' as $$
+declare v_application uuid:=$1; v_context jsonb:=$2; v_versions jsonb;
+begin
+  if bx1_portal.application_document_access(v_application,v_context) is not true then
+    raise exception 'application_document_access_denied' using errcode='42501'; end if;
+  select coalesce(pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
+    'revision',v.application_revision,'submitted_at',v.submitted_at,'capture_kind',v.capture_kind,
+    'documents',(select coalesce(pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
+      'id',d.item->>'id','kind',d.item->>'kind','title',d.item->>'title',
+      'claimed_sha256',d.item->>'sha256','size',d.item->'size','mime_type',d.item->>'mime_type')
+      order by d.ordinality),'[]'::jsonb)
+      from pg_catalog.jsonb_array_elements(case when pg_catalog.jsonb_typeof(v.details->'documents')='array'
+        then v.details->'documents' else '[]'::jsonb end) with ordinality d(item,ordinality)))
+    order by v.application_revision),'[]'::jsonb) into v_versions
+    from bx1_portal.application_detail_versions v where v.application_id=v_application;
+  if bx1_portal.application_document_access(v_application,v_context) is not true then
+    raise exception 'application_document_access_denied' using errcode='42501'; end if;
+  return pg_catalog.jsonb_build_object('application_id',v_application,'versions',v_versions);
+end $$;
+
+-- Exact historical lookup for a future private-document proxy. The caller
+-- supplies application/revision/document identity, never a Storage path.
+create function public.bx1_application_document_lookup(application_id uuid,revision integer,
+  document_id uuid,operating_context jsonb) returns jsonb
+language plpgsql volatile security definer set search_path='' as $$
+declare v_application uuid:=$1; v_revision integer:=$2; v_document uuid:=$3; v_context jsonb:=$4;
+  v_count bigint; v_matches jsonb; v_document_manifest jsonb; v_owner uuid; v_path text;
+begin
+  if bx1_portal.application_document_access(v_application,v_context) is not true then
+    raise exception 'application_document_access_denied' using errcode='42501'; end if;
+  select count(*),pg_catalog.jsonb_agg(d.item) into v_count,v_matches
+    from bx1_portal.application_detail_versions v
+    cross join lateral pg_catalog.jsonb_array_elements(case when pg_catalog.jsonb_typeof(v.details->'documents')='array'
+      then v.details->'documents' else '[]'::jsonb end) d(item)
+    where v.application_id=v_application and v.application_revision=v_revision
+      and d.item->>'id'=v_document::text;
+  if v_count<>1 then raise exception 'application_document_not_found' using errcode='P0002'; end if;
+  v_document_manifest:=v_matches->0;
+  v_path:=v_document_manifest->>'storage_path';
+  select a.user_id into v_owner from bx1_portal.applications a where a.id=v_application;
+  if v_path is null or pg_catalog.split_part(v_path,'/',1) is distinct from v_owner::text
+    or coalesce(v_document_manifest->>'sha256','') !~ '^[0-9a-f]{64}$'
+    or not exists(select 1 from storage.objects o where o.bucket_id='bx1-portal-documents'
+      and o.name=v_path and o.owner_id=v_owner::text
+      and o.metadata->>'size'=v_document_manifest->>'size'
+      and o.metadata->>'mimetype'=v_document_manifest->>'mime_type') then
+    raise exception 'application_document_storage_unavailable' using errcode='55000'; end if;
+  if bx1_portal.application_document_access(v_application,v_context) is not true then
+    raise exception 'application_document_access_denied' using errcode='42501'; end if;
+  return pg_catalog.jsonb_build_object('application_id',v_application,'revision',v_revision,
+    'id',v_document,'kind',v_document_manifest->>'kind','title',v_document_manifest->>'title',
+    'storage_path',v_path,'claimed_sha256',v_document_manifest->>'sha256',
+    'size',v_document_manifest->'size','mime_type',v_document_manifest->>'mime_type');
+end $$;
 
 alter table bx1_portal.application_admission_baseline owner to postgres;
 alter table bx1_portal.application_detail_versions owner to postgres;
@@ -261,9 +365,20 @@ alter function bx1_portal.guard_application_admission() owner to postgres;
 alter function bx1_portal.capture_application_details() owner to postgres;
 alter function bx1_portal.validate_application(jsonb,text) owner to postgres;
 alter function bx1_portal.application_review_route(uuid) owner to postgres;
+alter function bx1_portal.application_document_access(uuid,jsonb) owner to postgres;
+alter function bx1_portal.object_readable(text) owner to postgres;
+alter function public.bx1_application_document_versions(uuid,jsonb) owner to postgres;
+alter function public.bx1_application_document_lookup(uuid,integer,uuid,jsonb) owner to postgres;
 revoke all on bx1_portal.application_admission_baseline,bx1_portal.application_detail_versions from public,anon,authenticated,service_role;
 revoke all on function bx1_portal.guard_application_admission(),bx1_portal.capture_application_details(),
   bx1_portal.validate_application(jsonb,text),bx1_portal.validate_application_v1(jsonb,text),
-  bx1_portal.application_review_route(uuid) from public,anon,authenticated,service_role;
+  bx1_portal.application_review_route(uuid),bx1_portal.application_document_access(uuid,jsonb),
+  bx1_portal.object_readable(text),
+  public.bx1_application_document_versions(uuid,jsonb),
+  public.bx1_application_document_lookup(uuid,integer,uuid,jsonb)
+  from public,anon,authenticated,service_role;
+grant execute on function public.bx1_application_document_versions(uuid,jsonb),
+  public.bx1_application_document_lookup(uuid,integer,uuid,jsonb) to authenticated;
+grant execute on function bx1_portal.object_readable(text) to authenticated;
 -- CREATE OR REPLACE preserved existing ACLs on entry_submit/scoped_operator/
--- entry_read/object_readable. In particular it must NOT reopen MAIN Storage.
+-- entry_read. In particular it must NOT reopen MAIN Storage.

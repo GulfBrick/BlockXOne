@@ -5,7 +5,7 @@ import Link from 'next/link'
 import { isWealthManagerDetailsV2, subscriptionQuote, type LegacyApplicationDetails, type PortalApplication, type PortalInvestmentAccount, type PortalProduct, type PortalProductEligibility, type PortalSnapshot } from '@/lib/portal/contracts'
 import { portalScopeHref, type PortalOperatingContext } from '@/lib/portal/operating-context'
 import { CommandFeedback, usePortalCommand } from './portal-client'
-import { ApplicationDetailsSummary, PrivateDocument } from './onboarding-form'
+import { ApplicationDetailsSummary, ApplicationDocumentHistory, PrivateDocument } from './onboarding-form'
 import { DetailList, EmptyState, Field, Notice, Panel, StatusBadge, dateLabel, money } from './portal-primitives'
 import styles from './portal.module.css'
 
@@ -118,6 +118,7 @@ export function ApplicationReview({ application, snapshot, onSaved }: { applicat
     <Notice title="Manual test review only">Record a real review decision against fictional evidence. No automated sanctions service or production KYC provider is represented as connected.</Notice>
     <Panel title={manager ? 'Customer organisation and representative' : 'Investor applicant information'} action={<StatusBadge status={application.status} />}><DetailList rows={[{ label: 'Application reference', value: application.id }, { label: 'Review purpose', value: manager ? application.admission_purpose === 'LEGACY_REHEARSAL' ? 'Historical rehearsal relationship' : 'Customer organisation admission' : 'Investor admission' }, { label: 'Submitted', value: dateLabel(application.submitted_at) }, { label: 'Version', value: `Revision ${application.revision}` }]} /><div className={styles.sectionGap}><ApplicationDetailsSummary persona={application.persona} details={application.details} /></div></Panel>
     <Panel title="Private supporting evidence" description="Each download rechecks the current caller’s access.">{application.details.documents?.length ? application.details.documents.map(document => <PrivateDocument key={document.id} document={document} />) : <p className={styles.muted}>No evidence attached.</p>}</Panel>
+    <ApplicationDocumentHistory key={application.id} applicationId={application.id} />
   </div><div className={styles.stack}>
     {manager ? <Notice title="Customer admission is not operating authority">This decision does not appoint an Offering Manager, create a mandate or grant product, financial or signing powers. Those require separate approved assignments.</Notice> : <Notice title="Investor admission is not product eligibility">Each offering and investment account has separate eligibility and authority checks. Admission alone does not create a holding.</Notice>}
     {requiresOrganisationFacts ? <Notice title="Organisation facts required before approval" tone="warning">This saved case contains legacy investor-shaped answers. Request the organisation's business activities, representative position and authority evidence through changes required. The applicant must explicitly resubmit those facts before customer admission can be approved.</Notice> : null}

@@ -1,8 +1,8 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { FileCheck2, Upload } from 'lucide-react'
-import { isWealthManagerDetailsV2, type ApplicationDetails, type EvidenceDocument, type LegacyApplicationDetails, type Persona, type WealthManagerApplicationDetailsV2 } from '@/lib/portal/contracts'
+import { applicationDocumentVersionsSchema, isWealthManagerDetailsV2, type ApplicationDetails, type ApplicationDocumentVersions, type EvidenceDocument, type LegacyApplicationDetails, type Persona, type WealthManagerApplicationDetailsV2 } from '@/lib/portal/contracts'
 import type { EntryApplication, EntrySnapshot } from '@/lib/portal/entry-contracts'
 import type { PlatformEnvironment } from '@/lib/platform-release'
 import { CommandFeedback, usePortalActorId, usePortalOperatingContext } from './portal-client'
@@ -50,6 +50,10 @@ export function applicationSubmissionReady(persona: Persona, details: FormDetail
   return !locked && acknowledged && requiredApplicationEvidence(persona, details.investor_type).every(item => details.documents.some(document => document.kind === item.kind))
 }
 
+export function withoutDraftEvidence(documents: EvidenceDocument[], documentId: string): EvidenceDocument[] {
+  return documents.filter(document => document.id !== documentId)
+}
+
 export function ApplicationDetailsSummary({ persona, details }: { persona: Persona; details: Partial<ApplicationDetails> }) {
   const manager = isWealthManagerDetailsV2(details) ? details : null
   const legacyManager = persona === 'WEALTH_MANAGER' && !manager
@@ -80,13 +84,16 @@ export function applicationNextStep(application: EntryApplication): { title: str
     : { title: 'Draft: not submitted', description: 'Complete your details and private evidence, then select Submit for review. Changes remain in this browser until the server confirms submission.', owner: 'You, the applicant' }
 }
 
-export function PrivateDocument({ document }: { document: EvidenceDocument }) {
+export function PrivateDocument({ document, history }: { document: Pick<EvidenceDocument, 'id' | 'kind' | 'title' | 'size'>; history?: { applicationId: string; revision: number } }) {
   const operatingContext = usePortalOperatingContext()
   const [url, setUrl] = useState(''), [message, setMessage] = useState(''), [busy, setBusy] = useState(false)
+  const contextKey = JSON.stringify(operatingContext)
+  useEffect(() => { setUrl(''); setMessage('') }, [contextKey, document.id, history?.applicationId, history?.revision])
   async function prepare() {
     setBusy(true); setMessage('')
     try {
-      const response = await fetch(portalScopeHref(`/api/portal/documents?id=${encodeURIComponent(document.id)}`, operatingContext), { credentials: 'same-origin', cache: 'no-store', redirect: 'error', signal: AbortSignal.timeout(15000) })
+      const target = history ? `/api/portal/documents?application_id=${encodeURIComponent(history.applicationId)}&revision=${history.revision}&id=${encodeURIComponent(document.id)}` : `/api/portal/documents?id=${encodeURIComponent(document.id)}`
+      const response = await fetch(portalScopeHref(target, operatingContext), { credentials: 'same-origin', cache: 'no-store', redirect: 'error', signal: AbortSignal.timeout(15000) })
       const result = await response.json()
       if (!response.ok || typeof result.url !== 'string') throw new Error('The private document could not be opened. Your access may have changed.')
       const download = new URL(result.url, window.location.origin)
@@ -96,6 +103,39 @@ export function PrivateDocument({ document }: { document: EvidenceDocument }) {
     finally { setBusy(false) }
   }
   return <div className={styles.sectionGap}><div className={styles.actions}><FileCheck2 size={18} aria-hidden="true" /><span>{document.title}</span>{url ? <a href={url} target="_blank" rel="noreferrer noopener" className={styles.textLink}>Open private document</a> : <button type="button" className={styles.buttonSecondary} disabled={busy} onClick={() => void prepare()}>{busy ? 'Checking access…' : 'View document'}</button>}</div><p className={styles.muted}>{document.kind.replaceAll('_', ' ')} · {Math.ceil(document.size / 1024)} KB · Private evidence</p>{message ? <p role="status" className={styles.fieldError}>{message}</p> : null}</div>
+}
+
+export function ApplicationDocumentHistory({ applicationId }: { applicationId: string }) {
+  const operatingContext = usePortalOperatingContext()
+  const scopeKey = `${applicationId}:${JSON.stringify(operatingContext)}`
+  const requestGeneration = useRef(0)
+  const [loaded, setLoaded] = useState<{ scopeKey: string; value: ApplicationDocumentVersions } | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState('')
+  useEffect(() => {
+    requestGeneration.current += 1
+    setLoaded(null); setBusy(false); setMessage('')
+    return () => { requestGeneration.current += 1 }
+  }, [scopeKey])
+  async function loadHistory() {
+    const request = ++requestGeneration.current
+    setBusy(true); setMessage('')
+    try {
+      const url = portalScopeHref(`/api/portal/documents?application_id=${encodeURIComponent(applicationId)}&history=1`, operatingContext)
+      const response = await fetch(url, { credentials: 'same-origin', cache: 'no-store', redirect: 'error', signal: AbortSignal.timeout(15000) })
+      if (!response.ok) throw new Error()
+      const parsed = applicationDocumentVersionsSchema.safeParse(await response.json())
+      if (!parsed.success || parsed.data.application_id !== applicationId) throw new Error()
+      if (request === requestGeneration.current) setLoaded({ scopeKey, value: parsed.data })
+    } catch { if (request === requestGeneration.current) setMessage('Submitted evidence history is unavailable in this operating context. Refresh and try again.') }
+    finally { if (request === requestGeneration.current) setBusy(false) }
+  }
+  const history = loaded?.scopeKey === scopeKey ? loaded.value : null
+  return <Panel title="Submitted evidence history" description="Immutable submission versions remain separate from your unsaved draft. Each private download rechecks current authority and the file bytes.">
+    <button type="button" className={styles.buttonSecondary} disabled={busy} onClick={() => void loadHistory()}>{busy ? 'Loading submitted versions...' : history ? 'Refresh submitted versions' : 'View submitted versions'}</button>
+    {message ? <p role="status" className={styles.fieldError}>{message}</p> : null}
+    {history ? history.versions.length ? <div className={`${styles.stack} ${styles.sectionGap}`}>{[...history.versions].sort((a, b) => b.revision - a.revision).map(version => <section key={version.revision} className={styles.panelBody}><h3>Submission revision {version.revision}</h3><p className={styles.muted}>Submitted {dateLabel(version.submitted_at)} · {version.capture_kind === 'MIGRATION_SNAPSHOT' ? 'Preserved historical submission' : 'Recorded submission'}</p>{version.documents.length ? version.documents.map(document => <PrivateDocument key={`${version.revision}:${document.id}`} document={document} history={{ applicationId, revision: version.revision }} />) : <p className={styles.muted}>No evidence files were recorded in this version.</p>}</section>)}</div> : <p className={styles.muted}>No submitted evidence versions are recorded for this application.</p> : null}
+  </Panel>
 }
 
 export function OnboardingForm({ application, environment, onSaved, receipts }: { application: EntryApplication; environment: PlatformEnvironment; onSaved: (snapshot: EntrySnapshot) => void; receipts?: EntrySnapshot['requests'] }) {
@@ -160,11 +200,13 @@ export function OnboardingForm({ application, environment, onSaved, receipts }: 
             <div><button type="button" className={styles.buttonSecondary} disabled={!file || uploadBusy} onClick={() => void upload()}><Upload size={16} aria-hidden="true" />{uploadBusy ? 'Uploading…' : 'Upload private evidence'}</button></div>
           </fieldset>
           <div role="status" aria-live="polite" className={styles.muted}>{uploadMessage}</div>
-          {details.documents.map(document => <PrivateDocument key={document.id} document={document} />)}
+          {details.documents.map(document => <div key={document.id}><PrivateDocument document={document} /><button type="button" className={styles.textLink} disabled={locked} onClick={() => change('documents', withoutDraftEvidence(details.documents, document.id))}>Exclude from this submission</button></div>)}
+          <p className={styles.muted}>Excluding a file removes it from this unsaved submission only. Earlier versions and stored objects are not deleted; the separate upload quota still applies.</p>
           <label className={styles.check}><input type="checkbox" required checked={acknowledged} disabled={locked} onChange={event => setAcknowledged(event.target.checked)} /><span>I confirm this application and all evidence are fictional test data. I understand a manual test approval does not establish legal identity, investment eligibility or production authority.</span></label><div className={styles.formFoot}><p>Saved record: revision {application.revision}. The fields above are submitted only after a confirmed response. An independent reviewer must make the decision.</p><button type="submit" className={styles.button} disabled={!submitReady}>{command.busy ? 'Submitting…' : applicationSubmitLabel(application)}</button></div>
         </form>
         </> : <div className={`${styles.stack} ${styles.sectionGap}`}><p className={styles.muted}>Read-only saved application, revision {application.revision}. {application.status === 'SUBMITTED' ? 'A request for changes will reopen editing.' : 'The recorded decision does not alter these submitted answers.'}</p><ApplicationDetailsSummary persona={persona} details={application.details} /><section><h3>Submitted private evidence</h3>{application.details.documents?.length ? application.details.documents.map(document => <PrivateDocument key={document.id} document={document} />) : <p className={styles.muted}>No evidence is recorded.</p>}</section></div>}
       </Panel>
+      <ApplicationDocumentHistory key={application.id} applicationId={application.id} />
     </div>
     <aside className={styles.stack} aria-label="Application progress and responsibility"><Panel title="Application status"><DetailList rows={[{ label: 'Relationship', value: persona === 'INVESTOR' ? 'Investor' : 'Wealth manager / representative' }, { label: 'Status', value: <StatusBadge status={application.status} /> }, { label: 'Saved revision', value: application.revision }, { label: 'Submitted', value: dateLabel(application.submitted_at) }, { label: 'Decision recorded', value: dateLabel(application.reviewed_at) }, { label: 'Review provider', value: application.provider_mode === 'MANUAL_TEST_REVIEW' ? 'Manual test review' : 'Not assigned to this application yet' }, { label: editable ? 'Evidence selected in this browser' : 'Saved evidence files', value: details.documents.length }]} /></Panel><Panel title="Next responsible owner"><p className={styles.applicationOwner}>{next.owner}</p><h3>{next.title}</h3><p className={styles.copy}>{next.description}</p><p className={styles.muted}>Review availability is checked again when you submit. It does not prove a reviewer is currently signed in.</p></Panel><Panel title={editable ? 'Submission checklist' : 'Connected handoff'}><ol className={styles.timeline}><li><strong>{persona === 'INVESTOR' ? 'Investor facts and supporting evidence' : 'Organisation facts and representative evidence'}</strong><p>{editable ? 'Complete each required field and attach fictional evidence. Unsaved browser edits are not in the review queue.' : 'The saved package is displayed read-only at its recorded revision.'}</p></li><li><strong>Independent BlockXOne review</strong><p>{persona === 'INVESTOR' ? 'A permitted reviewer assesses the submitted investor evidence. A product still has its own eligibility rules.' : 'A permitted reviewer assesses the customer organisation, representative and requested services. The customer cannot self-approve.'}</p></li><li><strong>{persona === 'INVESTOR' ? 'Account and product eligibility' : 'Separate operating assignment'}</strong><p>{persona === 'INVESTOR' ? 'An admission decision is not a funded investment or token holding.' : 'Organisation, role, mandate and signing permissions require their own authority. Customer admission does not create them.'}</p></li></ol></Panel></aside>
   </div>

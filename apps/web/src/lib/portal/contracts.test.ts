@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { PORTAL_PATHS, applicationDetailsSchema, applicationDraftDetailsSchema, isWealthManagerDetailsV2, evidenceSchema, formatTestMoney, portalCommandSchema, productTermsSchema, subscriptionQuote, type PortalProduct, type ProductTerms } from './contracts'
+import { PORTAL_PATHS, applicationDetailsSchema, applicationDocumentLookupSchema, applicationDocumentVersionsSchema, applicationDraftDetailsSchema, isWealthManagerDetailsV2, evidenceSchema, formatTestMoney, portalCommandSchema, productTermsSchema, subscriptionQuote, type PortalProduct, type ProductTerms } from './contracts'
 import { isSupabaseWebPathAllowed } from '@/lib/auth-mode'
 import { isProductionWebPathBlocked } from '@/lib/release-policy'
 
@@ -10,6 +10,14 @@ const product: PortalProduct = { id, organisation_id: id, created_by: id, revisi
 
 describe('customer portal contracts', () => {
   const evidence = { id, kind: 'IDENTITY', title: 'Synthetic identity', storage_path: `${id}/${key}`, sha256: 'a'.repeat(64), size: 100, mime_type: 'application/pdf' }
+  it('keeps historical document paths off browser metadata and requires exact lookup facts', () => {
+    const historical = { id, kind: 'IDENTITY', title: 'Earlier synthetic evidence', claimed_sha256: 'a'.repeat(64), size: 100, mime_type: 'application/pdf' }
+    const versions = { application_id: id, versions: [{ revision: 2, submitted_at: '2026-09-22T09:00:00Z', capture_kind: 'SUBMISSION', documents: [historical] }] }
+    expect(applicationDocumentVersionsSchema.safeParse(versions).success).toBe(true)
+    expect(applicationDocumentVersionsSchema.safeParse({ ...versions, versions: [{ ...versions.versions[0], documents: [{ ...historical, storage_path: `${id}/${key}` }] }] }).success).toBe(false)
+    expect(applicationDocumentLookupSchema.safeParse({ ...historical, application_id: id, revision: 2, storage_path: `${id}/${key}` }).success).toBe(true)
+    expect(applicationDocumentLookupSchema.safeParse({ ...historical, application_id: id, revision: 0, storage_path: `${id}/${key}` }).success).toBe(false)
+  })
   const wm = { details_version: 2, full_name: 'Synthetic Representative', country: 'ZA', company_name: 'Synthetic Manager', registration_reference: 'TEST-001', beneficial_owners: 'Fictional owner of the whole organisation.', business_activities: 'Fictional fund management for synthetic testing.', representative_position: 'Director', authority_basis: 'Fictional board authorisation to submit this application.', documents: [evidence], test_data_acknowledged: true }
   it('accepts WM organisation facts without manufacturing investor facts', () => {
     expect(applicationDetailsSchema.parse(wm)).toEqual(wm)

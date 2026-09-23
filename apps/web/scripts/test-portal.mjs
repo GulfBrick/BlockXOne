@@ -485,6 +485,11 @@ try {
     documents: ['IDENTITY', 'COMPANY', 'BENEFICIAL_OWNERS'].map((kind, i) => document(9, kind, i)),
     test_data_acknowledged: true,
   }
+  await admin()
+  for (const doc of managerDetails.documents) {
+    await db.query('insert into storage.objects(bucket_id,name,owner_id,metadata) values($1,$2,$3,$4::jsonb)',
+      ['bx1-portal-documents', doc.storage_path, uid(9), JSON.stringify({ size: doc.size, mimetype: doc.mime_type })])
+  }
   const submittedManager = await entryCommand(9, 'submit_application', {
     application_id: managerAppDraft.id, expected_revision: managerAppDraft.revision, details: managerDetails,
   })
@@ -587,6 +592,131 @@ try {
   phase = 'document-receipt-proof'
   await sqlFile('../../../supabase/migrations/20260923144216_stage2_document_receipts.sql')
   await sqlFile('../../../supabase/tests/bx1_document_receipts.sql')
+  phase = 'document-history-migration'
+  await sqlFile('../../../supabase/migrations/20260923161500_stage2_application_document_history.sql')
+  await sqlFile('../../../supabase/tests/bx1_application_document_history.sql')
+  phase = 'document-history-caller-bound-proof'
+  const historyContext = JSON.stringify(applicant)
+  const reviewerContext = JSON.stringify(reviewer)
+  const ownHistory = await (async () => {
+    await actor(9)
+    return scalar('select public.bx1_application_document_versions($1::uuid,$2::jsonb)', [managerApp.id, historyContext])
+  })()
+  eq(ownHistory.application_id, managerApp.id, 'applicant reads only its exact application history')
+  eq(ownHistory.versions.length, 1, 'submitted customer application has one immutable revision manifest')
+  eq(JSON.stringify(ownHistory).includes('storage_path'), false, 'broad revision list never exposes Storage paths')
+  const ownVersion = ownHistory.versions[0]
+  eq(ownVersion.documents[0].claimed_sha256, managerDetails.documents[0].sha256, 'historic hash is explicitly a claim')
+  await actor(9)
+  const ownDocument = await scalar('select public.bx1_application_document_lookup($1::uuid,$2::integer,$3::uuid,$4::jsonb)',
+    [managerApp.id, ownVersion.revision, ownVersion.documents[0].id, historyContext])
+  eq(ownDocument.storage_path, managerDetails.documents[0].storage_path, 'exact revision and document ID resolve DB-owned Storage path')
+  eq(ownDocument.claimed_sha256, managerDetails.documents[0].sha256, 'lookup does not invent verified-byte evidence')
+  await actor(9)
+  eq(await scalar("select count(*)::int from storage.objects where bucket_id='bx1-portal-documents' and name=$1",
+    [ownDocument.storage_path]), 1, 'unenrolled applicant retains direct access to own uploaded evidence')
+  await db.query('savepoint enrolled_owner_storage')
+  await admin()
+  await db.query("insert into auth.mfa_factors(id,user_id,status,factor_type) values($1,$2,'verified','totp')", [sid(39), uid(9)])
+  await db.query("update auth.sessions set aal='aal2',factor_id=$1 where user_id=$2", [sid(39), uid(9)])
+  await actor(9)
+  eq(await scalar("select count(*)::int from storage.objects where bucket_id='bx1-portal-documents' and name=$1",
+    [ownDocument.storage_path]), 0, 'enrolled applicant AAL1 JWT cannot read direct Storage even with AAL2 session')
+  await denied('enrolled applicant AAL1 JWT cannot enumerate historic manifests', async () => {
+    await actor(9)
+    await scalar('select public.bx1_application_document_versions($1::uuid,$2::jsonb)', [managerApp.id, historyContext])
+  }, '42501')
+  await actor(9, { aal: 'aal2' })
+  eq(await scalar("select count(*)::int from storage.objects where bucket_id='bx1-portal-documents' and name=$1",
+    [ownDocument.storage_path]), 1, 'enrolled applicant with AAL2 JWT retains own evidence access')
+  await db.query('rollback to savepoint enrolled_owner_storage; release savepoint enrolled_owner_storage')
+  await denied('another applicant cannot enumerate customer history', async () => {
+    await actor(3)
+    await scalar('select public.bx1_application_document_versions($1::uuid,$2::jsonb)', [managerApp.id, historyContext])
+  }, '42501')
+  await denied('other applicant cannot discover a historical Storage path', async () => {
+    await actor(3)
+    await scalar('select public.bx1_application_document_lookup($1::uuid,$2::integer,$3::uuid,$4::jsonb)',
+      [managerApp.id, ownVersion.revision, ownVersion.documents[0].id, historyContext])
+  }, '42501')
+  await denied('unknown application does not reveal whether it exists', async () => {
+    await actor(9)
+    await scalar('select public.bx1_application_document_versions($1::uuid,$2::jsonb)', [uid(99), historyContext])
+  }, '42501')
+  await denied('wrong revision cannot resolve a current document path', async () => {
+    await actor(9)
+    await scalar('select public.bx1_application_document_lookup($1::uuid,$2::integer,$3::uuid,$4::jsonb)',
+      [managerApp.id, ownVersion.revision + 1, ownVersion.documents[0].id, historyContext])
+  }, 'P0002')
+  await denied('wrong document ID cannot resolve another version path', async () => {
+    await actor(9)
+    await scalar('select public.bx1_application_document_lookup($1::uuid,$2::integer,$3::uuid,$4::jsonb)',
+      [managerApp.id, ownVersion.revision, uid(99), historyContext])
+  }, 'P0002')
+  await denied('real document ID from another application cannot resolve this version path', async () => {
+    await actor(9)
+    await scalar('select public.bx1_application_document_lookup($1::uuid,$2::integer,$3::uuid,$4::jsonb)',
+      [managerApp.id, ownVersion.revision, 'ed200000-0000-4000-8000-000000000001', historyContext])
+  }, 'P0002')
+  await denied('submitted revision manifest cannot be rewritten', async () => {
+    await admin()
+    await db.query("update bx1_portal.application_detail_versions set details='{}'::jsonb where application_id=$1 and application_revision=$2", [managerApp.id, ownVersion.revision])
+  }, '23514')
+  const receiptApplication = 'ed300000-0000-4000-8000-000000000001'
+  const receiptDocument = 'ed200000-0000-4000-8000-000000000001'
+  await actor(2, { aal: 'aal2' })
+  const reviewerHistory = await scalar('select public.bx1_application_document_versions($1::uuid,$2::jsonb)', [receiptApplication, reviewerContext])
+  eq(reviewerHistory.versions.length, 1, 'assured Compliance sees only exact submitted application history')
+  await actor(2, { aal: 'aal2' })
+  const reviewerDocument = await scalar('select public.bx1_application_document_lookup($1::uuid,$2::integer,$3::uuid,$4::jsonb)',
+    [receiptApplication, reviewerHistory.versions[0].revision, receiptDocument, reviewerContext])
+  eq(reviewerDocument.id, receiptDocument, 'reviewer lookup binds document UUID to immutable revision')
+  await actor(2)
+  eq(await scalar("select count(*)::int from storage.objects where bucket_id='bx1-portal-documents' and name=$1",
+    [reviewerDocument.storage_path]), 0, 'AAL1 Compliance cannot bypass history RPC through direct Storage')
+  await actor(2, { aal: 'aal2' })
+  eq(await scalar("select count(*)::int from storage.objects where bucket_id='bx1-portal-documents' and name=$1",
+    [reviewerDocument.storage_path]), 1, 'AAL2 appointed Compliance can read an immutable historic-version object')
+  await db.query('savepoint immutable_history_only_storage')
+  await admin()
+  await db.query("update bx1_portal.applications set status='CHANGES_REQUIRED',details=pg_catalog.jsonb_set(details,'{documents}','[]'::jsonb) where id=$1", [receiptApplication])
+  await actor(2, { aal: 'aal2' })
+  eq(await scalar("select count(*)::int from storage.objects where bucket_id='bx1-portal-documents' and name=$1",
+    [reviewerDocument.storage_path]), 1, 'historic object stays readable from immutable version after current manifest changes')
+  await db.query('rollback to savepoint immutable_history_only_storage; release savepoint immutable_history_only_storage')
+  await actor(5, { aal: 'aal2' })
+  eq(await scalar("select count(*)::int from storage.objects where bucket_id='bx1-portal-documents' and name=$1",
+    [reviewerDocument.storage_path]), 0, 'other organisation cannot use direct Storage to read historic case')
+  await denied('AAL1 Compliance cannot read private historic manifests', async () => {
+    await actor(2)
+    await scalar('select public.bx1_application_document_versions($1::uuid,$2::jsonb)', [receiptApplication, reviewerContext])
+  }, '42501')
+  await denied('wrong organisation context cannot read historic case', async () => {
+    await actor(2, { aal: 'aal2' })
+    await scalar('select public.bx1_application_document_versions($1::uuid,$2::jsonb)',
+      [receiptApplication, JSON.stringify(roleContext('ComplianceOfficer', otherScope))])
+  }, '42501')
+  await denied('SuperAdmin role is not a document reviewer appointment', async () => {
+    await actor(10, { aal: 'aal2' })
+    await scalar('select public.bx1_application_document_versions($1::uuid,$2::jsonb)',
+      [receiptApplication, JSON.stringify(roleContext('SuperAdmin'))])
+  }, '42501')
+  await denied('revoked Compliance membership loses historic document access', async () => {
+    await admin()
+    await db.query("update public.bx1_memberships set status='SUSPENDED' where user_id=$1 and organisation_id=$2 and role='ComplianceOfficer'", [uid(2), nativeScope])
+    await actor(2, { aal: 'aal2' })
+    eq(await scalar("select count(*)::int from storage.objects where bucket_id='bx1-portal-documents' and name=$1",
+      [reviewerDocument.storage_path]), 0, 'revoked Compliance cannot read direct Storage')
+    await scalar('select public.bx1_application_document_versions($1::uuid,$2::jsonb)', [receiptApplication, reviewerContext])
+  }, '42501')
+  await denied('expired reviewer session loses historic document access', async () => {
+    await admin()
+    await db.query("update auth.sessions set not_after=clock_timestamp()-interval '1 second' where user_id=$1", [uid(2)])
+    await actor(2, { aal: 'aal2' })
+    eq(await scalar("select count(*)::int from storage.objects where bucket_id='bx1-portal-documents' and name=$1",
+      [reviewerDocument.storage_path]), 0, 'expired reviewer session cannot read direct Storage')
+    await scalar('select public.bx1_application_document_versions($1::uuid,$2::jsonb)', [receiptApplication, reviewerContext])
+  }, '42501')
   await db.query('commit'); begun = false
   phase = 'cleanup-committed-disposable-fixture'
   await db.query('drop schema bx1_portal,bx1_private,storage,auth,public cascade; create schema public')

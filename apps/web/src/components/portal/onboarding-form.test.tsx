@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 import type { EntryApplication } from '@/lib/portal/entry-contracts'
 import { entryApplication, entryActorId } from '@/lib/portal/entry-test-fixtures'
 import { applicationDetailsSchema, type LegacyApplicationDetails, type PortalApplication, type PortalSnapshot, type WealthManagerApplicationDetailsV2 } from '@/lib/portal/contracts'
-import { ApplicationDetailsSummary, OnboardingForm, applicationFormDetails, applicationNextStep, applicationSubmissionDetails, applicationSubmissionReady, applicationSubmitLabel, requiredApplicationEvidence } from './onboarding-form'
+import { ApplicationDetailsSummary, OnboardingForm, applicationFormDetails, applicationNextStep, applicationSubmissionDetails, applicationSubmissionReady, applicationSubmitLabel, requiredApplicationEvidence, withoutDraftEvidence } from './onboarding-form'
 import { ApplicationReview } from './portal-workflows'
 import { dateLabel } from './portal-primitives'
 
@@ -68,6 +68,19 @@ describe('persona-specific application preparation', () => {
     expect(applicationSubmissionReady('WEALTH_MANAGER', prepared, true, false)).toBe(true)
     expect(applicationSubmissionReady('WEALTH_MANAGER', prepared, true, true)).toBe(false)
     expect(applicationSubmissionReady('WEALTH_MANAGER', prepared, false, false)).toBe(false)
+  })
+  it('excludes corrected draft evidence without altering submitted records or weakening the required-kind check', () => {
+    const original = structuredClone(documents)
+    const selected = withoutDraftEvidence(original, documents[1].id)
+    expect(selected.map(document => document.kind)).toEqual(['IDENTITY', 'BENEFICIAL_OWNERS'])
+    expect(original).toEqual(documents)
+    const prepared = applicationFormDetails(entryApplication({ persona: 'WEALTH_MANAGER', details: manager }))
+    expect(applicationSubmissionReady('WEALTH_MANAGER', { ...prepared, documents: selected }, true, false)).toBe(false)
+    const html = form({ persona: 'WEALTH_MANAGER', details: manager, status: 'CHANGES_REQUIRED' })
+    expect(html).toContain('Exclude from this submission')
+    expect(html).toContain('Earlier submitted versions and private stored objects are not deleted')
+    expect(html).toContain('Submitted evidence history')
+    expect(html).toContain('View submitted versions')
   })
   it('rechecks a newly staffed review route without resetting prepared draft values', () => {
     const application = entryApplication({ persona: 'WEALTH_MANAGER', review_route: 'REVIEWER_UNAVAILABLE', details: manager })
@@ -141,6 +154,8 @@ describe('reviewer sees the same evidence and purpose as the applicant', () => {
     expect(html).toContain('Customer organisation admission')
     expect(html).toContain(manager.business_activities)
     expect(html).toContain(manager.authority_basis)
+    expect(html).toContain('Submitted evidence history')
+    expect(html).toContain('View submitted versions')
     expect(html).toContain('Customer business activities and requested service scope reviewed')
     expect(html).not.toContain('Investor suitability reviewed')
     expect(html).not.toContain('Source of funds')

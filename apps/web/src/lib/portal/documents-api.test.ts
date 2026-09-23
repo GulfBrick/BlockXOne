@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { createHash } from 'node:crypto'
 import { NextRequest } from 'next/server'
 vi.mock('server-only', () => ({}))
 const mocks = vi.hoisted(() => ({ read: vi.fn(), create: vi.fn() }))
@@ -11,6 +12,7 @@ const origin = 'https://block-x-one-documents-test.vercel.app'
 const id = '55555555-5555-4555-8555-555555555555'
 const actor = '11111111-1111-4111-8111-111111111111'
 const organisationId = '33333333-3333-4333-8333-333333333333'
+const applicationId = '44444444-4444-4444-8444-444444444444'
 const document = { id, kind: 'IDENTITY', title: 'Fictional identity', storage_path: `${actor}/${id}`, sha256: 'a'.repeat(64), size: 10, mime_type: 'application/pdf' }
 const snapshot = { actor: { id: actor, email: 'synthetic@example.invalid', can_review: false }, applications: [{ details: { documents: [document] } }], organisations: [], products: [], subscriptions: [], events: [] }
 beforeEach(() => {
@@ -49,6 +51,93 @@ describe('private evidence context continuity', () => {
   it('does not leak a document excluded from the selected scope', async () => {
     mocks.read.mockResolvedValue({ user: { id: actor }, snapshot: { ...snapshot, applications: [] } })
     expect((await GET(new NextRequest(`${origin}/api/portal/documents?id=${id}&mode=applicant`))).status).toBe(404)
+  })
+  it('returns only scoped immutable version metadata without a storage path', async () => {
+    const rpc = vi.fn().mockReturnValue({ abortSignal: vi.fn().mockResolvedValue({ data: { application_id: applicationId, versions: [{ revision: 2, submitted_at: '2026-09-22T09:00:00Z', capture_kind: 'SUBMISSION', documents: [{ id, kind: 'IDENTITY', title: 'Fictional earlier evidence', claimed_sha256: 'a'.repeat(64), size: 10, mime_type: 'application/pdf' }] }] }, error: null }) })
+    mocks.create.mockReturnValue({ rpc })
+    mocks.read.mockResolvedValue({ user: { id: actor }, snapshot: { ...snapshot, applications: [{ id: applicationId, user_id: actor, details: { documents: [] } }] } })
+    const response = await GET(new NextRequest(`${origin}/api/portal/documents?application_id=${applicationId}&history=1&mode=applicant`))
+    expect(response.status).toBe(200)
+    expect(rpc).toHaveBeenCalledWith('bx1_application_document_versions', { application_id: applicationId, operating_context: { mode: 'APPLICANT' } })
+    const body = await response.json()
+    expect(body.versions[0].documents[0].title).toBe('Fictional earlier evidence')
+    expect(JSON.stringify(body)).not.toContain('storage_path')
+    expect(response.headers.get('cache-control')).toContain('no-store')
+  })
+  it('denies foreign history before a backend lookup and rejects ambiguous history parameters', async () => {
+    const rpc = vi.fn()
+    mocks.create.mockReturnValue({ rpc })
+    mocks.read.mockResolvedValue({ user: { id: actor }, snapshot: { ...snapshot, applications: [] } })
+    expect((await GET(new NextRequest(`${origin}/api/portal/documents?application_id=${applicationId}&history=1&mode=applicant`))).status).toBe(404)
+    expect(rpc).not.toHaveBeenCalled()
+    for (const query of [`application_id=${applicationId}&history=1&id=${id}`, `application_id=${applicationId}&revision=2&id=${id}&history=1`, `application_id=${applicationId}&history=1&download=1`, `application_id=${applicationId}&revision=2&id=${id}&id=${id}`]) {
+      expect((await GET(new NextRequest(`${origin}/api/portal/documents?${query}&mode=applicant`))).status).toBe(400)
+    }
+    expect(rpc).not.toHaveBeenCalled()
+  })
+  it('resolves exact historic bytes only through a caller-bound lookup and same-origin download', async () => {
+    const bytes = Buffer.from('%PDF-1.4\nfictional earlier evidence')
+    const digest = createHash('sha256').update(bytes).digest('hex')
+    const rpc = vi.fn().mockReturnValue({ abortSignal: vi.fn().mockResolvedValue({ data: { application_id: applicationId, revision: 2, id, kind: 'IDENTITY', title: 'Earlier evidence', storage_path: `${actor}/${id}`, claimed_sha256: digest, size: bytes.length, mime_type: 'application/pdf' }, error: null }) })
+    const download = vi.fn().mockResolvedValue({ error: null, data: new Blob([bytes], { type: 'application/pdf' }) })
+    mocks.create.mockReturnValue({ rpc, storage: { from: () => ({ download }) } })
+    mocks.read.mockResolvedValue({ user: { id: actor }, snapshot: { ...snapshot, applications: [{ id: applicationId, user_id: actor, details: { documents: [] } }] } })
+    const target = `${origin}/api/portal/documents?application_id=${applicationId}&revision=2&id=${id}&mode=applicant`
+    const prepared = await GET(new NextRequest(target))
+    expect(prepared.status).toBe(200)
+    const link = (await prepared.json()).url as string
+    expect(link).toContain('download=1')
+    expect(link).not.toContain(`${actor}/${id}`)
+    expect(download).not.toHaveBeenCalled()
+    const result = await GET(new NextRequest(new URL(link, origin)))
+    expect(result.status).toBe(200)
+    expect(Buffer.from(await result.arrayBuffer())).toEqual(bytes)
+    expect(rpc).toHaveBeenCalledWith('bx1_application_document_lookup', { application_id: applicationId, revision: 2, document_id: id, operating_context: { mode: 'APPLICANT' } })
+    expect(download).toHaveBeenCalledWith(`${actor}/${id}`)
+  })
+  it('does not read Storage after a historic authority denial or mismatched lookup', async () => {
+    const download = vi.fn()
+    const rpc = vi.fn().mockReturnValueOnce({ abortSignal: vi.fn().mockResolvedValue({ data: null, error: { code: '42501' } }) })
+      .mockReturnValueOnce({ abortSignal: vi.fn().mockResolvedValue({ data: { application_id: applicationId, revision: 3, id, kind: 'IDENTITY', title: 'Wrong version', storage_path: `${actor}/${id}`, claimed_sha256: 'a'.repeat(64), size: 10, mime_type: 'application/pdf' }, error: null }) })
+    mocks.create.mockReturnValue({ rpc, storage: { from: () => ({ download }) } })
+    mocks.read.mockResolvedValue({ user: { id: actor }, snapshot: { ...snapshot, applications: [{ id: applicationId, user_id: actor, details: { documents: [] } }] } })
+    const target = `${origin}/api/portal/documents?application_id=${applicationId}&revision=2&id=${id}&mode=applicant&download=1`
+    expect((await GET(new NextRequest(target))).status).toBe(404)
+    expect((await GET(new NextRequest(target))).status).toBe(503)
+    expect(download).not.toHaveBeenCalled()
+  })
+  it('keeps historical lookup distinct from a current document with the same id', async () => {
+    const earlier = Buffer.from('%PDF-1.4\nearlier fictional version')
+    const earlierHash = createHash('sha256').update(earlier).digest('hex')
+    const download = vi.fn().mockResolvedValue({ error: null, data: new Blob([earlier], { type: 'application/pdf' }) })
+    const rpc = vi.fn().mockReturnValue({ abortSignal: vi.fn().mockResolvedValue({ data: { application_id: applicationId, revision: 1, id, kind: 'IDENTITY', title: 'Earlier evidence', storage_path: `${actor}/${id}`, claimed_sha256: earlierHash, size: earlier.length, mime_type: 'application/pdf' }, error: null }) })
+    mocks.create.mockReturnValue({ rpc, storage: { from: () => ({ download }) } })
+    mocks.read.mockResolvedValue({ user: { id: actor }, snapshot: { ...snapshot, applications: [{ id: applicationId, user_id: actor, details: { documents: [{ ...document, sha256: 'f'.repeat(64), size: earlier.length }] } }] } })
+    const response = await GET(new NextRequest(`${origin}/api/portal/documents?application_id=${applicationId}&revision=1&id=${id}&mode=applicant&download=1`))
+    expect(response.status).toBe(200)
+    expect(Buffer.from(await response.arrayBuffer())).toEqual(earlier)
+    expect(rpc).toHaveBeenCalledWith('bx1_application_document_lookup', { application_id: applicationId, revision: 1, document_id: id, operating_context: { mode: 'APPLICANT' } })
+  })
+  it('does not return bytes when historical size or claimed hash differs from Storage', async () => {
+    const bytes = Buffer.from('%PDF-1.4\nfictional evidence')
+    const download = vi.fn().mockResolvedValue({ error: null, data: new Blob([bytes], { type: 'application/pdf' }) })
+    const rpc = vi.fn().mockReturnValue({ abortSignal: vi.fn().mockResolvedValue({ data: { application_id: applicationId, revision: 2, id, kind: 'IDENTITY', title: 'Earlier evidence', storage_path: `${actor}/${id}`, claimed_sha256: 'a'.repeat(64), size: bytes.length, mime_type: 'application/pdf' }, error: null }) })
+    mocks.create.mockReturnValue({ rpc, storage: { from: () => ({ download }) } })
+    mocks.read.mockResolvedValue({ user: { id: actor }, snapshot: { ...snapshot, applications: [{ id: applicationId, user_id: actor, details: { documents: [] } }] } })
+    const target = `${origin}/api/portal/documents?application_id=${applicationId}&revision=2&id=${id}&mode=applicant&download=1`
+    expect((await GET(new NextRequest(target))).status).toBe(409)
+    rpc.mockReturnValue({ abortSignal: vi.fn().mockResolvedValue({ data: { application_id: applicationId, revision: 2, id, kind: 'IDENTITY', title: 'Earlier evidence', storage_path: `${actor}/${id}`, claimed_sha256: createHash('sha256').update(bytes).digest('hex'), size: bytes.length + 1, mime_type: 'application/pdf' }, error: null }) })
+    expect((await GET(new NextRequest(target))).status).toBe(409)
+  })
+  it('denies a reviewer outside the exact organisation scope without reading Storage', async () => {
+    const rpc = vi.fn().mockReturnValue({ abortSignal: vi.fn().mockResolvedValue({ data: null, error: { code: '42501' } }) })
+    const download = vi.fn()
+    mocks.create.mockReturnValue({ rpc, storage: { from: () => ({ download }) } })
+    mocks.read.mockResolvedValue({ user: { id: actor }, snapshot: { ...snapshot, applications: [{ id: applicationId, user_id: '99999999-9999-4999-8999-999999999999', details: { documents: [] } }] } })
+    const target = `${origin}/api/portal/documents?application_id=${applicationId}&revision=2&id=${id}&organisation=${organisationId}&role=ComplianceOfficer&download=1`
+    expect((await GET(new NextRequest(target))).status).toBe(404)
+    expect(rpc).toHaveBeenCalledWith('bx1_application_document_lookup', { application_id: applicationId, revision: 2, document_id: id, operating_context: { mode: 'ROLE', organisationId, role: 'ComplianceOfficer' } })
+    expect(download).not.toHaveBeenCalled()
   })
   it('refuses unscoped uploads before any private backend call', async () => {
     const response = await POST(new NextRequest(`${origin}/api/portal/documents`, { method: 'POST', headers: { origin, host: new URL(origin).host, 'content-type': 'multipart/form-data; boundary=synthetic' }, body: '' }))

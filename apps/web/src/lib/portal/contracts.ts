@@ -114,6 +114,16 @@ const positive = z.string().regex(/^[1-9][0-9]{0,19}$/)
 const country = z.string().regex(/^[A-Z]{2}$/)
 const hash = z.string().regex(/^[0-9a-f]{64}$/)
 export const evidenceSchema = z.object({ id, kind: z.enum(['IDENTITY', 'ADDRESS', 'COMPANY', 'BENEFICIAL_OWNERS']), title: text(1, 160), storage_path: text(1, 400), sha256: hash, size: z.number().int().min(1).max(4_194_304), mime_type: z.enum(['application/pdf', 'image/png', 'image/jpeg']) }).strict()
+const historicalEvidenceSchema = evidenceSchema.omit({ storage_path: true, sha256: true }).extend({ claimed_sha256: hash }).strict()
+export const applicationDocumentVersionsSchema = z.object({
+  application_id: id,
+  versions: z.array(z.object({ revision: z.number().int().positive(), submitted_at: z.string().datetime({ offset: true }), capture_kind: z.enum(['MIGRATION_SNAPSHOT', 'SUBMISSION']), documents: z.array(historicalEvidenceSchema).max(8) })),
+})
+export const applicationDocumentLookupSchema = historicalEvidenceSchema.extend({
+  application_id: id, revision: z.number().int().positive(), storage_path: text(1, 400),
+}).strip()
+export type ApplicationDocumentVersions = z.infer<typeof applicationDocumentVersionsSchema>
+export type HistoricalEvidenceDocument = z.infer<typeof historicalEvidenceSchema>
 export const legacyApplicationDetailsSchema = z.object({ full_name: text(2, 120), country, investor_type: z.enum(['INDIVIDUAL', 'ENTITY']), company_name: text(0, 160), registration_reference: text(0, 100), source_of_funds: text(20, 2000), beneficial_owners: text(0, 2000), experience: text(10, 2000), documents: z.array(evidenceSchema).min(1).max(8), test_data_acknowledged: z.literal(true), details_version: z.never().optional(), business_activities: z.never().optional(), representative_position: z.never().optional(), authority_basis: z.never().optional() }).strict()
 export const wealthManagerApplicationDetailsV2Schema = z.object({ details_version: z.literal(2), full_name: text(2, 120), country, company_name: text(3, 160), registration_reference: text(3, 100), beneficial_owners: text(20, 2000), business_activities: text(20, 2000), representative_position: text(2, 160), authority_basis: text(20, 2000), documents: z.array(evidenceSchema).min(1).max(8), test_data_acknowledged: z.literal(true), investor_type: z.never().optional(), source_of_funds: z.never().optional(), experience: z.never().optional() }).strict()
 export const applicationDetailsSchema = z.union([legacyApplicationDetailsSchema, wealthManagerApplicationDetailsV2Schema])

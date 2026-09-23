@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { NextRequest, NextResponse } from 'next/server'
-import { evidenceSchema } from '@/lib/portal/contracts'
+import { applicationDocumentLookupSchema, applicationDocumentVersionsSchema, evidenceSchema } from '@/lib/portal/contracts'
 import { PortalError, readPortal, requirePortalEnvironment } from '@/lib/portal/server'
 import { portalFailure, readPortalBody } from '@/lib/portal/http'
 import { hasCanonicalOrigin, privateResponse, responseCookieAdapter } from '@/lib/supabase/http'
@@ -99,17 +99,53 @@ export async function GET(request: NextRequest) {
     requirePortalEnvironment()
     if (request.headers.get('sec-fetch-site') === 'cross-site') throw new PortalError('Open this document from your portal.', 403)
     const params = request.nextUrl.searchParams
-    const id = params.get('id') ?? ''
-    if (!/^[0-9a-f-]{36}$/i.test(id) || params.getAll('id').length !== 1 || [...params.keys()].some(k => !['id', 'download', 'mode', 'organisation', 'role'].includes(k)) || ['download','mode','organisation','role'].some(k => params.getAll(k).length > 1) || (params.has('download') && params.get('download') !== '1')) throw new PortalError('Invalid document reference.', 400)
+    const id = params.get('id') ?? '', applicationId = params.get('application_id') ?? ''
+    const revisionText = params.get('revision') ?? ''
+    const validId = (value: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)
+    const keys = ['id', 'application_id', 'revision', 'history', 'download', 'mode', 'organisation', 'role']
+    if ([...params.keys()].some(key => !keys.includes(key)) || keys.some(key => params.getAll(key).length > 1)
+      || (params.has('download') && params.get('download') !== '1')
+      || (params.has('history') && params.get('history') !== '1')) throw new PortalError('Invalid document reference.', 400)
+    const history = validId(applicationId) && params.has('history') && !params.has('revision') && !params.has('id') && !params.has('download')
+    const historicalDocument = validId(applicationId) && validId(id) && !params.has('history') && /^[1-9][0-9]{0,8}$/.test(revisionText)
+    const currentDocument = validId(id) && !params.has('application_id') && !params.has('revision') && !params.has('history')
+    if (!history && !historicalDocument && !currentDocument) throw new PortalError('Invalid document reference.', 400)
     const context = portalOperatingContextSchema.safeParse(params.get('mode') === 'applicant' && !params.has('organisation') && !params.has('role') ? { mode: 'APPLICANT' } : !params.has('mode') ? { mode: 'ROLE', organisationId: params.get('organisation'), role: params.get('role') } : null)
     if (!context.success) throw new PortalError('Invalid operating context.', 403)
     const client = createRequestSupabaseClient(jar.adapter)
     const { snapshot } = await readPortal(client, context.data)
-    const document = snapshot.applications.flatMap(application => application.details.documents ?? []).find(item => item.id === id)
-    if (!document || !evidenceSchema.safeParse(document).success
+    const visibleApplication = history || historicalDocument ? snapshot.applications.find(application => application.id === applicationId) : undefined
+    if ((history || historicalDocument) && !visibleApplication) throw new PortalError('Document unavailable for this session.', 404)
+    if (history) {
+      const { data, error } = await client.rpc('bx1_application_document_versions', { application_id: applicationId, operating_context: context.data }).abortSignal(AbortSignal.timeout(12000))
+      if (error?.code === '42501' || error?.code === 'P0002') throw new PortalError('Document unavailable for this session.', 404)
+      if (error) throw new PortalError('Document history is temporarily unavailable.', 503)
+      const versions = applicationDocumentVersionsSchema.safeParse(data)
+      if (!versions.success || versions.data.application_id !== applicationId) throw new PortalError('Document history could not be verified.', 503)
+      return jar.finish(privateResponse(NextResponse.json(versions.data)))
+    }
+    const revision = historicalDocument ? Number(revisionText) : undefined
+    let document: { id: string; storage_path: string; sha256: string; size: number; mime_type: string } | undefined
+    if (historicalDocument) {
+      const { data, error } = await client.rpc('bx1_application_document_lookup', { application_id: applicationId, revision, document_id: id, operating_context: context.data }).abortSignal(AbortSignal.timeout(12000))
+      if (error?.code === '42501' || error?.code === 'P0002') throw new PortalError('Document unavailable for this session.', 404)
+      if (error) throw new PortalError('The saved document is temporarily unavailable.', 503)
+      const lookup = applicationDocumentLookupSchema.safeParse(data)
+      if (!lookup.success || lookup.data.application_id !== applicationId || lookup.data.revision !== revision || lookup.data.id !== id) throw new PortalError('Document lookup could not be verified.', 503)
+      document = { id, storage_path: lookup.data.storage_path, sha256: lookup.data.claimed_sha256, size: lookup.data.size, mime_type: lookup.data.mime_type }
+    } else {
+      const current = snapshot.applications.flatMap(application => application.details.documents ?? []).find(item => item.id === id)
+      const checked = evidenceSchema.safeParse(current)
+      if (checked.success) document = checked.data
+    }
+    if (!document
       || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(document.storage_path)
-      || !document.storage_path.endsWith(`/${document.id}`)) throw new PortalError('Document unavailable for this session.', 404)
-    if (!params.has('download')) return jar.finish(privateResponse(NextResponse.json({ url: portalScopeHref(`/api/portal/documents?id=${id}&download=1`, context.data) })))
+      || !document.storage_path.endsWith(`/${document.id}`)
+      || (historicalDocument && document.storage_path.split('/')[0] !== visibleApplication?.user_id)) throw new PortalError('Document unavailable for this session.', 404)
+    if (!params.has('download')) {
+      const target = historicalDocument ? `/api/portal/documents?application_id=${applicationId}&revision=${revision}&id=${id}&download=1` : `/api/portal/documents?id=${id}&download=1`
+      return jar.finish(privateResponse(NextResponse.json({ url: portalScopeHref(target, context.data) })))
+    }
     const downloaded = await client.storage.from(bucket).download(document.storage_path)
     if (downloaded.error || !downloaded.data || downloaded.data.size !== document.size || downloaded.data.size > maxFile) throw new PortalError('The saved document could not be verified.', 409)
     const bytes = new Uint8Array(await downloaded.data.arrayBuffer())
