@@ -748,8 +748,10 @@ try {
   await db.query('savepoint entity_draft_review_scope')
   await admin()
   await db.query('update bx1_portal.applications set reviewer_scope=$1 where id=$2', [nativeScope, entityApp.id])
+  const draftEventId = (await db.query("insert into bx1_portal.events(subject_id,application_id,kind,actor_id,summary) values($1,$1,'synthetic_draft_marker',$2,'Synthetic unsubmitted draft event') returning id", [entityApp.id, uid(9)])).rows[0].id
   const reviewerDraftProjection = await mandateScopedRead(2, reviewer)
   eq(reviewerDraftProjection.applications.some(value => value.id === entityApp.id), false, 'assured staff cannot read an unsubmitted customer draft even if reviewer scope is set')
+  eq(reviewerDraftProjection.events.some(value => value.id === draftEventId), false, 'assured staff cannot read unsubmitted customer draft event metadata')
   await db.query('rollback to savepoint entity_draft_review_scope; release savepoint entity_draft_review_scope')
   const entitySubmitted = await entryCommand(9, 'submit_application', { application_id: entityApp.id, expected_revision: entityApp.revision, details: entityDetails })
   entityApp = entitySubmitted.applications.find(value => value.id === entityApp.id)
