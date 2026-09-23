@@ -29,6 +29,13 @@ describe('entry application identities and capacities', () => {
     expect(entryCommandSchema.safeParse({ command: 'submit_application', key, payload: { persona: 'INVESTOR', expected_revision: 1, details: {} } }).success).toBe(false)
     expect(entryCommandSchema.safeParse({ command: 'submit_application', key, payload: { application_id: entryApplicationId, expected_revision: 0, details: {} } }).success).toBe(false)
   })
+  it('binds a synthetic mandate request to the application and never accepts a client-selected role', () => {
+    const payload = { application_id: entryApplicationId, expected_revision: 0, evidence_reference: 'SYNTHETIC-APPOINTMENT-001 for test review', requested_until: '2026-10-01T12:00:00Z' }
+    expect(entryCommandSchema.safeParse({ command: 'request_representative_mandate', key, payload }).success).toBe(true)
+    for (const change of [{ application_id: undefined }, { expected_revision: -1 }, { evidence_reference: 'too short' }, { requested_until: 'not a date' }, { role: 'SuperAdmin' }]) {
+      expect(entryCommandSchema.safeParse({ command: 'request_representative_mandate', key, payload: { ...payload, ...change } }).success).toBe(false)
+    }
+  })
   it('rejects manufactured staff roles and malformed environment admission', () => {
     expect(entrySnapshotSchema.safeParse({ ...entryFixture(), contexts: [{ context_key: key, organisation_id: key, name: 'Example', roles: ['WealthManager'] }] }).success).toBe(false)
     expect(entrySnapshotSchema.safeParse({ ...entryFixture(), admission: { manual_test_review: 'true' } }).success).toBe(false)

@@ -10,7 +10,7 @@ const markerKey = (actorId: string, environment: PlatformEnvironment) => `bx1-en
 function readMarker(raw: string | null): EntryMarker | null {
   if (!raw) return null
   const value = JSON.parse(raw) as Partial<EntryMarker> | null
-  if (!value || typeof value.key !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value.key) || !['start_application', 'submit_application'].includes(value.command ?? '') || typeof value.hash !== 'string' || !/^[0-9a-f]{64}$/.test(value.hash)) throw new Error('Your previous request reference needs operator reconciliation. No replacement request was sent.')
+  if (!value || typeof value.key !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value.key) || !['start_application', 'submit_application', 'request_representative_mandate'].includes(value.command ?? '') || typeof value.hash !== 'string' || !/^[0-9a-f]{64}$/.test(value.hash)) throw new Error('Your previous request reference needs operator reconciliation. No replacement request was sent.')
   return value as EntryMarker
 }
 export function reconcileEntryMarker(storage: MarkerStorage, actorId: string, environment: PlatformEnvironment, receipts: NonNullable<EntrySnapshot['requests']>): EntryMarker | null {

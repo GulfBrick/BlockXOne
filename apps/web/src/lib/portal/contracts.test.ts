@@ -75,6 +75,17 @@ describe('customer portal contracts', () => {
       expect(portalCommandSchema.safeParse({ command: 'revoke_product_eligibility', key, payload: { ...payload, ...change } }).success).toBe(false)
     }
   })
+  it('keeps appointment review, role application and protective revocation as separate guarded commands', () => {
+    const review = { mandate_id: id, expected_revision: 1, decision: 'APPROVED', notes: 'Fictional appointment, customer source and scope independently reviewed.', checks: { appointment: true, evidence: true, scope: true } }
+    expect(portalCommandSchema.safeParse({ command: 'review_representative_mandate', key, payload: review }).success).toBe(true)
+    for (const change of [{ expected_revision: 0 }, { notes: 'too short' }, { role: 'SuperAdmin' }, { checks: { ...review.checks, ownership: true } }]) {
+      expect(portalCommandSchema.safeParse({ command: 'review_representative_mandate', key, payload: { ...review, ...change } }).success).toBe(false)
+    }
+    expect(portalCommandSchema.safeParse({ command: 'apply_representative_mandate', key, payload: { mandate_id: id, expected_revision: 2 } }).success).toBe(true)
+    expect(portalCommandSchema.safeParse({ command: 'apply_representative_mandate', key, payload: { mandate_id: id, expected_revision: 2, role: 'SuperAdmin' } }).success).toBe(false)
+    expect(portalCommandSchema.safeParse({ command: 'revoke_representative_mandate', key, payload: { mandate_id: id, expected_revision: 3, reason: 'Fictional appointment revoked for controlled authority testing.' } }).success).toBe(true)
+    expect(portalCommandSchema.safeParse({ command: 'revoke_representative_mandate', key, payload: { mandate_id: id, expected_revision: 3, reason: 'short' } }).success).toBe(false)
+  })
   it('never accepts financial completion or reviewer identity from the browser', () => {
     expect(portalCommandSchema.safeParse({ command: 'settle', key, payload: { subscription_id: id, paid: true } }).success).toBe(false)
     expect(portalCommandSchema.safeParse({ command: 'review_application', key, payload: { application_id: id, expected_revision: 1, decision: 'APPROVED', notes: 'Synthetic documents independently reviewed.', checks: { identity: true, ownership: true, screening: true, suitability: true }, reviewer_id: id } }).success).toBe(false)

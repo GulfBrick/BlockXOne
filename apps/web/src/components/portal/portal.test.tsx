@@ -1,7 +1,7 @@
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { PORTAL_PATHS, productTermsSchema, type PortalApplication, type PortalInvestmentAccount, type PortalOrganisation, type PortalPageData, type PortalProduct, type PortalProductEligibility, type PortalSnapshot, type PortalSubscription } from '@/lib/portal/contracts'
+import { PORTAL_PATHS, productTermsSchema, type PortalApplication, type PortalInvestmentAccount, type PortalOrganisation, type PortalOrganisationMandate, type PortalPageData, type PortalProduct, type PortalProductEligibility, type PortalSnapshot, type PortalSubscription } from '@/lib/portal/contracts'
 import { APPLICANT_CONTEXT, portalScopeHref, type PortalOperatingContext } from '@/lib/portal/operating-context'
 import type { Bx1Role } from '@/lib/supabase/contracts'
 import { PortalScreen, productManagementOrganisations } from './portal-screens'
@@ -33,6 +33,25 @@ function operatorOrganisation(role: 'OfferingManager' | 'IssuerFundManager' = 'O
 }
 function application(change: Partial<PortalApplication> = {}): PortalApplication {
   return { id: applicationId, user_id: actor, persona: 'INVESTOR', status: 'APPROVED', revision: 1, details: { full_name: 'Synthetic Investor', country: 'ZA', investor_type: 'INDIVIDUAL', company_name: '', registration_reference: '', source_of_funds: 'Entirely fictional test savings for workflow validation.', beneficial_owners: '', experience: 'Fictional investment experience for manual test review.', documents: [], test_data_acknowledged: true }, submitted_at: '2026-09-20T10:00:00Z', reviewed_at: '2026-09-20T11:00:00Z', reviewer_id: other, review_notes: null, organisation_id: null, review_checks: {}, provider_mode: 'MANUAL_TEST_REVIEW', approved_until: '2099-01-01T00:00:00Z', ...change }
+}
+function managerApplication(change: Partial<PortalApplication> = {}): PortalApplication {
+  return application({ persona: 'WEALTH_MANAGER', user_id: other, organisation_id: organisation, admission_purpose: 'CUSTOMER_ORGANISATION_ADMISSION', details: {
+    details_version: 2, full_name: 'Synthetic Customer Representative', country: 'ZA', company_name: 'Fictional Manager Client',
+    registration_reference: 'SYNTHETIC-REG-001', beneficial_owners: 'Fictional owners and share proportions for test review.',
+    business_activities: 'Fictional wealth management and product structuring for the test environment.',
+    representative_position: 'Synthetic authorised representative', authority_basis: 'Synthetic appointment by fictional company board for this rehearsal.',
+    documents: [], test_data_acknowledged: true,
+  }, ...change })
+}
+function representativeMandate(change: Partial<PortalOrganisationMandate> = {}): PortalOrganisationMandate {
+  return { id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', application_id: applicationId, product_organisation_id: organisation,
+    native_organisation_id: null, reviewer_scope_organisation_id: nativeOrganisation, applicant_user_id: other,
+    organisation_name: 'Fictional Manager Client', role: 'OfferingManager', status: 'SUBMITTED', revision: 1,
+    requested_until: '2099-01-01T00:00:00Z', evidence_reference: 'SYNTHETIC-APPOINTMENT-001 for test review', review_notes: null,
+    reviewer_user_id: null, applied_by_user_id: null, admission_revision: 1, admission_status: 'APPROVED',
+    admission_approved_until: '2099-01-01T00:00:00Z', admission_purpose: 'CUSTOMER_ORGANISATION_ADMISSION',
+    effective: false, next_owner: 'COMPLIANCE', can_request: false, can_review: true,
+    can_apply: false, can_revoke: false, ...change }
 }
 function product(change: Partial<PortalProduct> = {}): PortalProduct {
   return { id: productId, organisation_id: organisation, created_by: other, revision: 3, status: 'PUBLISHED', terms: fictionalProductTerms(), terms_hash: 'ab'.repeat(32), reserved_units: '0', created_at: '2026-09-20T10:00:00Z', reviewer_id: actor, review_notes: null, reviewed_at: '2026-09-20T11:00:00Z', published_at: '2026-09-20T12:00:00Z', review_checks: {}, ...change }
@@ -101,7 +120,7 @@ describe('portal navigation and source-driven surfaces', () => {
     expect(html).not.toContain('Other Private Applicant'); expect(html).not.toContain('Record review decision')
   })
   it('never turns an unfunded reservation into a holding or performance chart', () => {
-    const value = snapshot(); value.subscriptions = [order()]
+    const value = snapshot(); value.applications = [application()]; value.subscriptions = [order()]
     const html = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal/portfolio" />)
     expect(html).toContain('Awaiting funding'); expect(html).toContain('Reservations are not holdings'); expect(html).toContain('Cancel unfunded reservation')
     expect(html).not.toContain('Portfolio return'); expect(html).not.toContain('Total assets under management')
@@ -334,6 +353,113 @@ describe('owned individual investment-account controls', () => {
     expect(activeIndividualAccounts(value)).toEqual([])
     const html = renderToStaticMarkup(<SubscriptionForm product={product()} snapshot={value} onSaved={vi.fn()} />)
     expect(html).toContain('Approved investor onboarding required'); expect(html).not.toContain('Accept terms and reserve units</button>')
+  })
+})
+
+describe('customer organisation admission to governed representative mandate', () => {
+  it('never gives a wealth-manager-only applicant the investor account, orders or opportunities surfaces', () => {
+    const value = snapshot(); value.applications = [managerApplication({ user_id: actor })]; value.products = [product()]
+    const overview = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal" operatingContext={APPLICANT_CONTEXT} />)
+    expect(overview).toContain('Continue your customer organisation application.')
+    expect(overview).toContain('Customer organisation relationship')
+    expect(overview).not.toContain('Your subscription orders')
+    expect(overview).not.toContain('Your investment account')
+    expect(overview).not.toContain('Investment opportunities')
+    expect(overview).not.toContain('href="/portal/portfolio?mode=applicant"')
+    for (const view of ['/portal/portfolio', '/portal/opportunities', '/portal/opportunities/detail'] as const) {
+      const html = renderToStaticMarkup(<PortalScreen data={data(value)} view={view} id={productId} operatingContext={APPLICANT_CONTEXT} />)
+      expect(html).toContain('Record unavailable')
+      expect(html).not.toContain('Fictional Test Fund')
+    }
+  })
+  it('shows a separate Compliance appointment queue and source-admission review, not an instant product role', () => {
+    const value = snapshot(); value.actor.can_review = true; value.mandate_queue_available = true; value.applications = [managerApplication()]; value.organisation_mandates = [representativeMandate()]
+    const reviewer = operating('ComplianceOfficer')
+    const queue = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal/compliance" operatingContext={reviewer} />)
+    expect(queue).toContain('Representative mandate review')
+    expect(queue).toContain('Fictional Manager Client')
+    expect(queue).toContain('Independent BlockXOne Compliance Officer')
+    const detail = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal/compliance/detail" id={representativeMandate().id} operatingContext={reviewer} />)
+    expect(detail).toContain('Approved customer admission source')
+    expect(detail).toContain('Inspect original admission and private evidence')
+    expect(detail).toContain('Record appointment decision')
+    expect(detail).not.toContain('Apply reviewed Offering Manager mandate')
+    expect(detail).not.toContain('Create a product')
+  })
+  it('denies reviewer action when source evidence is unavailable or the case belongs to another scope', () => {
+    const value = snapshot(); value.actor.can_review = true; value.mandate_queue_available = true; value.organisation_mandates = [representativeMandate()]
+    const reviewer = operating('ComplianceOfficer')
+    const noSource = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal/compliance/detail" id={representativeMandate().id} operatingContext={reviewer} />)
+    expect(noSource).toContain('Source admission unavailable')
+    expect(noSource).not.toContain('Record appointment decision')
+    value.organisation_mandates = [representativeMandate({ reviewer_scope_organisation_id: otherOrganisation, organisation_name: 'Other organisation confidential appointment' })]
+    const queue = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal/compliance" operatingContext={reviewer} />)
+    expect(queue).not.toContain('Other organisation confidential appointment')
+    const detail = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal/compliance/detail" id={representativeMandate().id} operatingContext={reviewer} />)
+    expect(detail).toContain('Record unavailable')
+    expect(detail).not.toContain('Other organisation confidential appointment')
+  })
+  it('does not let an applicant with a separate Compliance role decide their own mandate', () => {
+    const value = snapshot(); value.actor.can_review = true; value.mandate_queue_available = true
+    value.applications = [managerApplication({ user_id: actor })]
+    value.organisation_mandates = [representativeMandate({ applicant_user_id: actor })]
+    const html = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal/compliance/detail" id={representativeMandate().id} operatingContext={operating('ComplianceOfficer')} />)
+    expect(html).toContain('You cannot decide or apply your own appointment')
+    expect(html).not.toContain('Record appointment decision')
+  })
+  it('does not equate an unavailable mandate queue with zero saved cases', () => {
+    const value = snapshot(); value.actor.can_review = true
+    const compliance = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal/compliance" operatingContext={operating('ComplianceOfficer')} />)
+    expect(compliance).toContain('Mandate queue unavailable')
+    const admin = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal" operatingContext={operating('SuperAdmin')} />)
+    expect(admin).toContain('Mandate queue unavailable')
+  })
+  it('requires authenticator assurance before displaying any mandate case or case count', () => {
+    const value = snapshot(); value.actor.can_review = true; value.mandate_queue_available = false; value.mandate_queue_blocked_reason = 'MFA_REQUIRED'
+    value.organisation_mandates = [representativeMandate({ organisation_name: 'Hidden until authenticator verification' })]
+    for (const role of ['ComplianceOfficer', 'SuperAdmin'] as const) {
+      const context = operating(role)
+      const queue = renderToStaticMarkup(<PortalScreen data={data(value)} view={role === 'SuperAdmin' ? '/portal' : '/portal/compliance'} operatingContext={context} />)
+      expect(queue).toContain('Authenticator required')
+      expect(queue).toContain('href="/workspace/security"')
+      expect(queue).not.toContain('Hidden until authenticator verification')
+      const detail = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal/compliance/detail" id={representativeMandate().id} operatingContext={context} />)
+      expect(detail).toContain('Record unavailable')
+      expect(detail).not.toContain('Hidden until authenticator verification')
+    }
+  })
+  it('shows a sealed staff mandate route as unavailable rather than an empty reviewed queue', () => {
+    const value = snapshot(); value.actor.can_review = true; value.mandate_queue_available = false; value.mandate_queue_blocked_reason = 'NOT_ADMITTED'
+    value.organisation_mandates = [representativeMandate({ organisation_name: 'Hidden until route admission' })]
+    const html = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal/compliance" operatingContext={operating('ComplianceOfficer')} />)
+    expect(html).toContain('Mandate review route not admitted')
+    expect(html).not.toContain('Hidden until route admission')
+    expect(html).not.toContain('No representative mandate cases in this scope')
+  })
+  it('reserves role application for a distinct, scoped Super Admin and no applicant self-application', () => {
+    const value = snapshot(); value.mandate_queue_available = true; const reviewed = representativeMandate({ status: 'APPROVED', revision: 2, can_review: false, can_apply: true, reviewer_user_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', next_owner: 'SUPER_ADMIN' })
+    value.organisation_mandates = [reviewed]
+    const admin = operating('SuperAdmin')
+    const queue = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal" operatingContext={admin} />)
+    expect(queue).toContain('Approved representative mandates to apply')
+    expect(queue).toContain('Authorised BlockXOne Super Admin')
+    const detail = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal/compliance/detail" id={reviewed.id} operatingContext={admin} />)
+    expect(detail).toContain('Apply reviewed Offering Manager mandate')
+    expect(detail).not.toContain('Record appointment decision')
+    value.organisation_mandates = [{ ...reviewed, applicant_user_id: actor }]
+    const self = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal/compliance/detail" id={reviewed.id} operatingContext={admin} />)
+    expect(self).not.toContain('Apply reviewed Offering Manager mandate')
+    expect(self).toContain('You cannot decide or apply your own appointment')
+  })
+  it('shows revocation only for an applied case under a server-authorised exact scope', () => {
+    const value = snapshot(); value.mandate_queue_available = true; value.organisation_mandates = [representativeMandate({ status: 'APPLIED', revision: 3, can_review: false, can_revoke: true, effective: true, native_organisation_id: otherOrganisation })]
+    const admin = operating('SuperAdmin')
+    const detail = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal/compliance/detail" id={representativeMandate().id} operatingContext={admin} />)
+    expect(detail).toContain('Revoke this appointment')
+    expect(detail).not.toContain('Apply reviewed Offering Manager mandate')
+    value.organisation_mandates = [{ ...value.organisation_mandates[0], can_revoke: false }]
+    const denied = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal/compliance/detail" id={representativeMandate().id} operatingContext={admin} />)
+    expect(denied).not.toContain('Revoke this appointment')
   })
 })
 

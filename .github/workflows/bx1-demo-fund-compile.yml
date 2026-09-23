@@ -52,6 +52,8 @@ on:
       - supabase/migrations/20260921160000_portal_authority_accounts.sql
       - supabase/migrations/20260923134152_stage2_product_eligibility.sql
       - supabase/tests/bx1_product_eligibility.sql
+      - supabase/migrations/20260923143713_stage2_customer_mandates.sql
+      - supabase/tests/bx1_customer_mandates.sql
       - supabase/tests/bx1_portal_authority_accounts.sql
       - supabase/tests/bx1_portal.sql
       - contracts/demo/**
@@ -102,6 +104,8 @@ on:
       - supabase/migrations/20260921160000_portal_authority_accounts.sql
       - supabase/migrations/20260923134152_stage2_product_eligibility.sql
       - supabase/tests/bx1_product_eligibility.sql
+      - supabase/migrations/20260923143713_stage2_customer_mandates.sql
+      - supabase/tests/bx1_customer_mandates.sql
       - supabase/tests/bx1_portal_authority_accounts.sql
       - supabase/tests/bx1_portal.sql
       - contracts/demo/**

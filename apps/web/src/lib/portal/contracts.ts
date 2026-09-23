@@ -26,6 +26,10 @@ export type WealthManagerApplicationDetailsV2 = {
 }
 export type ApplicationDetails = LegacyApplicationDetails | WealthManagerApplicationDetailsV2
 export type AdmissionPurpose = 'INVESTOR_ADMISSION' | 'CUSTOMER_ORGANISATION_ADMISSION' | 'LEGACY_REHEARSAL'
+export type RepresentativeMandateNextOwner = 'APPLICANT' | 'COMPLIANCE' | 'SUPER_ADMIN' | 'NONE'
+export function representativeMandateNextOwnerLabel(owner: RepresentativeMandateNextOwner): string {
+  return { APPLICANT: 'Customer applicant', COMPLIANCE: 'Independent BlockXOne Compliance Officer', SUPER_ADMIN: 'Authorised BlockXOne Super Admin', NONE: 'No current mandate action' }[owner]
+}
 /** A version discriminator only; request/read schemas still validate complete evidence. */
 export function isWealthManagerDetailsV2(value: unknown): value is WealthManagerApplicationDetailsV2 {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value) && (value as { details_version?: unknown }).details_version === 2)
@@ -59,6 +63,16 @@ export type PortalProductEligibility = {
   holder_user_id?: string; product_name?: string; account_kind?: string;
   investor_application?: Pick<PortalApplication, 'id' | 'revision' | 'status' | 'approved_until' | 'details'> | null;
 }
+export type PortalOrganisationMandate = {
+  id: string; application_id: string; product_organisation_id: string; native_organisation_id: string | null;
+  reviewer_scope_organisation_id: string; applicant_user_id: string; organisation_name: string;
+  role: 'OfferingManager'; status: 'SUBMITTED' | 'CHANGES_REQUIRED' | 'APPROVED' | 'REJECTED' | 'APPLIED' | 'REVOKED';
+  revision: number; requested_until: string; evidence_reference: string; review_notes: string | null;
+  reviewer_user_id: string | null; applied_by_user_id: string | null;
+  admission_revision: number; admission_status: ApplicationStatus; admission_approved_until: string | null;
+  admission_purpose: AdmissionPurpose; effective: boolean; next_owner: RepresentativeMandateNextOwner;
+  can_request: boolean; can_review: boolean; can_apply: boolean; can_revoke: boolean;
+}
 export type ProductTerms = {
   asset_type: 'FUND' | 'REAL_ESTATE'; name: string; issuer_name: string; summary: string;
   strategy: string; share_class: string; currency: 'ZAR_TEST'; unit_price_minor: string;
@@ -88,7 +102,8 @@ export type PortalSnapshot = {
   applications: PortalApplication[]; organisations: PortalOrganisation[];
   products: PortalProduct[]; subscriptions: PortalSubscription[]; events: PortalEvent[];
   requests?: { key: string; command: string }[];
-  accounts?: PortalInvestmentAccount[]; product_eligibility?: PortalProductEligibility[]; operating_context?: PortalOperatingContext;
+  accounts?: PortalInvestmentAccount[]; product_eligibility?: PortalProductEligibility[]; organisation_mandates?: PortalOrganisationMandate[]; operating_context?: PortalOperatingContext;
+  mandate_queue_available?: boolean; mandate_queue_blocked_reason?: 'MFA_REQUIRED' | 'NOT_ADMITTED' | null;
   funding?: FundingSnapshot;
 }
 export type PortalPageData = { user: { id: string; email: string }; snapshot: PortalSnapshot }
@@ -110,6 +125,7 @@ export const productTermsSchema = z.object({ asset_type: z.enum(['FUND', 'REAL_E
 export const reviewChecks = z.object({ identity: z.boolean(), ownership: z.boolean(), screening: z.boolean(), suitability: z.boolean() }).strict()
 export const offeringChecks = z.object({ issuer: z.boolean(), terms: z.boolean(), disclosures: z.boolean(), eligibility: z.boolean() }).strict()
 export const productEligibilityChecks = z.object({ identity: z.boolean(), product_fit: z.boolean(), restrictions: z.boolean(), source_of_funds: z.boolean() }).strict()
+export const representativeMandateChecks = z.object({ appointment: z.boolean(), evidence: z.boolean(), scope: z.boolean() }).strict()
 export const portalCommandSchema = z.discriminatedUnion('command', [
   z.object({ command: z.literal('submit_application'), key: id, payload: z.object({ persona: z.enum(['INVESTOR', 'WEALTH_MANAGER']), expected_revision: z.number().int().min(0), details: applicationDetailsSchema }).strict() }).strict(),
   z.object({ command: z.literal('review_application'), key: id, payload: z.object({ application_id: id, expected_revision: z.number().int().positive(), decision: z.enum(['APPROVED', 'CHANGES_REQUIRED', 'REJECTED']), notes: text(20, 3000), checks: reviewChecks }).strict() }).strict(),
@@ -117,6 +133,9 @@ export const portalCommandSchema = z.discriminatedUnion('command', [
   z.object({ command: z.literal('request_product_eligibility'), key: id, payload: z.object({ product_id: id, investment_account_id: id, expected_revision: z.number().int().min(0), investor_statement: text(20, 2000) }).strict() }).strict(),
   z.object({ command: z.literal('review_product_eligibility'), key: id, payload: z.object({ eligibility_case_id: id, expected_revision: z.number().int().positive(), decision: z.enum(['APPROVED', 'CHANGES_REQUIRED', 'REJECTED']), notes: text(20, 3000), checks: productEligibilityChecks }).strict() }).strict(),
   z.object({ command: z.literal('revoke_product_eligibility'), key: id, payload: z.object({ eligibility_case_id: id, expected_revision: z.number().int().positive(), reason: text(20, 2000) }).strict() }).strict(),
+  z.object({ command: z.literal('review_representative_mandate'), key: id, payload: z.object({ mandate_id: id, expected_revision: z.number().int().positive(), decision: z.enum(['APPROVED', 'CHANGES_REQUIRED', 'REJECTED']), notes: text(20, 3000), checks: representativeMandateChecks }).strict() }).strict(),
+  z.object({ command: z.literal('apply_representative_mandate'), key: id, payload: z.object({ mandate_id: id, expected_revision: z.number().int().positive() }).strict() }).strict(),
+  z.object({ command: z.literal('revoke_representative_mandate'), key: id, payload: z.object({ mandate_id: id, expected_revision: z.number().int().positive(), reason: text(20, 1000) }).strict() }).strict(),
   z.object({ command: z.literal('create_product'), key: id, payload: z.object({ organisation_id: id, terms: productTermsSchema }).strict() }).strict(),
   z.object({ command: z.literal('save_product'), key: id, payload: z.object({ product_id: id, expected_revision: z.number().int().positive(), terms: productTermsSchema }).strict() }).strict(),
   z.object({ command: z.literal('submit_product'), key: id, payload: z.object({ product_id: id, expected_revision: z.number().int().positive() }).strict() }).strict(),

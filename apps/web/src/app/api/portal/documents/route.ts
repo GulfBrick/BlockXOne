@@ -6,6 +6,7 @@ import { portalFailure, readPortalBody } from '@/lib/portal/http'
 import { hasCanonicalOrigin, privateResponse, responseCookieAdapter } from '@/lib/supabase/http'
 import { createRequestSupabaseClient } from '@/lib/supabase/server'
 import { portalOperatingContextSchema, portalScopeHref } from '@/lib/portal/operating-context'
+import { documentReceiptDatabaseConfig, documentReceiptId, registerDocumentReceipt } from '@/lib/portal/document-receipts'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -17,6 +18,27 @@ function detectedType(bytes: Uint8Array): string | null {
   if (bytes.length >= 8 && Buffer.from(bytes.subarray(0, 8)).equals(Buffer.from([137,80,78,71,13,10,26,10]))) return 'image/png'
   if (bytes.length >= 3 && bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255) return 'image/jpeg'
   return null
+}
+async function receiptPolicy(client: ReturnType<typeof createRequestSupabaseClient>): Promise<boolean> {
+  const { data, error } = await client.rpc('bx1_document_receipts_required').abortSignal(AbortSignal.timeout(8000))
+  // During the reviewed database-first rollout, the old synthetic-only schema
+  // may not have this RPC yet. All other failures are fail-closed.
+  if (error?.code === 'PGRST202') return false
+  if (error || typeof data !== 'boolean') throw new PortalError('Private evidence policy is temporarily unavailable.', 503)
+  return data
+}
+async function currentSessionId(client: ReturnType<typeof createRequestSupabaseClient>, actorId: string): Promise<string> {
+  const { data, error } = await client.auth.getSession()
+  const token = data.session?.access_token
+  if (error || !token) throw new PortalError('Sign in again before uploading private evidence.', 401)
+  const verified = await client.auth.getUser(token)
+  if (verified.error || verified.data.user?.id !== actorId) throw new PortalError('The signed-in account changed.', 403)
+  try {
+    const claims = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8')) as Record<string, unknown>
+    if (claims.sub !== actorId || typeof claims.session_id !== 'string'
+      || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(claims.session_id)) throw new Error()
+    return claims.session_id
+  } catch { throw new PortalError('The signed-in session is unavailable.', 403) }
 }
 export async function POST(request: NextRequest) {
   const jar = responseCookieAdapter(request)
@@ -34,6 +56,10 @@ export async function POST(request: NextRequest) {
     const client = createRequestSupabaseClient(jar.adapter)
     const { user } = await readPortal(client, context.data)
     if (user.id !== expectedActor) throw new PortalError('The signed-in account changed. Reload before uploading.', 403)
+    const strictReceipts = await receiptPolicy(client)
+    // Check the server-only database credential before an irreversible Storage
+    // upload. A missing credential never creates an unreceipted strict upload.
+    if (strictReceipts) documentReceiptDatabaseConfig()
     const body = await readPortalBody(request, maxFile + 16384)
     let form: FormData
     try { form = await new Response(Buffer.from(body), { headers: { 'Content-Type': contentType } }).formData() } catch { throw new PortalError('Invalid document upload.', 400) }
@@ -43,12 +69,26 @@ export async function POST(request: NextRequest) {
     const bytes = new Uint8Array(await file.arrayBuffer())
     const mime = detectedType(bytes)
     if (!mime || mime !== file.type) throw new PortalError('The file contents do not match a supported PDF, PNG or JPEG document.', 400)
-    const id = randomUUID()
-    const document = evidenceSchema.safeParse({ id, kind: form.get('kind'), title: form.get('title'), storage_path: `${user.id}/${id}`, sha256: createHash('sha256').update(bytes).digest('hex'), size: bytes.length, mime_type: mime })
+    const sha256 = createHash('sha256').update(bytes).digest('hex')
+    const kind = form.get('kind'), title = form.get('title')
+    const id = strictReceipts && typeof kind === 'string' && typeof title === 'string'
+      ? documentReceiptId(user.id, kind, title, sha256) : randomUUID()
+    const document = evidenceSchema.safeParse({ id, kind, title, storage_path: `${user.id}/${id}`, sha256, size: bytes.length, mime_type: mime })
     if (!document.success) throw new PortalError('Check the document type and title.', 400)
     const uploaded = await client.storage.from(bucket).upload(document.data.storage_path, bytes, { contentType: mime, cacheControl: '0', upsert: false, metadata: { sha256: document.data.sha256 } })
-    if (uploaded.error) throw new PortalError('The private document could not be saved. Your application has not been submitted.', 503)
-    return jar.finish(privateResponse(NextResponse.json({ document: document.data }, { status: 201 })))
+    if (!strictReceipts && uploaded.error) throw new PortalError('The private document could not be saved. Your application has not been submitted.', 503)
+    if (strictReceipts) {
+      // A retry may encounter the same immutable path. Accept it only if the
+      // stored object is byte-for-byte the file in this authenticated request.
+      const saved = await client.storage.from(bucket).download(document.data.storage_path)
+      if (saved.error || !saved.data || saved.data.size !== bytes.length) throw new PortalError('The saved evidence bytes could not be verified. Do not submit this document.', 503)
+      const storedBytes = new Uint8Array(await saved.data.arrayBuffer())
+      if (detectedType(storedBytes) !== mime || !Buffer.from(storedBytes).equals(Buffer.from(bytes)))
+        throw new PortalError('The saved evidence bytes differ from this upload. Do not submit this document.', 409)
+      const sessionId = await currentSessionId(client, user.id)
+      await registerDocumentReceipt(user.id, sessionId, document.data)
+    }
+    return jar.finish(privateResponse(NextResponse.json({ document: document.data, validation_state: strictReceipts ? 'SYNTHETIC_UNSCANNED' : 'LEGACY_UNVERIFIED' }, { status: uploaded.error ? 200 : 201 })))
   } catch (error) { return jar.finish(portalFailure(error)) }
 }
 export async function GET(request: NextRequest) {
@@ -64,7 +104,9 @@ export async function GET(request: NextRequest) {
     const client = createRequestSupabaseClient(jar.adapter)
     const { snapshot } = await readPortal(client, context.data)
     const document = snapshot.applications.flatMap(application => application.details.documents ?? []).find(item => item.id === id)
-    if (!document || !evidenceSchema.safeParse(document).success) throw new PortalError('Document unavailable for this session.', 404)
+    if (!document || !evidenceSchema.safeParse(document).success
+      || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(document.storage_path)
+      || !document.storage_path.endsWith(`/${document.id}`)) throw new PortalError('Document unavailable for this session.', 404)
     if (!params.has('download')) return jar.finish(privateResponse(NextResponse.json({ url: portalScopeHref(`/api/portal/documents?id=${id}&download=1`, context.data) })))
     const downloaded = await client.storage.from(bucket).download(document.storage_path)
     if (downloaded.error || !downloaded.data || downloaded.data.size !== document.size || downloaded.data.size > maxFile) throw new PortalError('The saved document could not be verified.', 409)

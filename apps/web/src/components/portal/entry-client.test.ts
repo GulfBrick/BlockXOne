@@ -20,6 +20,13 @@ describe('entry reload and unknown-result reconciliation', () => {
     expect(reconcileEntryMarker(saved, entryActorId, 'TESTNET', [])).toEqual(marker)
     expect(saved.getItem(storageKey)).not.toBeNull()
   })
+  it('recovers a mandate request by its exact receipt without saving appointment evidence in the marker', () => {
+    const saved = storage(); const mandateMarker = { key, command: 'request_representative_mandate', hash: 'b'.repeat(64) }
+    saved.setItem(storageKey, JSON.stringify(mandateMarker))
+    expect(reconcileEntryMarker(saved, entryActorId, 'TESTNET', [{ key, command: 'submit_application', application_id: entryApplicationId }])).toEqual(mandateMarker)
+    expect(reconcileEntryMarker(saved, entryActorId, 'TESTNET', [{ key, command: 'request_representative_mandate', application_id: entryApplicationId }])).toBeNull()
+    expect(saved.getItem(storageKey)).toBeNull()
+  })
   it('keeps receipt reconciliation isolated by actor and environment', () => {
     const saved = storage(); saved.setItem(storageKey, JSON.stringify(marker))
     const receipts = [{ key, command: 'submit_application' as const, application_id: entryApplicationId }]

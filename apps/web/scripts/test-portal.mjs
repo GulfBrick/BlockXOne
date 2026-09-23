@@ -77,6 +77,19 @@ async function scopedCommand(n, context, kind, payload, requestKey = key(), clie
   await actor(n, {}, client)
   return scalar('select public.bx1_portal_command_scoped($1,$2,$3::jsonb,$4::jsonb)', [kind, requestKey, JSON.stringify(payload), JSON.stringify(context)], client)
 }
+async function mandateScopedRead(n, context, client = db) {
+  await actor(n, { aal: 'aal2' }, client)
+  return scalar('select public.bx1_portal_read_scoped($1::jsonb)', [JSON.stringify(context)], client)
+}
+async function mandateScopedCommand(n, context, kind, payload, requestKey = key(), client = db) {
+  await actor(n, { aal: 'aal2' }, client)
+  return scalar('select public.bx1_portal_command_scoped($1,$2,$3::jsonb,$4::jsonb)', [kind, requestKey, JSON.stringify(payload), JSON.stringify(context)], client)
+}
+async function entryRead(n, client = db) { await actor(n, {}, client); return scalar('select public.bx1_entry_read()', [], client) }
+async function entryCommand(n, kind, payload, requestKey = key(), client = db) {
+  await actor(n, {}, client)
+  return scalar('select public.bx1_entry_command($1,$2,$3::jsonb)', [kind, requestKey, JSON.stringify(payload)], client)
+}
 async function scopedPublishedProduct(orgId, asset, name, cap = '10') {
   const context = roleContext('OfferingManager')
   const created = await scopedCommand(1, context, 'create_product', { organisation_id: orgId, terms: { ...terms(asset), name, cap_units: cap } })

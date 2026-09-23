@@ -1,6 +1,6 @@
 {
   "product": "BlockXOne",
-  "version": "1.1.0-rc.12",
+  "version": "1.1.0-rc.13",
   "status": "release-candidate",
   "baseSource": "713d1bf45f1c0c0ad71e25a9f8d15b0037341d6a",
   "sourceIdentity": "VERCEL_GIT_COMMIT_SHA",
@@ -9,10 +9,10 @@
   "sharedDashboard": "/portal",
   "environments": ["TESTNET", "MAINNET"],
   "brand": "BlockXOne Brand Kit v2.0 Exact Logo",
-  "schemaChanges": ["20260923134152_stage2_product_eligibility"],
+  "schemaChanges": ["20260923134152_stage2_product_eligibility", "20260923143713_stage2_customer_mandates", "20260923144216_stage2_document_receipts"],
   "mainnetMissingPrerequisites": ["Live identity-provider evidence, controlled document validation, and real customer admission are not approved"],
   "contractChanges": [],
   "productionFinancialAdmission": false,
-  "scope": "Bounded Stage 2 customer-to-offering increment: connect an approved investor to account creation and require a separate, independently reviewed, revision-bound product eligibility case before any new subscription. Revocation blocks new subscriptions, but does not cancel previously accepted orders or determine how their funding must be handled; that policy and reconciliation remain a Stage 4 gate. Existing identity, funding and contract history are preserved. Manual fictional TEST evidence is not live KYC. Entity mandates, document scanning, provider integration and hosted distinct-human acceptance remain required; MAIN business actions stay sealed."
+  "scope": "Stage 2 review increment: retain approved-investor account and product-eligibility controls; add a first-representative TEST customer mandate with separate applicant, MFA-authenticated Compliance decision and MFA-authenticated Super Admin application, without automatic role grants. Add a private server-owned document-receipt schema and guarded upload path, but leave receipt enforcement OFF until a dedicated restricted cloud credential and hosted proof exist. Existing identity, funding and contract history are preserved. Manual fictional evidence is not live KYC or malware scanning. Multiple representatives, entity investment accounts, Sumsub, complete document lifecycle and hosted distinct-person acceptance remain required. MAIN business actions stay sealed."
 }
 

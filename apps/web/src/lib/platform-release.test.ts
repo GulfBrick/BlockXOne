@@ -14,7 +14,7 @@ describe('one product version with isolated deployment identity', () => {
     expect(manifest.sharedEntry).toBe('/login')
     expect(manifest.sharedDashboard).toBe('/portal')
     expect(manifest.productionFinancialAdmission).toBe(false)
-    expect(manifest.schemaChanges).toEqual(['20260923134152_stage2_product_eligibility'])
+    expect(manifest.schemaChanges).toEqual(['20260923134152_stage2_product_eligibility', '20260923143713_stage2_customer_mandates', '20260923144216_stage2_document_receipts'])
     expect(manifest.mainnetMissingPrerequisites).toEqual(['Live identity-provider evidence, controlled document validation, and real customer admission are not approved'])
     expect(manifest.contractChanges).toEqual([])
   })
