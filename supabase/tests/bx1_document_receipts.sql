@@ -46,6 +46,13 @@ begin
   -- invariants above still run; the dynamic proof belongs to TEST only.
   if not exists(select 1 from bx1_portal.entry_configuration where singleton
     and environment='TESTNET' and manual_test_review) then return; end if;
+  -- The funding harness starts from a minimal synthetic auth.users table.
+  -- Stage 1's signup trigger reads this standard Supabase Auth column; add it
+  -- only to the disposable fixture before introducing receipt-test users.
+  if not exists(select 1 from pg_catalog.pg_attribute
+    where attrelid='auth.users'::regclass and attname='raw_user_meta_data' and not attisdropped) then
+    execute 'alter table auth.users add column raw_user_meta_data jsonb not null default ''{}''::jsonb';
+  end if;
   insert into auth.users(id,email,email_confirmed_at,is_anonymous) values
     (actor_a,'receipt-synthetic-a@example.invalid',clock_timestamp(),false),
     (actor_b,'receipt-synthetic-b@example.invalid',clock_timestamp(),false);

@@ -296,12 +296,22 @@ describe('owned individual investment-account controls', () => {
   })
   it.each([
     { status: 'SUBMITTED' as const }, { approved_until: '2020-01-01T00:00:00Z' },
-    { user_id: other }, { persona: 'WEALTH_MANAGER' as const },
-  ])('does not offer account creation on the portfolio route without owned, current investor approval: %j', change => {
+  ])('sends an owned investor with pending or expired approval back to onboarding: %j', change => {
     const value = snapshot(); value.applications = [application(change)]
     const html = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal/portfolio" operatingContext={APPLICANT_CONTEXT} />)
     expect(html).toContain('Complete investor onboarding')
     expect(html).toContain('href="/portal/onboarding?mode=applicant"')
+    expect(html).not.toContain('Open individual investment account</button>')
+  })
+  it.each([
+    { user_id: other }, { persona: 'WEALTH_MANAGER' as const },
+  ])('denies investor portfolio to a foreign or wealth-manager-only applicant: %j', change => {
+    const value = snapshot(); value.applications = [application(change)]
+    const html = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal/portfolio" operatingContext={APPLICANT_CONTEXT} />)
+    expect(html).toContain('Record unavailable')
+    expect(html).not.toContain('Complete investor onboarding')
+    expect(html).not.toContain('<h2>Your investment account</h2>')
+    expect(html).not.toContain('<h2>Your subscription orders</h2>')
     expect(html).not.toContain('Open individual investment account</button>')
   })
   it('keeps account creation unavailable when approved applicant account records did not load', () => {

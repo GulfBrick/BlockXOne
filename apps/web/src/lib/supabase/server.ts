@@ -81,13 +81,23 @@ export async function readWorkspace(client: SupabaseClient): Promise<Bx1Workspac
     if (typeof profile.platform_user_id !== 'string' || !profile.platform_user_id) throw new AuthUnavailableError()
 
     const { data: memberships, error: membershipError } = await client.from('bx1_memberships')
-      .select('organisation_id,role,status').eq('user_id', user.id).eq('status', 'ACTIVE')
+      .select('id,organisation_id,role,status').eq('user_id', user.id).eq('status', 'ACTIVE')
     if (membershipError) throw new AuthUnavailableError()
     if (!memberships?.length) return null
     for (const member of memberships) {
-      if (!BX1_ROLES.includes(member.role as Bx1Role) || typeof member.organisation_id !== 'string' || member.status !== 'ACTIVE') throw new AuthUnavailableError()
+      if (!BX1_ROLES.includes(member.role as Bx1Role) || typeof member.id !== 'string' || !member.id
+        || typeof member.organisation_id !== 'string' || member.status !== 'ACTIVE') throw new AuthUnavailableError()
     }
-    const ids = [...new Set(memberships.map((member) => member.organisation_id as string))]
+    // Exact server-side membership gate handles passive mandate expiry as well
+    // as a revoke racing the preceding RLS read. An unavailable gate is not an
+    // invitation to fall back to a stale active role.
+    const { data: currentMembershipIds, error: currentMembershipError } = await client.rpc('bx1_workspace_effective_membership_ids')
+    if (currentMembershipError || !Array.isArray(currentMembershipIds)
+      || currentMembershipIds.some((id) => typeof id !== 'string' || !id)) throw new AuthUnavailableError()
+    const current = new Set(currentMembershipIds)
+    const effectiveMemberships = memberships.filter((member) => current.has(member.id))
+    if (!effectiveMemberships.length) return null
+    const ids = [...new Set(effectiveMemberships.map((member) => member.organisation_id as string))]
     const { data: organisations, error: organisationError } = await client.from('bx1_organisations')
       .select('id,name,status').in('id', ids).eq('status', 'ACTIVE')
     if (organisationError) throw new AuthUnavailableError()
@@ -96,7 +106,7 @@ export async function readWorkspace(client: SupabaseClient): Promise<Bx1Workspac
     if (!visible.length) return null
     const workspace: Bx1Workspace = {
       user: { id: user.id, email: user.email!, platformUserId: profile.platform_user_id, displayName: typeof profile.display_name === 'string' ? profile.display_name : null },
-      organisations: visible.map((org) => ({ id: org.id, name: org.name, roles: [...new Set(memberships.filter((member) => member.organisation_id === org.id).map((member) => member.role as Bx1Role))] })),
+      organisations: visible.map((org) => ({ id: org.id, name: org.name, roles: [...new Set(effectiveMemberships.filter((member) => member.organisation_id === org.id).map((member) => member.role as Bx1Role))] })),
     }
     if (!evaluateActionPermission(workspace, 'workspace.read').allowed
       || !evaluateActionPermission(workspace, 'profile.read_own', { userId: user.id }).allowed

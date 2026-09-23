@@ -22,6 +22,9 @@ begin
     'bx1_portal.entry_command_pre_mandate(text,uuid,jsonb)',
     'bx1_portal.execute_scoped_pre_mandate(jsonb,text,uuid,jsonb)',
     'bx1_portal.representative_mandate_effective(uuid)',
+    'bx1_portal.representative_mandate_effective_at(uuid,timestamptz)',
+    'bx1_portal.native_membership_effective(uuid)',
+    'bx1_portal.native_membership_effective_at(uuid,timestamptz)',
     'bx1_portal.representative_mandate_actor(jsonb,uuid,text)'] loop
     foreach role_name in array array['anon','authenticated','service_role'] loop
       if pg_catalog.has_function_privilege(role_name,signature,'EXECUTE') then
@@ -44,4 +47,34 @@ begin
   body:=pg_catalog.pg_get_functiondef('bx1_portal.representative_mandate_actor(jsonb,uuid,text)'::pg_catalog.regprocedure);
   if body not like '%aal2%' or body not like '%mfa_factors%' then
     raise exception 'mandate_real_mfa_gate_missing' using errcode='55000'; end if;
+  body:=pg_catalog.pg_get_functiondef('bx1_private.can_access_organisation(uuid)'::pg_catalog.regprocedure);
+  if body not like '%native_membership_effective%' or body not like '%has_session_mfa%' then
+    raise exception 'mandate_native_organisation_gate_missing' using errcode='55000'; end if;
+  body:=pg_catalog.pg_get_functiondef('bx1_private.can_read_native_membership(uuid)'::pg_catalog.regprocedure);
+  if body not like '%has_token_mfa%' or body not like '%native_membership_effective%' then
+    raise exception 'mandate_native_membership_mfa_gate_missing' using errcode='55000'; end if;
+  if not exists(select 1 from pg_catalog.pg_policy p where p.polrelid='public.bx1_memberships'::pg_catalog.regclass
+    and p.polname='bx1_membership_mfa_read') then
+    raise exception 'mandate_restrictive_mfa_policy_lost' using errcode='55000'; end if;
+  body:=pg_catalog.pg_get_functiondef('bx1_portal.valid_operating_context(jsonb)'::pg_catalog.regprocedure);
+  if body not like '%native_membership_effective%' then
+    raise exception 'mandate_scoped_context_gate_missing' using errcode='55000'; end if;
+  body:=pg_catalog.pg_get_functiondef('bx1_portal.entry_read()'::pg_catalog.regprocedure);
+  if body not like '%native_membership_effective%' or body not like '%effective_contexts%' then
+    raise exception 'mandate_entry_context_gate_missing' using errcode='55000'; end if;
+  if not pg_catalog.has_function_privilege('authenticated',
+    'bx1_private.can_read_native_membership(uuid)','EXECUTE') then
+    raise exception 'mandate_self_membership_rls_helper_missing' using errcode='55000'; end if;
+  if not pg_catalog.has_function_privilege('authenticated',
+    'public.bx1_workspace_effective_membership_ids()','EXECUTE')
+    or pg_catalog.has_function_privilege('anon',
+      'public.bx1_workspace_effective_membership_ids()','EXECUTE') then
+    raise exception 'mandate_workspace_rpc_grant_invalid' using errcode='55000'; end if;
+  body:=pg_catalog.pg_get_functiondef('public.bx1_workspace_effective_membership_ids()'::pg_catalog.regprocedure);
+  if body not like '%m.user_id = auth.uid()%' and body not like '%m.user_id=auth.uid()%' then
+    raise exception 'mandate_workspace_rpc_not_caller_bound' using errcode='55000'; end if;
+  body:=pg_catalog.pg_get_functiondef('bx1_portal.native_membership_effective(uuid)'::pg_catalog.regprocedure);
+  if body not like '%native_membership_effective_at(target_membership, clock_timestamp())%'
+    and body not like '%native_membership_effective_at(target_membership,clock_timestamp())%' then
+    raise exception 'mandate_native_expiry_clock_not_live' using errcode='55000'; end if;
 end $$;

@@ -126,7 +126,7 @@ create trigger bx1_representative_mandate_guard before update or delete on bx1_p
 -- The effective authority predicate is not a native membership test. Every
 -- customer mandate is bound to its exact reviewed admission, reviewer scope,
 -- native membership, portal binding and expiry. Expiry requires no scheduler.
-create function bx1_portal.representative_mandate_effective(target_mandate uuid) returns boolean
+create function bx1_portal.representative_mandate_effective_at(target_mandate uuid,as_of timestamptz) returns boolean
 language sql volatile security definer set search_path='' as $$
   select exists(select 1 from bx1_portal.representative_mandates m
     join bx1_portal.applications a on a.id=m.application_id and a.user_id=m.applicant_user_id
@@ -138,7 +138,7 @@ language sql volatile security definer set search_path='' as $$
     join bx1_portal.entry_configuration cfg on cfg.singleton
     join public.bx1_organisations reviewer_org on reviewer_org.id=m.reviewer_scope_organisation_id
     where m.id=target_mandate and m.status='APPLIED' and m.role='OfferingManager'
-      and m.requested_until>clock_timestamp() and a.approved_until>clock_timestamp()
+      and m.requested_until>as_of and a.approved_until>as_of
       and a.status='APPROVED' and a.admission_purpose='CUSTOMER_ORGANISATION_ADMISSION'
       and a.revision=m.admission_revision and a.persona='WEALTH_MANAGER'
       and a.provider_mode='MANUAL_TEST_REVIEW' and a.details->'details_version'='2'::jsonb
@@ -150,11 +150,82 @@ language sql volatile security definer set search_path='' as $$
       and b.product_organisation_id=po.id and b.native_organisation_id=no.id
       and b.role='OfferingManager' and b.status='ACTIVE'
       and b.approval_receipt_id=m.approval_receipt_id
-      and b.valid_from<=clock_timestamp() and b.valid_until=m.requested_until
-      and b.valid_until>clock_timestamp()
+      and b.valid_from<=as_of and b.valid_until=m.requested_until
+      and b.valid_until>as_of
       and cfg.environment='TESTNET' and cfg.manual_test_review
       and cfg.reviewer_scope=m.reviewer_scope_organisation_id);
 $$;
+create function bx1_portal.representative_mandate_effective(target_mandate uuid) returns boolean
+language sql volatile security definer set search_path='' as $$
+  select bx1_portal.representative_mandate_effective_at(target_mandate,clock_timestamp());
+$$;
+
+-- Native memberships predate customer mandates. Only OfferingManager rows in
+-- a mandate-managed native organisation inherit this extra expiry/revocation
+-- gate. Historical organisations and separately appointed roles keep their
+-- existing authority rules. Check the exact membership, not merely the org.
+create function bx1_portal.native_membership_effective_at(target_membership uuid,as_of timestamptz) returns boolean
+language sql volatile security definer set search_path='' as $$
+  select exists(select 1 from public.bx1_memberships m
+    join public.bx1_organisations o on o.id=m.organisation_id
+    where m.id=target_membership and m.status='ACTIVE' and o.status='ACTIVE'
+      and (m.role<>'OfferingManager'
+        or not exists(select 1 from bx1_portal.representative_mandates managed
+          where managed.native_organisation_id=m.organisation_id)
+        or exists(select 1 from bx1_portal.representative_mandates mandate
+          where mandate.native_organisation_id=m.organisation_id
+            and mandate.native_membership_id=m.id
+            and mandate.applicant_user_id=m.user_id
+            and bx1_portal.representative_mandate_effective_at(mandate.id,as_of))));
+$$;
+create function bx1_portal.native_membership_effective(target_membership uuid) returns boolean
+language sql volatile security definer set search_path='' as $$
+  select bx1_portal.native_membership_effective_at(target_membership,clock_timestamp());
+$$;
+
+-- RLS requires a caller-executable self-only helper. Its underlying predicate
+-- remains private and cannot be queried to enumerate another person's roles.
+create function bx1_private.can_read_native_membership(target_membership uuid) returns boolean
+language sql volatile security definer set search_path='' as $$
+  select bx1_private.has_active_session() and bx1_private.has_token_mfa()
+    and exists(select 1 from public.bx1_memberships m
+    where m.id=target_membership and m.user_id=auth.uid()
+      and bx1_portal.native_membership_effective(m.id));
+$$;
+
+create or replace function bx1_private.can_access_organisation(target_organisation uuid) returns boolean
+language sql volatile security definer set search_path='' as $$
+  select bx1_private.has_active_session() and bx1_private.has_session_mfa()
+    and exists(select 1 from public.bx1_memberships m
+    where m.user_id=auth.uid() and m.organisation_id=target_organisation
+      and bx1_portal.native_membership_effective(m.id));
+$$;
+
+drop policy bx1_membership_self_read on public.bx1_memberships;
+create policy bx1_membership_self_read on public.bx1_memberships for select to authenticated
+  using (bx1_private.can_read_native_membership(id));
+
+create or replace function bx1_portal.entry_context_available(target_org uuid) returns boolean
+language sql volatile security definer set search_path='' as $$
+  select bx1_portal.fresh_session() and bx1_private.can_access_organisation(target_org);
+$$;
+
+create or replace function bx1_portal.valid_operating_context(c jsonb) returns boolean
+language plpgsql volatile security definer set search_path='' as $$
+declare v_org uuid;
+begin
+  if bx1_portal.fresh_session() is not true or pg_catalog.jsonb_typeof(c) is distinct from 'object' then return false; end if;
+  if c=pg_catalog.jsonb_build_object('mode','APPLICANT') then return true; end if;
+  if c->>'mode' is distinct from 'ROLE' or not(c ?& array['mode','organisationId','role'])
+    or c-array['mode','organisationId','role']<>'{}' or pg_catalog.jsonb_typeof(c->'organisationId') is distinct from 'string'
+    or c->>'organisationId' !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    or pg_catalog.jsonb_typeof(c->'role') is distinct from 'string' then return false; end if;
+  v_org:=(c->>'organisationId')::uuid;
+  return exists(select 1 from public.bx1_memberships m join public.bx1_profiles p on p.id=m.user_id
+    where m.user_id=auth.uid() and m.organisation_id=v_org and m.role=c->>'role'
+      and p.status='ACTIVE' and bx1_portal.native_membership_effective(m.id));
+exception when others then return false;
+end $$;
 
 create function bx1_portal.representative_mandate_requestable(target_application uuid) returns boolean
 language sql volatile security definer set search_path='' as $$
@@ -296,7 +367,7 @@ alter function bx1_portal.read_scoped(jsonb) rename to read_scoped_pre_mandate;
 
 create function bx1_portal.entry_read() returns jsonb
 language plpgsql volatile security definer set search_path='' as $$
-declare result jsonb; enriched_apps jsonb; cases jsonb; mandate_requests jsonb;
+declare result jsonb; enriched_apps jsonb; cases jsonb; mandate_requests jsonb; effective_contexts jsonb;
 begin
   result:=bx1_portal.entry_read_pre_mandate();
   select coalesce(pg_catalog.jsonb_agg(app.item||pg_catalog.jsonb_build_object(
@@ -314,9 +385,17 @@ begin
         and created_at>=clock_timestamp()-interval '7 days'
       order by created_at desc,request_key limit 1000) r
     join bx1_portal.representative_mandates m on m.id=r.mandate_id;
+  select coalesce(pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
+    'context_key',visible.id,'organisation_id',visible.id,'name',visible.name,'roles',visible.roles)
+    order by visible.name,visible.id),'[]'::jsonb) into effective_contexts
+    from (select o.id,o.name,pg_catalog.jsonb_agg(m.role order by m.role) roles
+      from public.bx1_memberships m join public.bx1_organisations o on o.id=m.organisation_id
+      where m.user_id=auth.uid() and bx1_portal.native_membership_effective(m.id)
+      group by o.id,o.name) visible;
   if bx1_portal.fresh_session() is not true then raise exception 'mandate_entry_context_changed' using errcode='42501'; end if;
-  return pg_catalog.jsonb_set(pg_catalog.jsonb_set(pg_catalog.jsonb_set(result,'{applications}',enriched_apps),
-    '{organisation_mandates}',cases),'{requests}',coalesce(result->'requests','[]'::jsonb)||mandate_requests);
+  return pg_catalog.jsonb_set(pg_catalog.jsonb_set(pg_catalog.jsonb_set(pg_catalog.jsonb_set(result,
+    '{applications}',enriched_apps),'{organisation_mandates}',cases),'{contexts}',effective_contexts),
+    '{requests}',coalesce(result->'requests','[]'::jsonb)||mandate_requests);
 end $$;
 
 create function bx1_portal.read_scoped(c jsonb) returns jsonb
@@ -627,8 +706,20 @@ create or replace function public.bx1_portal_read_scoped(operating_context jsonb
 language sql security invoker set search_path='' as $$ select bx1_portal.read_scoped(operating_context); $$;
 create or replace function public.bx1_portal_command_scoped(command text,request_key uuid,payload jsonb,operating_context jsonb) returns jsonb
 language sql security invoker set search_path='' as $$ select bx1_portal.execute_scoped(operating_context,command,request_key,payload); $$;
+-- A second caller-bound workspace check keeps the server-rendered role list
+-- fail-closed even if a stale table result raced mandate expiry or revocation.
+create function public.bx1_workspace_effective_membership_ids() returns uuid[]
+language sql volatile security definer set search_path='' as $$
+  select coalesce(pg_catalog.array_agg(m.id order by m.id),'{}'::uuid[])
+    from public.bx1_memberships m
+    where bx1_portal.fresh_session() and m.user_id=auth.uid()
+      and bx1_portal.native_membership_effective(m.id);
+$$;
 revoke all on function bx1_portal.guard_representative_mandate(),
   bx1_portal.representative_mandate_effective(uuid),
+  bx1_portal.representative_mandate_effective_at(uuid,timestamptz),
+  bx1_portal.native_membership_effective(uuid),bx1_portal.native_membership_effective_at(uuid,timestamptz),
+  bx1_private.can_read_native_membership(uuid),
   bx1_portal.representative_mandate_requestable(uuid),
   bx1_portal.representative_mandate_admission_current(uuid,boolean,boolean),
   bx1_portal.representative_mandate_actor(jsonb,uuid,text),
@@ -639,10 +730,12 @@ revoke all on function bx1_portal.guard_representative_mandate(),
   bx1_portal.entry_read(),bx1_portal.read_scoped(jsonb),
   bx1_portal.entry_command(text,uuid,jsonb),bx1_portal.execute_scoped(jsonb,text,uuid,jsonb),
   public.bx1_entry_read(),public.bx1_entry_command(text,uuid,jsonb),
-  public.bx1_portal_read_scoped(jsonb),public.bx1_portal_command_scoped(text,uuid,jsonb,jsonb)
+  public.bx1_portal_read_scoped(jsonb),public.bx1_portal_command_scoped(text,uuid,jsonb,jsonb),
+  public.bx1_workspace_effective_membership_ids()
   from public,anon,authenticated,service_role;
 grant execute on function bx1_portal.entry_read(),bx1_portal.entry_command(text,uuid,jsonb),
-  public.bx1_entry_read(),public.bx1_entry_command(text,uuid,jsonb) to authenticated;
+  public.bx1_entry_read(),public.bx1_entry_command(text,uuid,jsonb),
+  bx1_private.can_read_native_membership(uuid),public.bx1_workspace_effective_membership_ids() to authenticated;
 do $$ begin
   -- MAIN entry-only baseline must remain entry-only after this additive schema.
   if exists(select 1 from bx1_portal.entry_configuration where singleton and environment='TESTNET') then
