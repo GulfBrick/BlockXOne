@@ -227,6 +227,22 @@ begin
 exception when others then return false;
 end $$;
 
+-- A customer OfferingManager is not a Compliance reviewer. Check that cheap
+-- role/scope mismatch before traversing live native mandate authority; the
+-- inherited helper validated the full context first on every catalogue row.
+create or replace function bx1_portal.scoped_reviewer(c jsonb,target_scope uuid,target_org uuid default null) returns boolean
+language plpgsql volatile security definer set search_path='' as $$
+begin
+  if c->>'mode' is distinct from 'ROLE' or c->>'role' is distinct from 'ComplianceOfficer'
+    or c->>'organisationId' is distinct from target_scope::text then return false; end if;
+  if bx1_portal.valid_operating_context(c) is not true then return false; end if;
+  -- Unbound historical applications retain their explicitly assigned review scope.
+  if target_org is null or not exists(select 1 from bx1_portal.organisation_authority_bindings where product_organisation_id=target_org) then return true; end if;
+  return exists(select 1 from bx1_portal.organisation_authority_bindings b where b.product_organisation_id=target_org
+    and b.native_organisation_id=target_scope and b.role='ComplianceOfficer' and b.status='ACTIVE'
+    and b.valid_from<=clock_timestamp() and b.valid_until>clock_timestamp());
+end $$;
+
 create function bx1_portal.representative_mandate_requestable(target_application uuid) returns boolean
 language sql volatile security definer set search_path='' as $$
   select exists(select 1 from bx1_portal.applications a
