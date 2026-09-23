@@ -27,6 +27,7 @@ begin
   foreach signature in array array[
     'bx1_portal.read_scoped_pre_entity(jsonb)',
     'bx1_portal.execute_scoped_pre_entity(jsonb,text,uuid,jsonb)',
+    'bx1_portal.entity_staff_source_assured(jsonb)',
     'bx1_portal.entity_people_independent(uuid,uuid)',
     'bx1_portal.entity_account_admission_current(uuid)',
     'bx1_portal.investing_mandate_effective(uuid)'] loop
@@ -40,8 +41,19 @@ begin
     raise exception 'entity_missing_trusted_person_gate' using errcode='55000'; end if;
   body:=pg_catalog.pg_get_functiondef('bx1_portal.execute_scoped(jsonb,text,uuid,jsonb)'::pg_catalog.regprocedure);
   if body not like '%execute_scoped_pre_entity%' or body not like '%entry_manual_review_enabled%'
-    or body not like '%entity_people_independent%' then
+    or body not like '%entity_people_independent%'
+    or body not like '%entity_staff_source_assured%' then
     raise exception 'entity_command_gate_missing' using errcode='55000'; end if;
+  body:=pg_catalog.pg_get_functiondef('bx1_portal.read_scoped(jsonb)'::pg_catalog.regprocedure);
+  if pg_catalog.strpos(body,'entity_staff_source_assured')=0
+    or pg_catalog.strpos(body,'read_scoped_pre_entity')=0
+    or pg_catalog.strpos(body,'entity_staff_source_assured')>pg_catalog.strpos(body,'read_scoped_pre_entity')
+    or pg_catalog.strpos(body,'draft.status')=0
+    or pg_catalog.strpos(body,'filtered_events')=0 then
+    raise exception 'entity_staff_pii_gate_after_legacy_reader' using errcode='55000'; end if;
+  body:=pg_catalog.pg_get_functiondef('bx1_portal.scoped_reviewer(jsonb,uuid,uuid)'::pg_catalog.regprocedure);
+  if pg_catalog.strpos(body,'entity_staff_source_assured')=0 then
+    raise exception 'entity_shared_reviewer_pii_gate_missing' using errcode='55000'; end if;
   body:=pg_catalog.pg_get_functiondef('bx1_portal.investing_mandate_effective(uuid)'::pg_catalog.regprocedure);
   if body not like '%transaction_limit_minor = 0%' and body not like '%transaction_limit_minor=0%' then
     raise exception 'entity_zero_transaction_limit_missing' using errcode='55000'; end if;

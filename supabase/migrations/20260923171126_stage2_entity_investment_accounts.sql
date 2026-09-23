@@ -327,15 +327,66 @@ begin
       and bx1_portal.entity_people_independent(auth.uid(),m.applicant_user_id));
 end $$;
 
+-- Earlier scoped readers expose full submitted investor application details to
+-- Compliance. Gate BEFORE delegating to those readers: an unenrolled AAL1
+-- staff session must not receive source PII just because it has a role row.
+create function bx1_portal.entity_staff_source_assured(c jsonb) returns boolean
+language sql volatile security definer set search_path='' as $$
+  select bx1_portal.valid_operating_context(c)
+    and c->>'mode'='ROLE' and c->>'role' in ('ComplianceOfficer','SuperAdmin')
+    and auth.jwt()->>'aal'='aal2'
+    and bx1_private.has_session_mfa() and bx1_private.has_token_mfa()
+    and exists(select 1 from auth.sessions s join auth.mfa_factors f
+      on f.id=s.factor_id and f.user_id=s.user_id
+      where s.user_id=auth.uid() and s.id::text=auth.jwt()->>'session_id'
+        and s.aal::text='aal2' and f.status::text='verified' and f.factor_type::text='totp');
+$$;
+
+-- This predicate is shared by the earlier application reader, eligibility
+-- projections, document access and review commands. They must not treat an
+-- unenrolled Compliance role as permission to see investor source details.
+create or replace function bx1_portal.scoped_reviewer(c jsonb,target_scope uuid,target_org uuid default null) returns boolean
+language plpgsql volatile security definer set search_path='' as $$
+begin
+  if c->>'mode' is distinct from 'ROLE' or c->>'role' is distinct from 'ComplianceOfficer'
+    or c->>'organisationId' is distinct from target_scope::text
+    or bx1_portal.entity_staff_source_assured(c) is not true then return false; end if;
+  if target_org is null or not exists(select 1 from bx1_portal.organisation_authority_bindings
+    where product_organisation_id=target_org) then return true; end if;
+  return exists(select 1 from bx1_portal.organisation_authority_bindings b
+    where b.product_organisation_id=target_org and b.native_organisation_id=target_scope
+      and b.role='ComplianceOfficer' and b.status='ACTIVE'
+      and b.valid_from<=clock_timestamp() and b.valid_until>clock_timestamp());
+end $$;
+
 -- Only the existing scoped portal reader is exposed. Array presence is stable
--- even when a caller has no eligible cases or lacks staff MFA.
+-- when a caller has no eligible cases. Unassured staff are denied before the
+-- pre-entity reader can return application PII or case metadata.
 alter function bx1_portal.read_scoped(jsonb) rename to read_scoped_pre_entity;
 create function bx1_portal.read_scoped(c jsonb) returns jsonb
 language plpgsql volatile security definer set search_path='' as $$
 declare result jsonb; accounts jsonb:='[]'::jsonb; cases jsonb:='[]'::jsonb;
-  enriched_apps jsonb; available boolean:=false; blocked text; route_available boolean:=false;
+  enriched_apps jsonb; filtered_events jsonb; available boolean:=false; blocked text; route_available boolean:=false;
 begin
+  if c->>'mode'='ROLE' and c->>'role' in ('ComplianceOfficer','SuperAdmin')
+    and bx1_portal.entity_staff_source_assured(c) is not true then
+    raise exception 'entity_staff_source_mfa_required' using errcode='42501'; end if;
   result:=bx1_portal.read_scoped_pre_entity(c);
+  if c->>'mode'='ROLE' and c->>'role' in ('ComplianceOfficer','SuperAdmin') then
+    -- A reviewer can inspect a submitted or decided case, never a customer's
+    -- unsubmitted draft or its create/update event metadata. Own drafts remain
+    -- available through the person's separate APPLICANT context.
+    select coalesce(pg_catalog.jsonb_agg(item order by ordinality),'[]'::jsonb) into enriched_apps
+      from pg_catalog.jsonb_array_elements(result->'applications') with ordinality x(item,ordinality)
+      where item->>'status'<>'DRAFT';
+    result:=pg_catalog.jsonb_set(result,'{applications}',enriched_apps);
+    select coalesce(pg_catalog.jsonb_agg(item order by ordinality),'[]'::jsonb) into filtered_events
+      from pg_catalog.jsonb_array_elements(result->'events') with ordinality x(item,ordinality)
+      where not exists(select 1 from bx1_portal.events e
+        join bx1_portal.applications draft on draft.id=e.application_id and draft.status='DRAFT'
+        where e.id=(item->>'id')::uuid);
+    result:=pg_catalog.jsonb_set(result,'{events}',filtered_events);
+  end if;
   route_available:=c->>'mode'='APPLICANT' and bx1_portal.entry_manual_review_enabled();
   select coalesce(pg_catalog.jsonb_agg(app.item||pg_catalog.jsonb_build_object(
     'can_create_entity_account',route_available and bx1_portal.entity_application_account_openable((app.item->>'id')::uuid))
@@ -389,6 +440,9 @@ declare actor uuid:=auth.uid(); prior bx1_portal.scoped_requests;
   expected integer; decision text; expiry timestamptz; receipt_id uuid;
   now_at timestamptz; record_id uuid; v_subject uuid; v_summary text;
 begin
+  if c->>'mode'='ROLE' and c->>'role' in ('ComplianceOfficer','SuperAdmin')
+    and bx1_portal.entity_staff_source_assured(c) is not true then
+    raise exception 'entity_staff_source_mfa_required' using errcode='42501'; end if;
   if action not in ('create_entity_investment_account',
     'request_investing_representative_mandate',
     'review_investing_representative_mandate',
@@ -637,6 +691,8 @@ revoke all on function bx1_portal.guard_entity_account_insert(),
   bx1_portal.entity_account_admission_current(uuid),
   bx1_portal.investing_mandate_current(uuid),bx1_portal.investing_mandate_effective(uuid),
   bx1_portal.entity_account_projection(jsonb,uuid),bx1_portal.investing_mandate_projection(jsonb,uuid),
+  bx1_portal.entity_staff_source_assured(jsonb),
+  bx1_portal.scoped_reviewer(jsonb,uuid,uuid),
   bx1_portal.read_scoped_pre_entity(jsonb),bx1_portal.execute_scoped_pre_entity(jsonb,text,uuid,jsonb),
   bx1_portal.read_scoped(jsonb),bx1_portal.execute_scoped(jsonb,text,uuid,jsonb),
   public.bx1_portal_read_scoped(jsonb),public.bx1_portal_command_scoped(text,uuid,jsonb,jsonb)

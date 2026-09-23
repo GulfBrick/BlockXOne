@@ -732,8 +732,6 @@ try {
   await db.query("insert into public.bx1_profiles(id,display_name) values($1,'Synthetic same-human reviewer')", [uid(11)])
   await db.query("insert into bx1_private.person_principals(auth_user_id,person_id,status,evidence_reference,bootstrap_receipt_id) values($1,$2,'TRUSTED','synthetic:same-human-principal-11',$3)", [uid(11), uid(30), uid(32)])
   await db.query("insert into public.bx1_memberships(user_id,organisation_id,role,status) values($1,$2,'ComplianceOfficer','ACTIVE')", [uid(11), nativeScope])
-  await db.query("insert into auth.mfa_factors(id,user_id,status,factor_type) values($1,$2,'verified','totp')", [sid(41), uid(11)])
-  await db.query("update auth.sessions set aal='aal2',factor_id=$1 where user_id=$2", [sid(41), uid(11)])
   eq(await scalar('select bx1_portal.entity_people_independent($1::uuid,$2::uuid)', [uid(9), uid(11)]), false, 'distinct TEST emails mapped to same trusted human cannot be independent')
   phase = 'entity-investor-admission'
   const entityEvidence = ['IDENTITY', 'COMPANY', 'BENEFICIAL_OWNERS'].map((kind, index) => ({
@@ -747,6 +745,12 @@ try {
   const entityStart = await entryCommand(9, 'start_application', { persona: 'INVESTOR' })
   let entityApp = entityStart.applications.find(value => value.user_id === uid(9) && value.persona === 'INVESTOR')
   truth(entityApp?.id, 'same person adds a distinct entity-investor application without merging manager admission')
+  await db.query('savepoint entity_draft_review_scope')
+  await admin()
+  await db.query('update bx1_portal.applications set reviewer_scope=$1 where id=$2', [nativeScope, entityApp.id])
+  const reviewerDraftProjection = await mandateScopedRead(2, reviewer)
+  eq(reviewerDraftProjection.applications.some(value => value.id === entityApp.id), false, 'assured staff cannot read an unsubmitted customer draft even if reviewer scope is set')
+  await db.query('rollback to savepoint entity_draft_review_scope; release savepoint entity_draft_review_scope')
   const entitySubmitted = await entryCommand(9, 'submit_application', { application_id: entityApp.id, expected_revision: entityApp.revision, details: entityDetails })
   entityApp = entitySubmitted.applications.find(value => value.id === entityApp.id)
   await mandateScopedCommand(2, reviewer, 'review_application', { application_id: entityApp.id,
@@ -754,6 +758,8 @@ try {
     notes: 'Independent synthetic entity identity, ownership, screening and suitability review.', checks: reviewChecks })
   entityApp = (await scopedRead(9, applicant)).applications.find(value => value.id === entityApp.id)
   eq([entityApp.status, entityApp.can_create_entity_account], ['APPROVED', true], 'reviewed entity application enables an account, not investing authority')
+  await denied('unenrolled AAL1 Compliance cannot read an approved entity source application',
+    () => scopedRead(11, reviewer), '42501')
   await db.query('savepoint entity_scope_pause')
   await admin(); await db.query('update bx1_portal.entry_configuration set manual_test_review=false,reviewer_scope=$1 where singleton', [otherScope])
   await actor(9); await admin()
@@ -787,10 +793,18 @@ try {
   await denied('enrolled AAL1 Compliance cannot enter the scoped portal to enumerate entity mandates',
     () => scopedRead(2, reviewer), '42501')
   eq((await mandateScopedRead(2, reviewer)).investing_representative_mandates.some(value => value.id === entityMandate.id), true, 'AAL2 appointed Compliance sees exact entity case')
+  await admin()
+  await db.query("insert into auth.mfa_factors(id,user_id,status,factor_type) values($1,$2,'verified','totp')", [sid(42), uid(5)])
+  await db.query("update auth.sessions set aal='aal2',factor_id=$1 where user_id=$2", [sid(42), uid(5)])
   eq((await mandateScopedRead(5, roleContext('ComplianceOfficer', otherScope))).investing_representative_mandates.length, 0, 'unrelated organisation cannot read entity mandate')
   const entityChecks = { appointment: true, legal_entity: true, scope: true }
   const entityReview = (row, decision) => ({ mandate_id: row.id, expected_revision: row.revision, decision,
     notes: 'Independent synthetic appointment, legal entity, and restricted scope reviewed.', checks: entityChecks })
+  await denied('unenrolled AAL1 Compliance cannot decide an entity representative case', () => scopedCommand(11, reviewer,
+    'review_investing_representative_mandate', entityReview(entityMandate, 'APPROVED')), '42501')
+  await admin()
+  await db.query("insert into auth.mfa_factors(id,user_id,status,factor_type) values($1,$2,'verified','totp')", [sid(41), uid(11)])
+  await db.query("update auth.sessions set aal='aal2',factor_id=$1 where user_id=$2", [sid(41), uid(11)])
   await denied('same human under separate assured Compliance login cannot review entity mandate', () => mandateScopedCommand(11, reviewer,
     'review_investing_representative_mandate', entityReview(entityMandate, 'APPROVED')), '42501')
   entityMandate = (await mandateScopedCommand(2, reviewer, 'review_investing_representative_mandate', entityReview(entityMandate, 'CHANGES_REQUIRED'))).investing_representative_mandates.find(value => value.id === entityMandate.id)
