@@ -165,8 +165,16 @@ try {
   for (const table of ['product_eligibility_cases', 'product_eligibility_receipts']) eq(await scalar(`select count(*)::int from bx1_portal.${table}`), 0, `Stage 2 definition does not seed ${table} in MAIN`)
   for (const table of ['legal_entity_parties', 'investing_representative_mandates', 'investing_representative_receipts']) eq(await scalar(`select count(*)::int from bx1_portal.${table}`), 0, `entity definition does not seed ${table} in MAIN`)
   for (const table of ['offering_revisions', 'offering_decisions']) eq(await scalar(`select count(*)::int from bx1_portal.${table}`), 0, `Stage 3 definition does not seed ${table} in MAIN`)
-  for (const table of ['provider_application_bindings', 'provider_evidence_events', 'staff_invitation_intents', 'staff_invitation_outbox'])
+  for (const table of ['provider_application_bindings', 'provider_evidence_events'])
     eq(await scalar(`select count(*)::int from bx1_private.${table}`), 0, `new Stage 1/2 definition does not seed ${table} in MAIN`)
+  // The staff evidence owner is intentionally isolated from the hosted migrator.
+  // Inspect empty state as that owner; do not grant the migrator table access.
+  await maintenance.query('set role bx1_authority_owner')
+  try {
+    for (const table of ['staff_invitation_intents', 'staff_invitation_outbox'])
+      eq(await scalar(`select count(*)::int from bx1_private.${table}`, [], maintenance), 0,
+        `staff invitation definition does not seed ${table} in MAIN`)
+  } finally { await maintenance.query('reset role') }
   eq(await scalar('select count(*)::int from bx1_portal.application_ownership_control_versions'), 0,
     'structured ownership definition does not seed disclosures in MAIN')
   eq(await scalar('select count(*)::int from bx1_private.document_quarantine_items'), 0,

@@ -17,7 +17,11 @@ export async function proveProviderEvidence(db) {
   const admin = async () => db.query('reset role')
   const writer = async (sql, params = []) => {
     await admin(); await db.query('set local role bx1_provider_evidence_writer')
-    try { return await scalar(sql, params) } finally { await admin() }
+    // A rejected SQL call aborts the transaction until expectCode rolls back
+    // its savepoint. Do not mask the original SQLSTATE with RESET ROLE's 25P02.
+    const result = await scalar(sql, params)
+    await admin()
+    return result
   }
   const expectCode = async (label, action, expected) => {
     await db.query('savepoint provider_expected_denial')
