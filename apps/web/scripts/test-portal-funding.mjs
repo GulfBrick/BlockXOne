@@ -165,6 +165,7 @@ try {
   // The later monitoring decision requires trusted, distinct humans. The
   // standard funding fixture's investor has no native role, but receives a
   // synthetic identity mapping before postgres loses private-schema writes.
+  await db.query("insert into public.bx1_profiles(id,display_name) values($1,'Synthetic admitted investor 3')", [uid(3)])
   await db.query(`insert into bx1_private.persons(id,label,status,evidence_reference,bootstrap_receipt_id)
     values('e6000000-0000-4000-8000-000000000004',
       'Synthetic test human investor 3','TRUSTED','synthetic:funding-investor-3',
