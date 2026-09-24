@@ -14,6 +14,7 @@ import { readWorkspace } from '@/lib/supabase/server'
 import { hasRequiredMfa, isMfaContextCurrent, readMfaContext } from '@/lib/supabase/mfa'
 import { identityEnvironmentEnabled } from '@/lib/platform-release'
 import { readEntry } from '@/lib/portal/entry-server'
+import { pendingStaffInvitations } from '@/lib/administration/staff-invitations'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -132,6 +133,7 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
         mfaRequired = !hasRequiredMfa(context)
         if (!mfaRequired) {
           validSetup = Boolean(await readWorkspace(client))
+          if (!validSetup && (await pendingStaffInvitations(client)).length) validSetup = true
           if (!validSetup && identityEnvironmentEnabled(process.env)) { await readEntry(client); validSetup = true }
           if (!await isMfaContextCurrent(client, context)) throw new Error('Access unavailable')
         }

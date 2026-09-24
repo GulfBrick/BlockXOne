@@ -41,6 +41,13 @@ on:
       - apps/web/src/app/api/portal/**
       - apps/web/src/app/register/**
       - apps/web/src/app/auth/**
+      - apps/web/src/app/workspace/staff-invite/**
+      - apps/web/src/app/workspace/administration/staff-invitations/**
+      - apps/web/src/components/auth/staff-invitation-accept.tsx
+      - apps/web/src/components/workspace/staff-invitations-panel.tsx
+      - apps/web/src/lib/administration/staff-invitations.ts
+      - apps/web/scripts/test-supabase-staff-invitations.mjs
+      - supabase/functions/bx1-staff-invite-dispatch/**
       - apps/web/scripts/test-portal.mjs
       - apps/web/scripts/test-portal-funding.mjs
       - apps/web/scripts/probe-amoy-funding.mjs
@@ -49,18 +56,8 @@ on:
       - supabase/tests/bx1_portal_funding.sql
       - supabase/functions/bx1-funding-verifier/**
       - supabase/features/bx1_portal.sql
-      - supabase/migrations/20260921160000_portal_authority_accounts.sql
-      - supabase/migrations/20260923134152_stage2_product_eligibility.sql
-      - supabase/tests/bx1_product_eligibility.sql
-      - supabase/migrations/20260923143713_stage2_customer_mandates.sql
-      - supabase/tests/bx1_customer_mandates.sql
-      - supabase/migrations/20260923144216_stage2_document_receipts.sql
-      - supabase/tests/bx1_document_receipts.sql
-      - supabase/migrations/20260923171126_stage2_entity_investment_accounts.sql
-      - supabase/migrations/20260923175822_stage2_superadmin_shell_mfa_boundary.sql
-      - supabase/tests/bx1_entity_investment_accounts.sql
-      - supabase/tests/bx1_portal_authority_accounts.sql
-      - supabase/tests/bx1_portal.sql
+      - supabase/migrations/**
+      - supabase/tests/**
       - contracts/demo/**
       - apps/web/src/lib/testnet-fund/**
       - apps/web/src/components/testnet-fund/**
@@ -98,6 +95,13 @@ on:
       - apps/web/src/app/api/portal/**
       - apps/web/src/app/register/**
       - apps/web/src/app/auth/**
+      - apps/web/src/app/workspace/staff-invite/**
+      - apps/web/src/app/workspace/administration/staff-invitations/**
+      - apps/web/src/components/auth/staff-invitation-accept.tsx
+      - apps/web/src/components/workspace/staff-invitations-panel.tsx
+      - apps/web/src/lib/administration/staff-invitations.ts
+      - apps/web/scripts/test-supabase-staff-invitations.mjs
+      - supabase/functions/bx1-staff-invite-dispatch/**
       - apps/web/scripts/test-portal.mjs
       - apps/web/scripts/test-portal-funding.mjs
       - apps/web/scripts/probe-amoy-funding.mjs
@@ -106,18 +110,8 @@ on:
       - supabase/tests/bx1_portal_funding.sql
       - supabase/functions/bx1-funding-verifier/**
       - supabase/features/bx1_portal.sql
-      - supabase/migrations/20260921160000_portal_authority_accounts.sql
-      - supabase/migrations/20260923134152_stage2_product_eligibility.sql
-      - supabase/tests/bx1_product_eligibility.sql
-      - supabase/migrations/20260923143713_stage2_customer_mandates.sql
-      - supabase/tests/bx1_customer_mandates.sql
-      - supabase/migrations/20260923144216_stage2_document_receipts.sql
-      - supabase/tests/bx1_document_receipts.sql
-      - supabase/migrations/20260923171126_stage2_entity_investment_accounts.sql
-      - supabase/migrations/20260923175822_stage2_superadmin_shell_mfa_boundary.sql
-      - supabase/tests/bx1_entity_investment_accounts.sql
-      - supabase/tests/bx1_portal_authority_accounts.sql
-      - supabase/tests/bx1_portal.sql
+      - supabase/migrations/**
+      - supabase/tests/**
       - contracts/demo/**
       - apps/web/src/lib/testnet-fund/**
       - apps/web/src/components/testnet-fund/**
@@ -268,6 +262,52 @@ jobs:
           cmp apps/web/src/lib/portal/funding-verifier.ts supabase/functions/bx1-funding-verifier/funding-verifier.ts
           cd supabase/functions/bx1-funding-verifier
           "$RUNNER_TEMP/bx1-deno/node_modules/.bin/deno" check --config deno.json index.ts funding-verifier.ts funding-claim.ts
+          cd ../bx1-staff-invite-dispatch
+          "$RUNNER_TEMP/bx1-deno/node_modules/.bin/deno" check --config deno.json index.ts
+
+  staff-invitation-sql-acceptance:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.mode != 'registration-browser-proof' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: bx1_demo_ci
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: bx1-synthetic-ci-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d bx1_demo_ci"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Check out exact staff invitation source in an independent cloud fixture
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+          submodules: false
+          lfs: false
+      - name: Select pinned Node for staff invitation proof
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22.23.1'
+          check-latest: false
+          package-manager-cache: false
+      - name: Install locked dependencies in the disposable cloud runner
+        working-directory: apps/web
+        shell: bash
+        run: npm ci --no-audit --no-fund
+      - name: Prove scoped invite, verified-email binding and AAL1 denial on PostgreSQL 17
+        working-directory: apps/web
+        shell: bash
+        env:
+          BX1_STAFF_INVITE_CLOUD: github-postgres17
+          BX1_CI_POSTGRES_PASSWORD: bx1-synthetic-ci-only
+        run: node scripts/test-supabase-staff-invitations.mjs
 
   funding-sql-acceptance:
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.mode != 'registration-browser-proof' }}

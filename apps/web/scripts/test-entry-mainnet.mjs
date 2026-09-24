@@ -65,7 +65,7 @@ try {
   await db.query('begin'); begun = true
   await sqlFile('../../../supabase/tests/bx1_identity_workspace.sql')
   await sqlFile('../../../supabase/tests/bx1_mfa_assurance.sql')
-  await db.query("alter table auth.users add column email text; alter table auth.users add column email_confirmed_at timestamptz; alter table auth.users add column is_anonymous boolean default false; alter table auth.users add column raw_user_meta_data jsonb default '{}'; alter table auth.sessions add column created_at timestamptz not null default now(); alter table auth.users enable row level security; alter table auth.sessions enable row level security")
+  await db.query("alter table auth.users add column email text; alter table auth.users add column email_confirmed_at timestamptz; alter table auth.users add column invited_at timestamptz; alter table auth.users add column confirmation_sent_at timestamptz; alter table auth.users add column is_anonymous boolean default false; alter table auth.users add column raw_user_meta_data jsonb default '{}'::jsonb; alter table auth.users add column raw_app_meta_data jsonb default '{}'::jsonb; alter table auth.sessions add column created_at timestamptz not null default now(); alter table auth.users enable row level security; alter table auth.sessions enable row level security")
   await db.query('create schema storage; create table storage.buckets(id text primary key,name text not null,public boolean not null,file_size_limit bigint,allowed_mime_types text[]); create table storage.objects(id uuid primary key default gen_random_uuid(),bucket_id text references storage.buckets(id),name text not null,owner_id text,metadata jsonb,user_metadata jsonb,unique(bucket_id,name)); alter table storage.objects enable row level security; grant usage on schema storage to authenticated; grant select,insert,update,delete on storage.objects to authenticated')
   for (const file of ['20260916234746_bx1_identity_workspace.sql', '20260917190042_bx1_wallet_ownership.sql', '20260918015541_bx1_mfa_assurance.sql']) await sqlFile(`../../../supabase/migrations/${file}`)
   phase = 'preexisting-native-history'
@@ -93,7 +93,15 @@ try {
     using(bucket_id='preexisting-native-bucket' and owner_id=auth.uid()::text)`)
   const nativeStoragePolicies = await scalar("select jsonb_agg(jsonb_build_object('name',polname,'command',polcmd,'roles',polroles,'using',pg_get_expr(polqual,polrelid),'check',pg_get_expr(polwithcheck,polrelid)) order by polname) from pg_policy where polrelid='storage.objects'::regclass and polname like 'synthetic_native_%'")
   const signatures = (await db.query("select p.oid::regprocedure::text signature from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname in ('bx1_private','public') order by signature")).rows.map(row => row.signature)
-  const preservedSignatures = signatures.filter((signature) => signature !== 'bx1_private.can_access_organisation(uuid)')
+  const deliberatelyExtendedSignatures = new Set([
+    'bx1_private.can_access_organisation(uuid)',
+    'bx1_private.read_mfa_status()',
+    'bx1_mfa_status()',
+  ])
+  const preservedSignatures = signatures.filter((signature) => !deliberatelyExtendedSignatures.has(signature))
+  const mfaSignatures = ['bx1_private.read_mfa_status()', 'bx1_mfa_status()']
+  const mfaOwnersBefore = Object.fromEntries(Object.entries(await functionManifest(mfaSignatures))
+    .map(([signature, metadata]) => [signature, metadata.owner]))
   const nativeFunctions = await functionManifest(preservedSignatures), nativeGrants = await grantManifest(signatures), nativeHistory = await nativeRecords()
   eq(await scalar("select to_regclass('bx1_private.person_principals') is null and to_regnamespace('bx1_portal') is null"), true, 'MAIN-shaped baseline has no person-principal or portal subsystem')
   await db.query('create role bx1_fixture_bootstrap nologin superuser')
@@ -121,9 +129,58 @@ try {
   await sqlFile('../../../supabase/migrations/20260923143713_stage2_customer_mandates.sql')
   await sqlFile('../../../supabase/tests/bx1_customer_mandates.sql')
   await sqlFile('../../../supabase/migrations/20260923144216_stage2_document_receipts.sql')
+  await sqlFile('../../../supabase/migrations/20260923161500_stage2_application_document_history.sql')
   await sqlFile('../../../supabase/migrations/20260923171126_stage2_entity_investment_accounts.sql')
   await sqlFile('../../../supabase/migrations/20260923175822_stage2_superadmin_shell_mfa_boundary.sql')
-  eq(await functionManifest(preservedSignatures), nativeFunctions, 'unrelated native auth/MFA/wallet function definitions and owners exactly preserved')
+  await sqlFile('../../../supabase/migrations/20260923205519_stage3_immutable_offering_packages.sql')
+  await sqlFile('../../../supabase/migrations/20260924110608_stage2_provider_evidence.sql')
+  await sqlFile('../../../supabase/migrations/20260924110911_stage1_staff_invitation_intents.sql')
+  eq(await scalar("select has_table_privilege(current_user,'bx1_private.authority_scopes','REFERENCES')"), false,
+    'staff migration leaves MAIN migrator without authority-table REFERENCES')
+  eq(await scalar("select count(*)::int from pg_auth_members m join pg_roles r on r.oid=m.roleid where r.rolname='bx1_authority_owner' and m.member=(select oid from pg_roles where rolname=current_user) and (m.inherit_option or m.set_option)"), 0,
+    'staff migration closes temporary owner inheritance and SET capability')
+  await sqlFile('../../../supabase/migrations/20260924110922_stage2_beneficial_ownership_control.sql')
+  await sqlFile('../../../supabase/migrations/20260924112832_stage2_document_quarantine_lifecycle.sql')
+  await sqlFile('../../../supabase/tests/bx1_document_lifecycle.sql')
+  await sqlFile('../../../supabase/migrations/20260924125627_stage2_customer_monitoring.sql')
+  await sqlFile('../../../supabase/migrations/20260924125811_stage2_document_retention_authority.sql')
+  eq(await scalar("select has_table_privilege(current_user,'bx1_private.person_principals','REFERENCES')"), false,
+    'retention migration leaves MAIN migrator without direct identity-table REFERENCES')
+  eq(await scalar("select count(*)::int from pg_auth_members m join pg_roles r on r.oid=m.roleid where r.rolname='bx1_authority_owner' and m.member=(select oid from pg_roles where rolname=current_user) and (m.inherit_option or m.set_option)"), 0,
+    'retention migration restores sealed authority-owner membership')
+  for (const signature of [
+    'public.bx1_portal_read_scoped(jsonb)',
+    'public.bx1_portal_command_scoped(text,uuid,jsonb,jsonb)',
+    'bx1_portal.read_scoped(jsonb)',
+    'bx1_portal.execute_scoped(jsonb,text,uuid,jsonb)',
+  ]) eq(await scalar("select has_function_privilege('authenticated',$1,'EXECUTE')", [signature]), false,
+    `MAIN retains sealed ${signature} after monitoring and retention installation`)
+  eq(await scalar('select count(*)::int from bx1_portal.customer_monitoring_cases'), 0,
+    'MAIN monitoring definition seeds no customer decision')
+  eq(await scalar("select state='NOT_ADMITTED' and policy_version=0 from bx1_private.document_retention_admission where singleton"), true,
+    'MAIN retention disposal remains unadmitted')
+  await db.query('savepoint main_funding_install_order')
+  await sqlFile('../../../supabase/features/bx1_portal_funding.sql')
+  for (const signature of [
+    'public.bx1_portal_read_scoped(jsonb)',
+    'public.bx1_portal_command_scoped(text,uuid,jsonb,jsonb)',
+    'bx1_portal.read_scoped(jsonb)',
+    'bx1_portal.execute_scoped(jsonb,text,uuid,jsonb)',
+    'public.bx1_portal_funding_verification_context(text,uuid,jsonb)',
+  ]) eq(await scalar("select has_function_privilege('authenticated',$1,'EXECUTE')", [signature]), false,
+    `later funding installation cannot reopen MAIN ${signature}`)
+  await db.query('rollback to savepoint main_funding_install_order; release savepoint main_funding_install_order')
+  eq(await scalar("select has_function_privilege('authenticated','bx1_portal.document_upload_allowed(text,text,jsonb)','EXECUTE')"), false,
+    'MAIN keeps the portal upload helper outside authenticated reach')
+  await actor(2)
+  await denied('MAIN denies direct calls to the sealed portal upload helper', () =>
+    scalar('select bx1_portal.document_upload_allowed($1,$2,$3::jsonb)',
+      [`${id(2)}/${id(240)}`, id(2), '{}']))
+  await admin()
+  eq(await functionManifest(preservedSignatures), nativeFunctions, 'unrelated native auth and wallet function definitions and owners exactly preserved')
+  eq(Object.fromEntries(Object.entries(await functionManifest(mfaSignatures))
+    .map(([signature, metadata]) => [signature, metadata.owner])), mfaOwnersBefore,
+  'extended MFA helpers retain their trusted original owners')
   const grantsAfter = await grantManifest(signatures)
   eq(grantsAfter.filter(grant => grant.grantee !== 'bx1_authority_owner'), nativeGrants, 'all existing native function grants preserved')
   eq(grantsAfter.filter(grant => grant.grantee === 'bx1_authority_owner').map(grant => [grant.signature, grant.privilege_type, grant.is_grantable]), [
@@ -135,6 +192,27 @@ try {
   for (const table of ['applications', 'organisations', 'organisation_authority_bindings', 'investment_accounts', 'products', 'subscriptions', 'requests', 'events', 'entry_requests']) eq(await scalar(`select count(*)::int from bx1_portal.${table}`), 0, `bootstrap does not seed ${table}`)
   for (const table of ['product_eligibility_cases', 'product_eligibility_receipts']) eq(await scalar(`select count(*)::int from bx1_portal.${table}`), 0, `Stage 2 definition does not seed ${table} in MAIN`)
   for (const table of ['legal_entity_parties', 'investing_representative_mandates', 'investing_representative_receipts']) eq(await scalar(`select count(*)::int from bx1_portal.${table}`), 0, `entity definition does not seed ${table} in MAIN`)
+  for (const table of ['offering_revisions', 'offering_decisions']) eq(await scalar(`select count(*)::int from bx1_portal.${table}`), 0, `Stage 3 definition does not seed ${table} in MAIN`)
+  for (const table of ['provider_application_bindings', 'provider_evidence_events'])
+    eq(await scalar(`select count(*)::int from bx1_private.${table}`), 0, `new Stage 1/2 definition does not seed ${table} in MAIN`)
+  // The staff owner and tables are uncommitted in this fixture, so the separate
+  // maintenance connection cannot see them. The existing MFA helper owner
+  // intentionally retains SELECT on intents, but not on the private outbox.
+  for (const table of ['staff_invitation_intents', 'staff_invitation_outbox']) {
+    eq(await scalar('select pg_catalog.to_regclass($1) is not null', [`bx1_private.${table}`]), true,
+      `staff invitation ${table} definition is present in MAIN`)
+  }
+  eq(await scalar('select count(*)::int from bx1_private.staff_invitation_intents'), 0,
+    'MAIN definition does not seed invitation intents')
+  eq(await scalar("select pg_catalog.has_table_privilege(current_user,'bx1_private.staff_invitation_outbox','SELECT')"), false,
+    'MAIN migrator cannot read the private invitation outbox')
+  eq(await scalar('select count(*)::int from bx1_portal.application_ownership_control_versions'), 0,
+    'structured ownership definition does not seed disclosures in MAIN')
+  eq(await scalar('select count(*)::int from bx1_private.document_quarantine_items'), 0,
+    'document quarantine definition does not seed private documents in MAIN')
+  for (const table of ['offering_revisions', 'offering_decisions']) for (const role of ['anon', 'authenticated', 'service_role']) {
+    for (const privilege of ['SELECT', 'INSERT', 'UPDATE', 'DELETE']) eq(await scalar('select has_table_privilege($1,$2,$3)', [role, `bx1_portal.${table}`, privilege]), false, `${role} has no direct ${privilege} on MAIN ${table}`)
+  }
   eq(await scalar('select count(*)::int from bx1_private.person_principals'), 0, 'dependency creates no person-principal grants')
   eq(await scalar('select count(*)::int from bx1_private.governance_grants'), 0, 'dependency creates no governance grants')
   eq(await scalar("select jsonb_agg(jsonb_build_object('name',polname,'command',polcmd,'roles',polroles,'using',pg_get_expr(polqual,polrelid),'check',pg_get_expr(polwithcheck,polrelid)) order by polname) from pg_policy where polrelid='storage.objects'::regclass and polname like 'synthetic_native_%'"), nativeStoragePolicies, 'pre-existing unrelated Storage policies preserved exactly')

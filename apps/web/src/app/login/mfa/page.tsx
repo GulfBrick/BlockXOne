@@ -8,6 +8,7 @@ import { platformRelease } from '@/lib/platform-release'
 import { createPageSupabaseClient } from '@/lib/supabase/page'
 import { hasRequiredMfa, readMfaContext, toMfaView } from '@/lib/supabase/mfa'
 import type { MfaView } from '@/lib/supabase/mfa-contracts'
+import { pendingStaffInvitations } from '@/lib/administration/staff-invitations'
 
 type Props = { searchParams: Promise<Record<string, string | string[] | undefined>> }
 export const dynamic = 'force-dynamic'
@@ -18,22 +19,24 @@ export async function generateMetadata({ searchParams }: Props) {
 export default async function MfaPage({ searchParams }: Props) {
   if (!isSupabaseAuthMode()) notFound()
   const params = await searchParams
-  const safeQuery = Object.entries(params).every(([key, value]) => value === undefined || (key === 'continue' && value === 'setup'))
-  const continuation = params.continue === 'setup' ? 'setup' : 'workspace'
+  const safeQuery = Object.entries(params).every(([key, value]) => value === undefined || (key === 'continue' && (value === 'setup' || value === 'staff')))
+  const continuation = params.continue === 'setup' ? 'setup' : params.continue === 'staff' ? 'staff' : 'workspace'
   let unavailable = !safeQuery
   let signedIn = false
   let sufficient = false
   let view: MfaView | null = null
   if (safeQuery) {
     try {
-      const context = await readMfaContext(await createPageSupabaseClient())
+      const client = await createPageSupabaseClient()
+      const context = await readMfaContext(client)
       signedIn = Boolean(context)
       if (context) { sufficient = hasRequiredMfa(context); view = toMfaView(context) }
+      if (continuation === 'staff' && !(await pendingStaffInvitations(client)).length) unavailable = true
     } catch { unavailable = true }
   }
   // Next navigation exceptions must never be swallowed by a provider catch.
   if (!unavailable && !signedIn) redirect('/login')
-  if (!unavailable && sufficient) redirect(continuation === 'setup' ? '/login?setup=1' : platformRelease(process.env) ? '/portal' : '/workspace')
+  if (!unavailable && sufficient) redirect(continuation === 'setup' ? '/login?setup=1' : continuation === 'staff' ? '/workspace/staff-invite' : platformRelease(process.env) ? '/portal' : '/workspace')
   return <PublicShell><main id="main-content" className="mx-auto w-full max-w-md px-4 py-16 sm:px-6 sm:py-24">
     <p className="text-sm font-semibold uppercase tracking-[0.16em] text-bxo-accent-primary">Secure access</p>
     <h1 className="mt-4 font-ui text-3xl font-medium tracking-tight text-bxo-text-primary sm:text-4xl">Verify your sign-in</h1>

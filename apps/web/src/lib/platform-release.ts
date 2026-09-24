@@ -1,7 +1,7 @@
 import { TESTNET_APP_ORIGIN } from './testnet-fund/contracts'
 
 /** One product version; deployment identity and business readiness remain separate. */
-export const PLATFORM_VERSION = '1.1.0-rc.15'
+export const PLATFORM_VERSION = '1.1.0-rc.19'
 export type PlatformEnvironment = 'TESTNET' | 'MAINNET'
 export type PlatformRelease = { version: string; environment: PlatformEnvironment; source: string }
 

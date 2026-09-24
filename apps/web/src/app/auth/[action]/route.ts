@@ -11,6 +11,7 @@ import { administrationErrorResponse, handleAdministrationAction } from '@/lib/a
 import { identityEnvironmentEnabled, platformRelease } from '@/lib/platform-release'
 import { PortalError } from '@/lib/portal/server'
 import { readEntry } from '@/lib/portal/entry-server'
+import { beginStaffInvitation, pendingStaffInvitations } from '@/lib/administration/staff-invitations'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -120,6 +121,11 @@ async function dispatch(request: NextRequest, context: Context): Promise<NextRes
         if (mfa && !await isMfaContextCurrent(client, mfa)) return jar.finish(clearPending(errorResponse('unavailable', 503)))
         return jar.finish(clearPending(redirect('/portal/onboarding')))
       }
+      if (pending.type === 'invite' && await beginStaffInvitation(client)) {
+        // No organisation membership exists at this point. Password setup
+        // and a fresh verified authenticator precede role activation.
+        return jar.finish(clearPending(redirect('/login?setup=1')))
+      }
       return jar.finish(clearPending(redirect(mfa && !hasRequiredMfa(mfa) ? '/login/mfa?continue=setup' : '/login?setup=1')))
     }
     if (action === 'login') {
@@ -136,9 +142,12 @@ async function dispatch(request: NextRequest, context: Context): Promise<NextRes
       const mfa = await readMfaContext(client)
       let destination = !mfa ? '/workspace/access-denied' : '/login/mfa'
       const portalEnabled = identityEnvironmentEnabled(process.env)
+      const pendingStaff = mfa ? await pendingStaffInvitations(client) : []
+      if (pendingStaff.length) destination = !hasRequiredMfa(mfa!) ? '/login/mfa?continue=staff' : '/workspace/staff-invite'
       if (mfa && hasRequiredMfa(mfa)) {
         const workspace = await readWorkspace(client)
-        if (portalEnabled) {
+        if (pendingStaff.length && !workspace) destination = '/workspace/staff-invite'
+        else if (portalEnabled) {
           try { await readEntry(client); destination = workspace ? '/portal' : '/portal/onboarding' } catch (error) {
             if (error instanceof PortalError && [401, 403].includes(error.status)) destination = '/workspace/access-denied'
             else throw error
@@ -165,9 +174,12 @@ async function dispatch(request: NextRequest, context: Context): Promise<NextRes
       if (!mfa && !identityEnvironmentEnabled(process.env)) return jar.finish(errorResponse('access_denied', 403, true))
       if (mfa && !hasRequiredMfa(mfa)) return jar.finish(redirect('/login/mfa?continue=setup'))
       const existingWorkspace = mfa ? await readWorkspace(client) : null
+      const pendingStaff = mfa ? await pendingStaffInvitations(client) : []
       if (!existingWorkspace) {
-        if (!identityEnvironmentEnabled(process.env)) return jar.finish(errorResponse('access_denied', 403, true))
-        await readEntry(client)
+        if (!pendingStaff.length) {
+          if (!identityEnvironmentEnabled(process.env)) return jar.finish(errorResponse('access_denied', 403, true))
+          await readEntry(client)
+        }
       }
       if (mfa && !await isMfaContextCurrent(client, mfa)) return jar.finish(errorResponse('unavailable', 503, true))
       const { error } = await client.auth.updateUser({ password })
@@ -187,9 +199,9 @@ async function dispatch(request: NextRequest, context: Context): Promise<NextRes
       }
       if (!hasRequiredMfa(updated)) return jar.finish(redirect('/login/mfa?continue=setup'))
       const workspace = await readWorkspace(client)
-      if (!workspace && identityEnvironmentEnabled(process.env)) await readEntry(client)
+      if (!workspace && !pendingStaff.length && identityEnvironmentEnabled(process.env)) await readEntry(client)
       if (!await isMfaContextCurrent(client, updated)) return jar.finish(errorResponse('unavailable', 503, true))
-      return jar.finish(redirect(workspace ? (platformRelease(process.env) ? '/portal' : '/workspace') : identityEnvironmentEnabled(process.env) ? '/portal/onboarding' : '/workspace/access-denied'))
+      return jar.finish(redirect(workspace ? (platformRelease(process.env) ? '/portal' : '/workspace') : pendingStaff.length ? '/workspace/staff-invite' : identityEnvironmentEnabled(process.env) ? '/portal/onboarding' : '/workspace/access-denied'))
     }
     if (!await readVerifiedUser(client)) return jar.finish(errorResponse('access_denied', 401))
     const { error } = await client.auth.signOut({ scope: 'local' })
