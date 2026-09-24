@@ -151,6 +151,7 @@ export async function proveCustomerMonitoring(db, {
   const cleared = await command(2, payload('CURRENT', 2, 'cleared-before-underlying-expiry'), key(8))
   eq(cleared.customer_monitoring.find(c => c.application_id === applicationId)?.new_actions_allowed, true,
     'independently reviewed release restores only the still-current admission')
+  await admin()
   if (managerMandateId) eq(await scalar('select bx1_portal.representative_mandate_effective($1)',
     [managerMandateId]), true, 'clearance restores only the unchanged approved appointment')
   await admin()
@@ -180,6 +181,7 @@ export async function proveCustomerMonitoring(db, {
 
   if (investorApplicationId && investorAccountId) {
     await actor(3, 'aal1')
+    await admin()
     eq(await scalar('select bx1_portal.account_usable($1::jsonb,$2::uuid)',
       [JSON.stringify({ mode: 'APPLICANT' }), investorAccountId]),
     true, 'approved investor account is usable before its separate monitoring hold')
@@ -190,6 +192,7 @@ export async function proveCustomerMonitoring(db, {
     eq(investorState.customer_monitoring.find(c => c.application_id === investorApplicationId)?.state,
       'ON_HOLD', 'a separate investor has an independently reviewed hold')
     await actor(3, 'aal1')
+    await admin()
     eq(await scalar('select bx1_portal.account_usable($1::jsonb,$2::uuid)',
       [JSON.stringify({ mode: 'APPLICANT' }), investorAccountId]),
     false, 'held investor account cannot be used for another subscription')
@@ -210,6 +213,7 @@ export async function proveCustomerMonitoring(db, {
     const entityHold = payload('ON_HOLD', 0, 'entity-investor-on-hold')
     entityHold.application_id = entityApplicationId
     await command(2, entityHold, key(12))
+    await admin()
     eq(await scalar('select bx1_portal.entity_account_admission_current($1)', [entityAccountId]), false,
       'held entity admission no longer opens a new mandate')
     eq(await scalar('select bx1_portal.investing_mandate_effective($1)', [entityMandateId]), false,
