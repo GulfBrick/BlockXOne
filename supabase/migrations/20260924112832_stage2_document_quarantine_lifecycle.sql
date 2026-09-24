@@ -148,7 +148,7 @@ begin
   end if;
   if NEW.bucket_id='bx1-portal-quarantine' then
     if (select mode from bx1_private.document_lifecycle_policy where singleton)<>'SCANNER_REQUIRED'
-      or NEW.name !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+      or NEW.name !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
       then raise exception 'document_quarantine_unavailable' using errcode='23514'; end if;
     return NEW;
   end if;
@@ -163,7 +163,7 @@ begin
     NEW.owner_id:=q.actor_id::text;
   end if;
   v_owner:=NEW.owner_id;
-  if v_owner is null or v_owner !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+  if v_owner is null or v_owner !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
     or pg_catalog.split_part(NEW.name,'/',1) is distinct from v_owner then
     raise exception 'portal_document_owner_required' using errcode='23514'; end if;
   perform pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended('bx1_portal_document:'||v_owner,0));
@@ -463,7 +463,7 @@ begin
   end if;
   v_owner_prefix:=pg_catalog.split_part(object_name,'/',1);
   if v_owner_prefix=auth.uid()::text then return true; end if;
-  if v_owner_prefix !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+  if v_owner_prefix !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
     then return false; end if;
   for v_app in select a.id,a.reviewer_scope from bx1_portal.applications a
     where a.user_id=v_owner_prefix::uuid and a.status<>'DRAFT' and a.reviewer_scope is not null loop
