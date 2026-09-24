@@ -209,4 +209,7 @@
 .applicationChecklist strong { display: block; }
 .applicationChecklist span { color: var(--portal-muted); }
 .applicationChecklist li[data-ready=true] { border-left: 3px solid var(--portal-accent); }
+.applicationChecklist li button { margin: 10px 10px 0 0; }
+.kycWidget { width: 100%; min-width: 0; overflow: hidden; border: 1px solid var(--bxo-border-default); border-radius: 8px; }
+.kycWidget iframe { display: block; max-width: 100%; border: 0; }
 @media (max-width: 760px) { .applicationRefresh .buttonSecondary { width: 100%; } .applicationState { padding: 15px; } }

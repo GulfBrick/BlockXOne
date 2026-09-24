@@ -1,18 +1,18 @@
 {
   "product": "BlockXOne",
-  "version": "1.1.0-rc.16",
+  "version": "1.1.0-rc.17",
   "status": "release-candidate",
-  "baseSource": "713d1bf45f1c0c0ad71e25a9f8d15b0037341d6a",
+  "baseSource": "fd5540e8073deb1da8b786e3fb0386f546db9d3f",
   "sourceIdentity": "VERCEL_GIT_COMMIT_SHA",
   "environmentSource": "validated deployment target, canonical origin and Supabase project",
   "sharedEntry": "/login",
   "sharedDashboard": "/portal",
   "environments": ["TESTNET", "MAINNET"],
   "brand": "BlockXOne Brand Kit v2.0 Exact Logo",
-  "schemaChanges": ["20260923134152_stage2_product_eligibility", "20260923143713_stage2_customer_mandates", "20260923144216_stage2_document_receipts", "20260923161500_stage2_application_document_history", "20260923171126_stage2_entity_investment_accounts", "20260923175822_stage2_superadmin_shell_mfa_boundary", "20260923205519_stage3_immutable_offering_packages"],
-  "mainnetMissingPrerequisites": ["Live identity-provider evidence, controlled document validation, required MFA for every admission reviewer, trusted distinct-person mappings, and real customer admission are not approved", "Issuer appointment, actual e-signature/document evidence, reviewed contract package and independently verified technical readiness are not admitted"],
+  "schemaChanges": ["20260923134152_stage2_product_eligibility", "20260923143713_stage2_customer_mandates", "20260923144216_stage2_document_receipts", "20260923161500_stage2_application_document_history", "20260923171126_stage2_entity_investment_accounts", "20260923175822_stage2_superadmin_shell_mfa_boundary", "20260923205519_stage3_immutable_offering_packages", "20260924110608_stage2_provider_evidence", "20260924110911_stage1_staff_invitation_intents", "20260924110922_stage2_beneficial_ownership_control", "20260924112832_stage2_document_quarantine_lifecycle"],
+  "mainnetMissingPrerequisites": ["Live identity-provider evidence, operational malware scanning and disposal, lost-authenticator recovery, required MFA for every admission reviewer, trusted distinct-person mappings, and real customer admission are not approved", "Issuer appointment, actual e-signature/document evidence, reviewed contract package and independently verified technical readiness are not admitted"],
   "contractChanges": [],
   "productionFinancialAdmission": false,
-  "scope": "Stage 3 offering-package increment in the same portal: preserve Stage 1 and Stage 2 identity, admission, account, funding and contract history. Submitted fund and real-estate draft terms gain immutable package references and document-text digests; issuer and Compliance decisions bind to the exact package, while investor eligibility and new subscriptions require that same package. Existing legacy records remain historical, not automatically approved. Publishing, subscriptions and new funding commitments fail closed without independently verified technical readiness; this release does not provide a self-attestation bypass. Issuer appointment for newly admitted customer organisations, actual e-signature and private-document evidence, complete typed product rights, deployment/contract conformance, test settlement, issuance, servicing and exits are not complete. TEST retains fictional manual customer evidence, not live KYC or malware scanning. MAIN business and financial actions remain sealed."
+  "scope": "Stage 1/2 evidence-path increment on the same portal and environments. Add scoped, independently reviewed first-time staff invitation intents with exact-email and TOTP acceptance; structured beneficial-owner versions; TEST-only Sumsub sandbox evidence adapter and applicant/reviewer surfaces; and a fail-closed document quarantine/scanner-result contract. Existing login, application, account, product, funding, wallet and contract history is retained. No invitation is sent until Auth email-template/redirect proof. Sumsub lacks hosted sandbox credentials and webhook proof; document scanning lacks a real provider, and scanner-required mode stays disabled. Lost-authenticator recovery and governed document disposal remain unimplemented. MAIN business and financial actions remain sealed. Stage 3 offering packages remain drafts until technical and legal admission, not an offered investment."
 }
 

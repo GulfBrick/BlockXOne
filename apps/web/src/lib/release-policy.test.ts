@@ -15,7 +15,7 @@ describe('native Auth admission', () => {
       '/login', '/auth/confirm', '/auth/login', '/auth/setup', '/auth/logout',
       '/workspace', '/workspace/access-denied', '/api/wallet/challenge', '/api/wallet/verify',
       '/login/mfa', '/workspace/security', '/auth/mfa-enroll', '/auth/mfa-verify',
-      '/workspace/administration', '/auth/admin-command',
+      '/workspace/administration', '/workspace/administration/staff-invitations', '/auth/admin-command', '/auth/staff-invite', '/workspace/staff-invite',
       '/workspace/testnet-fund', '/api/testnet-fund/command',
       '/register', '/auth/register', '/portal', '/portal/onboarding',
       '/portal/products', '/portal/products/new', '/portal/products/detail',

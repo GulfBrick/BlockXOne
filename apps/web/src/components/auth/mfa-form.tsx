@@ -22,7 +22,7 @@ type ControllerOptions = {
 }
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const initialState = (): MfaFormState => ({ pending: false, reloadRequired: false })
-const nextPaths = new Set(['/portal', '/workspace', '/login?setup=1', '/workspace/security'])
+const nextPaths = new Set(['/portal', '/workspace', '/login?setup=1', '/workspace/security', '/workspace/staff-invite'])
 const errors: Record<MfaErrorCode, string> = {
   invalid_request: 'Unable to verify that code. Check your authenticator and try again.',
   unauthorised: 'Sign in again to continue.',
@@ -47,9 +47,9 @@ export function createMfaFormController(options: ControllerOptions) {
   const emit = (next: MfaFormState) => { state = next; if (active) options.onChange(next) }
   const failUnknown = () => emit({ pending: false, reloadRequired: true, error: 'unavailable' })
   const allowedFactor = (id: string) => {
-    if (options.continuation === 'security' && state.setup?.factorId === id) return true
+    if (['security','staff'].includes(options.continuation) && state.setup?.factorId === id) return true
     return options.view.factors.some(factor => factor.id === id && factor.factorType === 'totp'
-      && (factor.status === 'verified' || (options.continuation === 'security' && options.view.state === 'unenrolled' && factor.status === 'unverified')))
+      && (factor.status === 'verified' || (['security','staff'].includes(options.continuation) && options.view.state === 'unenrolled' && factor.status === 'unverified')))
   }
   async function submit(path: string, body: URLSearchParams, enrollment: boolean) {
     if (!active || state.pending || state.reloadRequired) return
@@ -85,7 +85,7 @@ export function createMfaFormController(options: ControllerOptions) {
   return {
     getState: () => state,
     enroll: async () => {
-      if (options.continuation !== 'security' || options.view.state !== 'unenrolled' || options.view.hasPendingTotp || options.view.factors.length || state.setup) return
+      if (!['security','staff'].includes(options.continuation) || options.view.state !== 'unenrolled' || options.view.hasPendingTotp || options.view.factors.length || state.setup) return
       await submit('/auth/mfa-enroll', new URLSearchParams(), true)
     },
     verify: async (factorId: string, code: string) => {
@@ -180,8 +180,8 @@ export function MfaForm({ view, continuation }: { view: MfaView; continuation: M
   useEffect(() => { if (state.error) alert.current?.focus() }, [state.error])
 
   const factors = state.setup ? [{ id: state.setup.factorId, status: 'unverified' as const, factorType: 'totp' as const }]
-    : view.factors.filter(factor => factor.status === 'verified' || (continuation === 'security' && view.state === 'unenrolled'))
-  const canEnroll = continuation === 'security' && view.state === 'unenrolled' && !view.hasPendingTotp && !view.factors.length && !state.setup
+    : view.factors.filter(factor => factor.status === 'verified' || (['security','staff'].includes(continuation) && view.state === 'unenrolled'))
+  const canEnroll = ['security','staff'].includes(continuation) && view.state === 'unenrolled' && !view.hasPendingTotp && !view.factors.length && !state.setup
   const unsupported = view.state === 'unsupported_factor' || (view.state === 'verified' && !factors.length)
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()

@@ -52,6 +52,15 @@ function database(): Pool {
   return pool
 }
 
+/** Restricted server-only writer; callers must use fixed, parameterised SQL. */
+export async function documentReceiptQuery<T>(sql: string, parameters: readonly unknown[]): Promise<T> {
+  try {
+    const { rows } = await database().query<{ result: T }>(sql, [...parameters])
+    if (rows.length !== 1 || rows[0].result === null || rows[0].result === undefined) throw new Error()
+    return rows[0].result
+  } catch { throw new DocumentReceiptError() }
+}
+
 export async function registerDocumentReceipt(actorId: string, sessionId: string, document: EvidenceDocument): Promise<void> {
   try {
     const { rows } = await database().query<{ result: Record<string, unknown> }>(

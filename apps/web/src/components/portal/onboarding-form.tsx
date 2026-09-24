@@ -2,21 +2,49 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { FileCheck2, Upload } from 'lucide-react'
-import { applicationDocumentVersionsSchema, isWealthManagerDetailsV2, type ApplicationDetails, type ApplicationDocumentVersions, type EvidenceDocument, type LegacyApplicationDetails, type Persona, type WealthManagerApplicationDetailsV2 } from '@/lib/portal/contracts'
+import { z } from 'zod'
+import { applicationDocumentVersionsSchema, evidenceSchema, isWealthManagerDetailsV2, ownershipControlRelationshipSchema, type ApplicationDetails, type ApplicationDocumentVersions, type EvidenceDocument, type LegacyApplicationDetails, type OwnershipControlRelationship, type Persona, type WealthManagerApplicationDetailsV2 } from '@/lib/portal/contracts'
 import type { EntryApplication, EntrySnapshot } from '@/lib/portal/entry-contracts'
 import type { PlatformEnvironment } from '@/lib/platform-release'
 import { CommandFeedback, usePortalActorId, usePortalOperatingContext } from './portal-client'
 import { useEntryCommand } from './entry-client'
 import { portalScopeHref } from '@/lib/portal/operating-context'
 import { DetailList, Field, FormProgress, Notice, Panel, StatusBadge, dateLabel } from './portal-primitives'
+import { KycVerification } from './kyc-verification'
 import styles from './portal.module.css'
 
-type FormDetails = Omit<LegacyApplicationDetails, 'details_version' | 'business_activities' | 'representative_position' | 'authority_basis'> & Pick<WealthManagerApplicationDetailsV2, 'business_activities' | 'representative_position' | 'authority_basis'>
+type FormDetails = Omit<LegacyApplicationDetails, 'details_version' | 'business_activities' | 'representative_position' | 'authority_basis'> & Pick<WealthManagerApplicationDetailsV2, 'business_activities' | 'representative_position' | 'authority_basis'> & {
+  ownership_control: OwnershipControlRelationship[]; ownership_change_reason: string;
+}
+const scanQueueItemSchema = z.object({
+  id: z.string().uuid(), kind: evidenceSchema.shape.kind, title: z.string(),
+  state: z.enum(['QUARANTINED', 'SCANNED_CLEAN', 'REJECTED']), created_at: z.string(),
+}).strict()
+const scanQueueSchema = z.object({ documents: z.array(scanQueueItemSchema) }).strict()
+type ScanQueueItem = z.infer<typeof scanQueueItemSchema>
+
+export function classifyDocumentUpload(status: number, value: unknown): { kind: 'QUARANTINED' | 'ATTACHABLE'; document: z.infer<typeof evidenceSchema> } | null {
+  const result = z.object({ document: evidenceSchema, validation_state: z.string() }).passthrough().safeParse(value)
+  if (!result.success) return null
+  if (status === 202 && result.data.validation_state === 'QUARANTINED') return { kind: 'QUARANTINED', document: result.data.document }
+  if ([200, 201].includes(status) && ['SYNTHETIC_UNSCANNED', 'LEGACY_UNVERIFIED'].includes(result.data.validation_state))
+    return { kind: 'ATTACHABLE', document: result.data.document }
+  return null
+}
+
+export function requiresOwnershipDisclosure(persona: Persona, investorType: LegacyApplicationDetails['investor_type']) {
+  return persona === 'WEALTH_MANAGER' || investorType === 'ENTITY'
+}
+
+export function newOwnershipRelationship(): OwnershipControlRelationship {
+  return { id: crypto.randomUUID(), party_type: 'PERSON', legal_name: '', registration_reference: '', country: 'ZA', relationship: 'DIRECT_OWNER', ownership_basis_points: 0, control_basis: '', effective_on: '', change_reason: '', evidence_document_id: '' }
+}
 
 /** Carry shared historical facts forward, never reinterpret investor answers as organisation facts. */
 export function applicationFormDetails(application: EntryApplication): FormDetails {
   const details = application.details
   const manager = isWealthManagerDetailsV2(details) ? details : null
+  const structured = 'ownership_control' in details && Array.isArray(details.ownership_control) ? details : null
   return {
     full_name: details.full_name ?? '', country: details.country ?? 'ZA',
     company_name: details.company_name ?? '', registration_reference: details.registration_reference ?? '',
@@ -26,14 +54,17 @@ export function applicationFormDetails(application: EntryApplication): FormDetai
     experience: 'experience' in details ? details.experience ?? '' : '',
     business_activities: manager?.business_activities ?? '', representative_position: manager?.representative_position ?? '',
     authority_basis: manager?.authority_basis ?? '',
+    ownership_control: structured?.ownership_control ?? [], ownership_change_reason: structured?.ownership_change_reason ?? '',
   }
 }
 
 export function applicationSubmissionDetails(persona: Persona, details: FormDetails): ApplicationDetails {
   const shared = { full_name: details.full_name, country: details.country, company_name: details.company_name, registration_reference: details.registration_reference, beneficial_owners: details.beneficial_owners, documents: details.documents, test_data_acknowledged: true as const }
   return persona === 'WEALTH_MANAGER'
-    ? { ...shared, details_version: 2, business_activities: details.business_activities, representative_position: details.representative_position, authority_basis: details.authority_basis }
-    : { ...shared, investor_type: details.investor_type, source_of_funds: details.source_of_funds, experience: details.experience }
+    ? { ...shared, details_version: 3, business_activities: details.business_activities, representative_position: details.representative_position, authority_basis: details.authority_basis, ownership_control: details.ownership_control, ownership_change_reason: details.ownership_change_reason }
+    : details.investor_type === 'ENTITY'
+      ? { ...shared, details_version: 3, investor_type: 'ENTITY', source_of_funds: details.source_of_funds, experience: details.experience, ownership_control: details.ownership_control, ownership_change_reason: details.ownership_change_reason }
+      : { ...shared, investor_type: 'INDIVIDUAL', source_of_funds: details.source_of_funds, experience: details.experience }
 }
 
 export function requiredApplicationEvidence(persona: Persona, investorType: LegacyApplicationDetails['investor_type']) {
@@ -47,7 +78,13 @@ export function applicationSubmitLabel(application: EntryApplication): string {
 }
 
 export function applicationSubmissionReady(persona: Persona, details: FormDetails, acknowledged: boolean, locked: boolean): boolean {
-  return !locked && acknowledged && requiredApplicationEvidence(persona, details.investor_type).every(item => details.documents.some(document => document.kind === item.kind))
+  const evidenceReady = requiredApplicationEvidence(persona, details.investor_type).every(item => details.documents.some(document => document.kind === item.kind))
+  const ownershipReady = !requiresOwnershipDisclosure(persona, details.investor_type) || (details.ownership_change_reason.trim().length >= 20
+    && details.ownership_control.length > 0 && details.ownership_control.every(relationship => {
+      return ownershipControlRelationshipSchema.safeParse(relationship).success
+        && details.documents.some(document => document.id === relationship.evidence_document_id && document.kind === 'BENEFICIAL_OWNERS')
+    }))
+  return !locked && acknowledged && evidenceReady && ownershipReady
 }
 
 export function withoutDraftEvidence(documents: EvidenceDocument[], documentId: string): EvidenceDocument[] {
@@ -68,6 +105,7 @@ export function ApplicationDetailsSummary({ persona, details }: { persona: Perso
     {manager ? <><section><h3>Business activities and requested services</h3><p className={styles.copy}>{manager.business_activities}</p></section><section><h3>Basis of representative authority</h3><p className={styles.copy}>{manager.authority_basis}</p></section></>
       : <><section><h3>{legacyManager ? 'Legacy source-of-funds answer' : 'Source of funds'}</h3><p className={styles.copy}>{'source_of_funds' in details ? details.source_of_funds || 'Not provided' : 'Not provided'}</p></section><section><h3>{legacyManager ? 'Legacy investment experience and objectives' : 'Investment experience and objectives'}</h3><p className={styles.copy}>{'experience' in details ? details.experience || 'Not provided' : 'Not provided'}</p></section></>}
     {details.beneficial_owners ? <section><h3>Ownership and representation</h3><p className={styles.copy}>{details.beneficial_owners}</p></section> : null}
+    {'ownership_control' in details && Array.isArray(details.ownership_control) ? <section><h3>Disclosed ownership and control relationships</h3><p className={styles.muted}>These are submitted facts for independent review, not BlockXOne roles, mandates or wallet authority.</p><p className={styles.copy}>{'ownership_change_reason' in details ? details.ownership_change_reason : ''}</p>{details.ownership_control.map(relationship => <div key={relationship.id} className={styles.sectionGap}><DetailList rows={[{ label: 'Party', value: `${relationship.legal_name} (${relationship.party_type})` }, { label: 'Relationship', value: relationship.relationship.replaceAll('_', ' ') }, { label: 'Disclosed economic ownership', value: `${(relationship.ownership_basis_points / 100).toFixed(2)}%` }, { label: 'Effective from', value: relationship.effective_on }, { label: 'Control basis', value: relationship.control_basis }, { label: 'Change reason', value: relationship.change_reason }, { label: 'Linked evidence', value: relationship.evidence_document_id }]} /></div>)}</section> : null}
   </div>
 }
 
@@ -166,32 +204,96 @@ export function OnboardingForm({ application, environment, onSaved, receipts }: 
   const [file, setFile] = useState<File | null>(null)
   const [uploadBusy, setUploadBusy] = useState(false)
   const [uploadMessage, setUploadMessage] = useState('')
+  const [scanQueue, setScanQueue] = useState<ScanQueueItem[] | null>(null)
+  const [scanMessage, setScanMessage] = useState('')
+  const [scanBusy, setScanBusy] = useState(false)
+  const [attachingScan, setAttachingScan] = useState('')
+  const [pendingForApplication, setPendingForApplication] = useState<string[]>([])
+  const scanScope = `${environment}:${expectedActor}:${application.id}:${application.revision}`
+  const activeScanScope = useRef(scanScope)
+  activeScanScope.current = scanScope
+  useEffect(() => {
+    setScanQueue(null); setScanMessage(''); setScanBusy(false); setAttachingScan(''); setPendingForApplication([])
+  }, [scanScope])
   const command = useEntryCommand(expectedActor, environment, onSaved, receipts)
   const editable = ['DRAFT', 'CHANGES_REQUIRED'].includes(application.status)
-  const locked = !editable || command.busy || command.unknown || uploadBusy
+  const locked = !editable || command.busy || command.unknown || uploadBusy || Boolean(attachingScan)
   const reviewAvailable = application.review_route === 'AVAILABLE'
   const requiredEvidence = requiredApplicationEvidence(persona, details.investor_type)
-  const submitReady = applicationSubmissionReady(persona, details, acknowledged, locked)
+  const submitReady = applicationSubmissionReady(persona, details, acknowledged, locked) && pendingForApplication.length === 0
   const next = applicationNextStep(application)
   const legacyManager = persona === 'WEALTH_MANAGER' && !isWealthManagerDetailsV2(application.details) && Object.keys(application.details).length > 0
   function change<K extends keyof FormDetails>(key: K, value: FormDetails[K]) { setDetails(current => ({ ...current, [key]: value })) }
+  function changeRelationship(id: string, patch: Partial<OwnershipControlRelationship>) {
+    setDetails(current => ({ ...current, ownership_control: current.ownership_control.map(item => item.id === id ? { ...item, ...patch } : item) }))
+  }
   async function upload() {
     if (!file || !uploadTitle.trim()) { setUploadMessage('Choose a file and give the evidence a descriptive title.'); return }
     if (!['application/pdf', 'image/png', 'image/jpeg'].includes(file.type) || file.size > 4_194_304 || file.size === 0) { setUploadMessage('Use a PDF, PNG or JPEG between 1 byte and 4 MiB.'); return }
-    if (details.documents.length >= 8) { setUploadMessage('A maximum of eight evidence files can be attached.'); return }
+    if (details.documents.length + pendingForApplication.length >= 8) { setUploadMessage('A maximum of eight evidence files can be attached or awaiting a scan.'); return }
+    const scope = scanScope
     setUploadBusy(true); setUploadMessage('')
     try {
       const body = new FormData(); body.set('file', file); body.set('kind', uploadKind); body.set('title', uploadTitle.trim())
       const response = await fetch('/api/portal/documents', { method: 'POST', body, headers: { 'x-bx1-operating-context': JSON.stringify(operatingContext), 'x-bx1-expected-actor': expectedActor }, credentials: 'same-origin', cache: 'no-store', redirect: 'error', signal: AbortSignal.timeout(45000) })
       const result = await response.json()
-      if (!response.ok || !result.document) throw new Error(result.error ?? 'The upload was not confirmed.')
-      change('documents', [...details.documents, result.document]); setFile(null); setUploadTitle(''); setUploadMessage('File uploaded privately. Its application attachment and these fields are not saved until submission is confirmed.')
-    } catch (error) { setUploadMessage(error instanceof Error ? error.message : 'The upload was not confirmed.'); }
-    finally { setUploadBusy(false) }
+      if (activeScanScope.current !== scope) return
+      const upload = classifyDocumentUpload(response.status, result)
+      if (!response.ok || !upload) throw new Error(typeof result.error === 'string' ? result.error : 'The upload state was not confirmed. Do not submit this file.')
+      setFile(null); setUploadTitle('')
+      if (upload.kind === 'QUARANTINED') {
+        setPendingForApplication(current => current.includes(upload.document.id) ? current : [...current, upload.document.id])
+        setScanQueue(current => current ? [
+          { id: upload.document.id, kind: upload.document.kind, title: upload.document.title, state: 'QUARANTINED', created_at: new Date().toISOString() },
+          ...current.filter(item => item.id !== upload.document.id),
+        ] : [{ id: upload.document.id, kind: upload.document.kind, title: upload.document.title, state: 'QUARANTINED', created_at: new Date().toISOString() }])
+        setUploadMessage('File quarantined for an independent scan. It is not attached to this application and cannot satisfy a submission requirement. Check the scan queue before submitting.')
+      } else {
+        change('documents', [...details.documents, upload.document]); setUploadMessage('File uploaded privately. Its application attachment and these fields are not saved until submission is confirmed.')
+      }
+    } catch (error) { if (activeScanScope.current === scope) setUploadMessage(error instanceof Error ? error.message : 'The upload was not confirmed.'); }
+    finally { if (activeScanScope.current === scope) setUploadBusy(false) }
+  }
+  async function refreshScanQueue() {
+    if (scanBusy) return
+    const scope = scanScope
+    setScanBusy(true); setScanMessage('')
+    try {
+      const response = await fetch('/api/portal/documents?queue=1', { credentials: 'same-origin', cache: 'no-store', redirect: 'error', signal: AbortSignal.timeout(15000) })
+      if (!response.ok) throw new Error('The private scan queue is unavailable. Retry later; no pending file is counted as evidence.')
+      const parsed = scanQueueSchema.safeParse(await response.json())
+      if (!parsed.success) throw new Error('The private scan queue response could not be verified.')
+      if (activeScanScope.current !== scope) return
+      setScanQueue(parsed.data.documents)
+      const rejected = new Set(parsed.data.documents.filter(item => item.state === 'REJECTED').map(item => item.id))
+      setPendingForApplication(current => current.filter(id => !rejected.has(id)))
+    } catch (error) { if (activeScanScope.current === scope) setScanMessage(error instanceof Error ? error.message : 'The scan queue is unavailable.') }
+    finally { if (activeScanScope.current === scope) setScanBusy(false) }
+  }
+  async function attachScannedDocument(item: ScanQueueItem) {
+    if (attachingScan || item.state !== 'SCANNED_CLEAN' || details.documents.length >= 8) return
+    const scope = scanScope
+    setAttachingScan(item.id); setScanMessage('')
+    try {
+      const response = await fetch(`/api/portal/documents?status=${encodeURIComponent(item.id)}`, { credentials: 'same-origin', cache: 'no-store', redirect: 'error', signal: AbortSignal.timeout(15000) })
+      if (!response.ok) throw new Error('This scanned file could not be checked for your current session.')
+      const result: unknown = await response.json()
+      if (!result || typeof result !== 'object' || !('state' in result) || result.state !== 'SCANNED_CLEAN' || !('id' in result) || result.id !== item.id || !('document' in result))
+        throw new Error('The file does not have a verified clean receipt. It cannot be attached.')
+      const manifest = evidenceSchema.safeParse(result.document)
+      if (!manifest.success || manifest.data.id !== item.id || manifest.data.kind !== item.kind || manifest.data.title !== item.title)
+        throw new Error('The scanned file receipt does not match the selected document.')
+      if (activeScanScope.current !== scope) return
+      setDetails(current => current.documents.some(document => document.id === item.id) ? current
+        : current.documents.length >= 8 ? current : { ...current, documents: [...current.documents, manifest.data] })
+      setPendingForApplication(current => current.filter(id => id !== item.id))
+      setScanMessage('The clean-scan receipt was rechecked and the file was selected for this application. Submit the application to save that selection.')
+    } catch (error) { if (activeScanScope.current === scope) setScanMessage(error instanceof Error ? error.message : 'The clean-scan receipt is unavailable.') }
+    finally { if (activeScanScope.current === scope) setAttachingScan('') }
   }
   return <div className={styles.wideGrid}>
     <div className={styles.stack}>
-      <Notice title="Use fictional test evidence only">This is the same customer onboarding workflow with a manual test-review provider. Do not upload a real identity document or treat a test approval as regulated KYC clearance.</Notice>
+      <Notice title="Use fictional test evidence only">Customer admission remains an independent BlockXOne decision. TEST uses fictional documents and can collect sandbox provider evidence; neither a provider event nor a test approval establishes production KYC clearance.</Notice>
       <Panel title={persona === 'INVESTOR' ? 'Investor application' : 'Organisation / representative application'} description="This application never changes your assigned roles. Your status and next responsible owner are shown alongside its evidence." action={<StatusBadge status={application.status} />}>
         <p className={styles.muted}>Application reference: <span className={styles.mono}>{application.id}</span></p>
         <div className={styles.sectionGap}><FormProgress stages={['Prepare application', 'Submit evidence', 'Independent review', 'Recorded decision']} current={editable ? 0 : application.status === 'SUBMITTED' ? 2 : 3} /></div>
@@ -205,12 +307,23 @@ export function OnboardingForm({ application, environment, onSaved, receipts }: 
           <fieldset className={styles.fieldset} disabled={locked}><legend>01 · {persona === 'INVESTOR' ? 'Investor details' : 'Organisation and representative'}</legend>
             <div className={styles.formRow}><Field label={persona === 'INVESTOR' ? 'Full name' : 'Representative full name'} hint="Use a fictional identity for this environment."><input value={details.full_name} onChange={event => change('full_name', event.target.value)} required minLength={2} maxLength={120} autoComplete="off" placeholder="e.g. Alex Example (test)" /></Field><Field label="Country of residence" hint="Two-letter country code, for example ZA."><input value={details.country} onChange={event => change('country', event.target.value.toUpperCase())} required pattern="[A-Z]{2}" maxLength={2} /></Field></div>
             {persona === 'INVESTOR' ? <Field label="Investor classification"><select value={details.investor_type} onChange={event => change('investor_type', event.target.value as LegacyApplicationDetails['investor_type'])}><option value="INDIVIDUAL">Individual</option><option value="ENTITY">Legal entity</option></select></Field> : null}
-            {details.investor_type === 'ENTITY' || persona === 'WEALTH_MANAGER' ? <><div className={styles.formRow}><Field label={persona === 'WEALTH_MANAGER' ? 'Customer organisation legal name' : 'Investing entity name'}><input value={details.company_name} onChange={event => change('company_name', event.target.value)} required minLength={3} maxLength={160} placeholder="Fictional example company" /></Field><Field label="Registration reference"><input value={details.registration_reference} onChange={event => change('registration_reference', event.target.value)} required minLength={3} maxLength={100} placeholder="SYNTHETIC-REG-001" /></Field></div><Field label="Beneficial owners and representatives" hint="Describe fictional ownership percentages and who is authorised to act."><textarea value={details.beneficial_owners} onChange={event => change('beneficial_owners', event.target.value)} required minLength={20} maxLength={2000} /></Field></> : null}
+            {details.investor_type === 'ENTITY' || persona === 'WEALTH_MANAGER' ? <><div className={styles.formRow}><Field label={persona === 'WEALTH_MANAGER' ? 'Customer organisation legal name' : 'Investing entity name'}><input value={details.company_name} onChange={event => change('company_name', event.target.value)} required minLength={3} maxLength={160} placeholder="Fictional example company" /></Field><Field label="Registration reference"><input value={details.registration_reference} onChange={event => change('registration_reference', event.target.value)} required minLength={3} maxLength={100} placeholder="SYNTHETIC-REG-001" /></Field></div><Field label="Ownership context" hint="Explain the disclosed structure. Each person or entity must also have a separate linked record below."><textarea value={details.beneficial_owners} onChange={event => change('beneficial_owners', event.target.value)} required minLength={20} maxLength={2000} /></Field></> : null}
             {persona === 'WEALTH_MANAGER' ? <><Field label="Business activities and requested services" hint="Describe the organisation's business and the platform services it seeks. Minimum 20 characters."><textarea value={details.business_activities} onChange={event => change('business_activities', event.target.value)} required minLength={20} maxLength={2000} /></Field><Field label="Your position in the organisation"><input value={details.representative_position} onChange={event => change('representative_position', event.target.value)} required minLength={2} maxLength={160} placeholder="e.g. Appointed representative (fictional)" /></Field><Field label="Basis of your representative authority" hint="Explain who appointed you and what the supporting mandate authorises. This statement alone grants no operating powers."><textarea value={details.authority_basis} onChange={event => change('authority_basis', event.target.value)} required minLength={20} maxLength={2000} /></Field></>
               : <><Field label="Source of funds" hint="Explain where investment capital comes from. Minimum 20 characters."><textarea value={details.source_of_funds} onChange={event => change('source_of_funds', event.target.value)} required minLength={20} maxLength={2000} placeholder="Describe the fictional source and supporting evidence…" /></Field><Field label="Investment experience and objectives" hint="This is submitted to the reviewer; it is not an automated suitability result."><textarea value={details.experience} onChange={event => change('experience', event.target.value)} required minLength={10} maxLength={2000} /></Field></>}
           </fieldset>
+          {requiresOwnershipDisclosure(persona, details.investor_type) ? <><hr className={styles.divider} /><fieldset className={styles.fieldset} disabled={locked}><legend>02 · Beneficial ownership and control</legend><p className={styles.muted}>Disclose each fictional person or legal entity separately. An ownership record is reviewed as evidence; it never grants a BlockXOne role, account mandate or signing authority.</p>
+            {details.ownership_control.map((relationship, index) => <section key={relationship.id} className={styles.panelBody}><div className={styles.actions}><h3>Relationship {index + 1}</h3><button type="button" className={styles.textLink} onClick={() => change('ownership_control', details.ownership_control.filter(item => item.id !== relationship.id))}>Remove</button></div>
+              <div className={styles.formRow}><Field label="Party type"><select value={relationship.party_type} onChange={event => changeRelationship(relationship.id, { party_type: event.target.value as OwnershipControlRelationship['party_type'] })}><option value="PERSON">Person</option><option value="ENTITY">Legal entity</option></select></Field><Field label="Legal name"><input value={relationship.legal_name} onChange={event => changeRelationship(relationship.id, { legal_name: event.target.value })} required minLength={2} maxLength={160} /></Field></div>
+              <div className={styles.formRow}><Field label="Country"><input value={relationship.country} onChange={event => changeRelationship(relationship.id, { country: event.target.value.toUpperCase() })} required pattern="[A-Z]{2}" maxLength={2} /></Field><Field label="Registration reference" hint={relationship.party_type === 'ENTITY' ? 'Required for a legal entity.' : 'Optional for a person.'}><input value={relationship.registration_reference} onChange={event => changeRelationship(relationship.id, { registration_reference: event.target.value })} required={relationship.party_type === 'ENTITY'} maxLength={100} /></Field></div>
+              <div className={styles.formRow}><Field label="Relationship"><select value={relationship.relationship} onChange={event => changeRelationship(relationship.id, { relationship: event.target.value as OwnershipControlRelationship['relationship'] })}><option value="DIRECT_OWNER">Direct owner</option><option value="INDIRECT_OWNER">Indirect owner</option><option value="CONTROLLER">Controller without declared economic ownership</option></select></Field><Field label="Economic ownership (%)" hint="Use 0 only for a controller without declared economic ownership."><input type="number" min={relationship.relationship === 'CONTROLLER' ? 0 : 0.01} max="100" step="0.01" value={relationship.ownership_basis_points / 100} onChange={event => changeRelationship(relationship.id, { ownership_basis_points: Math.round(Number(event.target.value) * 100) })} required /></Field></div>
+              <div className={styles.formRow}><Field label="Effective date"><input type="date" value={relationship.effective_on} max={new Date().toISOString().slice(0, 10)} onChange={event => changeRelationship(relationship.id, { effective_on: event.target.value })} required /></Field><Field label="Linked ownership evidence"><select value={relationship.evidence_document_id} onChange={event => changeRelationship(relationship.id, { evidence_document_id: event.target.value })} required><option value="">Choose an uploaded beneficial-ownership file</option>{details.documents.filter(document => document.kind === 'BENEFICIAL_OWNERS').map(document => <option key={document.id} value={document.id}>{document.title}</option>)}</select></Field></div>
+              <Field label="Basis of ownership or control" hint="Explain the underlying shareholding, chain of ownership or controlling influence."><textarea value={relationship.control_basis} onChange={event => changeRelationship(relationship.id, { control_basis: event.target.value })} required minLength={20} maxLength={1000} /></Field><Field label="Reason for this relationship record"><textarea value={relationship.change_reason} onChange={event => changeRelationship(relationship.id, { change_reason: event.target.value })} required minLength={20} maxLength={500} placeholder="Initial fictional disclosure or reason this relationship changed" /></Field>
+            </section>)}
+            <button type="button" className={styles.buttonSecondary} disabled={details.ownership_control.length >= 20} onClick={() => change('ownership_control', [...details.ownership_control, newOwnershipRelationship()])}>Add a person or entity</button>
+            <Field label="Reason for this ownership disclosure revision" hint="On resubmission, explain any addition, removal or change to the disclosed structure."><textarea value={details.ownership_change_reason} onChange={event => change('ownership_change_reason', event.target.value)} required minLength={20} maxLength={500} /></Field>
+          </fieldset></> : null}
           <hr className={styles.divider} />
-          <fieldset className={styles.fieldset} disabled={locked}><legend>02 · Supporting evidence</legend><p className={styles.muted}>PDF, PNG or JPEG · up to 4 MiB each · up to eight files · access-controlled storage. Attach each required evidence type below.</p>
+          <fieldset className={styles.fieldset} disabled={locked}><legend>{requiresOwnershipDisclosure(persona, details.investor_type) ? '03' : '02'} · Supporting evidence</legend><p className={styles.muted}>PDF, PNG or JPEG · up to 4 MiB each · up to eight files · access-controlled storage. Attach each required evidence type below.</p>
             <ul className={styles.applicationChecklist} aria-label="Required evidence checklist">{requiredEvidence.map(item => { const ready = details.documents.some(document => document.kind === item.kind); return <li key={item.kind} data-ready={ready}><strong>{item.label}</strong><span>{ready ? 'Selected for this submission' : 'Required: upload this evidence type'}</span></li> })}</ul>
             <div className={styles.formRow}><Field label="Evidence type"><select value={uploadKind} onChange={event => setUploadKind(event.target.value)}><option value="IDENTITY">Identity evidence</option><option value="ADDRESS">Address evidence</option><option value="COMPANY">Company evidence</option><option value="BENEFICIAL_OWNERS">Beneficial ownership</option></select></Field><Field label="Document title"><input value={uploadTitle} onChange={event => setUploadTitle(event.target.value)} maxLength={160} placeholder="Fictional proof of identity" /></Field></div>
             <Field label="Choose fictional evidence"><input type="file" accept="application/pdf,image/png,image/jpeg" onChange={event => setFile(event.target.files?.[0] ?? null)} /></Field>
@@ -218,11 +331,19 @@ export function OnboardingForm({ application, environment, onSaved, receipts }: 
           </fieldset>
           <div role="status" aria-live="polite" className={styles.muted}>{uploadMessage}</div>
           {details.documents.map(document => <div key={document.id}><PrivateDocument document={document} /><button type="button" className={styles.textLink} disabled={locked} onClick={() => change('documents', withoutDraftEvidence(details.documents, document.id))}>Exclude from this submission</button></div>)}
+          <div className={styles.sectionGap}>
+            <button type="button" className={styles.buttonSecondary} disabled={scanBusy} onClick={() => void refreshScanQueue()}>{scanBusy ? 'Checking private scan queue...' : 'View private scan queue'}</button>
+            <p className={styles.muted}>Scanned files belong to your signed-in account, not automatically to this investor or organisation application. Select each clean file deliberately. Quarantined and rejected files never count as evidence.</p>
+            {pendingForApplication.length ? <p className={styles.fieldError} role="status">{pendingForApplication.length} file{pendingForApplication.length === 1 ? '' : 's'} uploaded for this application still await{pendingForApplication.length === 1 ? 's' : ''} a clean receipt or exclusion. Submission is disabled.</p> : null}
+            {scanMessage ? <p className={styles.muted} role="status">{scanMessage}</p> : null}
+            {scanQueue ? scanQueue.length ? <ul className={styles.applicationChecklist} aria-label="Private scan queue">{scanQueue.map(item => <li key={item.id} data-ready={item.state === 'SCANNED_CLEAN'}><strong>{item.title}</strong><span>{item.state === 'QUARANTINED' ? 'Awaiting independent scan' : item.state === 'REJECTED' ? 'Rejected by scan; upload a different file' : 'Clean receipt available; select for this application if relevant'}</span>{item.state === 'SCANNED_CLEAN' ? <button type="button" className={styles.buttonSecondary} disabled={Boolean(attachingScan) || details.documents.some(document => document.id === item.id) || details.documents.length >= 8} onClick={() => void attachScannedDocument(item)}>{details.documents.some(document => document.id === item.id) ? 'Selected in this draft' : attachingScan === item.id ? 'Checking receipt...' : 'Include clean file'}</button> : null}{pendingForApplication.includes(item.id) ? <button type="button" className={styles.textLink} onClick={() => setPendingForApplication(current => current.filter(id => id !== item.id))}>Exclude pending file from this application</button> : null}</li>)}</ul> : <p className={styles.muted}>No scanned or pending files are available for this account.</p> : null}
+          </div>
           <p className={styles.muted}>Excluding a file removes it from this unsaved submission only. Earlier versions and stored objects are not deleted; the separate upload quota still applies.</p>
           <label className={styles.check}><input type="checkbox" required checked={acknowledged} disabled={locked} onChange={event => setAcknowledged(event.target.checked)} /><span>I confirm this application and all evidence are fictional test data. I understand a manual test approval does not establish legal identity, investment eligibility or production authority.</span></label><div className={styles.formFoot}><p>Saved record: revision {application.revision}. The fields above are submitted only after a confirmed response. An independent reviewer must make the decision.</p><button type="submit" className={styles.button} disabled={!submitReady}>{command.busy ? 'Submitting…' : applicationSubmitLabel(application)}</button></div>
         </form>
         </> : <div className={`${styles.stack} ${styles.sectionGap}`}><p className={styles.muted}>Read-only saved application, revision {application.revision}. {application.status === 'SUBMITTED' ? 'A request for changes will reopen editing.' : 'The recorded decision does not alter these submitted answers.'}</p><ApplicationDetailsSummary persona={persona} details={application.details} /><section><h3>Submitted private evidence</h3>{application.details.documents?.length ? application.details.documents.map(document => <PrivateDocument key={document.id} document={document} />) : <p className={styles.muted}>No evidence is recorded.</p>}</section></div>}
       </Panel>
+      <KycVerification key={`${environment}:${expectedActor}:${application.id}:${application.revision}`} application={application} environment={environment} actorId={expectedActor} />
       {application.status !== 'DRAFT' || application.submitted_at ? <ApplicationDocumentHistory key={application.id} applicationId={application.id} /> : null}
     </div>
     <aside className={styles.stack} aria-label="Application progress and responsibility"><Panel title="Application status"><DetailList rows={[{ label: 'Relationship', value: persona === 'INVESTOR' ? 'Investor' : 'Wealth manager / representative' }, { label: 'Status', value: <StatusBadge status={application.status} /> }, { label: 'Saved revision', value: application.revision }, { label: 'Submitted', value: dateLabel(application.submitted_at) }, { label: 'Decision recorded', value: dateLabel(application.reviewed_at) }, { label: 'Review provider', value: application.provider_mode === 'MANUAL_TEST_REVIEW' ? 'Manual test review' : 'Not assigned to this application yet' }, { label: editable ? 'Evidence selected in this browser' : 'Saved evidence files', value: details.documents.length }]} /></Panel><Panel title="Next responsible owner"><p className={styles.applicationOwner}>{next.owner}</p><h3>{next.title}</h3><p className={styles.copy}>{next.description}</p><p className={styles.muted}>Review availability is checked again when you submit. It does not prove a reviewer is currently signed in.</p></Panel><Panel title={editable ? 'Submission checklist' : 'Connected handoff'}><ol className={styles.timeline}><li><strong>{persona === 'INVESTOR' ? 'Investor facts and supporting evidence' : 'Organisation facts and representative evidence'}</strong><p>{editable ? 'Complete each required field and attach fictional evidence. Unsaved browser edits are not in the review queue.' : 'The saved package is displayed read-only at its recorded revision.'}</p></li><li><strong>Independent BlockXOne review</strong><p>{persona === 'INVESTOR' ? 'A permitted reviewer assesses the submitted investor evidence. A product still has its own eligibility rules.' : 'A permitted reviewer assesses the customer organisation, representative and requested services. The customer cannot self-approve.'}</p></li><li><strong>{persona === 'INVESTOR' ? 'Account and product eligibility' : 'Separate operating assignment'}</strong><p>{persona === 'INVESTOR' ? 'An admission decision is not a funded investment or token holding.' : 'Organisation, role, mandate and signing permissions require their own authority. Customer admission does not create them.'}</p></li></ol></Panel></aside>

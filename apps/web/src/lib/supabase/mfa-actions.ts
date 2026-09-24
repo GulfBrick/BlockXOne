@@ -16,7 +16,7 @@ function uuid(value: unknown): value is string {
   return typeof value === 'string' && uuidPattern.test(value) && value !== '00000000-0000-0000-0000-000000000000'
 }
 function record(value: unknown): value is Record<string, unknown> { return value !== null && typeof value === 'object' && !Array.isArray(value) }
-function continuation(value: unknown): value is MfaContinuation { return value === 'workspace' || value === 'setup' || value === 'security' }
+function continuation(value: unknown): value is MfaContinuation { return value === 'workspace' || value === 'setup' || value === 'security' || value === 'staff' }
 
 export function mfaErrorResponse(error: MfaErrorCode, status = statuses[error]): NextResponse {
   return privateResponse(NextResponse.json({ ok: false, error }, { status }))
@@ -80,7 +80,7 @@ export async function handleMfaAction(action: string, form: URLSearchParams, cli
     }
     if (view.state === 'unsupported_factor') return mfaErrorResponse('unsupported_factor')
     const factor = view.factors.find((candidate) => candidate.id === factorId)
-    if (!factor || (factor.status === 'unverified' && (destination !== 'security' || view.state !== 'unenrolled'))) return mfaErrorResponse('unauthorised', 403)
+    if (!factor || (factor.status === 'unverified' && (!['security','staff'].includes(destination ?? '') || view.state !== 'unenrolled'))) return mfaErrorResponse('unauthorised', 403)
     // Repeat the narrow type guards for control-flow narrowing, never cast
     // posted authority. Challenge IDs are created and consumed only here.
     if (!uuid(factorId) || typeof code !== 'string' || !continuation(destination)) return mfaErrorResponse('invalid_request')

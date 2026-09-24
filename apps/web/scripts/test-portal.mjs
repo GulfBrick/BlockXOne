@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import pg from 'pg'
+import { proveProviderEvidence } from './provider-evidence-proof.mjs'
 
 // Exact disposable GitHub PostgreSQL17 service only. No local/project execution.
 if (process.argv.length !== 2 || process.env.GITHUB_ACTIONS !== 'true') throw new Error('Portal SQL proof requires cloud CI without arguments')
@@ -1023,6 +1024,91 @@ try {
     'issuer binding in another native organisation does not expose customer product')
   await admin()
   eq(await scalar('select count(*)::int from bx1_portal.subscriptions'), legacyOrdersBeforeOffering, 'new package workflow creates no order or funding')
+  await sqlFile('../../../supabase/migrations/20260924110608_stage2_provider_evidence.sql')
+  phase = 'structured-beneficial-ownership-cutover'
+  const priorManagerStatus = await scalar('select status from bx1_portal.applications where id=$1', [managerApp.id])
+  await sqlFile('../../../supabase/migrations/20260924110922_stage2_beneficial_ownership_control.sql')
+  eq(await scalar('select status from bx1_portal.applications where id=$1', [managerApp.id]), priorManagerStatus,
+    'historical customer admission remains intact without invented ownership rows')
+  eq(await scalar('select count(*)::int from bx1_portal.application_ownership_control_versions'), 0,
+    'legacy v1/v2 submissions are not reinterpreted as structured ownership')
+  for (const role of ['anon', 'authenticated', 'service_role'])
+    eq(await scalar('select has_table_privilege($1,$2,\'SELECT,INSERT,UPDATE,DELETE\')',
+      [role, 'bx1_portal.application_ownership_control_versions']), false, `${role} has no direct ownership-row access`)
+  await db.query("insert into auth.users(id,email,email_confirmed_at,is_anonymous) values($1,'synthetic-owner-applicant-14@example.invalid',clock_timestamp(),false)", [uid(14)])
+  await db.query("insert into auth.sessions(id,user_id,not_after,created_at) values($1,$2,clock_timestamp()+interval '1 hour',clock_timestamp()-interval '1 hour')", [sid(14), uid(14)])
+  await db.query("insert into public.bx1_profiles(id,display_name) values($1,'Synthetic ownership applicant')", [uid(14)])
+  const ownershipDocs = ['IDENTITY', 'COMPANY', 'BENEFICIAL_OWNERS'].map((kind, i) => document(14, kind, i))
+  for (const doc of ownershipDocs) await db.query("insert into storage.objects(bucket_id,name,owner_id,metadata) values('bx1-portal-documents',$1,$2,'{\"size\":100,\"mimetype\":\"application/pdf\"}'::jsonb)", [doc.storage_path, uid(14)])
+  const ownershipRelationship = { id: 'e1400000-0000-4000-8000-000000000001', party_type: 'PERSON',
+    legal_name: 'Synthetic Direct Owner', registration_reference: '', country: 'ZA', relationship: 'DIRECT_OWNER',
+    ownership_basis_points: 10000, control_basis: 'Synthetic direct shareholding in the fictional customer organisation.',
+    effective_on: '2026-09-01', change_reason: 'Initial fictional direct ownership disclosure.',
+    evidence_document_id: ownershipDocs[2].id }
+  const ownershipDetails = { details_version: 3, full_name: 'Synthetic Applicant Fourteen', country: 'ZA',
+    company_name: 'Synthetic Ownership Advisory', registration_reference: 'SYNTHETIC-OWN-14',
+    beneficial_owners: 'Synthetic direct owner disclosed in a separate typed relationship record.',
+    business_activities: 'Synthetic wealth-manager operations for test admission only.',
+    representative_position: 'Fictional authorised representative',
+    authority_basis: 'Synthetic appointment evidence, not a platform role or signing mandate.',
+    documents: ownershipDocs, test_data_acknowledged: true, ownership_control: [ownershipRelationship],
+    ownership_change_reason: 'Initial fictional beneficial-ownership disclosure.' }
+  const wrongCapacity = (await entryCommand(14, 'start_application', { persona: 'INVESTOR' })).applications.find(a => a.persona === 'INVESTOR')
+  await denied('manager ownership package cannot be submitted as investor capacity', () => entryCommand(14,
+    'submit_application', { application_id: wrongCapacity.id, expected_revision: wrongCapacity.revision, details: ownershipDetails }), '22023')
+  const ownershipDraft = (await entryCommand(14, 'start_application', { persona: 'WEALTH_MANAGER' })).applications.find(a => a.persona === 'WEALTH_MANAGER')
+  await denied('legacy free-text-only package cannot submit as new customer', () => entryCommand(14,
+    'submit_application', { application_id: ownershipDraft.id, expected_revision: ownershipDraft.revision,
+      details: { ...managerDetails, documents: ownershipDocs } }), '23514')
+  await denied('foreign evidence reference is not an ownership proof', () => entryCommand(14,
+    'submit_application', { application_id: ownershipDraft.id, expected_revision: ownershipDraft.revision,
+      details: { ...ownershipDetails, ownership_control: [{ ...ownershipRelationship, evidence_document_id: managerDetails.documents[2].id }] } }), '22023')
+  await denied('stale ownership application revision rejected', () => entryCommand(14,
+    'submit_application', { application_id: ownershipDraft.id, expected_revision: ownershipDraft.revision + 1,
+      details: ownershipDetails }), '23514')
+  let ownershipApp = (await entryCommand(14, 'submit_application', {
+    application_id: ownershipDraft.id, expected_revision: ownershipDraft.revision, details: ownershipDetails,
+  })).applications.find(a => a.id === ownershipDraft.id)
+  eq(ownershipApp.status, 'SUBMITTED', 'typed ownership submission awaits independent decision')
+  await admin()
+  eq(await scalar('select count(*)::int from bx1_portal.application_ownership_control_versions where application_id=$1 and application_revision=$2',
+    [ownershipApp.id, ownershipApp.revision]), 1, 'exact submitted revision captures one immutable relationship')
+  eq(await scalar('select count(*)::int from public.bx1_memberships where user_id=$1', [uid(14)]), 0,
+    'ownership disclosure did not create a platform membership')
+  await denied('other-organisation Compliance cannot review ownership package', () => scopedCommand(5,
+    roleContext('ComplianceOfficer', otherScope), 'review_application', { application_id: ownershipApp.id,
+      expected_revision: ownershipApp.revision, decision: 'APPROVED',
+      notes: 'Synthetic unrelated organisation attempted admission decision.', checks: reviewChecks }), '42501')
+  ownershipApp = (await scopedCommand(2, reviewer, 'review_application', { application_id: ownershipApp.id,
+    expected_revision: ownershipApp.revision, decision: 'CHANGES_REQUIRED',
+    notes: 'Clarify the fictional control relationship and disclose the correction.', checks: reviewChecks })).applications.find(a => a.id === ownershipApp.id)
+  eq(ownershipApp.status, 'CHANGES_REQUIRED', 'reviewer requests information without approval')
+  const correctedRelationship = { ...ownershipRelationship, ownership_basis_points: 7500,
+    change_reason: 'Corrected fictional ownership after independent information request.' }
+  await denied('material ownership change needs a new version reason', () => entryCommand(14,
+    'submit_application', { application_id: ownershipApp.id, expected_revision: ownershipApp.revision,
+      details: { ...ownershipDetails, ownership_control: [correctedRelationship] } }), '23514')
+  ownershipApp = (await entryCommand(14, 'submit_application', { application_id: ownershipApp.id,
+    expected_revision: ownershipApp.revision, details: { ...ownershipDetails, ownership_control: [correctedRelationship],
+      ownership_change_reason: 'Corrected fictional ownership percentage after reviewer request.' } })).applications.find(a => a.id === ownershipApp.id)
+  await admin()
+  eq(await scalar('select count(distinct application_revision)::int from bx1_portal.application_ownership_control_versions where application_id=$1', [ownershipApp.id]), 2,
+    'old and corrected relationship versions remain separately preserved')
+  eq(await scalar('select ownership_basis_points from bx1_portal.application_ownership_control_versions where application_id=$1 order by application_revision limit 1', [ownershipApp.id]), 10000,
+    'earlier disclosed percentage remains immutable')
+  ownershipApp = (await scopedCommand(2, reviewer, 'review_application', { application_id: ownershipApp.id,
+    expected_revision: ownershipApp.revision, decision: 'APPROVED',
+    notes: 'Independent synthetic review of exact corrected ownership evidence.', checks: reviewChecks })).applications.find(a => a.id === ownershipApp.id)
+  eq(ownershipApp.status, 'APPROVED', 'independent decision applies to exact structured revision')
+  await admin()
+  eq(await scalar('select count(*)::int from public.bx1_memberships where user_id=$1', [uid(14)]), 0,
+    'customer admission still grants no platform membership or signer authority')
+  await admin()
+  checks += await proveProviderEvidence(db)
+  await admin()
+  await sqlFile('../../../supabase/migrations/20260924112832_stage2_document_quarantine_lifecycle.sql')
+  await sqlFile('../../../supabase/tests/bx1_document_lifecycle.sql')
+  checks++
   await db.query('commit'); begun = false
   phase = 'cleanup-committed-disposable-fixture'
   await db.query('drop schema bx1_portal,bx1_private,storage,auth,public cascade; create schema public')

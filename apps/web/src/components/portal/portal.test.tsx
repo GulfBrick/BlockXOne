@@ -1,7 +1,7 @@
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { PORTAL_PATHS, productTermsSchema, type PortalApplication, type PortalEntityInvestmentAccount, type PortalInvestmentAccount, type PortalInvestingRepresentativeMandate, type PortalOrganisation, type PortalOrganisationMandate, type PortalPageData, type PortalProduct, type PortalProductEligibility, type PortalSnapshot, type PortalSubscription } from '@/lib/portal/contracts'
+import { PORTAL_PATHS, isWealthManagerDetailsV2, productTermsSchema, type PortalApplication, type PortalEntityInvestmentAccount, type PortalInvestmentAccount, type PortalInvestingRepresentativeMandate, type PortalOrganisation, type PortalOrganisationMandate, type PortalPageData, type PortalProduct, type PortalProductEligibility, type PortalSnapshot, type PortalSubscription } from '@/lib/portal/contracts'
 import { APPLICANT_CONTEXT, portalScopeHref, type PortalOperatingContext } from '@/lib/portal/operating-context'
 import type { Bx1Role } from '@/lib/supabase/contracts'
 import { PortalScreen, productManagementOrganisations } from './portal-screens'
@@ -60,7 +60,7 @@ function representativeMandate(change: Partial<PortalOrganisationMandate> = {}):
 }
 function entityApplication(change: Partial<PortalApplication> = {}): PortalApplication {
   const details = application().details
-  if (details.details_version === 2) throw new Error('Expected investor details fixture')
+  if (isWealthManagerDetailsV2(details)) throw new Error('Expected investor details fixture')
   return application({ id: entityApplicationId, details: { ...details, investor_type: 'ENTITY', company_name: 'Fictional Holding Company', registration_reference: 'SYNTH-ENTITY-001', beneficial_owners: 'Fictional owner and control evidence.', documents: [{ id: companyDocumentId, kind: 'COMPANY', title: 'Synthetic board appointment', storage_path: `${entityApplicationId}/${companyDocumentId}`, sha256: 'a'.repeat(64), size: 100, mime_type: 'application/pdf' }] }, can_create_entity_account: true, ...change })
 }
 function entityAccount(change: Partial<PortalEntityInvestmentAccount> = {}): PortalEntityInvestmentAccount {
@@ -446,7 +446,7 @@ describe('owned individual investment-account controls', () => {
   })
   it('does not turn entity qualification into a personal account', () => {
     const investorDetails = application().details
-    if (investorDetails.details_version === 2) throw new Error('This fixture must remain an investor application')
+    if (isWealthManagerDetailsV2(investorDetails)) throw new Error('This fixture must remain an investor application')
     const value = snapshot(); value.applications = [application({ details: { ...investorDetails, investor_type: 'ENTITY', company_name: 'Entity Applicant' } })]; value.accounts = [account()]
     expect(activeIndividualAccounts(value)).toEqual([])
     const html = renderToStaticMarkup(<InvestmentAccountPanel snapshot={value} onSaved={vi.fn()} />)

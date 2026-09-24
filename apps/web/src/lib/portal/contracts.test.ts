@@ -25,6 +25,32 @@ describe('customer portal contracts', () => {
     for (const extra of [{ investor_type: 'ENTITY' }, { source_of_funds: 'Old investment capital source facts.' }, { experience: 'Old investment objectives.' }, { details_version: 3 }, { approved: true }]) expect(applicationDetailsSchema.safeParse({ ...wm, ...extra }).success).toBe(false)
     for (const field of ['business_activities', 'representative_position', 'authority_basis']) expect(applicationDetailsSchema.safeParse({ ...wm, [field]: '' }).success).toBe(false)
   })
+  it('requires versioned ownership/control parties and linked evidence for new legal-entity disclosures', () => {
+    const boEvidence = { ...evidence, id: key, kind: 'BENEFICIAL_OWNERS', title: 'Synthetic ownership register' }
+    const relationship = { id, party_type: 'PERSON', legal_name: 'Synthetic Owner', registration_reference: '', country: 'ZA', relationship: 'DIRECT_OWNER', ownership_basis_points: 7500, control_basis: 'Fictional direct shareholding in the customer organisation.', effective_on: '2026-09-01', change_reason: 'Initial fictional disclosure for independent review.', evidence_document_id: key }
+    const managerV3 = { ...wm, details_version: 3, documents: [evidence, boEvidence], ownership_control: [relationship], ownership_change_reason: 'Initial fictional ownership disclosure.' }
+    expect(applicationDetailsSchema.safeParse(managerV3).success).toBe(true)
+    expect(isWealthManagerDetailsV2(managerV3)).toBe(true)
+    const investorV3 = { ...managerV3, investor_type: 'ENTITY', source_of_funds: 'Fictional company capital from retained earnings.', experience: 'Fictional long-term property investment strategy.' }
+    delete (investorV3 as Partial<typeof investorV3>).business_activities
+    delete (investorV3 as Partial<typeof investorV3>).representative_position
+    delete (investorV3 as Partial<typeof investorV3>).authority_basis
+    expect(applicationDetailsSchema.safeParse(investorV3).success).toBe(true)
+    expect(isWealthManagerDetailsV2(investorV3)).toBe(false)
+    for (const malformed of [
+      { ownership_control: [] },
+      { ownership_control: [{ ...relationship, evidence_document_id: id }] },
+      { ownership_control: [{ ...relationship, ownership_basis_points: 10001 }] },
+      { ownership_control: [{ ...relationship, relationship: 'DIRECT_OWNER', ownership_basis_points: 0 }] },
+      { ownership_control: [{ ...relationship, party_type: 'ENTITY', registration_reference: '' }] },
+      { ownership_control: [relationship, relationship] },
+      { ownership_control: [{ ...relationship, ownership_basis_points: 6000 }, { ...relationship, id: key, ownership_basis_points: 6000 }] },
+      { ownership_change_reason: 'short' },
+      { role: 'SuperAdmin' },
+    ]) expect(applicationDetailsSchema.safeParse({ ...managerV3, ...malformed }).success).toBe(false)
+    expect(applicationDetailsSchema.safeParse({ ...managerV3, investor_type: 'ENTITY' }).success).toBe(false)
+    expect(applicationDetailsSchema.safeParse({ ...investorV3, investor_type: 'INDIVIDUAL' }).success).toBe(false)
+  })
   it('keeps legacy evidence meanings and partial drafts without converting their fields', () => {
     const old = { full_name: 'Historical Applicant', country: 'ZA', investor_type: 'INDIVIDUAL', company_name: '', registration_reference: '', source_of_funds: 'Original investment capital source.', beneficial_owners: '', experience: 'Original investment objectives.', documents: [evidence], test_data_acknowledged: true }
     expect(applicationDetailsSchema.parse(old)).toEqual(old)

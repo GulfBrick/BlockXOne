@@ -2,10 +2,12 @@
 
 import { useState } from 'react'
 import Link from 'next/link'
+import type { PlatformEnvironment } from '@/lib/platform-release'
 import { isOfferingSubscribable, isWealthManagerDetailsV2, subscriptionQuote, type LegacyApplicationDetails, type PortalApplication, type PortalEntityInvestmentAccount, type PortalInvestmentAccount, type PortalInvestingRepresentativeMandate, type PortalProduct, type PortalProductEligibility, type PortalSnapshot } from '@/lib/portal/contracts'
 import { portalScopeHref, type PortalOperatingContext } from '@/lib/portal/operating-context'
 import { CommandFeedback, usePortalCommand } from './portal-client'
 import { ApplicationDetailsSummary, ApplicationDocumentHistory, PrivateDocument } from './onboarding-form'
+import { ProviderEvidenceReview } from './kyc-verification'
 import { DetailList, EmptyState, Field, Notice, Panel, StatusBadge, dateLabel, money } from './portal-primitives'
 import styles from './portal.module.css'
 
@@ -235,29 +237,35 @@ export function ProductActions({ product, onSaved, availableCommands }: { produc
   </Panel>
 }
 
-export function ApplicationReview({ application, snapshot, onSaved }: { application: PortalApplication; snapshot: PortalSnapshot; onSaved: (snapshot: PortalSnapshot) => void }) {
+export function ApplicationReview({ application, snapshot, onSaved, environment }: { application: PortalApplication; snapshot: PortalSnapshot; onSaved: (snapshot: PortalSnapshot) => void; environment?: PlatformEnvironment }) {
   const manager = application.persona === 'WEALTH_MANAGER'
   const managerV2 = manager && isWealthManagerDetailsV2(application.details)
   const requiresOrganisationFacts = manager && application.admission_purpose !== 'LEGACY_REHEARSAL' && !managerV2
+  const requiresStructuredOwnership = (manager || ('investor_type' in application.details && application.details.investor_type === 'ENTITY'))
+    && (!('ownership_control' in application.details) || !Array.isArray(application.details.ownership_control)
+      || application.details.ownership_control.length === 0 || application.details.details_version !== 3)
+  const approvalBlocked = requiresOrganisationFacts || requiresStructuredOwnership
   const [checks, setChecks] = useState({ identity: false, ownership: false, screening: false, suitability: false })
-  const [decision, setDecision] = useState(requiresOrganisationFacts ? 'CHANGES_REQUIRED' : 'APPROVED'), [notes, setNotes] = useState('')
+  const [decision, setDecision] = useState(approvalBlocked ? 'CHANGES_REQUIRED' : 'APPROVED'), [notes, setNotes] = useState('')
   const command = usePortalCommand(onSaved)
   const permitted = snapshot.actor.can_review && application.user_id !== snapshot.actor.id && application.status === 'SUBMITTED'
   const allChecked = Object.values(checks).every(Boolean)
   return <div className={styles.wideGrid}><div className={styles.stack}>
-    <Notice title="Manual test review only">Record a real review decision against fictional evidence. No automated sanctions service or production KYC provider is represented as connected.</Notice>
+    <Notice title="Independent test review only">Record your own decision against fictional evidence. A sandbox provider result is visible below only if received through the guarded evidence path; no production KYC or automated sanctions decision is represented as connected.</Notice>
     <Panel title={manager ? 'Customer organisation and representative' : 'Investor applicant information'} action={<StatusBadge status={application.status} />}><DetailList rows={[{ label: 'Application reference', value: application.id }, { label: 'Review purpose', value: manager ? application.admission_purpose === 'LEGACY_REHEARSAL' ? 'Historical rehearsal relationship' : 'Customer organisation admission' : 'Investor admission' }, { label: 'Submitted', value: dateLabel(application.submitted_at) }, { label: 'Version', value: `Revision ${application.revision}` }]} /><div className={styles.sectionGap}><ApplicationDetailsSummary persona={application.persona} details={application.details} /></div></Panel>
     <Panel title="Private supporting evidence" description="Each download rechecks the current caller’s access.">{application.details.documents?.length ? application.details.documents.map(document => <PrivateDocument key={document.id} document={document} />) : <p className={styles.muted}>No evidence attached.</p>}</Panel>
+    <ProviderEvidenceReview key={`${environment ?? 'UNAVAILABLE'}:${application.id}:${application.revision}`} applicationId={application.id} revision={application.revision} environment={environment} />
     <ApplicationDocumentHistory key={application.id} applicationId={application.id} />
   </div><div className={styles.stack}>
     {manager ? <Notice title="Customer admission is not operating authority">This decision does not appoint an Offering Manager, create a mandate or grant product, financial or signing powers. Those require separate approved assignments.</Notice> : <Notice title="Investor admission is not product eligibility">Each offering and investment account has separate eligibility and authority checks. Admission alone does not create a holding.</Notice>}
     {requiresOrganisationFacts ? <Notice title="Organisation facts required before approval" tone="warning">This saved case contains legacy investor-shaped answers. Request the organisation's business activities, representative position and authority evidence through changes required. The applicant must explicitly resubmit those facts before customer admission can be approved.</Notice> : null}
-    <Panel title="Review decision" description="The backend checks authority, revision and reviewer independence."><CommandFeedback command={command} />{permitted ? <form className={styles.form} onSubmit={event => { event.preventDefault(); if (decision !== 'APPROVED' || allChecked && !requiresOrganisationFacts) void command.submit('review_application', { application_id: application.id, expected_revision: application.revision, decision, notes, checks }) }}><fieldset className={styles.fieldset} disabled={command.busy || command.unknown}><legend>Evidence checks</legend>{([
+    {requiresStructuredOwnership ? <Notice title="Structured ownership disclosure required" tone="warning">This saved entity or customer case predates the per-person/entity disclosure. Request changes so the applicant can add each owner or controller, effective date, percentage, change reason and linked private evidence. A historical free-text answer is preserved, not treated as a reviewed relationship or an operating mandate.</Notice> : null}
+    <Panel title="Review decision" description="The backend checks authority, revision and reviewer independence."><CommandFeedback command={command} />{permitted ? <form className={styles.form} onSubmit={event => { event.preventDefault(); if (decision !== 'APPROVED' || allChecked && !approvalBlocked) void command.submit('review_application', { application_id: application.id, expected_revision: application.revision, decision, notes, checks }) }}><fieldset className={styles.fieldset} disabled={command.busy || command.unknown}><legend>Evidence checks</legend>{([
       { key: 'identity', label: managerV2 ? 'Representative identity evidence reviewed' : 'Identity evidence reviewed' },
       { key: 'ownership', label: managerV2 ? 'Organisation ownership and representative authority reviewed' : 'Ownership / authority reviewed' },
       { key: 'screening', label: 'Manual test screening recorded' },
       { key: 'suitability', label: managerV2 ? 'Customer business activities and requested service scope reviewed' : manager ? 'Legacy investment evidence reviewed (not customer service scope)' : 'Investor suitability reviewed' },
-    ] as const).map(item => <label key={item.key} className={styles.check}><input type="checkbox" checked={checks[item.key]} onChange={event => setChecks(current => ({ ...current, [item.key]: event.target.checked }))} />{item.label}</label>)}<Field label="Decision"><select value={decision} onChange={event => setDecision(event.target.value)}><option value="APPROVED" disabled={requiresOrganisationFacts}>{manager ? 'Approve test customer admission' : 'Approve test investor application'}</option><option value="CHANGES_REQUIRED">Request changes</option><option value="REJECTED">Reject application</option></select></Field><Field label="Review rationale" hint="Record the evidence considered and reason. At least 20 characters."><textarea required minLength={20} maxLength={3000} value={notes} onChange={event => setNotes(event.target.value)} /></Field><button type="submit" className={styles.button} disabled={decision === 'APPROVED' && (!allChecked || requiresOrganisationFacts)}>Record review decision</button></fieldset></form> : <Notice title="Decision unavailable">{application.user_id === snapshot.actor.id ? 'You cannot review your own application. A separate authorised reviewer must act.' : 'This case is not awaiting a decision, or this account does not have review authority.'}</Notice>}{application.review_notes ? <div className={styles.sectionGap}><h3>Recorded rationale</h3><p className={styles.copy}>{application.review_notes}</p></div> : null}</Panel>
+    ] as const).map(item => <label key={item.key} className={styles.check}><input type="checkbox" checked={checks[item.key]} onChange={event => setChecks(current => ({ ...current, [item.key]: event.target.checked }))} />{item.label}</label>)}<Field label="Decision"><select value={decision} onChange={event => setDecision(event.target.value)}><option value="APPROVED" disabled={approvalBlocked}>{manager ? 'Approve test customer admission' : 'Approve test investor application'}</option><option value="CHANGES_REQUIRED">Request changes</option><option value="REJECTED">Reject application</option></select></Field><Field label="Review rationale" hint="Record the evidence considered and reason. At least 20 characters."><textarea required minLength={20} maxLength={3000} value={notes} onChange={event => setNotes(event.target.value)} /></Field><button type="submit" className={styles.button} disabled={decision === 'APPROVED' && (!allChecked || approvalBlocked)}>Record review decision</button></fieldset></form> : <Notice title="Decision unavailable">{application.user_id === snapshot.actor.id ? 'You cannot review your own application. A separate authorised reviewer must act.' : 'This case is not awaiting a decision, or this account does not have review authority.'}</Notice>}{application.review_notes ? <div className={styles.sectionGap}><h3>Recorded rationale</h3><p className={styles.copy}>{application.review_notes}</p></div> : null}</Panel>
   </div></div>
 }
 

@@ -121,9 +121,15 @@ try {
   await sqlFile('../../../supabase/migrations/20260923143713_stage2_customer_mandates.sql')
   await sqlFile('../../../supabase/tests/bx1_customer_mandates.sql')
   await sqlFile('../../../supabase/migrations/20260923144216_stage2_document_receipts.sql')
+  await sqlFile('../../../supabase/migrations/20260923161500_stage2_application_document_history.sql')
   await sqlFile('../../../supabase/migrations/20260923171126_stage2_entity_investment_accounts.sql')
   await sqlFile('../../../supabase/migrations/20260923175822_stage2_superadmin_shell_mfa_boundary.sql')
   await sqlFile('../../../supabase/migrations/20260923205519_stage3_immutable_offering_packages.sql')
+  await sqlFile('../../../supabase/migrations/20260924110608_stage2_provider_evidence.sql')
+  await sqlFile('../../../supabase/migrations/20260924110911_stage1_staff_invitation_intents.sql')
+  await sqlFile('../../../supabase/migrations/20260924110922_stage2_beneficial_ownership_control.sql')
+  await sqlFile('../../../supabase/migrations/20260924112832_stage2_document_quarantine_lifecycle.sql')
+  await sqlFile('../../../supabase/tests/bx1_document_lifecycle.sql')
   eq(await functionManifest(preservedSignatures), nativeFunctions, 'unrelated native auth/MFA/wallet function definitions and owners exactly preserved')
   const grantsAfter = await grantManifest(signatures)
   eq(grantsAfter.filter(grant => grant.grantee !== 'bx1_authority_owner'), nativeGrants, 'all existing native function grants preserved')
@@ -137,6 +143,12 @@ try {
   for (const table of ['product_eligibility_cases', 'product_eligibility_receipts']) eq(await scalar(`select count(*)::int from bx1_portal.${table}`), 0, `Stage 2 definition does not seed ${table} in MAIN`)
   for (const table of ['legal_entity_parties', 'investing_representative_mandates', 'investing_representative_receipts']) eq(await scalar(`select count(*)::int from bx1_portal.${table}`), 0, `entity definition does not seed ${table} in MAIN`)
   for (const table of ['offering_revisions', 'offering_decisions']) eq(await scalar(`select count(*)::int from bx1_portal.${table}`), 0, `Stage 3 definition does not seed ${table} in MAIN`)
+  for (const table of ['provider_application_bindings', 'provider_evidence_events', 'staff_invitation_intents', 'staff_invitation_outbox'])
+    eq(await scalar(`select count(*)::int from bx1_private.${table}`), 0, `new Stage 1/2 definition does not seed ${table} in MAIN`)
+  eq(await scalar('select count(*)::int from bx1_portal.application_ownership_control_versions'), 0,
+    'structured ownership definition does not seed disclosures in MAIN')
+  eq(await scalar('select count(*)::int from bx1_private.document_quarantine_items'), 0,
+    'document quarantine definition does not seed private documents in MAIN')
   for (const table of ['offering_revisions', 'offering_decisions']) for (const role of ['anon', 'authenticated', 'service_role']) {
     for (const privilege of ['SELECT', 'INSERT', 'UPDATE', 'DELETE']) eq(await scalar('select has_table_privilege($1,$2,$3)', [role, `bx1_portal.${table}`, privilege]), false, `${role} has no direct ${privilege} on MAIN ${table}`)
   }
