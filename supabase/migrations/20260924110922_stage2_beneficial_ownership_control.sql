@@ -104,7 +104,7 @@ begin
       or pg_catalog.to_char(effective_date,'YYYY-MM-DD') <> record->>'effective_on'
       or effective_date > current_date
       or pg_catalog.jsonb_typeof(record->'evidence_document_id') is distinct from 'string'
-      or record->>'evidence_document_id' !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+      or record->>'evidence_document_id' !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
       or not (record->>'evidence_document_id')=any(evidence_ids) then
       raise exception 'ownership_relationship_invalid' using errcode='22023'; end if;
     ids:=pg_catalog.array_append(ids,record->>'id');
