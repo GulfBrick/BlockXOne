@@ -99,7 +99,7 @@ export const ROLE_DASHBOARDS: Record<Bx1Role, RoleDashboard> = {
       { id: 'appointment', label: 'Confirm independent review appointment', description: 'Review access requires an active scoped appointment and a separate reviewer from the applicant or product creator.', status: 'needs_setup' },
       { id: 'review', label: 'Review applications and offerings', description: 'Read private evidence and record independent decisions. The current connected review supports manual rehearsal checks, not a live KYC-provider result.', status: 'available', href: '/portal/compliance' },
       { id: 'provider-screening', label: 'Provider-backed identity and screening', description: 'Connect genuine provider outcomes, provenance, failures and escalations to each reviewed case.', status: 'not_connected' },
-      { id: 'ongoing-monitoring', label: 'Ongoing monitoring and restrictions', description: 'Connect review expiry, material changes and sanctions or eligibility restrictions to subscriptions and existing holdings.', status: 'not_connected' },
+      { id: 'ongoing-monitoring', label: 'Customer monitoring and restrictions', description: 'Inspect scoped admission expiry and record holds or renewal requirements with a reviewer-cited evidence reference. This is a guarded new-action restriction, not automatic provider monitoring or an existing-holding freeze.', status: 'available', href: '/portal/compliance' },
       { id: 'execution-review', label: 'Execution and exit compliance', description: 'Carry current decisions into governed issuance, transfer, servicing and exit checks.', status: 'not_connected' },
     ],
   },

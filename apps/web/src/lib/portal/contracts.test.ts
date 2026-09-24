@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { PORTAL_PATHS, applicationDetailsSchema, applicationDocumentLookupSchema, applicationDocumentVersionsSchema, applicationDraftDetailsSchema, isWealthManagerDetailsV2, evidenceSchema, formatTestMoney, portalCommandSchema, productTermsSchema, subscriptionQuote, type PortalProduct, type ProductTerms } from './contracts'
+import { PORTAL_PATHS, applicationDetailsSchema, applicationDocumentLookupSchema, applicationDocumentVersionsSchema, applicationDraftDetailsSchema, customerMonitoringSnapshotSchema, isWealthManagerDetailsV2, evidenceSchema, formatTestMoney, portalCommandSchema, productTermsSchema, subscriptionQuote, type PortalProduct, type ProductTerms } from './contracts'
 import { isSupabaseWebPathAllowed } from '@/lib/auth-mode'
 import { isProductionWebPathBlocked } from '@/lib/release-policy'
 
@@ -9,6 +9,24 @@ const terms: ProductTerms = { asset_type: 'FUND', name: 'Synthetic Balanced Fund
 const product: PortalProduct = { id, organisation_id: id, created_by: id, revision: 4, status: 'PUBLISHED', terms, terms_hash: 'a'.repeat(64), reserved_units: '20', created_at: '2026-09-21T00:00:00Z', reviewer_id: null, review_notes: null, reviewed_at: null, published_at: null, review_checks: {}, offering_package: { id: key, package_number: 1, origin: 'SUBMITTED', terms_hash: 'a'.repeat(64), document_hashes: { memorandum: 'b'.repeat(64), risks: 'c'.repeat(64), subscription_terms: 'd'.repeat(64) }, submitted_at: '2026-09-21T00:00:00Z', issuer_status: 'APPROVED', compliance_status: 'APPROVED', technical_readiness_status: 'VERIFIED', publishable: false, subscribable: true, can_review_issuer: false } }
 
 describe('customer portal contracts', () => {
+  it('separates a guarded monitoring restriction from admission and rejects malformed scoped reads', () => {
+    const item = { application_id: id, application_revision: 3, state: 'ON_HOLD', case_revision: 1, admission_expires_at: '2026-10-01T00:00:00+00:00', renewal_due: false, new_actions_allowed: false }
+    expect(customerMonitoringSnapshotSchema.safeParse([item]).success).toBe(true)
+    expect(customerMonitoringSnapshotSchema.safeParse([{ ...item, admission_expires_at: null, renewal_due: null }]).success).toBe(true)
+    expect(customerMonitoringSnapshotSchema.safeParse([]).success).toBe(true)
+    for (const malformed of [[item, item], [{ ...item, state: 'APPROVED' }], [{ ...item, case_revision: -1 }], [{ ...item, new_actions_allowed: 'yes' }], [{ ...item, reviewer_role: 'ComplianceOfficer' }]]) {
+      expect(customerMonitoringSnapshotSchema.safeParse(malformed).success).toBe(false)
+    }
+  })
+  it('binds monitoring decisions to one saved case revision and cited evidence, without accepting client authority', () => {
+    const checks = { identity: true, ownership: true, screening: true, suitability: true }
+    const payload = { application_id: id, expected_revision: 1, state: 'CURRENT', evidence_reference: 'SYNTHETIC-REVIEW-2026-09-24-001', reason: 'All four synthetic review checks are current against the saved case.', checks }
+    expect(portalCommandSchema.safeParse({ command: 'set_customer_monitoring', key, payload }).success).toBe(true)
+    expect(portalCommandSchema.safeParse({ command: 'set_customer_monitoring', key, payload: { ...payload, expected_revision: 0, state: 'ON_HOLD', checks: { ...checks, screening: false } } }).success).toBe(true)
+    for (const change of [{ expected_revision: -1 }, { evidence_reference: 'short' }, { reason: 'short' }, { reviewer_id: id }, { checks: { ...checks, screening: false } }, { checks: { ...checks, provider_approved: true } }]) {
+      expect(portalCommandSchema.safeParse({ command: 'set_customer_monitoring', key, payload: { ...payload, ...change } }).success).toBe(false)
+    }
+  })
   const evidence = { id, kind: 'IDENTITY', title: 'Synthetic identity', storage_path: `${id}/${key}`, sha256: 'a'.repeat(64), size: 100, mime_type: 'application/pdf' }
   it('keeps historical document paths off browser metadata and requires exact lookup facts', () => {
     const historical = { id, kind: 'IDENTITY', title: 'Earlier synthetic evidence', claimed_sha256: 'a'.repeat(64), size: 100, mime_type: 'application/pdf' }

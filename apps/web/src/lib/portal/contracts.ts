@@ -150,6 +150,23 @@ export type PortalSubscription = {
   allowed_actions?: string[];
 }
 export type PortalEvent = { id: string; subject_id: string; kind: string; actor_id: string; created_at: string; summary: string }
+/** An extra ongoing-review restriction, never a replacement for admission or product eligibility. */
+export type PortalCustomerMonitoring = {
+  application_id: string; application_revision: number; state: 'CURRENT' | 'RENEWAL_REQUIRED' | 'ON_HOLD';
+  case_revision: number; admission_expires_at: string | null; renewal_due: boolean | null; new_actions_allowed: boolean;
+}
+export const customerMonitoringSnapshotSchema = z.array(z.object({
+  application_id: z.string().uuid(), application_revision: z.number().int().positive(),
+  state: z.enum(['CURRENT', 'RENEWAL_REQUIRED', 'ON_HOLD']), case_revision: z.number().int().min(0),
+  admission_expires_at: z.string().datetime({ offset: true }).nullable(),
+  renewal_due: z.boolean().nullable(), new_actions_allowed: z.boolean(),
+}).strict()).superRefine((items, ctx) => {
+  const seen = new Set<string>()
+  for (const [index, item] of items.entries()) {
+    if (seen.has(item.application_id)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: [index, 'application_id'], message: 'Duplicate monitoring case.' })
+    seen.add(item.application_id)
+  }
+})
 export type PortalSnapshot = {
   actor: { id: string; email: string; display_name: string | null; can_review: boolean };
   applications: PortalApplication[]; organisations: PortalOrganisation[];
@@ -161,6 +178,7 @@ export type PortalSnapshot = {
   mandate_queue_available?: boolean; mandate_queue_blocked_reason?: 'MFA_REQUIRED' | 'NOT_ADMITTED' | null;
   entity_account_route_available?: boolean; entity_account_blocked_reason?: 'NOT_ADMITTED' | null;
   entity_mandate_queue_available?: boolean; entity_mandate_queue_blocked_reason?: 'MFA_REQUIRED' | 'NOT_ADMITTED' | null;
+  customer_monitoring?: PortalCustomerMonitoring[];
   funding?: FundingSnapshot;
 }
 export type PortalPageData = { user: { id: string; email: string }; snapshot: PortalSnapshot }
@@ -231,6 +249,9 @@ export const investingRepresentativeChecks = z.object({ appointment: z.boolean()
 export const portalCommandSchema = z.discriminatedUnion('command', [
   z.object({ command: z.literal('submit_application'), key: id, payload: z.object({ persona: z.enum(['INVESTOR', 'WEALTH_MANAGER']), expected_revision: z.number().int().min(0), details: applicationDetailsSchema }).strict() }).strict(),
   z.object({ command: z.literal('review_application'), key: id, payload: z.object({ application_id: id, expected_revision: z.number().int().positive(), decision: z.enum(['APPROVED', 'CHANGES_REQUIRED', 'REJECTED']), notes: text(20, 3000), checks: reviewChecks }).strict() }).strict(),
+  z.object({ command: z.literal('set_customer_monitoring'), key: id, payload: z.object({ application_id: id, expected_revision: z.number().int().min(0), state: z.enum(['CURRENT', 'RENEWAL_REQUIRED', 'ON_HOLD']), evidence_reference: text(20, 400), reason: text(20, 2000), checks: reviewChecks }).strict().superRefine((value, ctx) => {
+    if (value.state === 'CURRENT' && !Object.values(value.checks).every(Boolean)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['checks'], message: 'All four checks require current evidence before removing a restriction.' })
+  }) }).strict(),
   z.object({ command: z.literal('create_investment_account'), key: id, payload: z.object({ application_id: id }).strict() }).strict(),
   z.object({ command: z.literal('create_entity_investment_account'), key: id, payload: z.object({ application_id: id }).strict() }).strict(),
   z.object({ command: z.literal('request_investing_representative_mandate'), key: id, payload: z.object({ investment_account_id: id, expected_revision: z.number().int().min(0), evidence_reference: text(20, 400), appointment_document_id: id, requested_until: z.string().datetime({ offset: false }).regex(/Z$/) }).strict() }).strict(),

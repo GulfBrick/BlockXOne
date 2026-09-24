@@ -681,6 +681,18 @@ describe('customer organisation admission to governed representative mandate', (
     const admin = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal" operatingContext={operating('SuperAdmin')} />)
     expect(admin).toContain('Mandate queue unavailable')
   })
+  it('connects guarded ongoing monitoring to the existing Compliance queue and approved application detail', () => {
+    const value = snapshot(); value.actor.can_review = true; value.operating_context = operating('ComplianceOfficer')
+    value.applications = [application({ user_id: other })]
+    value.customer_monitoring = [{ application_id: applicationId, application_revision: 1, state: 'ON_HOLD', case_revision: 1, admission_expires_at: '2099-01-01T00:00:00+00:00', renewal_due: false, new_actions_allowed: false }]
+    const queue = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal/compliance" operatingContext={operating('ComplianceOfficer')} />)
+    expect(queue).toContain('Customer monitoring and restrictions')
+    expect(queue).toContain('New actions on hold')
+    expect(queue).toContain('Inspect evidence and decide')
+    const detail = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal/compliance/detail" id={applicationId} operatingContext={operating('ComplianceOfficer')} />)
+    expect(detail).toContain('Ongoing customer monitoring')
+    expect(detail).toContain('Record monitoring decision')
+  })
   it('requires authenticator assurance before displaying any mandate case or case count', () => {
     const value = snapshot(); value.actor.can_review = true; value.mandate_queue_available = false; value.mandate_queue_blocked_reason = 'MFA_REQUIRED'
     value.organisation_mandates = [representativeMandate({ organisation_name: 'Hidden until authenticator verification' })]
