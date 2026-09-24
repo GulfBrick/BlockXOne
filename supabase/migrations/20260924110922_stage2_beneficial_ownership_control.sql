@@ -7,8 +7,32 @@ do $$ begin
     or pg_catalog.to_regclass('bx1_portal.application_detail_versions') is null
     or pg_catalog.to_regprocedure('bx1_portal.entry_submit(uuid,integer,jsonb)') is null
     or pg_catalog.to_regprocedure('bx1_portal.validate_application(jsonb,text)') is null
+    or pg_catalog.to_regprocedure('bx1_portal.guard_application_admission()') is null
     or pg_catalog.to_regclass('bx1_portal.applications') is null
     then raise exception 'ownership_admission_baseline_required' using errcode='55000'; end if;
+end $$;
+
+-- The existing customer-admission trigger previously accepted only v2
+-- organisation details. New v3 submissions have the same v2 organisation
+-- fields plus the independently versioned ownership evidence below. Keep the
+-- server-owned admission purpose and legacy v2 history unchanged.
+create or replace function bx1_portal.guard_application_admission() returns trigger
+language plpgsql security definer set search_path='' as $$
+begin
+  if TG_OP='INSERT' then
+    if NEW.admission_purpose is not null then
+      raise exception 'application_purpose_server_owned' using errcode='23514'; end if;
+    NEW.admission_purpose:=case when NEW.persona='INVESTOR' then 'INVESTOR_ADMISSION'
+      else 'CUSTOMER_ORGANISATION_ADMISSION' end;
+  elsif NEW.admission_purpose is distinct from OLD.admission_purpose then
+    raise exception 'application_purpose_immutable' using errcode='23514';
+  end if;
+  if NEW.admission_purpose='CUSTOMER_ORGANISATION_ADMISSION' and NEW.status='APPROVED'
+    and NEW.details->'details_version' is distinct from '2'::jsonb
+    and NEW.details->'details_version' is distinct from '3'::jsonb then
+    raise exception 'application_organisation_details_required' using errcode='23514';
+  end if;
+  return NEW;
 end $$;
 
 create table bx1_portal.application_ownership_control_versions (
@@ -187,8 +211,64 @@ create trigger bx1_application_ownership_capture after insert or update of detai
   on bx1_portal.applications for each row
   execute function bx1_portal.capture_application_ownership_control();
 
+-- Historical v2 admissions keep their original mandate path. A v3 admission
+-- has that same organisation evidence plus an immutable, matching ownership
+-- snapshot at the exact approved application revision. The predicate is
+-- private and never derives membership or authority from the ownership rows.
+create function bx1_portal.customer_admission_package_current(target_application uuid) returns boolean
+language sql volatile security definer set search_path='' as $$
+  select exists(select 1 from bx1_portal.applications a
+    where a.id=target_application and a.persona='WEALTH_MANAGER'
+      and a.admission_purpose='CUSTOMER_ORGANISATION_ADMISSION' and a.status='APPROVED'
+      and (a.details->'details_version'='2'::jsonb
+        or (a.details->'details_version'='3'::jsonb
+          and pg_catalog.jsonb_typeof(a.details->'ownership_control')='array'
+          and pg_catalog.jsonb_array_length(a.details->'ownership_control') between 1 and 20
+          -- Approval increments the application revision once after the exact
+          -- submitted revision is captured. Bind to that predecessor only.
+          and exists(select 1 from bx1_portal.application_detail_versions d
+            where d.application_id=a.id and d.application_revision=a.revision-1
+              and d.capture_kind='SUBMISSION' and d.details=a.details
+              and d.submitted_at=a.submitted_at)
+          and (select pg_catalog.count(*) from bx1_portal.application_ownership_control_versions v
+            where v.application_id=a.id and v.application_revision=a.revision-1
+              and v.submitted_details_sha256=pg_catalog.encode(
+                pg_catalog.sha256(pg_catalog.convert_to(a.details::text,'UTF8')),'hex'))
+            =pg_catalog.jsonb_array_length(a.details->'ownership_control'))));
+$$;
+
+-- The already-applied customer-mandate migration hard-coded v2 in four
+-- otherwise guarded functions. Recreate only the exact installed definitions
+-- with a one-occurrence assertion; preserve all locking, MFA, independence,
+-- idempotency, expiry and audit logic as well as function OIDs/grants/owners.
+do $$
+declare signature text; definition text; needle text; replacement text; hits integer;
+begin
+  foreach signature in array array[
+    'bx1_portal.representative_mandate_effective_at(uuid,timestamptz)',
+    'bx1_portal.representative_mandate_requestable(uuid)',
+    'bx1_portal.representative_mandate_admission_current(uuid,boolean,boolean)',
+    'bx1_portal.entry_command(text,uuid,jsonb)'] loop
+    if pg_catalog.to_regprocedure(signature) is null then
+      raise exception 'ownership_mandate_baseline_required' using errcode='55000'; end if;
+    definition:=pg_catalog.pg_get_functiondef(signature::regprocedure);
+    if signature='bx1_portal.entry_command(text,uuid,jsonb)' then
+      needle:='a.details->''details_version'' is distinct from ''2''::jsonb';
+      replacement:='bx1_portal.customer_admission_package_current(a.id) is not true';
+    else
+      needle:='a.details->''details_version''=''2''::jsonb';
+      replacement:='bx1_portal.customer_admission_package_current(a.id)';
+    end if;
+    hits:=(pg_catalog.length(definition)-pg_catalog.length(pg_catalog.replace(definition,needle,'')))
+      /pg_catalog.length(needle);
+    if hits<>1 then raise exception 'ownership_mandate_definition_changed: %',signature using errcode='55000'; end if;
+    execute pg_catalog.replace(definition,needle,replacement);
+  end loop;
+end $$;
+
 revoke all on function bx1_portal.validate_application_pre_ownership(jsonb,text),
   bx1_portal.validate_application(jsonb,text),bx1_portal.guard_application_ownership_control(),
-  bx1_portal.capture_application_ownership_control() from public,anon,authenticated,service_role;
+  bx1_portal.capture_application_ownership_control(),
+  bx1_portal.customer_admission_package_current(uuid) from public,anon,authenticated,service_role;
 comment on table bx1_portal.application_ownership_control_versions is
   'Immutable disclosed ownership/control facts per submitted application revision. Evidence only; never a mandate, membership or signer source.';

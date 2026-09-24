@@ -96,10 +96,10 @@ try {
   const deliberatelyExtendedSignatures = new Set([
     'bx1_private.can_access_organisation(uuid)',
     'bx1_private.read_mfa_status()',
-    'public.bx1_mfa_status()',
+    'bx1_mfa_status()',
   ])
   const preservedSignatures = signatures.filter((signature) => !deliberatelyExtendedSignatures.has(signature))
-  const mfaSignatures = ['bx1_private.read_mfa_status()', 'public.bx1_mfa_status()']
+  const mfaSignatures = ['bx1_private.read_mfa_status()', 'bx1_mfa_status()']
   const mfaOwnersBefore = Object.fromEntries(Object.entries(await functionManifest(mfaSignatures))
     .map(([signature, metadata]) => [signature, metadata.owner]))
   const nativeFunctions = await functionManifest(preservedSignatures), nativeGrants = await grantManifest(signatures), nativeHistory = await nativeRecords()

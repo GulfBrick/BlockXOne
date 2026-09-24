@@ -15,7 +15,7 @@ Set these **server-only** variables on the existing Vercel `block-x-one` Preview
 | `BLOCKXONE_SUMSUB_SANDBOX_INDIVIDUAL_LEVEL` | Existing sandbox verification level for an individual |
 | `BLOCKXONE_SUMSUB_SANDBOX_COMPANY_LEVEL` | Existing sandbox verification level for a company |
 | `BLOCKXONE_PROVIDER_EVIDENCE_DATABASE_URL` | TLS-verified Supabase connection as only `bx1_provider_evidence_writer`; no broad database/service-role credential |
-| `NEXT_PUBLIC_BLOCKXONE_SUMSUB_SANDBOX_ENABLED` | Set to `true` only after TEST credentials, webhook, writer and a genuine sandbox event are proven; absent/false keeps the applicant start action hidden. This is a presentation gate, never backend authority. |
+| `NEXT_PUBLIC_BLOCKXONE_SUMSUB_SANDBOX_ENABLED` | Set to `true` only after TEST credentials, webhook endpoint and restricted writer are configured and probed; then prove a genuine sandbox event through the visible applicant flow before acceptance. Absent/false keeps the start action hidden. This is a presentation gate, never backend authority. |
 
 The webhook URL is `https://testnet.bx1.co.za/api/portal/kyc/webhook`. Sumsub must send `X-Payload-Digest-Alg` and `X-Payload-Digest` over the exact raw JSON bytes. SHA1, missing signatures, unbound external IDs, non-sandbox events and an unexpected client ID are rejected. A token is scoped to one application revision and expires after 600 seconds.
 
@@ -23,8 +23,8 @@ Apply `20260924110608_stage2_provider_evidence.sql` after the existing Stage 2 e
 
 ## Verification and remaining acceptance
 
-- Cloud PostgreSQL17 synthetic proof: import `proveProviderEvidence` from `apps/web/scripts/provider-evidence-proof.mjs`, apply the migration inside the existing `test-portal.mjs` fixture after its Stage 2 baseline, and call `checks += await proveProviderEvidence(db)` after its prior business assertions, before commit/cleanup. The helper creates only disposable synthetic actor/application records and tests binding, idempotency, reordering, wrong environment, scope and no admission/role side effects.
+- The `test-portal.mjs` cloud PostgreSQL17 fixture applies this migration and calls `proveProviderEvidence` with disposable synthetic records. It tests binding, idempotency, reordering, wrong environment, scope and no admission/role side effects. A passing run is still required for the exact release commit.
 - Web unit tests prove HMAC, request signing, credential failure, actor/revision checks, and no persistence on forged callbacks. These are **not** an actual Sumsub delivery proof.
-- Hosted acceptance still needs: provider sandbox app/levels and callback configuration; restricted writer credential; applicant WebSDK integration; a genuine sandbox event received and shown in the correct application/reviewer context; information-request/resubmission and independent reviewer decisions; and recurring/ongoing-monitoring policy. None is inferred from a passing test or a configured secret.
+- The applicant WebSDK component and reviewer evidence view are coded, but hosted acceptance still needs: provider sandbox app/levels and callback configuration; restricted writer credential; a genuine sandbox event received and shown in the correct application/reviewer context; information-request/resubmission and independent reviewer decisions; and recurring/ongoing-monitoring policy. None is inferred from a passing test or a configured secret.
 
 Primary provider contracts: [Sumsub webhook verification](https://docs.sumsub.com/docs/webhook-manager), [API request authentication](https://docs.sumsub.com/reference/authentication), [SDK token](https://docs.sumsub.com/reference/generate-access-token), [user-verification events](https://docs.sumsub.com/docs/user-verification-webhooks).

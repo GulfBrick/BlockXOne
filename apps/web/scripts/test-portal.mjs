@@ -1038,6 +1038,10 @@ try {
   await db.query("insert into auth.users(id,email,email_confirmed_at,is_anonymous) values($1,'synthetic-owner-applicant-14@example.invalid',clock_timestamp(),false)", [uid(14)])
   await db.query("insert into auth.sessions(id,user_id,not_after,created_at) values($1,$2,clock_timestamp()+interval '1 hour',clock_timestamp()-interval '1 hour')", [sid(14), uid(14)])
   await db.query("insert into public.bx1_profiles(id,display_name) values($1,'Synthetic ownership applicant')", [uid(14)])
+  await db.query("insert into bx1_private.persons(id,label,status,evidence_reference,bootstrap_receipt_id) values($1,'Synthetic ownership human 14','TRUSTED','synthetic:test-human-14',$2)", [uid(50), uid(51)])
+  await db.query("insert into bx1_private.person_principals(auth_user_id,person_id,status,evidence_reference,bootstrap_receipt_id) values($1,$2,'TRUSTED','synthetic:test-principal-14',$3)", [uid(14), uid(50), uid(51)])
+  eq(await scalar('select count(distinct person_id)::int from bx1_private.person_principals where auth_user_id=any($1::uuid[])', [[uid(14), uid(2), uid(10)]]), 3,
+    'v3 applicant, Compliance reviewer and Super Admin are separate synthetic humans')
   const ownershipDocs = ['IDENTITY', 'COMPANY', 'BENEFICIAL_OWNERS'].map((kind, i) => document(14, kind, i))
   for (const doc of ownershipDocs) await db.query("insert into storage.objects(bucket_id,name,owner_id,metadata) values('bx1-portal-documents',$1,$2,'{\"size\":100,\"mimetype\":\"application/pdf\"}'::jsonb)", [doc.storage_path, uid(14)])
   const ownershipRelationship = { id: 'e1400000-0000-4000-8000-000000000001', party_type: 'PERSON',
@@ -1066,11 +1070,20 @@ try {
   await denied('stale ownership application revision rejected', () => entryCommand(14,
     'submit_application', { application_id: ownershipDraft.id, expected_revision: ownershipDraft.revision + 1,
       details: ownershipDetails }), '23514')
+  phase = 'ownership-valid-manager-submission'
   let ownershipApp = (await entryCommand(14, 'submit_application', {
     application_id: ownershipDraft.id, expected_revision: ownershipDraft.revision, details: ownershipDetails,
   })).applications.find(a => a.id === ownershipDraft.id)
   eq(ownershipApp.status, 'SUBMITTED', 'typed ownership submission awaits independent decision')
   await admin()
+  const organisationRequiredKeys = ['details_version', 'full_name', 'country', 'company_name',
+    'registration_reference', 'beneficial_owners', 'business_activities', 'representative_position',
+    'authority_basis', 'documents', 'test_data_acknowledged', 'ownership_control', 'ownership_change_reason']
+  const admissionPackage = (await db.query("select admission_purpose,status,details->>'details_version' as details_version,details ?& $2::text[] as has_required_fields from bx1_portal.applications where id=$1",
+    [ownershipApp.id, organisationRequiredKeys])).rows[0]
+  eq([admissionPackage.admission_purpose, admissionPackage.status, admissionPackage.details_version,
+    admissionPackage.has_required_fields], ['CUSTOMER_ORGANISATION_ADMISSION', 'SUBMITTED', '3', true],
+  'submitted customer organisation has the v3 admission package before review')
   eq(await scalar('select count(*)::int from bx1_portal.application_ownership_control_versions where application_id=$1 and application_revision=$2',
     [ownershipApp.id, ownershipApp.revision]), 1, 'exact submitted revision captures one immutable relationship')
   eq(await scalar('select count(*)::int from public.bx1_memberships where user_id=$1', [uid(14)]), 0,
@@ -1082,6 +1095,7 @@ try {
   await denied('AAL1 Compliance cannot review ownership package', () => scopedCommand(2, reviewer,
     'review_application', { application_id: ownershipApp.id, expected_revision: ownershipApp.revision,
       decision: 'CHANGES_REQUIRED', notes: 'Synthetic lower-assurance review attempt.', checks: reviewChecks }), '42501')
+  phase = 'ownership-independent-changes-required-review'
   ownershipApp = (await mandateScopedCommand(2, reviewer, 'review_application', { application_id: ownershipApp.id,
     expected_revision: ownershipApp.revision, decision: 'CHANGES_REQUIRED',
     notes: 'Clarify the fictional control relationship and disclose the correction.', checks: reviewChecks })).applications.find(a => a.id === ownershipApp.id)
@@ -1091,6 +1105,7 @@ try {
   await denied('material ownership change needs a new version reason', () => entryCommand(14,
     'submit_application', { application_id: ownershipApp.id, expected_revision: ownershipApp.revision,
       details: { ...ownershipDetails, ownership_control: [correctedRelationship] } }), '23514')
+  phase = 'ownership-corrected-resubmission'
   ownershipApp = (await entryCommand(14, 'submit_application', { application_id: ownershipApp.id,
     expected_revision: ownershipApp.revision, details: { ...ownershipDetails, ownership_control: [correctedRelationship],
       ownership_change_reason: 'Corrected fictional ownership percentage after reviewer request.' } })).applications.find(a => a.id === ownershipApp.id)
@@ -1099,13 +1114,62 @@ try {
     'old and corrected relationship versions remain separately preserved')
   eq(await scalar('select ownership_basis_points from bx1_portal.application_ownership_control_versions where application_id=$1 order by application_revision limit 1', [ownershipApp.id]), 10000,
     'earlier disclosed percentage remains immutable')
+  phase = 'ownership-independent-approval'
   ownershipApp = (await mandateScopedCommand(2, reviewer, 'review_application', { application_id: ownershipApp.id,
     expected_revision: ownershipApp.revision, decision: 'APPROVED',
     notes: 'Independent synthetic review of exact corrected ownership evidence.', checks: reviewChecks })).applications.find(a => a.id === ownershipApp.id)
   eq(ownershipApp.status, 'APPROVED', 'independent decision applies to exact structured revision')
   await admin()
+  eq(await scalar('select bx1_portal.customer_admission_package_current($1::uuid)', [ownershipApp.id]), true,
+    'approved v3 mandate source binds to the immediately preceding submitted ownership revision')
   eq(await scalar('select count(*)::int from public.bx1_memberships where user_id=$1', [uid(14)]), 0,
     'customer admission still grants no platform membership or signer authority')
+  phase = 'ownership-v3-mandate-request'
+  const v3Admission = (await entryRead(14)).applications.find(a => a.id === ownershipApp.id)
+  eq(v3Admission.can_request_mandate, true, 'approved v3 customer admission exposes a separate mandate request')
+  await denied('v3 customer admission alone cannot create a product', () => scopedCommand(14,
+    { mode: 'APPLICANT' }, 'create_product', { organisation_id: v3Admission.organisation_id, terms: terms() }), '42501')
+  const v3MandateInput = { application_id: ownershipApp.id, expected_revision: 0,
+    evidence_reference: 'Synthetic independently reviewable v3 appointment evidence.',
+    requested_until: new Date(Date.now() + 3 * 86400000).toISOString() }
+  const v3MandateKey = key()
+  let v3Mandate = (await entryCommand(14, 'request_representative_mandate', v3MandateInput,
+    v3MandateKey)).organisation_mandates.find(m => m.application_id === ownershipApp.id)
+  eq([v3Mandate.status, v3Mandate.effective, v3Mandate.admission_revision],
+    ['SUBMITTED', false, ownershipApp.revision], 'v3 appointment awaits an independent decision on the exact admission revision')
+  eq((await entryCommand(14, 'request_representative_mandate', v3MandateInput, v3MandateKey))
+    .organisation_mandates.find(m => m.id === v3Mandate.id).id, v3Mandate.id,
+  'v3 appointment request retry is idempotent')
+  await admin()
+  eq(await scalar("select count(*)::int from public.bx1_memberships where user_id=$1 and role='OfferingManager'", [uid(14)]), 0,
+    'requesting a v3 mandate did not grant an operating role')
+  phase = 'ownership-v3-mandate-independent-review'
+  await denied('AAL1 reviewer cannot decide v3 appointment', () => scopedCommand(2, reviewer,
+    'review_representative_mandate', { mandate_id: v3Mandate.id, expected_revision: v3Mandate.revision,
+      decision: 'APPROVED', notes: 'Synthetic lower-assurance appointment decision.',
+      checks: { appointment: true, evidence: true, scope: true } }), '42501')
+  v3Mandate = (await mandateScopedCommand(2, reviewer, 'review_representative_mandate', {
+    mandate_id: v3Mandate.id, expected_revision: v3Mandate.revision, decision: 'APPROVED',
+    notes: 'Independent synthetic review of the v3 customer appointment and its exact source admission.',
+    checks: { appointment: true, evidence: true, scope: true },
+  })).organisation_mandates.find(m => m.id === v3Mandate.id)
+  eq([v3Mandate.status, v3Mandate.effective, v3Mandate.next_owner], ['APPROVED', false, 'SUPER_ADMIN'],
+    'Compliance approval of the v3 appointment still grants no role')
+  phase = 'ownership-v3-mandate-independent-apply'
+  v3Mandate = (await mandateScopedCommand(10, roleContext('SuperAdmin'), 'apply_representative_mandate', {
+    mandate_id: v3Mandate.id, expected_revision: v3Mandate.revision,
+  })).organisation_mandates.find(m => m.id === v3Mandate.id)
+  eq([v3Mandate.status, v3Mandate.effective, v3Mandate.applied_by_user_id], ['APPLIED', true, uid(10)],
+    'distinct assured Super Admin applies only the reviewed v3 appointment')
+  const v3RoleContext = roleContext('OfferingManager', v3Mandate.native_organisation_id)
+  const v3Workspace = await scopedRead(14, v3RoleContext)
+  eq(v3Workspace.organisations.some(o => o.id === v3Admission.organisation_id), true,
+    'applied v3 appointment opens the exact customer product workspace')
+  eq(v3Workspace.organisation_mandates.length, 0, 'customer product role does not expose the staff mandate queue')
+  const v3Draft = (await scopedCommand(14, v3RoleContext, 'create_product', {
+    organisation_id: v3Admission.organisation_id, terms: { ...terms(), name: 'V3 ownership-governed synthetic draft' },
+  })).products.find(p => p.terms.name === 'V3 ownership-governed synthetic draft')
+  truth(v3Draft?.id, 'v3 customer can create a product only after the separate approved mandate is applied')
   await admin()
   checks += await proveProviderEvidence(db)
   await admin()

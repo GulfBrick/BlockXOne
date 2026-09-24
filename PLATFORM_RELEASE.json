@@ -1,6 +1,6 @@
 {
   "product": "BlockXOne",
-  "version": "1.1.0-rc.17",
+  "version": "1.1.0-rc.18",
   "status": "release-candidate",
   "baseSource": "fd5540e8073deb1da8b786e3fb0386f546db9d3f",
   "sourceIdentity": "VERCEL_GIT_COMMIT_SHA",
@@ -13,6 +13,6 @@
   "mainnetMissingPrerequisites": ["Live identity-provider evidence, operational malware scanning and disposal, lost-authenticator recovery, required MFA for every admission reviewer, trusted distinct-person mappings, and real customer admission are not approved", "Issuer appointment, actual e-signature/document evidence, reviewed contract package and independently verified technical readiness are not admitted"],
   "contractChanges": [],
   "productionFinancialAdmission": false,
-  "scope": "Stage 1/2 evidence-path increment on the same portal and environments. Add scoped, independently reviewed first-time staff invitation intents with exact-email and TOTP acceptance; structured beneficial-owner versions; TEST-only Sumsub sandbox evidence adapter and applicant/reviewer surfaces; and a fail-closed document quarantine/scanner-result contract. Existing login, application, account, product, funding, wallet and contract history is retained. No invitation is sent until Auth email-template/redirect proof. Sumsub lacks hosted sandbox credentials and webhook proof; document scanning lacks a real provider, and scanner-required mode stays disabled. Lost-authenticator recovery and governed document disposal remain unimplemented. MAIN business and financial actions remain sealed. Stage 3 offering packages remain drafts until technical and legal admission, not an offered investment."
+  "scope": "Stage 1/2 evidence-path increment on the same portal and environments. Add scoped, independently reviewed first-time staff invitation intents with server-owned Auth delivery evidence and TOTP acceptance; recent-MFA backup-factor enrollment; structured beneficial-owner versions and the v3 organisation-to-mandate handoff; TEST-only Sumsub sandbox evidence adapter and applicant/reviewer surfaces; and a fail-closed document quarantine/scanner-result contract. Existing login, application, account, product, funding, wallet and contract history is retained. Routine staff invitation dispatch remains disabled pending a controlled mailbox and acceptance proof. Sumsub lacks hosted sandbox credentials and webhook proof, so the applicant start action remains hidden; document scanning lacks a real provider, and scanner-required mode stays disabled. Lost-all-authenticator recovery and governed document disposal remain unimplemented. MAIN business and financial actions remain sealed. Stage 3 offering packages remain drafts until technical and legal admission, not an offered investment."
 }
 

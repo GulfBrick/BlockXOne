@@ -1,7 +1,7 @@
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { PORTAL_PATHS, isWealthManagerDetailsV2, productTermsSchema, type PortalApplication, type PortalEntityInvestmentAccount, type PortalInvestmentAccount, type PortalInvestingRepresentativeMandate, type PortalOrganisation, type PortalOrganisationMandate, type PortalPageData, type PortalProduct, type PortalProductEligibility, type PortalSnapshot, type PortalSubscription } from '@/lib/portal/contracts'
+import { PORTAL_PATHS, isWealthManagerDetailsV2, productTermsSchema, type PortalApplication, type PortalEntityInvestmentAccount, type PortalInvestmentAccount, type PortalInvestingRepresentativeMandate, type PortalOrganisation, type PortalOrganisationMandate, type PortalPageData, type PortalProduct, type PortalProductEligibility, type PortalSnapshot, type PortalSubscription, type WealthManagerApplicationDetailsV3 } from '@/lib/portal/contracts'
 import { APPLICANT_CONTEXT, portalScopeHref, type PortalOperatingContext } from '@/lib/portal/operating-context'
 import type { Bx1Role } from '@/lib/supabase/contracts'
 import { PortalScreen, productManagementOrganisations } from './portal-screens'
@@ -615,6 +615,28 @@ describe('customer organisation admission to governed representative mandate', (
     expect(detail).toContain('Record appointment decision')
     expect(detail).not.toContain('Apply reviewed Offering Manager mandate')
     expect(detail).not.toContain('Create a product')
+  })
+  it('accepts the exact approved v3 ownership-disclosed customer admission as the appointment source', () => {
+    const legacy = managerApplication()
+    if (!isWealthManagerDetailsV2(legacy.details)) throw new Error('Expected manager source fixture')
+    const ownershipDocument = { id: companyDocumentId, kind: 'BENEFICIAL_OWNERS', title: 'Synthetic owner evidence',
+      storage_path: `${other}/${companyDocumentId}`, sha256: 'a'.repeat(64), size: 100, mime_type: 'application/pdf' }
+    const v3Details = { ...legacy.details, details_version: 3, documents: [ownershipDocument],
+      ownership_control: [{ id: 'abababab-abab-4bab-8bab-abababababab', party_type: 'PERSON',
+        legal_name: 'Fictional Direct Owner', registration_reference: '', country: 'ZA', relationship: 'DIRECT_OWNER',
+        ownership_basis_points: 10000, control_basis: 'Synthetic direct control of this fictional organisation.',
+        effective_on: '2026-09-01', change_reason: 'Initial fictional direct owner disclosure.',
+        evidence_document_id: companyDocumentId }],
+      ownership_change_reason: 'Initial fictional structured ownership disclosure.' } satisfies WealthManagerApplicationDetailsV3
+    const value = snapshot(); value.actor.can_review = true; value.mandate_queue_available = true
+    value.applications = [managerApplication({ details: v3Details })]
+    value.organisation_mandates = [representativeMandate()]
+    const detail = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal/compliance/detail"
+      id={representativeMandate().id} operatingContext={operating('ComplianceOfficer')} />)
+    expect(detail).toContain('Approved customer admission source')
+    expect(detail).toContain('Fictional Manager Client')
+    expect(detail).toContain('Record appointment decision')
+    expect(detail).not.toContain('Source admission unavailable')
   })
   it('denies reviewer action when source evidence is unavailable or the case belongs to another scope', () => {
     const value = snapshot(); value.actor.can_review = true; value.mandate_queue_available = true; value.organisation_mandates = [representativeMandate()]
