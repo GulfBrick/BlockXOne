@@ -168,14 +168,16 @@ try {
   for (const table of ['provider_application_bindings', 'provider_evidence_events'])
     eq(await scalar(`select count(*)::int from bx1_private.${table}`), 0, `new Stage 1/2 definition does not seed ${table} in MAIN`)
   // The staff owner and tables are uncommitted in this fixture, so the separate
-  // maintenance connection cannot see them. Prove their existence and the
-  // migrator's lack of SELECT rather than broadening access just for a count.
+  // maintenance connection cannot see them. The existing MFA helper owner
+  // intentionally retains SELECT on intents, but not on the private outbox.
   for (const table of ['staff_invitation_intents', 'staff_invitation_outbox']) {
     eq(await scalar('select pg_catalog.to_regclass($1) is not null', [`bx1_private.${table}`]), true,
       `staff invitation ${table} definition is present in MAIN`)
-    eq(await scalar('select pg_catalog.has_table_privilege(current_user,$1,\'SELECT\')', [`bx1_private.${table}`]), false,
-      `MAIN migrator cannot read private ${table} evidence`)
   }
+  eq(await scalar('select count(*)::int from bx1_private.staff_invitation_intents'), 0,
+    'MAIN definition does not seed invitation intents')
+  eq(await scalar("select pg_catalog.has_table_privilege(current_user,'bx1_private.staff_invitation_outbox','SELECT')"), false,
+    'MAIN migrator cannot read the private invitation outbox')
   eq(await scalar('select count(*)::int from bx1_portal.application_ownership_control_versions'), 0,
     'structured ownership definition does not seed disclosures in MAIN')
   eq(await scalar('select count(*)::int from bx1_private.document_quarantine_items'), 0,
