@@ -23,6 +23,10 @@ grant usage on schema bx1_private to bx1_document_scanner_writer;
 create function bx1_private.guard_document_lifecycle_activation() returns trigger
 language plpgsql volatile security definer set search_path='' as $$
 begin
+  if TG_OP='DELETE' then
+    raise exception 'document_lifecycle_policy_immutable' using errcode='55000'; end if;
+  if OLD.mode='SCANNER_REQUIRED' and NEW.mode<>'SCANNER_REQUIRED' then
+    raise exception 'document_scanner_downgrade_denied' using errcode='55000'; end if;
   if NEW.mode='SCANNER_REQUIRED' and
     (not exists(select 1 from bx1_private.document_receipt_policy where singleton and enforced)
       or pg_catalog.to_regclass('storage.buckets') is null
@@ -31,7 +35,7 @@ begin
   NEW.changed_at:=pg_catalog.clock_timestamp();
   return NEW;
 end $$;
-create trigger bx1_document_lifecycle_activation before update on bx1_private.document_lifecycle_policy
+create trigger bx1_document_lifecycle_activation before update or delete on bx1_private.document_lifecycle_policy
   for each row execute function bx1_private.guard_document_lifecycle_activation();
 
 create table bx1_private.document_quarantine_items (

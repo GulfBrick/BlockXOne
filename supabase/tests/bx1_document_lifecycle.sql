@@ -160,8 +160,10 @@ begin
   exception when check_violation then
     if SQLERRM<>'document_scan_required' then raise; end if;
   end;
-  update bx1_private.document_lifecycle_policy set mode='SYNTHETIC_TEST_ONLY',changed_at=pg_catalog.clock_timestamp()
-    where singleton;
-  update bx1_private.document_receipt_policy set enforced=false,changed_at=pg_catalog.clock_timestamp()
-    where singleton;
+  begin
+    update bx1_private.document_lifecycle_policy set mode='SYNTHETIC_TEST_ONLY' where singleton;
+    raise exception 'scanner_downgrade_was_allowed';
+  exception when object_not_in_prerequisite_state then
+    if SQLERRM<>'document_scanner_downgrade_denied' then raise; end if;
+  end;
 end $$;
