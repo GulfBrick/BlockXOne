@@ -115,6 +115,26 @@ export async function proveCustomerMonitoring(db, {
   await denied('other-organisation role cannot impose hold', () => command(5, hold, key(3), 'aal2',
     { mode: 'ROLE', organisationId: 'e3000000-0000-4000-8000-000000000002', role: 'ComplianceOfficer' }))
 
+  // Diagnose each independent guard through the disposable fixture owner,
+  // retaining actor 2's exact JWT claims. Never grant these predicates to a
+  // browser just to make a synthetic decision pass.
+  await actor(2)
+  await admin()
+  eq(await scalar("select status='APPROVED' and reviewer_scope=$2::uuid and organisation_id=$3::uuid from bx1_portal.applications where id=$1",
+    [applicationId, scope, organisationId]), true,
+  'monitoring target retains the exact approved customer and review scope')
+  eq(await scalar('select bx1_portal.valid_operating_context($1::jsonb)', [JSON.stringify(reviewer)]), true,
+    'monitoring reviewer has a current, scoped operating context')
+  eq(await scalar("select bx1_portal.representative_mandate_actor($1::jsonb,$2::uuid,'ComplianceOfficer')",
+    [JSON.stringify(reviewer), scope]), true,
+  'monitoring reviewer has current TOTP and a scoped staff appointment')
+  eq(await scalar('select bx1_portal.scoped_reviewer($1::jsonb,$2::uuid,$3::uuid)',
+    [JSON.stringify(reviewer), scope, organisationId]), true,
+  'monitoring reviewer is separately appointed to the customer organisation')
+  const applicantId = await scalar('select user_id from bx1_portal.applications where id=$1', [applicationId])
+  eq(await scalar('select bx1_portal.entity_people_independent($1::uuid,$2::uuid)',
+    [uid(2), applicantId]), true,
+  'monitoring reviewer and customer representative are distinct trusted people')
   const first = await command(2, hold, key(4))
   eq(first.customer_monitoring.find(c => c.application_id === applicationId)?.state, 'ON_HOLD',
     'reviewed hold appears in scoped Compliance queue')
