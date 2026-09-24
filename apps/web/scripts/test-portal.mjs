@@ -1075,11 +1075,14 @@ try {
     [ownershipApp.id, ownershipApp.revision]), 1, 'exact submitted revision captures one immutable relationship')
   eq(await scalar('select count(*)::int from public.bx1_memberships where user_id=$1', [uid(14)]), 0,
     'ownership disclosure did not create a platform membership')
-  await denied('other-organisation Compliance cannot review ownership package', () => scopedCommand(5,
+  await denied('other-organisation assured Compliance cannot review ownership package', () => mandateScopedCommand(5,
     roleContext('ComplianceOfficer', otherScope), 'review_application', { application_id: ownershipApp.id,
       expected_revision: ownershipApp.revision, decision: 'APPROVED',
       notes: 'Synthetic unrelated organisation attempted admission decision.', checks: reviewChecks }), '42501')
-  ownershipApp = (await scopedCommand(2, reviewer, 'review_application', { application_id: ownershipApp.id,
+  await denied('AAL1 Compliance cannot review ownership package', () => scopedCommand(2, reviewer,
+    'review_application', { application_id: ownershipApp.id, expected_revision: ownershipApp.revision,
+      decision: 'CHANGES_REQUIRED', notes: 'Synthetic lower-assurance review attempt.', checks: reviewChecks }), '42501')
+  ownershipApp = (await mandateScopedCommand(2, reviewer, 'review_application', { application_id: ownershipApp.id,
     expected_revision: ownershipApp.revision, decision: 'CHANGES_REQUIRED',
     notes: 'Clarify the fictional control relationship and disclose the correction.', checks: reviewChecks })).applications.find(a => a.id === ownershipApp.id)
   eq(ownershipApp.status, 'CHANGES_REQUIRED', 'reviewer requests information without approval')
@@ -1096,7 +1099,7 @@ try {
     'old and corrected relationship versions remain separately preserved')
   eq(await scalar('select ownership_basis_points from bx1_portal.application_ownership_control_versions where application_id=$1 order by application_revision limit 1', [ownershipApp.id]), 10000,
     'earlier disclosed percentage remains immutable')
-  ownershipApp = (await scopedCommand(2, reviewer, 'review_application', { application_id: ownershipApp.id,
+  ownershipApp = (await mandateScopedCommand(2, reviewer, 'review_application', { application_id: ownershipApp.id,
     expected_revision: ownershipApp.revision, decision: 'APPROVED',
     notes: 'Independent synthetic review of exact corrected ownership evidence.', checks: reviewChecks })).applications.find(a => a.id === ownershipApp.id)
   eq(ownershipApp.status, 'APPROVED', 'independent decision applies to exact structured revision')
