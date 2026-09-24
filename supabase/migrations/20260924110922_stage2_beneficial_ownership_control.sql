@@ -96,9 +96,9 @@ begin
     if pg_catalog.jsonb_typeof(record->'id') is distinct from 'string'
       or record->>'id' !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
       or (record->>'id')=any(ids)
-      or pg_catalog.coalesce(record->>'party_type','') not in ('PERSON','ENTITY')
+      or coalesce(record->>'party_type','') not in ('PERSON','ENTITY')
       or record->>'country' !~ '^[A-Z]{2}$'
-      or pg_catalog.coalesce(record->>'relationship','') not in ('DIRECT_OWNER','INDIRECT_OWNER','CONTROLLER')
+      or coalesce(record->>'relationship','') not in ('DIRECT_OWNER','INDIRECT_OWNER','CONTROLLER')
       or (record->>'ownership_basis_points')::integer > 10000
       or (record->>'relationship'<>'CONTROLLER' and (record->>'ownership_basis_points')::integer=0)
       or pg_catalog.to_char(effective_date,'YYYY-MM-DD') <> record->>'effective_on'
