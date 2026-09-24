@@ -297,9 +297,11 @@ begin
   end if;
   if exists(select 1 from bx1_portal.funding_reversals where obligation_id=oid and status='APPROVED') then return 'REVERSED'; end if;
   if (t->>'observed')::numeric>o.token_amount_base_units then return 'OVERPAID'; end if;
-  if (t->>'observed')::numeric>0 and (bx1_portal.funding_route_current(o.route_id) is not true or bx1_portal.funding_account_current(oid) is not true) then return 'EVIDENCE_REVIEW'; end if;
+  -- A subsequent customer hold or route revocation stops new acceptance, but
+  -- does not rewrite a previously posted and reconciled financial fact.
   if (t->>'posted')::numeric=o.token_amount_base_units and not exists(select 1 from bx1_portal.funding_references where obligation_id=oid and status not in ('POSTED','REJECTED_UNPAID'))
     and not exists(select 1 from bx1_portal.funding_reversals where obligation_id=oid) then return 'RECONCILED'; end if;
+  if (t->>'observed')::numeric>0 and (bx1_portal.funding_route_current(o.route_id) is not true or bx1_portal.funding_account_current(oid) is not true) then return 'EVIDENCE_REVIEW'; end if;
   if (t->>'observed')::numeric>0 and (t->>'observed')::numeric<o.token_amount_base_units then return 'PARTIAL'; end if;
   if exists(select 1 from bx1_portal.funding_references where obligation_id=oid and status<>'REJECTED_UNPAID') then return 'EVIDENCE_REVIEW'; end if;
   return 'AWAITING_FUNDING';
@@ -765,10 +767,35 @@ do $$ declare f record; begin
     execute format('revoke all on function %s from public,anon,authenticated,service_role',f.signature);
   end loop;
 end $$;
-grant execute on function bx1_portal.read_scoped(jsonb),bx1_portal.execute_scoped(jsonb,text,uuid,jsonb),bx1_portal.funding_verification_context(text,uuid,jsonb),
-  public.bx1_portal_read_scoped(jsonb),public.bx1_portal_command_scoped(text,uuid,jsonb,jsonb),public.bx1_portal_funding_verification_context(text,uuid,jsonb) to authenticated;
-grant usage on schema bx1_portal to service_role;
-grant execute on function bx1_portal.record_funding_observation(uuid,jsonb),public.bx1_portal_record_funding_observation(uuid,jsonb) to service_role;
+revoke all on function public.bx1_portal_read_scoped(jsonb),
+  public.bx1_portal_command_scoped(text,uuid,jsonb,jsonb)
+  from public,anon,authenticated,service_role;
+-- Funding can be installed after the MAIN monitoring migration for schema
+-- parity, but installation must never turn the sealed general scoped RPCs on.
+-- A missing environment admission is an installation error, not TEST by
+-- default. The existing TEST fixture supplies an explicit temporary context.
+do $funding_access_admission$
+declare admitted_environment text;
+begin
+  if pg_catalog.to_regclass('bx1_portal.entry_configuration') is null then
+    raise exception 'funding_environment_not_configured' using errcode='55000'; end if;
+  select environment into admitted_environment
+    from bx1_portal.entry_configuration where singleton;
+  if admitted_environment not in ('TESTNET','MAINNET') or admitted_environment is null then
+    raise exception 'funding_environment_not_admitted' using errcode='55000'; end if;
+  if admitted_environment='TESTNET' then
+    grant execute on function bx1_portal.read_scoped(jsonb),
+      bx1_portal.execute_scoped(jsonb,text,uuid,jsonb),
+      bx1_portal.funding_verification_context(text,uuid,jsonb),
+      public.bx1_portal_read_scoped(jsonb),
+      public.bx1_portal_command_scoped(text,uuid,jsonb,jsonb),
+      public.bx1_portal_funding_verification_context(text,uuid,jsonb)
+      to authenticated;
+    grant usage on schema bx1_portal to service_role;
+    grant execute on function bx1_portal.record_funding_observation(uuid,jsonb),
+      public.bx1_portal_record_funding_observation(uuid,jsonb) to service_role;
+  end if;
+end $funding_access_admission$;
 
 -- Funding may be installed before or after the additive customer-monitoring
 -- migration. If monitoring already exists, this feature is not complete until

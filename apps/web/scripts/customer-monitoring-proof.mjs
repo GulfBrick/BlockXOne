@@ -219,7 +219,8 @@ export async function proveCustomerMonitoring(db, {
 // reviewer is a synthetic, independently mapped human. No provider or chain
 // claim is invented by this proof.
 export async function proveCustomerMonitoringFunding(db, {
-  investorApplicationId, heldObligationId, otherObligationId, unpostedReferenceId,
+  investorApplicationId, heldObligationId, reconciledObligationId,
+  otherObligationId, unpostedReferenceId,
 }) {
   if (process.env.GITHUB_ACTIONS !== 'true'
     || process.env.BX1_FUNDING_SQL_TEST_URL !== 'postgresql://postgres:bx1-synthetic-ci-only@127.0.0.1:5432/bx1_demo_ci')
@@ -272,6 +273,8 @@ export async function proveCustomerMonitoringFunding(db, {
     'existing investor obligation starts with current customer admission')
   eq(await scalar('select bx1_portal.funding_account_current($1)', [otherObligationId]), true,
     'unrelated investor obligation independently starts current')
+  eq(await scalar('select bx1_portal.funding_state($1)', [reconciledObligationId]),
+    'RECONCILED', 'historical fully posted obligation remains reconciled before hold')
   const before = await scalar(`select pg_catalog.jsonb_build_object(
     'journals',(select count(*) from bx1_portal.funding_journals),
     'lines',(select count(*) from bx1_portal.funding_journal_lines),
@@ -300,6 +303,10 @@ export async function proveCustomerMonitoringFunding(db, {
     'existing investor obligation loses funding acceptance eligibility immediately')
   eq(await scalar('select bx1_portal.funding_account_current($1)', [otherObligationId]), true,
     'another investor is not held by the first investor decision')
+  eq(await scalar('select bx1_portal.funding_state($1)', [reconciledObligationId]),
+    'RECONCILED', 'hold cannot relabel historically reconciled cash as evidence review')
+  eq(await scalar('select bx1_portal.funding_state($1)', [heldObligationId]),
+    'EVIDENCE_REVIEW', 'unposted observed value still needs investigation while held')
   await denied('held obligation cannot receive a newly proposed funding acceptance', () => db.query(`
     insert into bx1_portal.funding_acceptances(reference_id,kind,proposed_by,proposed_person,
       proposed_context,reference_revision,evidence_set_hash)

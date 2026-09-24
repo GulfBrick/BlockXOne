@@ -142,6 +142,30 @@ try {
   await sqlFile('../../../supabase/migrations/20260924110922_stage2_beneficial_ownership_control.sql')
   await sqlFile('../../../supabase/migrations/20260924112832_stage2_document_quarantine_lifecycle.sql')
   await sqlFile('../../../supabase/tests/bx1_document_lifecycle.sql')
+  await sqlFile('../../../supabase/migrations/20260924125627_stage2_customer_monitoring.sql')
+  await sqlFile('../../../supabase/migrations/20260924125811_stage2_document_retention_authority.sql')
+  for (const signature of [
+    'public.bx1_portal_read_scoped(jsonb)',
+    'public.bx1_portal_command_scoped(text,uuid,jsonb,jsonb)',
+    'bx1_portal.read_scoped(jsonb)',
+    'bx1_portal.execute_scoped(jsonb,text,uuid,jsonb)',
+  ]) eq(await scalar("select has_function_privilege('authenticated',$1,'EXECUTE')", [signature]), false,
+    `MAIN retains sealed ${signature} after monitoring and retention installation`)
+  eq(await scalar('select count(*)::int from bx1_portal.customer_monitoring_cases'), 0,
+    'MAIN monitoring definition seeds no customer decision')
+  eq(await scalar("select state='NOT_ADMITTED' and policy_version=0 from bx1_private.document_retention_admission where singleton"), true,
+    'MAIN retention disposal remains unadmitted')
+  await db.query('savepoint main_funding_install_order')
+  await sqlFile('../../../supabase/features/bx1_portal_funding.sql')
+  for (const signature of [
+    'public.bx1_portal_read_scoped(jsonb)',
+    'public.bx1_portal_command_scoped(text,uuid,jsonb,jsonb)',
+    'bx1_portal.read_scoped(jsonb)',
+    'bx1_portal.execute_scoped(jsonb,text,uuid,jsonb)',
+    'public.bx1_portal_funding_verification_context(text,uuid,jsonb)',
+  ]) eq(await scalar("select has_function_privilege('authenticated',$1,'EXECUTE')", [signature]), false,
+    `later funding installation cannot reopen MAIN ${signature}`)
+  await db.query('rollback to savepoint main_funding_install_order; release savepoint main_funding_install_order')
   eq(await scalar("select has_function_privilege('authenticated','bx1_portal.document_upload_allowed(text,text,jsonb)','EXECUTE')"), false,
     'MAIN keeps the portal upload helper outside authenticated reach')
   await actor(2)

@@ -162,10 +162,15 @@ try {
   for (const file of ['20260916234746_bx1_identity_workspace.sql', '20260917190042_bx1_wallet_ownership.sql', '20260918015541_bx1_mfa_assurance.sql', '20260918234447_bx1_controlled_administration.sql']) await sqlFile(`../../../supabase/migrations/${file}`)
   await sqlFile('../../../supabase/features/bx1_portal.sql')
   await sqlFile('../../../supabase/tests/bx1_portal.sql')
-  // The later monitoring decision requires trusted, distinct humans. The
-  // standard funding fixture's investor has no native role, but receives a
-  // synthetic identity mapping before postgres loses private-schema writes.
-  await db.query("insert into public.bx1_profiles(id,display_name) values($1,'Synthetic admitted investor 3')", [uid(3)])
+  phase = 'canonical-preexisting-business-records'
+  await approveApplicant(1, true); await approveApplicant(3); await approveApplicant(6)
+  await actor(1); const orgId = (await scalar('select public.bx1_portal_read()')).organisations[0].id
+  const fund = await publish(orgId, 'FUND'), estate = await publish(orgId, 'REAL_ESTATE')
+  await admin(); await sqlFile('../../../supabase/migrations/20260921160000_portal_authority_accounts.sql')
+  await sqlFile('../../../supabase/tests/bx1_portal_authority_accounts.sql')
+  // The authority fixture has now created investor 3's canonical profile.
+  // Map that investor to a distinct trusted person before the synthetic
+  // hosted role loses private-schema write access.
   await db.query(`insert into bx1_private.persons(id,label,status,evidence_reference,bootstrap_receipt_id)
     values('e6000000-0000-4000-8000-000000000004',
       'Synthetic test human investor 3','TRUSTED','synthetic:funding-investor-3',
@@ -175,12 +180,6 @@ try {
     values($1,'e6000000-0000-4000-8000-000000000004','TRUSTED',
       'synthetic:funding-investor-principal-3',
       'e7000000-0000-4000-8000-000000000001')`, [uid(3)])
-  phase = 'canonical-preexisting-business-records'
-  await approveApplicant(1, true); await approveApplicant(3); await approveApplicant(6)
-  await actor(1); const orgId = (await scalar('select public.bx1_portal_read()')).organisations[0].id
-  const fund = await publish(orgId, 'FUND'), estate = await publish(orgId, 'REAL_ESTATE')
-  await admin(); await sqlFile('../../../supabase/migrations/20260921160000_portal_authority_accounts.sql')
-  await sqlFile('../../../supabase/tests/bx1_portal_authority_accounts.sql')
   phase = 'hosted-like-migration-role-boundary'
   // Preserve existing postgres-owned functions: demote the real fixture role
   // instead of assigning selected objects to an artificial privileged owner.
@@ -215,7 +214,17 @@ try {
   await denied('SELECT-only principals cannot be locked directly', () => db.query('select auth_user_id from bx1_private.person_principals for update'), '42501')
   await denied('SELECT-only persons cannot be a new foreign-key target', () => db.query('create table bx1_portal.synthetic_forbidden_person_reference (person_id uuid references bx1_private.persons(id))'), '42501')
   const originalAuthorityBoundary = await authorityBoundary()
+  // The full Stage 1 entry migration intentionally follows the historical
+  // funding fixture. Give this disposable install an explicit TEST admission;
+  // no missing configuration is allowed to mean TEST by default.
+  await db.query(`create table bx1_portal.entry_configuration
+    (singleton boolean primary key default true,environment text not null
+      check(environment in ('TESTNET','MAINNET')))`)
+  await db.query("insert into bx1_portal.entry_configuration(environment) values('TESTNET')")
   await sqlFile('../../../supabase/features/bx1_portal_funding.sql')
+  eq(await scalar("select has_function_privilege('authenticated','public.bx1_portal_command_scoped(text,uuid,jsonb,jsonb)','EXECUTE')"),
+    true, 'explicit TEST funding install grants the guarded scoped command')
+  await db.query('drop table bx1_portal.entry_configuration')
   phase = 'hosted-like-migration-preserves-private-boundary'
   await checkHostedRole()
   eq(await authorityBoundary(), originalAuthorityBoundary, 'funding migration restores exact authority membership and private schema/table ACLs')
@@ -466,6 +475,7 @@ try {
   checks += await proveCustomerMonitoringFunding(db, {
     investorApplicationId: await scalar('select application_id from bx1_portal.investment_accounts where id=$1', [account3.id]),
     heldObligationId: auditOrder.obligation.id,
+    reconciledObligationId: completed[1].o.obligation.id,
     otherObligationId: duplicate.obligation.id,
     unpostedReferenceId: auditRef.id,
   })
