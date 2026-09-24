@@ -142,6 +142,11 @@ try {
     await db.query('insert into auth.users(id,email,email_confirmed_at,invited_at,confirmation_sent_at,raw_user_meta_data) values($1,$2,null,clock_timestamp(),clock_timestamp(),$3::jsonb)',
       [uid(9), 'new.staff@example.invalid', JSON.stringify({bx1_staff_invitation_id:applied.invitationId,bx1_staff_lease_id:claim.leaseId})])
     await db.query('insert into auth.sessions(id,user_id,aal) values($1,$2,\'aal1\')', [sid(9), uid(9)])
+    await db.query("select set_config('request.jwt.claims','{}',true)")
+    await db.exec('set local role service_role')
+    await eq((await scalar('select public.bx1_staff_invitation_dispatch_result($1,$2,$3,true)',
+      [applied.invitationId, claim.leaseId, uid(9)])).error, 'forbidden',
+    'missing service JWT claim cannot acknowledge delivery')
     const sent = await serviceAck(applied.invitationId, claim.leaseId, uid(9))
     await eq(sent.state, 'INVITED', 'service records exact Auth user after send')
     await actor(9, 'aal1')

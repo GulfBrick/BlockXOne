@@ -93,7 +93,15 @@ try {
     using(bucket_id='preexisting-native-bucket' and owner_id=auth.uid()::text)`)
   const nativeStoragePolicies = await scalar("select jsonb_agg(jsonb_build_object('name',polname,'command',polcmd,'roles',polroles,'using',pg_get_expr(polqual,polrelid),'check',pg_get_expr(polwithcheck,polrelid)) order by polname) from pg_policy where polrelid='storage.objects'::regclass and polname like 'synthetic_native_%'")
   const signatures = (await db.query("select p.oid::regprocedure::text signature from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname in ('bx1_private','public') order by signature")).rows.map(row => row.signature)
-  const preservedSignatures = signatures.filter((signature) => signature !== 'bx1_private.can_access_organisation(uuid)')
+  const deliberatelyExtendedSignatures = new Set([
+    'bx1_private.can_access_organisation(uuid)',
+    'bx1_private.read_mfa_status()',
+    'public.bx1_mfa_status()',
+  ])
+  const preservedSignatures = signatures.filter((signature) => !deliberatelyExtendedSignatures.has(signature))
+  const mfaSignatures = ['bx1_private.read_mfa_status()', 'public.bx1_mfa_status()']
+  const mfaOwnersBefore = Object.fromEntries(Object.entries(await functionManifest(mfaSignatures))
+    .map(([signature, metadata]) => [signature, metadata.owner]))
   const nativeFunctions = await functionManifest(preservedSignatures), nativeGrants = await grantManifest(signatures), nativeHistory = await nativeRecords()
   eq(await scalar("select to_regclass('bx1_private.person_principals') is null and to_regnamespace('bx1_portal') is null"), true, 'MAIN-shaped baseline has no person-principal or portal subsystem')
   await db.query('create role bx1_fixture_bootstrap nologin superuser')
@@ -139,7 +147,10 @@ try {
     [`${id(2)}/${id(240)}`, id(2), '{}']), false,
     'MAIN rejects direct document upload before scanner admission')
   await admin()
-  eq(await functionManifest(preservedSignatures), nativeFunctions, 'unrelated native auth/MFA/wallet function definitions and owners exactly preserved')
+  eq(await functionManifest(preservedSignatures), nativeFunctions, 'unrelated native auth and wallet function definitions and owners exactly preserved')
+  eq(Object.fromEntries(Object.entries(await functionManifest(mfaSignatures))
+    .map(([signature, metadata]) => [signature, metadata.owner])), mfaOwnersBefore,
+  'extended MFA helpers retain their trusted original owners')
   const grantsAfter = await grantManifest(signatures)
   eq(grantsAfter.filter(grant => grant.grantee !== 'bx1_authority_owner'), nativeGrants, 'all existing native function grants preserved')
   eq(grantsAfter.filter(grant => grant.grantee === 'bx1_authority_owner').map(grant => [grant.signature, grant.privilege_type, grant.is_grantable]), [

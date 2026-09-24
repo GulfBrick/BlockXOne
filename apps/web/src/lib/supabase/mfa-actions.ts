@@ -9,7 +9,7 @@ import { hasRequiredMfa, isMfaContextCurrent, readMfaContext, requireRecentTotp,
 
 const statuses: Record<MfaErrorCode, number> = {
   invalid_request: 400, unauthorised: 401, invalid_code: 400, rate_limited: 429,
-  unavailable: 503, pending_setup_exists: 409, already_enrolled: 409, unsupported_factor: 403,
+  unavailable: 503, pending_setup_exists: 409, already_enrolled: 409, unsupported_factor: 403, step_up_required: 403,
 }
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 function uuid(value: unknown): value is string {
@@ -65,8 +65,13 @@ export async function handleMfaAction(action: string, form: URLSearchParams, cli
     if (!context) return mfaErrorResponse('unauthorised')
     const view = toMfaView(context)
     if (action === 'mfa-enroll') {
-      if (view.state !== 'unenrolled') return mfaErrorResponse('already_enrolled')
       if (view.hasPendingTotp) return mfaErrorResponse('pending_setup_exists')
+      if (view.state === 'verified') {
+        // A second TOTP is a recovery factor, never an AAL1 reset. The
+        // existing factor must have just been verified in this live session.
+        if (!requireRecentTotp(context, Math.floor(Date.now() / 1000)).allowed) return mfaErrorResponse('step_up_required')
+      } else if (view.state !== 'unenrolled') return mfaErrorResponse('already_enrolled')
+      if (view.factors.length >= 10) return mfaErrorResponse('already_enrolled')
       if (!await isMfaContextCurrent(client, context)) return mfaErrorResponse('unauthorised')
       const { data, error } = await client.auth.mfa.enroll({ factorType: 'totp', friendlyName: 'BlockXOne authenticator' })
       if (error) return providerFailure(error, false)
@@ -80,7 +85,13 @@ export async function handleMfaAction(action: string, form: URLSearchParams, cli
     }
     if (view.state === 'unsupported_factor') return mfaErrorResponse('unsupported_factor')
     const factor = view.factors.find((candidate) => candidate.id === factorId)
-    if (!factor || (factor.status === 'unverified' && (!['security','staff'].includes(destination ?? '') || view.state !== 'unenrolled'))) return mfaErrorResponse('unauthorised', 403)
+    if (!factor) return mfaErrorResponse('unauthorised', 403)
+    if (factor.status === 'unverified') {
+      const firstFactorSetup = view.state === 'unenrolled' && ['security','staff'].includes(destination ?? '')
+      const backupFactorSetup = view.state === 'verified' && destination === 'security'
+        && requireRecentTotp(context, Math.floor(Date.now() / 1000)).allowed
+      if (!firstFactorSetup && !backupFactorSetup) return mfaErrorResponse('unauthorised', 403)
+    }
     // Repeat the narrow type guards for control-flow narrowing, never cast
     // posted authority. Challenge IDs are created and consumed only here.
     if (!uuid(factorId) || typeof code !== 'string' || !continuation(destination)) return mfaErrorResponse('invalid_request')

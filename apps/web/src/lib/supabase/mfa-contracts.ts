@@ -13,7 +13,7 @@ export type MfaView = {
   hasPendingTotp: boolean
 }
 export type MfaErrorCode = 'invalid_request' | 'unauthorised' | 'invalid_code'
-  | 'rate_limited' | 'unavailable' | 'pending_setup_exists' | 'already_enrolled' | 'unsupported_factor'
+  | 'rate_limited' | 'unavailable' | 'pending_setup_exists' | 'already_enrolled' | 'unsupported_factor' | 'step_up_required'
 export type MfaContinuation = 'workspace' | 'setup' | 'security' | 'staff'
 export type MfaNextPath = '/portal' | '/workspace' | '/login?setup=1' | '/workspace/security' | '/workspace/staff-invite'
 export type MfaEnrollResponse = { ok: true; factorId: string; qrCode: string; secret: string } | { ok: false; error: MfaErrorCode }
