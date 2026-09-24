@@ -89,8 +89,8 @@ export function CustomerMonitoringDecision({ application, snapshot, operatingCon
                 <option value="RENEWAL_REQUIRED" disabled={monitoring.state === 'RENEWAL_REQUIRED'}>Require customer renewal</option>
                 <option value="CURRENT" disabled={!mayRestore || monitoring.state === 'CURRENT'}>Lift additional restriction after current evidence review</option>
               </select></Field>
-              <Field label="Evidence reference" hint="20–400 characters. Cite a saved, authorised evidence or case reference; this field does not validate a provider result."><input required minLength={20} maxLength={400} value={evidenceReference} onChange={event => setEvidenceReference(event.target.value)} /></Field>
-              <Field label="Decision reason" hint="20–2,000 characters. Explain the specific restriction or why it can be lifted."><textarea required minLength={20} maxLength={2000} value={reason} onChange={event => setReason(event.target.value)} /></Field>
+              <Field label="Evidence reference" hint="20 to 400 characters. Cite a saved, authorised evidence or case reference; this field does not validate a provider result."><input required minLength={20} maxLength={400} value={evidenceReference} onChange={event => setEvidenceReference(event.target.value)} /></Field>
+              <Field label="Decision reason" hint="20 to 2,000 characters. Explain the specific restriction or why it can be lifted."><textarea required minLength={20} maxLength={2000} value={reason} onChange={event => setReason(event.target.value)} /></Field>
               <div><p className={styles.copy}>Mark only checks supported by current evidence. Lifting a restriction requires all four; a hold does not certify missing evidence.</p>{CHECKS.map(item => <label key={item.key} className={styles.check}><input type="checkbox" checked={checks[item.key]} onChange={event => setChecks(current => ({ ...current, [item.key]: event.target.checked }))} />{item.label}</label>)}</div>
               <button type="submit" className={styles.button} disabled={!validForm}>Record monitoring decision</button>
             </fieldset>

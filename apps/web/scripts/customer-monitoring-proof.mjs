@@ -208,7 +208,22 @@ export async function proveCustomerMonitoring(db, {
     await admin()
     const investorHold = payload('ON_HOLD', 0, 'investor-on-hold')
     investorHold.application_id = investorApplicationId
-    const investorState = await command(2, investorHold, key(11))
+    eq(await scalar('select bx1_portal.entity_people_independent($1::uuid,$2::uuid)',
+      [uid(2), uid(3)]), false,
+    'unmapped historical investor cannot be treated as an independently identified person')
+    await denied('unmapped investor cannot receive a purported independent monitoring decision',
+      () => command(2, investorHold, key(11)))
+    await db.query(`insert into bx1_private.persons(id,label,status,evidence_reference,bootstrap_receipt_id)
+      values($1,'Synthetic monitored investor human','TRUSTED',
+        'synthetic-cloud-monitoring:investor-person',$2)`, [uid(60), uid(61)])
+    await db.query(`insert into bx1_private.person_principals
+      (auth_user_id,person_id,status,evidence_reference,bootstrap_receipt_id)
+      values($1,$2,'TRUSTED','synthetic-cloud-monitoring:investor-principal',$3)`,
+    [uid(3), uid(60), uid(61)])
+    eq(await scalar('select bx1_portal.entity_people_independent($1::uuid,$2::uuid)',
+      [uid(2), uid(3)]), true,
+    'synthetic investor is separately mapped from the trusted reviewer before decision')
+    const investorState = await command(2, investorHold, key(13))
     eq(investorState.customer_monitoring.find(c => c.application_id === investorApplicationId)?.state,
       'ON_HOLD', 'a separate investor has an independently reviewed hold')
     await actor(3, 'aal1')
