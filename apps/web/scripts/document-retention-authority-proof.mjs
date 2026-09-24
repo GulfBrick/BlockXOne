@@ -128,6 +128,9 @@ export async function proveDocumentRetentionAuthority(db) {
     () => governance(adminId, sid(10), approverContext, 'RETENTION_APPROVED', requested.event_id))
   await db.query('rollback to savepoint retention_revocation_case; release savepoint retention_revocation_case')
   await db.query('savepoint retention_revision_case')
+  // The synthetic revision bump still crosses the receipt trigger. Present
+  // the original applicant's JWT while fixture-owned postgres mutates it.
+  await actor(applicant, applicantSession, false)
   await admin()
   await db.query('update bx1_portal.applications set revision=revision+1 where id=$1', [application])
   await denied('changed application revision blocks stale approval',
