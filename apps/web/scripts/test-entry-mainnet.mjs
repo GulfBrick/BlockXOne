@@ -130,6 +130,11 @@ try {
   await sqlFile('../../../supabase/migrations/20260924110922_stage2_beneficial_ownership_control.sql')
   await sqlFile('../../../supabase/migrations/20260924112832_stage2_document_quarantine_lifecycle.sql')
   await sqlFile('../../../supabase/tests/bx1_document_lifecycle.sql')
+  await actor(2)
+  eq(await scalar('select bx1_portal.document_upload_allowed($1,$2,$3::jsonb)',
+    [`${id(2)}/${id(240)}`, id(2), '{}']), false,
+    'MAIN rejects direct document upload before scanner admission')
+  await admin()
   eq(await functionManifest(preservedSignatures), nativeFunctions, 'unrelated native auth/MFA/wallet function definitions and owners exactly preserved')
   const grantsAfter = await grantManifest(signatures)
   eq(grantsAfter.filter(grant => grant.grantee !== 'bx1_authority_owner'), nativeGrants, 'all existing native function grants preserved')

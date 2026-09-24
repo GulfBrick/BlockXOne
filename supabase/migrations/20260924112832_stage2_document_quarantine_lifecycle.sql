@@ -117,8 +117,11 @@ create or replace function bx1_portal.document_upload_allowed(object_name text, 
 returns boolean language plpgsql volatile security definer set search_path='' as $$
 declare v_actor uuid:=auth.uid(); v_count bigint;
 begin
-  if (select mode from bx1_private.document_lifecycle_policy where singleton)='SCANNER_REQUIRED'
-    then return false; end if;
+  -- Synthetic direct uploads are TEST-only. MAIN must not accept private
+  -- documents before an admitted scanner path, even if a client bypasses web.
+  if (select mode from bx1_private.document_lifecycle_policy where singleton)<>'SYNTHETIC_TEST_ONLY'
+    or not exists(select 1 from bx1_portal.entry_configuration
+      where singleton and environment='TESTNET') then return false; end if;
   if bx1_portal.has_session() is not true or object_owner is distinct from v_actor::text
     or pg_catalog.split_part(object_name,'/',1) is distinct from v_actor::text then return false; end if;
   perform pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended('bx1_portal_document:'||v_actor::text,0));
