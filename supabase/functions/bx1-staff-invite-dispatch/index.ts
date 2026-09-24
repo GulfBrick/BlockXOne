@@ -86,21 +86,40 @@ Deno.serve(async (request: Request) => {
     // separately allow-listed in the project's Auth URL configuration.
     const sent = await admin.auth.admin.inviteUserByEmail(claimed.data.email, {
       redirectTo: `${redirectOrigin}/auth/confirm`,
-      data: { bx1_staff_invitation_id: input.invitationId, bx1_staff_lease_id: claimed.data.leaseId },
     })
-    const delivered = !sent.error && Boolean(sent.data.user?.id)
+    // inviteUserByEmail({ data }) writes user-editable user_metadata. It must
+    // never be used as dispatch evidence. Only Auth Admin can write the
+    // server-owned app_metadata marker. An invite may already have been sent
+    // before this update: any error is unknown, never a cue to resend.
+    if (sent.error || !uuid.test(String(sent.data.user?.id))) {
+      return reply({ ok: false, error: 'outcome_unknown' }, 503)
+    }
+    const authUserId = sent.data.user!.id
+    const appMetadata = object(sent.data.user!.app_metadata) ? sent.data.user!.app_metadata : {}
+    const marked = await admin.auth.admin.updateUserById(authUserId, {
+      app_metadata: {
+        ...appMetadata,
+        bx1_staff_invitation_id: input.invitationId,
+        bx1_staff_lease_id: claimed.data.leaseId,
+      },
+    })
+    if (marked.error || marked.data.user?.id !== authUserId
+      || !object(marked.data.user.app_metadata)
+      || marked.data.user.app_metadata.bx1_staff_invitation_id !== input.invitationId
+      || marked.data.user.app_metadata.bx1_staff_lease_id !== claimed.data.leaseId) {
+      return reply({ ok: false, error: 'outcome_unknown' }, 503)
+    }
     const recorded = await admin.rpc('bx1_staff_invitation_dispatch_result', {
       invitation_id: input.invitationId as string,
       lease_id: claimed.data.leaseId as string,
-      auth_user_id: delivered ? sent.data.user!.id : null,
-      delivered,
+      auth_user_id: authUserId,
+      delivered: true,
     }).abortSignal(signal)
     if (recorded.error || !object(recorded.data) || recorded.data.ok !== true
-      || recorded.data.state !== (delivered ? 'INVITED' : 'DELIVERY_UNKNOWN')) {
+      || recorded.data.state !== 'INVITED') {
       return reply({ ok: false, error: 'outcome_unknown' }, 503)
     }
-    return delivered ? reply({ ok: true, state: 'INVITED' }, 200)
-      : reply({ ok: false, error: 'delivery_unknown' }, 503)
+    return reply({ ok: true, state: 'INVITED' }, 200)
   } catch {
     // A timeout after claim/send is an unknown outcome, not a retry signal.
     // Never log or return JWTs, email addresses, service keys or provider text.

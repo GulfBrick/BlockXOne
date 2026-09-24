@@ -85,6 +85,7 @@ try {
   await db.exec(`alter table auth.users add column email text, add column email_confirmed_at timestamptz,
     add column invited_at timestamptz, add column confirmation_sent_at timestamptz,
     add column raw_user_meta_data jsonb default '{}'::jsonb,
+    add column raw_app_meta_data jsonb default '{}'::jsonb,
     add column is_anonymous boolean default false;
     alter table auth.users enable row level security; alter table auth.sessions enable row level security;`)
   await file('../../../supabase/migrations/20260916234746_bx1_identity_workspace.sql')
@@ -139,7 +140,7 @@ try {
     const claim = await scalar('select public.bx1_staff_invitation_claim($1,$2)', [org(1), applied.invitationId])
     await eq(claim.ok, true, 'authorised delivery claim')
     await owner()
-    await db.query('insert into auth.users(id,email,email_confirmed_at,invited_at,confirmation_sent_at,raw_user_meta_data) values($1,$2,null,clock_timestamp(),clock_timestamp(),$3::jsonb)',
+    await db.query('insert into auth.users(id,email,email_confirmed_at,invited_at,confirmation_sent_at,raw_app_meta_data) values($1,$2,null,clock_timestamp(),clock_timestamp(),$3::jsonb)',
       [uid(9), 'new.staff@example.invalid', JSON.stringify({bx1_staff_invitation_id:applied.invitationId,bx1_staff_lease_id:claim.leaseId})])
     await db.query('insert into auth.sessions(id,user_id,aal) values($1,$2,\'aal1\')', [sid(9), uid(9)])
     await db.query("select set_config('request.jwt.claims','{}',true)")
@@ -185,7 +186,7 @@ try {
     await actor(3)
     const claim = await scalar('select public.bx1_staff_invitation_claim($1,$2)', [org(1), applied.invitationId])
     await owner()
-    await db.query('insert into auth.users(id,email,email_confirmed_at,invited_at,confirmation_sent_at,raw_user_meta_data) values($1,$2,now(),clock_timestamp(),clock_timestamp(),$3::jsonb)',
+    await db.query('insert into auth.users(id,email,email_confirmed_at,invited_at,confirmation_sent_at,raw_app_meta_data) values($1,$2,now(),clock_timestamp(),clock_timestamp(),$3::jsonb)',
       [uid(9), 'wrong@example.invalid', JSON.stringify({bx1_staff_invitation_id:applied.invitationId,bx1_staff_lease_id:claim.leaseId})])
     await db.query("insert into auth.sessions(id,user_id,aal) values($1,$2,'aal1')", [sid(9), uid(9)])
     await eq((await serviceAck(applied.invitationId, claim.leaseId, uid(9))).ok, false, 'wrong provider Auth email cannot mark invite sent')
@@ -193,6 +194,20 @@ try {
     await eq((await scalar('select public.bx1_staff_invitation_begin()')).state, 'NONE', 'wrong-email user cannot bind')
     await owner()
     await eq(await scalar('select count(*)::int from public.bx1_memberships where user_id=$1', [uid(9)]), 0, 'wrong-email user has no membership')
+  })
+  await isolated('user-editable metadata is not invitation authority', async () => {
+    const applied = await approvedInvite()
+    await actor(3)
+    const claim = await scalar('select public.bx1_staff_invitation_claim($1,$2)', [org(1), applied.invitationId])
+    await owner()
+    await db.query('insert into auth.users(id,email,invited_at,confirmation_sent_at,raw_user_meta_data) values($1,$2,clock_timestamp(),clock_timestamp(),$3::jsonb)',
+      [uid(9), 'new.staff@example.invalid', JSON.stringify({bx1_staff_invitation_id:applied.invitationId,bx1_staff_lease_id:claim.leaseId})])
+    await eq((await serviceAck(applied.invitationId,claim.leaseId,uid(9))).ok,false,
+      'forged user_metadata cannot acknowledge an Auth invitation')
+    await actor(1)
+    await eq((await scalar('select public.bx1_staff_invitation_reconcile($1,$2)',
+      [org(1),applied.invitationId])).error,'outcome_unknown',
+    'forged user_metadata cannot reconcile a claimed provider send')
   })
   await isolated('revoked and expired invitations deny delivery and role', async () => {
     const applied = await approvedInvite()
@@ -222,13 +237,13 @@ try {
     await eq((await scalar('select public.bx1_staff_invitation_reconcile($1,$2)',[org(1),applied.invitationId])).error,
       'outcome_unknown','absence of provider Auth evidence never resends or binds')
     await owner()
-    await db.query("insert into auth.users(id,email,invited_at,confirmation_sent_at,raw_user_meta_data) values($1,$2,clock_timestamp(),clock_timestamp(),$3::jsonb)",
+    await db.query("insert into auth.users(id,email,invited_at,confirmation_sent_at,raw_app_meta_data) values($1,$2,clock_timestamp(),clock_timestamp(),$3::jsonb)",
       [uid(9),'new.staff@example.invalid',JSON.stringify({bx1_staff_invitation_id:applied.invitationId,bx1_staff_lease_id:key(99)})])
     await actor(1)
     await eq((await scalar('select public.bx1_staff_invitation_reconcile($1,$2)',[org(1),applied.invitationId])).error,
       'outcome_unknown','wrong provider lease marker cannot bind invite')
     await owner()
-    await db.query("update auth.users set raw_user_meta_data=$1::jsonb where id=$2",[
+    await db.query("update auth.users set raw_app_meta_data=$1::jsonb where id=$2",[
       JSON.stringify({bx1_staff_invitation_id:applied.invitationId,bx1_staff_lease_id:claim.leaseId}),uid(9)])
     await actor(1)
     await eq((await scalar('select public.bx1_staff_invitation_reconcile($1,$2)',[org(1),applied.invitationId])).state,

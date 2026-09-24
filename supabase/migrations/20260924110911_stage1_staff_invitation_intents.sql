@@ -99,7 +99,9 @@ revoke all on table bx1_private.staff_invitation_intents,bx1_private.staff_invit
   bx1_private.staff_invitation_outbox,bx1_private.staff_invitation_events from public,anon,authenticated,service_role;
 -- Keep Auth reads with the pre-existing trusted migration role. The isolated
 -- authority owner receives only these narrow evidence predicates, never
--- SELECT on auth.users, auth.sessions or auth.mfa_factors.
+-- SELECT on auth.users, auth.sessions or auth.mfa_factors. Invitation markers
+-- must be written through Auth Admin app_metadata; user_metadata is editable
+-- by the invitee and is never evidence of a provider send.
 create function bx1_private.staff_invitation_auth_email_in_use(expected_email text) returns boolean
 language sql volatile security definer set search_path='' as $$
   select exists(select 1 from auth.users u where lower(u.email)=expected_email and u.deleted_at is null);
@@ -110,8 +112,8 @@ language sql volatile security definer set search_path='' as $$
   select case when count(*)=1 then min(u.id::text)::uuid else null end from auth.users u
     where lower(u.email)=expected_email and u.deleted_at is null
       and u.invited_at>=claimed_at and u.confirmation_sent_at>=claimed_at
-      and u.raw_user_meta_data->>'bx1_staff_invitation_id'=invitation_id::text
-      and u.raw_user_meta_data->>'bx1_staff_lease_id'=lease_id::text;
+      and u.raw_app_meta_data->>'bx1_staff_invitation_id'=invitation_id::text
+      and u.raw_app_meta_data->>'bx1_staff_lease_id'=lease_id::text;
 $$;
 create function bx1_private.staff_invitation_auth_self(require_totp boolean) returns text
 language sql volatile security definer set search_path='' as $$

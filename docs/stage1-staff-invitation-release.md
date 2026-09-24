@@ -50,11 +50,15 @@ Check the database event/outbox receipt and Auth `invited_at` evidence without
 exposing credentials. Do not claim MAIN admission from a TEST rehearsal.
 
 If send result is unknown, the invitation stays `DISPATCHING` and cannot be
-automatically resent. An authorised operator may use **Reconcile unknown
-send**; it reads the exact Auth invitation ID and lease marker, email, and
-post-lease `invited_at`/`confirmation_sent_at`. Only matching provider evidence
-links the user. Missing/ambiguous evidence stays unknown and requires an
-incident decision, not a blind resend or manual database role grant.
+automatically resent. After the Auth invite returns, the server writes the
+invitation ID and lease marker into Auth Admin `app_metadata` before recording
+delivery. Supabase invitation `data` writes user-editable `user_metadata` and
+must never be treated as dispatch evidence. An authorised operator may use
+**Reconcile unknown send**; it reads only the server-owned `raw_app_meta_data`
+marker, exact email, and post-lease `invited_at`/`confirmation_sent_at`. Only
+matching provider evidence links the user. Missing/ambiguous evidence stays
+unknown and requires an incident decision, not a blind resend or manual
+database role grant.
 
 ## Remaining acceptance gap
 
