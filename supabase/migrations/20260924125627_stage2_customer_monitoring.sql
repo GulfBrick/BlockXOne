@@ -306,10 +306,6 @@ $$;
 
 -- Wrap the existing single scoped command path, preserving all prior writer
 -- branches. MAIN retains its existing sealed public EXECUTE permissions.
--- The wrapper is owned by the migration role and invokes this previously
--- restricted predicate at runtime. Grant only that role; never expose the
--- predicate to authenticated clients or service_role.
-grant execute on function bx1_portal.scoped_reviewer(jsonb,uuid,uuid) to postgres;
 alter function bx1_portal.read_scoped(jsonb) rename to read_scoped_pre_monitoring;
 alter function bx1_portal.execute_scoped(jsonb,text,uuid,jsonb) rename to execute_scoped_pre_monitoring;
 create function bx1_portal.read_scoped(c jsonb) returns jsonb

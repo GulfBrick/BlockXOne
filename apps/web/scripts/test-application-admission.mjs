@@ -97,10 +97,10 @@ try {
   const historical = await scalar('select jsonb_agg(to_jsonb(a) order by id) from bx1_portal.applications a')
   const nativeRows = await scalar("select jsonb_build_object('profiles',(select jsonb_agg(to_jsonb(p) order by id) from public.bx1_profiles p),'memberships',(select jsonb_agg(to_jsonb(m) order by id) from public.bx1_memberships m))")
   await sqlFile('../../../supabase/migrations/20260921160000_portal_authority_accounts.sql')
-  await sqlFile('../../../supabase/features/bx1_portal_funding.sql')
   await sqlFile('../../../supabase/features/bx1_entry.sql')
-  await sqlFile('../../../supabase/features/bx1_entry_admission.sql')
   await db.query("insert into bx1_portal.entry_configuration(environment,manual_test_review,reviewer_scope,admission_reference) values('TESTNET',true,$1,'synthetic application handoff cloud acceptance')", [scope])
+  await sqlFile('../../../supabase/features/bx1_portal_funding.sql')
+  await sqlFile('../../../supabase/features/bx1_entry_admission.sql')
   const wrappers = await scalar("select jsonb_object_agg(oid::regprocedure::text,md5(pg_get_functiondef(oid))) from pg_proc where oid in ('bx1_portal.execute_scoped(jsonb,text,uuid,jsonb)'::regprocedure,'bx1_portal.read_scoped(jsonb)'::regprocedure,'bx1_portal.execute_scoped_p2(jsonb,text,uuid,jsonb)'::regprocedure,'bx1_portal.read_state()'::regprocedure)")
   await sqlFile('../../../supabase/features/bx1_application_admission.sql')
   phase = 'history-and-acl-preservation'

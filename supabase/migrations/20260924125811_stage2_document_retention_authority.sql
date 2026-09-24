@@ -32,6 +32,27 @@ revoke all on bx1_private.document_retention_admission from public,anon,authenti
 create trigger bx1_document_retention_admission_immutable before update or delete
   on bx1_private.document_retention_admission for each row execute function bx1_portal.immutable_record();
 
+-- person_principals belongs to the isolated NOLOGIN authority owner. The
+-- hosted migration role intentionally has SELECT, not REFERENCES or row-lock
+-- rights. Borrow inheritance only for this migration's FK/helper DDL; snapshot
+-- every grantor-specific edge and the schema ACL so nothing remains widened.
+create temporary table bx1_document_governance_original_edges on commit drop as
+  select m.grantor,m.admin_option,m.inherit_option,m.set_option
+  from pg_catalog.pg_auth_members m
+  where m.roleid='bx1_authority_owner'::regrole and m.member=current_user::regrole;
+create temporary table bx1_document_governance_original_schema on commit drop as
+  select not pg_catalog.has_schema_privilege('bx1_authority_owner','bx1_private','CREATE') added_create,
+    (select coalesce(pg_catalog.jsonb_agg(pg_catalog.to_jsonb(a)
+      order by grantor,grantee,privilege_type,is_grantable),'[]'::jsonb)
+      from pg_catalog.aclexplode(n.nspacl) a) original_acl
+  from pg_catalog.pg_namespace n where n.nspname='bx1_private';
+grant bx1_authority_owner to current_user with inherit true,set true granted by current_user;
+do $$ begin
+  if (select added_create from pg_temp.bx1_document_governance_original_schema) then
+    grant create on schema bx1_private to bx1_authority_owner;
+  end if;
+end $$;
+
 create table bx1_private.document_governance_events (
   id bigint generated always as identity primary key,
   document_id uuid not null references bx1_private.document_quarantine_items(id) on delete restrict,
@@ -73,6 +94,56 @@ revoke all on bx1_private.document_governance_events from public,anon,authentica
 revoke all on sequence bx1_private.document_governance_events_id_seq from public,anon,authenticated,service_role;
 create trigger bx1_document_governance_event_immutable before update or delete
   on bx1_private.document_governance_events for each row execute function bx1_portal.immutable_record();
+
+-- Only the trusted Postgres command owner may invoke this narrow authority-
+-- owner helper. Its FOR SHARE locks conflict with concurrent trust revocation;
+-- the migrator never receives UPDATE or direct row-lock rights on identity.
+create function bx1_private.document_governance_trusted_person(
+  p_actor uuid,p_expected_person uuid default null
+) returns uuid language plpgsql volatile security definer set search_path='' as $$
+declare linked_person uuid;
+begin
+  select pp.person_id into linked_person from bx1_private.person_principals pp
+    join bx1_private.persons person on person.id=pp.person_id
+    where pp.auth_user_id=p_actor and pp.status='TRUSTED' and person.status='TRUSTED'
+      and (p_expected_person is null or pp.person_id=p_expected_person)
+    for share of pp,person;
+  return linked_person;
+end $$;
+revoke all on function bx1_private.document_governance_trusted_person(uuid,uuid)
+  from public,anon,authenticated,service_role,bx1_wallet_owner,bx1_wallet_verifier;
+alter function bx1_private.document_governance_trusted_person(uuid,uuid) owner to bx1_authority_owner;
+grant execute on function bx1_private.document_governance_trusted_person(uuid,uuid) to current_user;
+
+do $restore_document_governance_owner$
+declare edge record; actual jsonb; expected jsonb;
+begin
+  if (select added_create from pg_temp.bx1_document_governance_original_schema) then
+    revoke create on schema bx1_private from bx1_authority_owner;
+  end if;
+  select original_acl into expected from pg_temp.bx1_document_governance_original_schema;
+  select coalesce(pg_catalog.jsonb_agg(pg_catalog.to_jsonb(a)
+    order by grantor,grantee,privilege_type,is_grantable),'[]'::jsonb) into actual
+    from pg_catalog.pg_namespace n cross join lateral pg_catalog.aclexplode(n.nspacl) a
+    where n.nspname='bx1_private';
+  if actual is distinct from expected then raise exception 'document_governance_schema_acl_not_restored'; end if;
+  select * into edge from pg_temp.bx1_document_governance_original_edges
+    where grantor=current_user::regrole;
+  if found then
+    execute pg_catalog.format('grant bx1_authority_owner to %I with admin %s, inherit %s, set %s granted by %I',
+      current_user,case when edge.admin_option then 'true' else 'false' end,
+      case when edge.inherit_option then 'true' else 'false' end,
+      case when edge.set_option then 'true' else 'false' end,current_user);
+  else
+    execute pg_catalog.format('revoke bx1_authority_owner from %I granted by %I',current_user,current_user);
+  end if;
+  select coalesce(pg_catalog.jsonb_agg(pg_catalog.to_jsonb(e) order by grantor),'[]'::jsonb) into expected
+    from pg_temp.bx1_document_governance_original_edges e;
+  select coalesce(pg_catalog.jsonb_agg(pg_catalog.to_jsonb(e) order by grantor),'[]'::jsonb) into actual
+    from (select grantor,admin_option,inherit_option,set_option from pg_catalog.pg_auth_members
+      where roleid='bx1_authority_owner'::regrole and member=current_user::regrole) e;
+  if actual is distinct from expected then raise exception 'document_governance_owner_edges_not_restored'; end if;
+end $restore_document_governance_owner$;
 
 -- This is an internal eligibility predicate, not a deletion endpoint. An
 -- approval is invalidated by any later governance event, hold, expiry change,
@@ -197,10 +268,7 @@ begin
   -- A login is not a human. Every governance action requires a trusted
   -- principal-to-person mapping, and the exact active native membership is
   -- retained for independent review and later revalidation.
-  select pp.person_id into actor_person from bx1_private.person_principals pp
-    join bx1_private.persons person on person.id=pp.person_id
-    where pp.auth_user_id=actor and pp.status='TRUSTED' and person.status='TRUSTED'
-    for share of pp,person;
+  actor_person:=bx1_private.document_governance_trusted_person(actor,null);
   select m.id into actor_membership from public.bx1_memberships m
     where m.user_id=actor and m.organisation_id=a.reviewer_scope
       and m.role=role_name and m.status='ACTIVE' for share;
@@ -280,13 +348,9 @@ begin
       -- Revalidate the requester's original Compliance authority, identity,
       -- active account and scope after locking the mutable rows. A revoked
       -- mapping or membership cannot be rescued by a different Auth login.
-      perform pp.auth_user_id from bx1_private.person_principals pp
-        join bx1_private.persons person on person.id=pp.person_id
-        where pp.auth_user_id=request_event.actor_id
-          and pp.person_id=request_event.actor_person_id
-          and pp.status='TRUSTED' and person.status='TRUSTED'
-        for share of pp,person;
-      if not found then
+      if bx1_private.document_governance_trusted_person(
+        request_event.actor_id,request_event.actor_person_id) is distinct from
+          request_event.actor_person_id then
         raise exception 'document_governance_requester_authority_lost' using errcode='42501'; end if;
       perform m.id from public.bx1_memberships m
         join public.bx1_profiles profile on profile.id=m.user_id

@@ -21,6 +21,12 @@ begin
       and c.contype='f' and pg_catalog.pg_get_constraintdef(c.oid)
         like '%(actor_id, actor_person_id)%') then
     raise exception 'document_governance_canonical_person_fk_missing'; end if;
+  if (select pg_catalog.pg_get_userbyid(p.proowner) from pg_catalog.pg_proc p
+      where p.oid='bx1_private.document_governance_trusted_person(uuid,uuid)'::pg_catalog.regprocedure)
+      is distinct from 'bx1_authority_owner'
+    or not pg_catalog.has_function_privilege('postgres',
+      'bx1_private.document_governance_trusted_person(uuid,uuid)','EXECUTE') then
+    raise exception 'document_governance_lock_helper_owner_invalid'; end if;
   foreach role_name in array array['anon','authenticated','service_role',
     'bx1_document_receipt_writer','bx1_document_scanner_writer'] loop
     if pg_catalog.has_table_privilege(role_name,'bx1_private.document_governance_events',
@@ -29,6 +35,9 @@ begin
     if pg_catalog.has_function_privilege(role_name,
       'bx1_private.document_disposal_authorised(uuid)','EXECUTE') then
       raise exception 'document_disposal_authority_exposed_%',role_name; end if;
+    if pg_catalog.has_function_privilege(role_name,
+      'bx1_private.document_governance_trusted_person(uuid,uuid)','EXECUTE') then
+      raise exception 'document_governance_lock_helper_exposed_%',role_name; end if;
     if pg_catalog.has_table_privilege(role_name,'bx1_private.document_retention_admission',
       'SELECT,INSERT,UPDATE,DELETE') then
       raise exception 'document_retention_admission_exposed_%',role_name; end if;
@@ -55,6 +64,7 @@ begin
     'public.bx1_document_governance_command(uuid,jsonb,uuid,text,text,timestamptz,bigint)'::pg_catalog.regprocedure);
   if body not like '%has_recent_administration_totp%'
     or body not like '%representative_mandate_actor%'
+    or body not like '%document_governance_trusted_person%'
     or body not like '%actor_person_id,actor_membership_id,application_revision%'
     or body not like '%request_event.actor_person_id=actor_person%'
     or body not like '%request_event.application_revision<>a.revision%'

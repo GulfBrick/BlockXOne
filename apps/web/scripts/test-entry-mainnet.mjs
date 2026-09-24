@@ -144,6 +144,10 @@ try {
   await sqlFile('../../../supabase/tests/bx1_document_lifecycle.sql')
   await sqlFile('../../../supabase/migrations/20260924125627_stage2_customer_monitoring.sql')
   await sqlFile('../../../supabase/migrations/20260924125811_stage2_document_retention_authority.sql')
+  eq(await scalar("select has_table_privilege(current_user,'bx1_private.person_principals','REFERENCES')"), false,
+    'retention migration leaves MAIN migrator without direct identity-table REFERENCES')
+  eq(await scalar("select count(*)::int from pg_auth_members m join pg_roles r on r.oid=m.roleid where r.rolname='bx1_authority_owner' and m.member=(select oid from pg_roles where rolname=current_user) and (m.inherit_option or m.set_option)"), 0,
+    'retention migration restores sealed authority-owner membership')
   for (const signature of [
     'public.bx1_portal_read_scoped(jsonb)',
     'public.bx1_portal_command_scoped(text,uuid,jsonb,jsonb)',

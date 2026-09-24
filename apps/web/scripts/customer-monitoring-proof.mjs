@@ -89,9 +89,13 @@ export async function proveCustomerMonitoring(db, {
   // appointment. A reviewer in the same native scope still needs a separate
   // product-organisation Compliance appointment; role/scope alone is not it.
   await actor(2)
-  eq(await scalar("select bx1_portal.scoped_reviewer($1::jsonb,$2::uuid,$3::uuid)",
-    [JSON.stringify(reviewer), scope, organisationId]), false,
-  'native Compliance role alone does not bypass product-organisation appointment')
+  await denied('browser cannot call the restricted reviewer predicate directly', () => db.query(
+    'select bx1_portal.scoped_reviewer($1::jsonb,$2::uuid,$3::uuid)',
+    [JSON.stringify(reviewer), scope, organisationId]))
+  await actor(2)
+  eq((await scalar('select public.bx1_portal_read_scoped($1::jsonb)', [JSON.stringify(reviewer)]))
+    .customer_monitoring.some(c => c.application_id === applicationId), false,
+  'native Compliance role alone cannot see case without product-organisation appointment')
   await admin()
   await db.query(`insert into bx1_portal.organisation_authority_bindings
     (product_organisation_id,native_organisation_id,role,status,valid_from,valid_until,
