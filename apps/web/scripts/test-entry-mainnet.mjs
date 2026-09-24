@@ -142,10 +142,12 @@ try {
   await sqlFile('../../../supabase/migrations/20260924110922_stage2_beneficial_ownership_control.sql')
   await sqlFile('../../../supabase/migrations/20260924112832_stage2_document_quarantine_lifecycle.sql')
   await sqlFile('../../../supabase/tests/bx1_document_lifecycle.sql')
+  eq(await scalar("select has_function_privilege('authenticated','bx1_portal.document_upload_allowed(text,text,jsonb)','EXECUTE')"), false,
+    'MAIN keeps the portal upload helper outside authenticated reach')
   await actor(2)
-  eq(await scalar('select bx1_portal.document_upload_allowed($1,$2,$3::jsonb)',
-    [`${id(2)}/${id(240)}`, id(2), '{}']), false,
-    'MAIN rejects direct document upload before scanner admission')
+  await denied('MAIN denies direct calls to the sealed portal upload helper', () =>
+    scalar('select bx1_portal.document_upload_allowed($1,$2,$3::jsonb)',
+      [`${id(2)}/${id(240)}`, id(2), '{}']))
   await admin()
   eq(await functionManifest(preservedSignatures), nativeFunctions, 'unrelated native auth and wallet function definitions and owners exactly preserved')
   eq(Object.fromEntries(Object.entries(await functionManifest(mfaSignatures))
