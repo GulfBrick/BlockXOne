@@ -2,6 +2,8 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import pg from 'pg'
 import { proveProviderEvidence } from './provider-evidence-proof.mjs'
+import { proveCustomerMonitoring } from './customer-monitoring-proof.mjs'
+import { proveDocumentRetentionAuthority } from './document-retention-authority-proof.mjs'
 
 // Exact disposable GitHub PostgreSQL17 service only. No local/project execution.
 if (process.argv.length !== 2 || process.env.GITHUB_ACTIONS !== 'true') throw new Error('Portal SQL proof requires cloud CI without arguments')
@@ -1176,6 +1178,19 @@ try {
   await sqlFile('../../../supabase/migrations/20260924112832_stage2_document_quarantine_lifecycle.sql')
   await sqlFile('../../../supabase/tests/bx1_document_lifecycle.sql')
   checks++
+  await sqlFile('../../../supabase/migrations/20260924125627_stage2_customer_monitoring.sql')
+  checks += await proveCustomerMonitoring(db, {
+    applicationId: ownershipApp.id,
+    organisationId: v3Admission.organisation_id,
+    draftProductId: v3Draft.id,
+    managerMandateId: v3Mandate.id,
+    investorApplicationId: ownApp3.id,
+    investorAccountId: account3.id,
+    eligibilityCaseId: approved.id,
+  })
+  await sqlFile('../../../supabase/migrations/20260924125811_stage2_document_retention_authority.sql')
+  await sqlFile('../../../supabase/tests/bx1_document_retention_authority.sql')
+  checks += await proveDocumentRetentionAuthority(db)
   await db.query('commit'); begun = false
   phase = 'cleanup-committed-disposable-fixture'
   await db.query('drop schema bx1_portal,bx1_private,storage,auth,public cascade; create schema public')

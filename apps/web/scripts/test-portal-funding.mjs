@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import pg from 'pg'
+import { proveCustomerMonitoringFunding } from './customer-monitoring-proof.mjs'
 
 // Never run locally or against Supabase. Provider facts below are deliberately
 // synthetic trusted-writer inputs, not a claim that an on-chain payment occurred.
@@ -161,6 +162,18 @@ try {
   for (const file of ['20260916234746_bx1_identity_workspace.sql', '20260917190042_bx1_wallet_ownership.sql', '20260918015541_bx1_mfa_assurance.sql', '20260918234447_bx1_controlled_administration.sql']) await sqlFile(`../../../supabase/migrations/${file}`)
   await sqlFile('../../../supabase/features/bx1_portal.sql')
   await sqlFile('../../../supabase/tests/bx1_portal.sql')
+  // The later monitoring decision requires trusted, distinct humans. The
+  // standard funding fixture's investor has no native role, but receives a
+  // synthetic identity mapping before postgres loses private-schema writes.
+  await db.query(`insert into bx1_private.persons(id,label,status,evidence_reference,bootstrap_receipt_id)
+    values('e6000000-0000-4000-8000-000000000004',
+      'Synthetic test human investor 3','TRUSTED','synthetic:funding-investor-3',
+      'e7000000-0000-4000-8000-000000000001')`)
+  await db.query(`insert into bx1_private.person_principals
+    (auth_user_id,person_id,status,evidence_reference,bootstrap_receipt_id)
+    values($1,'e6000000-0000-4000-8000-000000000004','TRUSTED',
+      'synthetic:funding-investor-principal-3',
+      'e7000000-0000-4000-8000-000000000001')`, [uid(3)])
   phase = 'canonical-preexisting-business-records'
   await approveApplicant(1, true); await approveApplicant(3); await approveApplicant(6)
   await actor(1); const orgId = (await scalar('select public.bx1_portal_read()')).organisations[0].id
@@ -446,6 +459,15 @@ try {
         route_id,product_revision,terms_hash,amount_minor,currency,token_amount_base_units,token_decimals
       from bx1_portal.funding_obligations order by created_at,id limit 1`)
   }, '23514')
+  phase = 'funding-monitoring-held-existing-obligation'
+  await admin()
+  await sqlFile('../../../supabase/migrations/20260924125627_stage2_customer_monitoring.sql')
+  checks += await proveCustomerMonitoringFunding(db, {
+    investorApplicationId: await scalar('select application_id from bx1_portal.investment_accounts where id=$1', [account3.id]),
+    heldObligationId: auditOrder.obligation.id,
+    otherObligationId: duplicate.obligation.id,
+    unpostedReferenceId: auditRef.id,
+  })
   await db.query('commit'); begun = false
   phase = 'cleanup'
   await cleanupFixture()

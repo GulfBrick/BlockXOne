@@ -769,3 +769,18 @@ grant execute on function bx1_portal.read_scoped(jsonb),bx1_portal.execute_scope
   public.bx1_portal_read_scoped(jsonb),public.bx1_portal_command_scoped(text,uuid,jsonb,jsonb),public.bx1_portal_funding_verification_context(text,uuid,jsonb) to authenticated;
 grant usage on schema bx1_portal to service_role;
 grant execute on function bx1_portal.record_funding_observation(uuid,jsonb),public.bx1_portal_record_funding_observation(uuid,jsonb) to service_role;
+
+-- Funding may be installed before or after the additive customer-monitoring
+-- migration. If monitoring already exists, this feature is not complete until
+-- its acceptance/posting hooks and account predicate are installed and checked.
+-- If funding came first, the monitoring migration installs them itself.
+do $funding_monitoring_install$ begin
+  if pg_catalog.to_regclass('bx1_portal.customer_monitoring_cases') is not null then
+    if pg_catalog.to_regprocedure('bx1_portal.install_customer_monitoring_funding_hooks()') is null
+      or pg_catalog.to_regprocedure('bx1_portal.assert_customer_monitoring_funding_hooks()') is null then
+      raise exception 'funding_monitoring_installer_missing' using errcode='55000';
+    end if;
+    perform bx1_portal.install_customer_monitoring_funding_hooks();
+    perform bx1_portal.assert_customer_monitoring_funding_hooks();
+  end if;
+end $funding_monitoring_install$;
