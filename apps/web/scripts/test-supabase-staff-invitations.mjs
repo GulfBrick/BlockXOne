@@ -228,6 +228,70 @@ try {
     await eq((await scalar('select public.bx1_staff_invitation_claim($1,$2)', [org(1),applied.invitationId])).ok,
       false, 'expired approval cannot send email')
   })
+  await isolated('expired review closes with audit and releases first-time email', async () => {
+    const proposed = await command(1,1,71,{intent:'propose',email:'new.staff@example.invalid',role:'ComplianceOfficer',expectedScopeRevision:'1'})
+    await eq(proposed.state,'PENDING_REVIEW','pending proposal occupies first-time email slot')
+    await owner()
+    await db.query("update bx1_private.staff_invitation_intents set created_at=statement_timestamp()-interval '25 hours',review_expires_at=statement_timestamp()-interval '1 hour' where id=$1",[proposed.invitationId])
+    const directory = await read(1,1)
+    await eq(directory.invitations.find(row=>row.id===proposed.invitationId).state,'EXPIRED',
+      'expired projection is shown before durable close')
+    const closed = await command(1,1,72,{intent:'cancel',invitationId:proposed.invitationId,expectedRevision:proposed.revision})
+    await eq(closed.state,'EXPIRED','authorised requester records terminal expiry')
+    await owner()
+    await eq(await scalar('select state from bx1_private.staff_invitation_intents where id=$1',[proposed.invitationId]),'EXPIRED',
+      'expiry releases the partial unique index')
+    await eq(await scalar("select count(*)::int from bx1_private.staff_invitation_events where invitation_id=$1 and event_type='EXPIRED' and before_state='PENDING_REVIEW' and after_state='EXPIRED'",[proposed.invitationId]),1,
+      'terminal expiry has one immutable event')
+    const replacement = await command(1,1,73,{intent:'propose',email:'new.staff@example.invalid',role:'ComplianceOfficer',expectedScopeRevision:'1'})
+    await eq(replacement.ok,true,'fresh proposal of released email succeeds without a provider send')
+    await owner()
+    await eq(await scalar('select count(*)::int from public.bx1_memberships where user_id=$1',[uid(9)]),0,
+      'closing and reproposing cannot grant a role')
+  })
+  await isolated('expired approved and queued entries auto-close under the proposal lock', async () => {
+    const proposed = await command(1,1,74,{intent:'propose',email:'new.staff@example.invalid',role:'ComplianceOfficer',expectedScopeRevision:'1'})
+    const reviewed = await command(3,1,75,{intent:'approve',invitationId:proposed.invitationId,expectedRevision:proposed.revision})
+    await owner()
+    await db.query("update bx1_private.staff_invitation_intents set created_at=statement_timestamp()-interval '25 hours',review_expires_at=statement_timestamp()-interval '1 hour' where id=$1",[proposed.invitationId])
+    const replacement = await command(1,1,76,{intent:'propose',email:'new.staff@example.invalid',role:'ComplianceOfficer',expectedScopeRevision:'1'})
+    await eq(replacement.ok,true,'new proposal atomically closes expired approval')
+    await owner()
+    await eq(await scalar("select count(*)::int from bx1_private.staff_invitation_events where invitation_id=$1 and event_type='EXPIRED' and before_state='APPROVED'",[reviewed.invitationId]),1,
+      'approved expiry records original state')
+    const reviewedAgain = await command(3,1,77,{intent:'approve',invitationId:replacement.invitationId,expectedRevision:replacement.revision})
+    const applied = await command(1,1,78,{intent:'apply',invitationId:replacement.invitationId,expectedRevision:reviewedAgain.revision})
+    await owner()
+    await db.query("update bx1_private.staff_invitation_intents set acceptance_expires_at=clock_timestamp()-interval '1 second' where id=$1",[applied.invitationId])
+    const afterQueueExpiry = await command(1,1,79,{intent:'propose',email:'new.staff@example.invalid',role:'ComplianceOfficer',expectedScopeRevision:'1'})
+    await eq(afterQueueExpiry.ok,true,'expired never-claimed queue releases email without dispatch')
+    await owner()
+    await eq(await scalar("select count(*)::int from bx1_private.staff_invitation_events where invitation_id=$1 and event_type='EXPIRED' and before_state='QUEUED'",[applied.invitationId]),1,
+      'queued expiry records original state')
+    await eq(await scalar('select state from bx1_private.staff_invitation_outbox where invitation_id=$1',[applied.invitationId]),'PENDING',
+      'expired queue was never claimed by provider')
+    await eq(await scalar('select count(*)::int from public.bx1_memberships where user_id=$1',[uid(9)]),0,
+      'replacement proposal cannot grant a role')
+  })
+  await isolated('expired claimed send can close but cannot silently resend', async () => {
+    const applied = await approvedInvite()
+    await actor(3)
+    const claim = await scalar('select public.bx1_staff_invitation_claim($1,$2)',[org(1),applied.invitationId])
+    await eq(claim.ok,true,'provider delivery was claimed once')
+    await owner()
+    await db.query("update bx1_private.staff_invitation_intents set acceptance_expires_at=clock_timestamp()-interval '1 second' where id=$1",[applied.invitationId])
+    const closed = await command(1,1,80,{intent:'cancel',invitationId:applied.invitationId,expectedRevision:'4'})
+    await eq(closed.state,'EXPIRED','authorised close makes expired claimed send terminal')
+    const replacement = await command(1,1,81,{intent:'propose',email:'new.staff@example.invalid',role:'ComplianceOfficer',expectedScopeRevision:'1'})
+    await eq(replacement.error,'conflict','unacknowledged Auth claim blocks a second first-time send')
+    await eq((await serviceAck(applied.invitationId,claim.leaseId,uid(9),false)).error,'conflict',
+      'late provider acknowledgement cannot reopen terminal invitation')
+    await owner()
+    await eq(await scalar('select state from bx1_private.staff_invitation_outbox where invitation_id=$1',[applied.invitationId]),'CLAIMED',
+      'claimed lease remains available for forensic review')
+    await eq(await scalar('select count(*)::int from public.bx1_memberships where user_id=$1',[uid(9)]),0,
+      'no role is created by closing unknown delivery')
+  })
   await isolated('unknown provider outcome reconciles only exact invite evidence', async () => {
     const applied = await approvedInvite()
     await actor(3)

@@ -33,7 +33,7 @@ export function StaffInvitationsPanel({ directory, organisationId }: { directory
         setMessage('The action was not confirmed. Reload to check the current invitation and authority before another action; do not blindly resend.')
         return
       }
-      setMessage(intent === 'dispatch' ? 'Supabase Auth accepted the invitation send. Email delivery and acceptance remain separate.' : intent === 'reconcile' ? 'Provider invitation evidence was matched without resending. Reload for the current state.' : 'Recorded. Reload for the current reviewed state.')
+      setMessage(intent === 'dispatch' ? 'Supabase Auth accepted the invitation send. Email delivery and acceptance remain separate.' : intent === 'reconcile' ? 'Provider invitation evidence was matched without resending. Reload for the current state.' : invite?.state === 'EXPIRED' && intent === 'cancel' ? 'The expired invitation was closed with an audit record. A previous Auth send may still require provider review; this action did not resend or grant access.' : 'Recorded. Reload for the current reviewed state.')
       if (intent !== 'dispatch') setEmail('')
     } catch { setMessage('Outcome unknown. Reload and inspect the current invitation before acting again; do not blindly resend.') }
     finally { setBusy(false) }
@@ -42,6 +42,7 @@ export function StaffInvitationsPanel({ directory, organisationId }: { directory
     <section aria-labelledby="new-staff-invitation" className="rounded-xl border border-bxo-border-default bg-bxo-bg-secondary p-5 sm:p-7">
       <h2 id="new-staff-invitation" className="font-ui text-2xl font-medium text-bxo-text-primary">Propose a first-time invitation</h2>
       <p className="mt-2 text-sm leading-6 text-bxo-text-secondary">A different authorised person must approve. Applying queues the invitation; sending is an explicit subsequent action. The invited person receives no role until verified email, password and authenticator acceptance.</p>
+      <p className="mt-2 text-sm leading-6 text-bxo-text-secondary">Expired proposals and unsent invitations can be closed and proposed again. An unknown Auth send or an already-created Auth account is never resent through this first-time flow.</p>
       <div className="mt-5 grid gap-4 sm:grid-cols-2"><label className="block text-sm font-semibold text-bxo-text-primary">New user email<input type="email" autoComplete="off" value={email} onChange={event=>setEmail(event.target.value)} maxLength={254} className={`${input} mt-2`} /></label>
         <label className="block text-sm font-semibold text-bxo-text-primary">Scoped capacity<select value={role} onChange={event=>setRole(event.target.value)} className={`${input} mt-2`}>{BX1_ROLES.map(value=><option key={value} value={value}>{value}</option>)}</select></label></div>
       <Button type="button" disabled={busy || !email} onClick={()=>void command('propose')} className="mt-5 min-h-11">Propose invitation</Button>
@@ -54,6 +55,7 @@ export function StaffInvitationsPanel({ directory, organisationId }: { directory
           {invite.state==='APPROVED' && [invite.requesterPersonId,invite.reviewerPersonId].includes(directory.actorPersonId) ? <Button type="button" disabled={busy} onClick={()=>void command('apply',invite)}>Apply approved invitation</Button> : null}
           {invite.state==='QUEUED' ? <Button type="button" disabled={busy} onClick={()=>void command('dispatch',invite)}>Send via Supabase Auth</Button> : null}
           {invite.state==='DISPATCHING' ? <Button type="button" variant="outline" disabled={busy} onClick={()=>void command('reconcile',invite)}>Reconcile unknown send</Button> : null}
+          {invite.state==='EXPIRED' ? <Button type="button" variant="outline" disabled={busy} onClick={()=>void command('cancel',invite)}>Close expired invitation</Button> : null}
           {['PENDING_REVIEW','APPROVED','QUEUED','DISPATCHING','INVITED','MFA_PENDING'].includes(invite.state)
             && [invite.requesterPersonId,invite.reviewerPersonId].includes(directory.actorPersonId) ? <Button type="button" variant="outline" disabled={busy} onClick={()=>void command('cancel',invite)}>Revoke invitation</Button> : null}
         </div>

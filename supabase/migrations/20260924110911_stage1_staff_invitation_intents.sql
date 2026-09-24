@@ -176,7 +176,8 @@ language plpgsql volatile security definer set search_path='' set statement_time
 declare authority jsonb; actor uuid; actor_person uuid; scope_row bx1_private.authority_scopes;
   root_row bx1_private.authority_root; invite bx1_private.staff_invitation_intents;
   prior bx1_private.staff_invitation_requests; intent text; expected bigint; email_value text;
-  role_value text; hash_value text; answer jsonb; now_value timestamptz;
+  role_value text; hash_value text; answer jsonb; now_value timestamptz; previous_state text;
+  expired boolean;
 begin
   perform set_config('lock_timeout','3s',true);
   if command_key is null or command_key='00000000-0000-0000-0000-000000000000'
@@ -237,9 +238,35 @@ begin
     return prior.result||'{"replayed":true}'::jsonb;
   end if;
   if intent='propose' then
-    if expected<>scope_row.revision or bx1_private.staff_invitation_auth_email_in_use(email_value)
+    if expected<>scope_row.revision
       or (select count(*) from bx1_private.governance_grants g where g.organisation_id=target_org
         and g.status='ACTIVE' and bx1_private.is_eligible_governor(g.person_id,target_org))<2 then
+      return '{"ok":false,"error":"conflict"}'::jsonb; end if;
+    -- An expired review or never-claimed send must stop occupying the unique
+    -- email slot. The root/scope locks serialize this with review and claim;
+    -- the terminal state and its event are committed with the new proposal.
+    -- A claimed or unknown Auth send is deliberately NOT auto-reopened.
+    select * into invite from bx1_private.staff_invitation_intents i
+      where i.organisation_id=target_org and i.email=email_value
+        and i.state in ('PENDING_REVIEW','APPROVED','QUEUED','DISPATCHING','INVITED','MFA_PENDING')
+      for update;
+    if found then
+      if (invite.state in ('PENDING_REVIEW','APPROVED') and invite.review_expires_at<=now_value)
+        or (invite.state='QUEUED' and invite.acceptance_expires_at<=now_value) then
+        previous_state:=invite.state;
+        update bx1_private.staff_invitation_intents set state='EXPIRED',revision=revision+1,
+          terminal_reason='time_window_elapsed' where id=invite.id;
+        insert into bx1_private.staff_invitation_events(invitation_id,organisation_id,actor_id,event_type,before_state,after_state)
+          values(invite.id,target_org,actor,'EXPIRED',previous_state,'EXPIRED');
+      else return '{"ok":false,"error":"conflict"}'::jsonb; end if;
+    end if;
+    -- Supabase Auth has no operation-bound idempotency key. Even after an
+    -- explicit terminal revocation, an unacknowledged claim or UNKNOWN send
+    -- must prevent a second first-time invitation for the same email.
+    if bx1_private.staff_invitation_auth_email_in_use(email_value)
+      or exists(select 1 from bx1_private.staff_invitation_intents old
+        join bx1_private.staff_invitation_outbox o on o.invitation_id=old.id
+        where old.email=email_value and o.state in ('CLAIMED','UNKNOWN')) then
       return '{"ok":false,"error":"conflict"}'::jsonb; end if;
     insert into bx1_private.staff_invitation_intents(organisation_id,email,role,requester_principal_id,
       requester_person_id,scope_revision,trust_revision,created_at,review_expires_at)
@@ -252,16 +279,26 @@ begin
       and organisation_id=target_org for update;
     if not found then return '{"ok":false,"error":"forbidden"}'::jsonb; end if;
     if invite.revision<>expected then return '{"ok":false,"error":"conflict"}'::jsonb; end if;
+    expired:=(invite.state in ('PENDING_REVIEW','APPROVED') and invite.review_expires_at<=now_value)
+      or (invite.acceptance_expires_at is not null and invite.acceptance_expires_at<=now_value);
     if intent in ('approve','reject') and (invite.state<>'PENDING_REVIEW' or actor_person=invite.requester_person_id) then
       return '{"ok":false,"error":"forbidden"}'::jsonb; end if;
     if intent='apply' and (invite.state<>'APPROVED' or actor_person not in (invite.requester_person_id,invite.reviewer_person_id)) then
       return '{"ok":false,"error":"forbidden"}'::jsonb; end if;
     if intent='cancel' and (invite.state not in ('PENDING_REVIEW','APPROVED','QUEUED','DISPATCHING','INVITED','MFA_PENDING')
-      or actor_person not in (invite.requester_person_id,coalesce(invite.reviewer_person_id,invite.requester_person_id))) then
+      or (not expired and actor_person not in (invite.requester_person_id,
+        coalesce(invite.reviewer_person_id,invite.requester_person_id)))) then
       return '{"ok":false,"error":"forbidden"}'::jsonb; end if;
-    if invite.review_expires_at<=now_value and invite.state in ('PENDING_REVIEW','APPROVED')
-      or (invite.acceptance_expires_at is not null and invite.acceptance_expires_at<=now_value)
-      or invite.scope_revision<>scope_row.revision and invite.state in ('PENDING_REVIEW','APPROVED')
+    -- Any currently authorised scoped administrator may record a mechanical
+    -- expiry, even if the original proposer/reviewer has since departed.
+    if expired then
+      previous_state:=invite.state;
+      update bx1_private.staff_invitation_intents set state='EXPIRED',revision=revision+1,
+        terminal_reason='time_window_elapsed' where id=invite.id returning * into invite;
+      insert into bx1_private.staff_invitation_events(invitation_id,organisation_id,actor_id,event_type,before_state,after_state)
+        values(invite.id,target_org,actor,'EXPIRED',previous_state,'EXPIRED');
+      if intent<>'cancel' then answer:='{"ok":false,"error":"conflict"}'::jsonb; end if;
+    elsif invite.scope_revision<>scope_row.revision and invite.state in ('PENDING_REVIEW','APPROVED')
       or invite.trust_revision<>root_row.trust_revision and invite.state in ('PENDING_REVIEW','APPROVED')
       or not bx1_private.is_eligible_governor(invite.requester_person_id,target_org)
       or (invite.reviewer_person_id is not null and not bx1_private.is_eligible_governor(invite.reviewer_person_id,target_org)) then
