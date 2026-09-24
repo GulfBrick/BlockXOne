@@ -37,11 +37,14 @@ describe('application-scoped sandbox identity verification', () => {
 
   it('offers only the TEST applicant a provider session and keeps MAIN closed', () => {
     const application = entryApplication({ revision: 3, review_route: 'AVAILABLE' })
-    const test = renderToStaticMarkup(createElement(KycVerification, { application, actorId: entryActorId, environment: 'TESTNET' }))
+    const test = renderToStaticMarkup(createElement(KycVerification, { application, actorId: entryActorId, environment: 'TESTNET', sandboxEnabled: true }))
     expect(test).toContain('Start sandbox identity check')
     expect(test).toContain('Refresh recorded evidence')
     expect(test).toContain('never grants account, role, product eligibility or signing authority')
     expect(test).not.toContain(session.token)
+    const unconfigured = renderToStaticMarkup(createElement(KycVerification, { application, actorId: entryActorId, environment: 'TESTNET', sandboxEnabled: false }))
+    expect(unconfigured).toContain('Sandbox identity check not connected')
+    expect(unconfigured).not.toContain('Start sandbox identity check')
     const main = renderToStaticMarkup(createElement(KycVerification, { application, actorId: entryActorId, environment: 'MAINNET' }))
     expect(main).toContain('Production identity provider not admitted')
     expect(main).not.toContain('Start sandbox identity check')

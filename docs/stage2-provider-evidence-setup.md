@@ -15,6 +15,7 @@ Set these **server-only** variables on the existing Vercel `block-x-one` Preview
 | `BLOCKXONE_SUMSUB_SANDBOX_INDIVIDUAL_LEVEL` | Existing sandbox verification level for an individual |
 | `BLOCKXONE_SUMSUB_SANDBOX_COMPANY_LEVEL` | Existing sandbox verification level for a company |
 | `BLOCKXONE_PROVIDER_EVIDENCE_DATABASE_URL` | TLS-verified Supabase connection as only `bx1_provider_evidence_writer`; no broad database/service-role credential |
+| `NEXT_PUBLIC_BLOCKXONE_SUMSUB_SANDBOX_ENABLED` | Set to `true` only after TEST credentials, webhook, writer and a genuine sandbox event are proven; absent/false keeps the applicant start action hidden. This is a presentation gate, never backend authority. |
 
 The webhook URL is `https://testnet.bx1.co.za/api/portal/kyc/webhook`. Sumsub must send `X-Payload-Digest-Alg` and `X-Payload-Digest` over the exact raw JSON bytes. SHA1, missing signatures, unbound external IDs, non-sandbox events and an unexpected client ID are rejected. A token is scoped to one application revision and expires after 600 seconds.
 

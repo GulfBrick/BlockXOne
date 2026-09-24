@@ -62,11 +62,12 @@ async function loadProviderEvidence(applicationId: string): Promise<ProviderEven
   return parsed.data.events
 }
 
-type Props = { application: EntryApplication; environment: PlatformEnvironment; actorId: string }
+type Props = { application: EntryApplication; environment: PlatformEnvironment; actorId: string; sandboxEnabled?: boolean }
 type Session = { scope: string; token: string }
 type Evidence = { scope: string; events: ProviderEvent[] }
 
-export function KycVerification({ application, environment, actorId }: Props) {
+export function KycVerification({ application, environment, actorId,
+  sandboxEnabled = process.env.NEXT_PUBLIC_BLOCKXONE_SUMSUB_SANDBOX_ENABLED === 'true' }: Props) {
   const scope = `${environment}:${actorId}:${application.id}:${application.revision}`
   const activeScope = useRef(scope)
   activeScope.current = scope
@@ -81,7 +82,7 @@ export function KycVerification({ application, environment, actorId }: Props) {
   const [evidenceBusy, setEvidenceBusy] = useState(false)
   const [evidenceMessage, setEvidenceMessage] = useState('')
   const testnet = environment === 'TESTNET'
-  const mayStart = testnet && Boolean(actorId) && application.context_kind === 'PERSONAL'
+  const mayStart = testnet && sandboxEnabled && Boolean(actorId) && application.context_kind === 'PERSONAL'
     && ['DRAFT', 'SUBMITTED', 'CHANGES_REQUIRED'].includes(application.status)
     && ['INVESTOR_ADMISSION', 'CUSTOMER_ORGANISATION_ADMISSION'].includes(application.admission_purpose)
 
@@ -187,7 +188,8 @@ export function KycVerification({ application, environment, actorId }: Props) {
   const latest = currentEvents.at(-1)
   return <Panel title="Identity verification evidence" description="A sandbox provider check and the BlockXOne admission decision are separate records.">
     {testnet ? <>
-      <Notice title="Sandbox: fictional identity information only">This opens Sumsub inside your application. Do not submit a real identity document here. A provider result is evidence for an independent reviewer; it never grants account, role, product eligibility or signing authority.</Notice>
+      <Notice title="Sandbox: fictional identity information only">When enabled, the Sumsub check opens inside your application. Do not submit a real identity document here. A provider result is evidence for an independent reviewer; it never grants account, role, product eligibility or signing authority.</Notice>
+      {!sandboxEnabled ? <Notice title="Sandbox identity check not connected">The provider session is unavailable until the TEST sandbox credentials, webhook and evidence writer are verified. Your application and its recorded review state remain available.</Notice> : null}
       <div className={styles.sectionGap} role="status" aria-live="polite">
         <strong>{currentEvidence ? providerEvidenceLabel(currentEvidence, application.revision) : evidenceBusy ? 'Checking provider evidence...' : 'Provider evidence has not been checked'}</strong>
         {latest ? <p className={styles.muted}>Latest recorded event: {dateLabel(latest.received_at)}. The compliance reviewer must still make a separate decision.</p> : null}
