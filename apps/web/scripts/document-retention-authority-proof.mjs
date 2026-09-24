@@ -139,6 +139,7 @@ export async function proveDocumentRetentionAuthority(db) {
   const approved = await governance(adminId, sid(10), approverContext,
     'RETENTION_APPROVED', requested.event_id)
   eq(approved.disposal_authorised, false, 'future retention date still blocks disposal')
+  await admin()
   eq(await scalar('select retention_until from bx1_private.document_quarantine_items where id=$1', [doc]),
     new Date(retentionUntil), 'independent approval stores exact retention date')
   await denied('one request cannot receive a second decision',
@@ -155,6 +156,7 @@ export async function proveDocumentRetentionAuthority(db) {
   const releaseRequest = await governance(compliance, sid(2), reviewerContext,
     'HOLD_RELEASE_REQUESTED', held.event_id)
   await governance(adminId, sid(10), approverContext, 'HOLD_RELEASED', releaseRequest.event_id)
+  await admin()
   eq(await scalar('select bx1_private.document_disposal_eligible($1::uuid)', [doc]), true,
     'independently released hold restores eligibility only')
 
