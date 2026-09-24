@@ -92,6 +92,7 @@ try {
     grant usage,create on schema public to bx1_fixture_migrator with grant option;
     grant usage on schema auth to bx1_fixture_migrator;
     grant select on auth.users,auth.sessions,auth.mfa_factors to bx1_fixture_migrator;
+    grant references on auth.users to bx1_fixture_migrator;
     alter schema bx1_private owner to bx1_fixture_migrator;
     alter table public.bx1_profiles owner to bx1_fixture_migrator;
     alter table public.bx1_organisations owner to bx1_fixture_migrator;
@@ -103,10 +104,25 @@ try {
   await file('../../../supabase/migrations/20260918015541_bx1_mfa_assurance.sql')
   await file('../../../supabase/migrations/20260918234447_bx1_controlled_administration.sql')
   await owner()
+  // Apply the new DDL as a non-superuser, as in the hosted-like MAIN fixture.
+  await db.exec('set local role bx1_fixture_migrator')
   await file('../../../supabase/migrations/20260924110911_stage1_staff_invitation_intents.sql')
+  await eq(await scalar("select has_table_privilege(current_user,'bx1_private.authority_scopes','REFERENCES')"),
+    false, 'migration role retains no REFERENCES on the isolated authority scope')
+  assert.ok(await scalar("select count(*)::int from pg_auth_members where member=(select oid from pg_roles where rolname=current_user) and roleid=(select oid from pg_roles where rolname='bx1_authority_owner')")>=1,
+    'isolated owner membership remains recorded'); checks++
+  await eq(await scalar("select count(*)::int from pg_auth_members where member=(select oid from pg_roles where rolname=current_user) and roleid=(select oid from pg_roles where rolname='bx1_authority_owner') and (inherit_option or set_option)"),
+    0, 'every owner membership has INHERIT and SET disabled after migration')
+  await owner()
   await eq(await scalar("select relrowsecurity from pg_class where oid='bx1_private.staff_invitation_intents'::regclass"), true, 'private invitation table has RLS')
   await eq(await scalar("select has_table_privilege('authenticated','bx1_private.staff_invitation_intents','INSERT')"), false, 'no direct invitation insert')
   await eq(await scalar("select has_function_privilege('authenticated','public.bx1_staff_invitation_dispatch_result(uuid,uuid,uuid,boolean)','EXECUTE')"), false, 'only service can acknowledge')
+  await eq(await scalar("select pg_get_userbyid(relowner) from pg_class where oid='bx1_private.staff_invitation_intents'::regclass"),
+    'bx1_authority_owner', 'invitation state is owned by isolated non-login authority role')
+  await eq(await scalar("select pg_get_userbyid(proowner) from pg_proc where oid='bx1_private.staff_invitation_command(uuid,uuid,jsonb)'::regprocedure"),
+    'bx1_authority_owner', 'guarded command runs with isolated authority role')
+  await eq(await scalar("select has_function_privilege('authenticated','bx1_private.staff_invitation_auth_self(boolean)','EXECUTE')"),
+    false, 'private Auth evidence helper is not client-callable')
   console.log(`BX1_STAFF_INVITATION_SCHEMA_PASS assertions=${checks}`)
   const fixture = (await source('../../../supabase/tests/bx1_controlled_administration.sql')).split('-- ADMINISTRATION_TRUST_FIXTURE')
   await db.exec(fixture[0]); await db.exec(fixture[1])

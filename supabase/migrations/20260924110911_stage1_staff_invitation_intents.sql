@@ -4,6 +4,15 @@
 -- session before the reviewed organisation role is granted atomically.
 -- No live people, invitations, Auth users, roles, or SMTP settings are seeded.
 
+-- The canonical administration migration owns authority_scopes and
+-- person_principals with the isolated NOLOGIN bx1_authority_owner. Its creator
+-- retains ADMIN membership but deliberately has INHERIT/SET disabled. Restore
+-- only transaction-scoped DDL inheritance to create exact foreign keys, then
+-- close that capability at the end of this same atomic migration. This does
+-- not grant any client role access to authority tables.
+grant bx1_authority_owner to current_user with inherit true, set true;
+grant create on schema bx1_private to bx1_authority_owner;
+
 create table bx1_private.staff_invitation_intents (
   id uuid primary key default gen_random_uuid(),
   organisation_id uuid not null references bx1_private.authority_scopes(organisation_id) on delete restrict,
@@ -88,16 +97,47 @@ alter table bx1_private.staff_invitation_outbox enable row level security;
 alter table bx1_private.staff_invitation_events enable row level security;
 revoke all on table bx1_private.staff_invitation_intents,bx1_private.staff_invitation_requests,
   bx1_private.staff_invitation_outbox,bx1_private.staff_invitation_events from public,anon,authenticated,service_role;
--- Preserve the existing MFA helper's isolated ownership when a project uses a
--- non-default migration owner. Only that pre-existing trusted helper owner may
--- inspect a pending pre-role invitation; authenticated callers get no table read.
-do $invite_mfa_owner$
-declare helper_owner text;
-begin
-  select pg_get_userbyid(p.proowner) into helper_owner from pg_proc p
-    where p.oid='bx1_private.read_mfa_status()'::regprocedure;
-  execute format('grant select on bx1_private.staff_invitation_intents to %I',helper_owner);
-end $invite_mfa_owner$;
+-- Keep Auth reads with the pre-existing trusted migration role. The isolated
+-- authority owner receives only these narrow evidence predicates, never
+-- SELECT on auth.users, auth.sessions or auth.mfa_factors.
+create function bx1_private.staff_invitation_auth_email_in_use(expected_email text) returns boolean
+language sql volatile security definer set search_path='' as $$
+  select exists(select 1 from auth.users u where lower(u.email)=expected_email and u.deleted_at is null);
+$$;
+create function bx1_private.staff_invitation_auth_match(expected_email text,invitation_id uuid,
+  lease_id uuid,claimed_at timestamptz) returns uuid
+language sql volatile security definer set search_path='' as $$
+  select case when count(*)=1 then min(u.id::text)::uuid else null end from auth.users u
+    where lower(u.email)=expected_email and u.deleted_at is null
+      and u.invited_at>=claimed_at and u.confirmation_sent_at>=claimed_at
+      and u.raw_user_meta_data->>'bx1_staff_invitation_id'=invitation_id::text
+      and u.raw_user_meta_data->>'bx1_staff_lease_id'=lease_id::text;
+$$;
+create function bx1_private.staff_invitation_auth_self(require_totp boolean) returns text
+language sql volatile security definer set search_path='' as $$
+  select lower(u.email) from auth.users u join auth.sessions s on s.user_id=u.id
+    where u.id=auth.uid() and auth.jwt()->>'role'='authenticated'
+      and s.id::text=auth.jwt()->>'session_id'
+      and (s.not_after is null or s.not_after>clock_timestamp()) and s.oauth_client_id is null
+      and u.email_confirmed_at is not null and u.deleted_at is null
+      and (u.banned_until is null or u.banned_until<=clock_timestamp())
+      and not coalesce(u.is_anonymous,false)
+      and (not require_totp or (s.aal::text='aal2' and exists(select 1 from auth.mfa_factors f
+        where f.user_id=u.id and f.id=s.factor_id and f.status::text='verified' and f.factor_type::text='totp')));
+$$;
+revoke all on function bx1_private.staff_invitation_auth_email_in_use(text),
+  bx1_private.staff_invitation_auth_match(text,uuid,uuid,timestamptz),
+  bx1_private.staff_invitation_auth_self(boolean) from public,anon,authenticated,service_role;
+grant execute on function bx1_private.staff_invitation_auth_email_in_use(text),
+  bx1_private.staff_invitation_auth_match(text,uuid,uuid,timestamptz),
+  bx1_private.staff_invitation_auth_self(boolean) to bx1_authority_owner;
+
+-- Only a fully guarded AAL2 invitation acceptance can use this owner grant.
+-- The NOLOGIN authority owner already holds membership INSERT for the same
+-- governed path; it needs profile INSERT to create the pre-role Auth mapping.
+grant insert(id,display_name,status) on public.bx1_profiles to bx1_authority_owner;
+create policy bx1_staff_invitation_profile_insert on public.bx1_profiles for insert
+  to bx1_authority_owner with check (true);
 
 create function bx1_private.staff_invitation_event_immutable() returns trigger
 language plpgsql security invoker set search_path='' as $$
@@ -195,8 +235,7 @@ begin
     return prior.result||'{"replayed":true}'::jsonb;
   end if;
   if intent='propose' then
-    if expected<>scope_row.revision or exists(select 1 from auth.users u where lower(u.email)=email_value and u.deleted_at is null)
-      or exists(select 1 from auth.users u where u.id=actor and lower(u.email)=email_value)
+    if expected<>scope_row.revision or bx1_private.staff_invitation_auth_email_in_use(email_value)
       or (select count(*) from bx1_private.governance_grants g where g.organisation_id=target_org
         and g.status='ACTIVE' and bx1_private.is_eligible_governor(g.person_id,target_org))<2 then
       return '{"ok":false,"error":"conflict"}'::jsonb; end if;
@@ -236,7 +275,7 @@ begin
       insert into bx1_private.staff_invitation_events(invitation_id,organisation_id,actor_id,event_type,before_state,after_state)
         values(invite.id,target_org,actor,invite.state,'PENDING_REVIEW',invite.state);
     elsif intent='apply' then
-      if exists(select 1 from auth.users u where lower(u.email)=invite.email and u.deleted_at is null) then
+      if bx1_private.staff_invitation_auth_email_in_use(invite.email) then
         return '{"ok":false,"error":"conflict"}'::jsonb; end if;
       update bx1_private.staff_invitation_intents set state='QUEUED',revision=revision+1,
         acceptance_expires_at=now_value+interval '7 days' where id=invite.id returning * into invite;
@@ -297,7 +336,7 @@ begin
     or invite.acceptance_expires_at<=clock_timestamp()
     or not bx1_private.is_eligible_governor(invite.requester_person_id,target_org)
     or not bx1_private.is_eligible_governor(invite.reviewer_person_id,target_org)
-    or exists(select 1 from auth.users u where lower(u.email)=invite.email and u.deleted_at is null) then
+    or bx1_private.staff_invitation_auth_email_in_use(invite.email) then
     return '{"ok":false,"error":"conflict"}'::jsonb; end if;
   if (bx1_private.staff_invitation_admin(target_org))->'ok'<>'true'::jsonb then
     return '{"ok":false,"error":"forbidden"}'::jsonb; end if;
@@ -317,17 +356,16 @@ language plpgsql volatile security definer set search_path='' set statement_time
 declare invite bx1_private.staff_invitation_intents; outbox bx1_private.staff_invitation_outbox;
   next_state text; now_value timestamptz:=clock_timestamp();
 begin
-  if auth.jwt()->>'role'<>'service_role' or invite_id is null or lease_id is null or delivered is null then
+  if current_setting('request.jwt.claims',true)::jsonb->>'role' is distinct from 'service_role'
+    or invite_id is null or lease_id is null or delivered is null then
     return '{"ok":false,"error":"forbidden"}'::jsonb; end if;
   select * into invite from bx1_private.staff_invitation_intents where id=invite_id for update;
   select * into outbox from bx1_private.staff_invitation_outbox where invitation_id=invite_id for update;
   if invite.id is null or outbox.lease_id is distinct from lease_id or invite.state<>'DISPATCHING'
     or outbox.state<>'CLAIMED' then return '{"ok":false,"error":"conflict"}'::jsonb; end if;
   if delivered and (auth_id is null or invite.acceptance_expires_at<=now_value
-    or not exists(select 1 from auth.users u where u.id=auth_id and lower(u.email)=invite.email and u.deleted_at is null
-      and u.invited_at>=outbox.claimed_at and u.confirmation_sent_at>=outbox.claimed_at
-      and u.raw_user_meta_data->>'bx1_staff_invitation_id'=invite.id::text
-      and u.raw_user_meta_data->>'bx1_staff_lease_id'=lease_id::text)) then
+    or bx1_private.staff_invitation_auth_match(invite.email,invite.id,lease_id,outbox.claimed_at)
+      is distinct from auth_id) then
     return '{"ok":false,"error":"conflict"}'::jsonb; end if;
   next_state:=case when delivered then 'INVITED' else 'DELIVERY_UNKNOWN' end;
   update bx1_private.staff_invitation_outbox set state=case when delivered then 'SENT' else 'UNKNOWN' end,
@@ -348,7 +386,7 @@ end $$;
 create function bx1_private.staff_invitation_reconcile(target_org uuid,invite_id uuid) returns jsonb
 language plpgsql volatile security definer set search_path='' set statement_timeout='10s' as $$
 declare authority jsonb; invite bx1_private.staff_invitation_intents;
-  outbox bx1_private.staff_invitation_outbox; matched_user uuid; match_count integer;
+  outbox bx1_private.staff_invitation_outbox; matched_user uuid;
 begin
   perform set_config('lock_timeout','3s',true);
   authority:=bx1_private.staff_invitation_admin(target_org);
@@ -365,12 +403,8 @@ begin
     or not bx1_private.is_eligible_governor(invite.requester_person_id,target_org)
     or not bx1_private.is_eligible_governor(invite.reviewer_person_id,target_org) then
     return '{"ok":false,"error":"conflict"}'::jsonb; end if;
-  select min(u.id::text)::uuid,count(*)::int into matched_user,match_count from auth.users u
-    where lower(u.email)=invite.email and u.deleted_at is null
-      and u.invited_at>=outbox.claimed_at and u.confirmation_sent_at>=outbox.claimed_at
-      and u.raw_user_meta_data->>'bx1_staff_invitation_id'=invite.id::text
-      and u.raw_user_meta_data->>'bx1_staff_lease_id'=outbox.lease_id::text;
-  if match_count<>1 then return '{"ok":false,"error":"outcome_unknown"}'::jsonb; end if;
+  matched_user:=bx1_private.staff_invitation_auth_match(invite.email,invite.id,outbox.lease_id,outbox.claimed_at);
+  if matched_user is null then return '{"ok":false,"error":"outcome_unknown"}'::jsonb; end if;
   if (bx1_private.staff_invitation_admin(target_org))->'ok'<>'true'::jsonb then
     return '{"ok":false,"error":"forbidden"}'::jsonb; end if;
   update bx1_private.staff_invitation_outbox set state='SENT',lease_id=null,claimed_at=null,
@@ -387,21 +421,18 @@ end $$;
 -- email. It creates only a profile, never a membership or trusted person.
 create function bx1_private.staff_invitation_begin() returns jsonb
 language plpgsql volatile security definer set search_path='' set statement_timeout='10s' as $$
-declare actor uuid:=auth.uid(); token jsonb:=auth.jwt(); invite bx1_private.staff_invitation_intents;
-  user_row auth.users; profile public.bx1_profiles; now_value timestamptz:=clock_timestamp();
+declare token jsonb:=current_setting('request.jwt.claims',true)::jsonb;
+  actor uuid:=(token->>'sub')::uuid; invite bx1_private.staff_invitation_intents;
+  confirmed_email text; profile public.bx1_profiles; now_value timestamptz:=clock_timestamp();
 begin
   if actor is null or token->>'session_id' is null or token->>'exp' !~ '^[0-9]{1,16}$'
     or (token->>'exp')::numeric<=extract(epoch from now_value) then
     return '{"ok":false,"error":"unauthorised"}'::jsonb; end if;
-  perform id from auth.sessions where user_id=actor and id::text=token->>'session_id'
-    and (not_after is null or not_after>now_value) and oauth_client_id is null for share;
-  if not found then return '{"ok":false,"error":"unauthorised"}'::jsonb; end if;
-  select * into user_row from auth.users where id=actor for share;
-  if not found or user_row.email_confirmed_at is null or user_row.deleted_at is not null
-    or coalesce(user_row.is_anonymous,false) or user_row.banned_until>now_value then
+  confirmed_email:=bx1_private.staff_invitation_auth_self(false);
+  if confirmed_email is null then
     return '{"ok":false,"error":"unauthorised"}'::jsonb; end if;
   select * into invite from bx1_private.staff_invitation_intents where auth_user_id=actor
-    and email=lower(user_row.email) and state in ('INVITED','MFA_PENDING')
+    and email=confirmed_email and state in ('INVITED','MFA_PENDING')
     order by created_at,id limit 1 for update;
   if not found then return '{"ok":true,"state":"NONE"}'::jsonb; end if;
   if invite.acceptance_expires_at<=now_value
@@ -410,7 +441,7 @@ begin
     or not bx1_private.is_eligible_governor(invite.requester_person_id,invite.organisation_id)
     or not bx1_private.is_eligible_governor(invite.reviewer_person_id,invite.organisation_id) then
     return '{"ok":false,"error":"forbidden"}'::jsonb; end if;
-  select * into profile from public.bx1_profiles where id=actor for update;
+  select * into profile from public.bx1_profiles where id=actor;
   if found and profile.status<>'ACTIVE' then return '{"ok":false,"error":"forbidden"}'::jsonb; end if;
   if not found then insert into public.bx1_profiles(id,display_name,status)
     values(actor,invite.email,'ACTIVE'); end if;
@@ -453,8 +484,9 @@ language sql volatile security invoker set search_path='' as $$
 
 create function bx1_private.staff_invitation_accept(invite_id uuid) returns jsonb
 language plpgsql volatile security definer set search_path='' set statement_timeout='10s' as $$
-declare actor uuid:=auth.uid(); token jsonb:=auth.jwt(); invite bx1_private.staff_invitation_intents;
-  user_row auth.users; profile public.bx1_profiles; mapped bx1_private.person_principals;
+declare token jsonb:=current_setting('request.jwt.claims',true)::jsonb;
+  actor uuid:=(token->>'sub')::uuid; invite bx1_private.staff_invitation_intents;
+  confirmed_email text; profile public.bx1_profiles; mapped bx1_private.person_principals;
   mapped_person bx1_private.persons; member public.bx1_memberships; now_value timestamptz;
   created_person uuid;
 begin
@@ -474,21 +506,14 @@ begin
     return jsonb_build_object('ok',true,'state','ACCEPTED','membershipId',invite.membership_id,'replayed',true); end if;
   if invite.state<>'MFA_PENDING' then return '{"ok":false,"error":"forbidden"}'::jsonb; end if;
   now_value:=clock_timestamp();
-  perform id from auth.sessions where user_id=actor and id::text=token->>'session_id'
-    and aal='aal2' and (not_after is null or not_after>now_value) and oauth_client_id is null for share;
-  if not found then return '{"ok":false,"error":"unauthorised"}'::jsonb; end if;
-  select * into user_row from auth.users where id=actor for share;
-  select * into profile from public.bx1_profiles where id=actor for update;
-  if user_row.id is null or lower(user_row.email)<>invite.email or user_row.email_confirmed_at is null
-    or user_row.deleted_at is not null or user_row.banned_until>now_value or coalesce(user_row.is_anonymous,false)
+  confirmed_email:=bx1_private.staff_invitation_auth_self(true);
+  select * into profile from public.bx1_profiles where id=actor;
+  if confirmed_email is distinct from invite.email
     or profile.id is null or profile.status<>'ACTIVE' or invite.acceptance_expires_at<=now_value
     or not exists(select 1 from bx1_private.authority_scopes s join public.bx1_organisations o
       on o.id=s.organisation_id where s.organisation_id=invite.organisation_id and s.state='READY' and o.status='ACTIVE')
     or not bx1_private.is_eligible_governor(invite.requester_person_id,invite.organisation_id)
-    or not bx1_private.is_eligible_governor(invite.reviewer_person_id,invite.organisation_id)
-    or not exists(select 1 from auth.mfa_factors f where f.user_id=actor and f.status='verified'
-      and f.factor_type='totp' and f.id=(select s.factor_id from auth.sessions s where s.user_id=actor
-        and s.id::text=token->>'session_id')) then
+    or not bx1_private.is_eligible_governor(invite.reviewer_person_id,invite.organisation_id) then
     return '{"ok":false,"error":"forbidden"}'::jsonb; end if;
   select * into mapped from bx1_private.person_principals where auth_user_id=actor for update;
   if found then
@@ -521,7 +546,7 @@ end $$;
 
 create function bx1_private.staff_invitation_self_read() returns jsonb
 language plpgsql volatile security definer set search_path='' as $$
-declare actor uuid:=auth.uid(); items jsonb;
+declare actor uuid:=(current_setting('request.jwt.claims',true)::jsonb->>'sub')::uuid; items jsonb;
 begin
   if not bx1_private.has_active_session() then return '{"ok":false,"error":"unauthorised"}'::jsonb; end if;
   select coalesce(jsonb_agg(jsonb_build_object('id',i.id,'organisationId',i.organisation_id,
@@ -580,3 +605,31 @@ grant execute on function bx1_private.staff_invitation_dispatch_result(uuid,uuid
 -- granted service result function; raw invitation tables remain inaccessible.
 grant usage on schema bx1_private to service_role;
 comment on function public.bx1_staff_invitation_accept(uuid) is 'Verified exact-email invitee, current live TOTP session and current independent governors required; one scoped membership only.';
+-- Reuse the canonical NOLOGIN governance owner rather than leaving new
+-- SECURITY DEFINER commands in a migration account with broad Auth access.
+alter table bx1_private.staff_invitation_intents owner to bx1_authority_owner;
+alter table bx1_private.staff_invitation_requests owner to bx1_authority_owner;
+alter table bx1_private.staff_invitation_outbox owner to bx1_authority_owner;
+alter table bx1_private.staff_invitation_events owner to bx1_authority_owner;
+alter function bx1_private.staff_invitation_event_immutable() owner to bx1_authority_owner;
+alter function bx1_private.staff_invitation_admin(uuid) owner to bx1_authority_owner;
+alter function bx1_private.staff_invitation_command(uuid,uuid,jsonb) owner to bx1_authority_owner;
+alter function bx1_private.staff_invitation_read(uuid) owner to bx1_authority_owner;
+alter function bx1_private.staff_invitation_claim(uuid,uuid) owner to bx1_authority_owner;
+alter function bx1_private.staff_invitation_dispatch_result(uuid,uuid,uuid,boolean) owner to bx1_authority_owner;
+alter function bx1_private.staff_invitation_reconcile(uuid,uuid) owner to bx1_authority_owner;
+alter function bx1_private.staff_invitation_begin() owner to bx1_authority_owner;
+alter function bx1_private.staff_invitation_accept(uuid) owner to bx1_authority_owner;
+alter function bx1_private.staff_invitation_self_read() owner to bx1_authority_owner;
+-- Ownership transfer drops implicit privileges of the former owner. Restore
+-- SELECT only to the existing Auth-backed MFA helper's exact function owner.
+-- No client role receives direct access to invitation records.
+do $invite_mfa_owner$
+declare helper_owner text;
+begin
+  select pg_get_userbyid(p.proowner) into helper_owner from pg_proc p
+    where p.oid='bx1_private.read_mfa_status()'::regprocedure;
+  execute format('grant select on bx1_private.staff_invitation_intents to %I',helper_owner);
+end $invite_mfa_owner$;
+revoke create on schema bx1_private from bx1_authority_owner;
+grant bx1_authority_owner to current_user with inherit false, set false;

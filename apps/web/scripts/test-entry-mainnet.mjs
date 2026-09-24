@@ -127,6 +127,10 @@ try {
   await sqlFile('../../../supabase/migrations/20260923205519_stage3_immutable_offering_packages.sql')
   await sqlFile('../../../supabase/migrations/20260924110608_stage2_provider_evidence.sql')
   await sqlFile('../../../supabase/migrations/20260924110911_stage1_staff_invitation_intents.sql')
+  eq(await scalar("select has_table_privilege(current_user,'bx1_private.authority_scopes','REFERENCES')"), false,
+    'staff migration leaves MAIN migrator without authority-table REFERENCES')
+  eq(await scalar("select count(*)::int from pg_auth_members m join pg_roles r on r.oid=m.roleid where r.rolname='bx1_authority_owner' and m.member=(select oid from pg_roles where rolname=current_user) and (m.inherit_option or m.set_option)"), 0,
+    'staff migration closes temporary owner inheritance and SET capability')
   await sqlFile('../../../supabase/migrations/20260924110922_stage2_beneficial_ownership_control.sql')
   await sqlFile('../../../supabase/migrations/20260924112832_stage2_document_quarantine_lifecycle.sql')
   await sqlFile('../../../supabase/tests/bx1_document_lifecycle.sql')
