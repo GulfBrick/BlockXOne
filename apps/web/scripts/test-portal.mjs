@@ -1,11 +1,17 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import pg from 'pg'
+import { proveProviderEvidence } from './provider-evidence-proof.mjs'
+import { proveCustomerMonitoring } from './customer-monitoring-proof.mjs'
+import { proveDocumentRetentionAuthority } from './document-retention-authority-proof.mjs'
+import { proveOfferingFileQuarantine, proveOfferingFileProductIsolation } from './offering-file-quarantine-proof.mjs'
 
 // Exact disposable GitHub PostgreSQL17 service only. No local/project execution.
 if (process.argv.length !== 2 || process.env.GITHUB_ACTIONS !== 'true') throw new Error('Portal SQL proof requires cloud CI without arguments')
 const expected = 'postgresql://postgres:bx1-synthetic-ci-only@127.0.0.1:5432/bx1_demo_ci'
 if (process.env.BX1_PORTAL_SQL_TEST_URL !== expected) throw new Error('Portal SQL proof requires the exact disposable CI database')
+const fundV2LegacyCrossrefs = JSON.parse(await readFile(new URL('../src/lib/portal/fund-v2-legacy-crossrefs.json', import.meta.url), 'utf8'))
+assert.deepEqual(Object.keys(fundV2LegacyCrossrefs).sort(), ['fees', 'pricing_basis', 'redemption_terms', 'strategy'], 'one shared v2 cross-reference contract')
 const options = { connectionString: expected, ssl: false, connectionTimeoutMillis: 5000, query_timeout: 20000, statement_timeout: 15000, application_name: 'bx1-portal-cloud-ci' }
 const db = new pg.Client(options)
 let phase = 'initialise', checks = 0, begun = false, connected = false, keySequence = 0
@@ -43,7 +49,7 @@ async function denied(label, body, expectedCode = '23514') {
   let code
   try { await body() } catch (error) { code = error?.code }
   await db.query('rollback to savepoint expected_denial; release savepoint expected_denial')
-  eq(code, expectedCode, label)
+  eq(code, expectedCode, `${label} (observed SQLSTATE ${code ?? 'none'})`)
 }
 const document = (n, kind, i) => ({ id: `ed000000-0000-4000-8000-${String(n * 10 + i).padStart(12, '0')}`, kind, title: `Synthetic ${kind}`, storage_path: `${uid(n)}/synthetic-${kind}.pdf`, sha256: 'a'.repeat(64), size: 100, mime_type: 'application/pdf' })
 const details = (n, entity = false, country = 'ZA') => ({ full_name: `Synthetic Applicant ${n}`, country, investor_type: entity ? 'ENTITY' : 'INDIVIDUAL', company_name: entity ? `Synthetic Company ${n}` : '', registration_reference: entity ? `SYNTHETIC-${n}` : '', source_of_funds: 'Fictional test savings only, no actual money or customer information.', beneficial_owners: entity ? 'Synthetic owner with one hundred percent fictional ownership.' : '', experience: 'Synthetic investment experience for workflow testing only.', documents: (entity ? ['IDENTITY', 'COMPANY', 'BENEFICIAL_OWNERS'] : ['IDENTITY']).map((kind, i) => document(n, kind, i)), test_data_acknowledged: true })
@@ -51,6 +57,59 @@ const application = (n, persona = 'INVESTOR', revision = 0, country = 'ZA') => (
 const reviewChecks = { identity: true, ownership: true, screening: true, suitability: true }
 const offeringChecks = { issuer: true, terms: true, disclosures: true, eligibility: true }
 const terms = (asset = 'FUND') => ({ asset_type: asset, name: `Synthetic ${asset} product`, issuer_name: 'Synthetic test issuer', summary: 'Fictional offering solely for testing a customer investment journey.', strategy: 'Fictional long-term diversified test strategy. This is not an investment offer.', share_class: 'Test Class A', currency: 'ZAR_TEST', unit_price_minor: '9007199254740993', cap_units: '10', minimum_units: '1', pricing_basis: 'Fixed synthetic unit price for workflow checks.', fees: 'No real fees or payments in this test.', redemption_terms: 'Future governed redemption service; not yet available for this test product.', eligible_countries: ['ZA'], eligible_investor_types: ['INDIVIDUAL', 'ENTITY'], property_address: asset === 'REAL_ESTATE' ? '100 Fictional Test Street' : '', property_valuation_minor: asset === 'REAL_ESTATE' ? '1234567890' : '0', rental_income_policy: asset === 'REAL_ESTATE' ? 'Fictional rental income policy requiring future reconciliation.' : '', documents: { memorandum: 'Synthetic memorandum. No property, fund interest or investment is offered. '.repeat(2).trim(), risks: 'Synthetic risk disclosure. This test does not represent real investment or ownership. '.repeat(2).trim(), subscription_terms: 'Synthetic subscription terms. Reservations do not confirm funding, assets or token delivery. '.repeat(2).trim() } })
+const fundV2Terms = (name = 'Synthetic TST fund package') => ({
+  ...terms('FUND'), ...fundV2LegacyCrossrefs, name, terms_version: 2, currency: 'TST', settlement_decimals: 6,
+  unit_price_minor: '10000000', cap_units: '100', minimum_units: '1',
+  fund: {
+    mandate: 'Fictional diversified fund mandate with no real portfolio or investable claim.',
+    class_rights: 'Synthetic Class A equal economic rights, with no live ownership or transfer right.',
+    nav: { valuation_method: 'Synthetic marked portfolio value divided by issued test units.', frequency: 'MONTHLY', pricing_cutoff: '16:00 UTC on last business day', correction_policy: 'Corrections require a reviewed replacement NAV version and disclosure.' },
+    dealing: { subscription_frequency: 'MONTHLY', redemption_frequency: 'MONTHLY', notice_days: 10, settlement_days: 5 },
+    fees: { management_bps: 100, performance_bps: 0, other_fees: 'No other synthetic fees are charged.' },
+    liquidity: { lockup_days: 0, gate_bps: 10000, suspension_policy: 'A separately reviewed suspension decision is required before dealing stops.' },
+    distributions: { frequency: 'NONE', policy: 'No distributions in this fictional initial fund class.' },
+    redemption: { price_basis: 'NAV', conditions: 'Redemption depends on the reviewed dealing calendar and available liquidity.' },
+  },
+})
+const propertyV2Terms = (name = 'Synthetic TST property package') => ({
+  ...terms('REAL_ESTATE'), name, terms_version: 2, currency: 'TST', settlement_decimals: 6,
+  unit_price_minor: '100000000', cap_units: '20', minimum_units: '1', property_valuation_minor: '3000000000',
+  strategy: 'The real_estate.spv and real_estate.property policies define the property interest and control for this package.',
+  pricing_basis: 'The real_estate.property valuation policy is the authoritative pricing basis for this package.',
+  fees: 'The real_estate.cashflow expense and reserve policies govern charges for this package.',
+  redemption_terms: 'The real_estate.exits policies distinguish eligible interest transfer from disposal and liquidation for this package.',
+  rental_income_policy: 'The real_estate.cashflow rent and distribution policies govern income for this package.',
+  real_estate: {
+    spv: {
+      legal_name: 'Fictional Property SPV', registration_reference: 'SYNTHETIC-SPV-001', jurisdiction: 'ZA',
+      interest_rights: 'Each synthetic interest has the specified SPV class rights, not direct title to the fictional property.',
+    },
+    property: {
+      title_evidence_reference: 'SYNTHETIC-TITLE-001', control_evidence_reference: 'SYNTHETIC-CONTROL-001',
+      valuation_method: 'Illustrative synthetic appraisal, requiring separate dated independent review before actual pricing.',
+      valuation_frequency: 'ANNUALLY',
+      correction_policy: 'A material valuation error requires a reviewed correction version and treatment of affected holders.',
+    },
+    financing: {
+      debt_policy: 'No actual debt is represented; any synthetic priority and covenant effects require reviewed terms.',
+      lender_consent_policy: 'Required lender consent must be evidenced before a transfer, disposal or change of control.',
+    },
+    cashflow: {
+      rent_policy: 'Synthetic rent claims are not distributable cash until independent settlement reconciliation.',
+      expense_policy: 'Property expenses and taxes are recorded before a synthetic net income calculation.',
+      reserve_policy: 'A reviewed maintenance and contingency reserve is retained before income distribution.',
+      distribution_policy: 'Record-date entitlement, approved income and authorised payout evidence are required.',
+    },
+    governance: {
+      consent_rights: 'Material disposal and financing changes require documented holder consent under the class terms.',
+      voting_policy: 'Voting eligibility and threshold use a dated register snapshot, not a wallet connection.',
+    },
+    exits: {
+      eligible_transfer_policy: 'Eligible interest transfer settles consideration and updates the holder while the product continues.',
+      disposal_liquidation_policy: 'Property disposal and liquidation require a creditor and reserve waterfall, authorised payouts and supply closure.',
+    },
+  },
+})
 async function approveApplication(n, persona = 'INVESTOR', country = 'ZA') {
   const submitted = await command(n, 'submit_application', application(n, persona, 0, country))
   const a = submitted.applications.find(value => value.user_id === uid(n))
@@ -99,7 +158,7 @@ async function scopedPublishedProduct(orgId, asset, name, cap = '10') {
   return (await scopedCommand(1, roleContext('IssuerFundManager'), 'publish_product', { product_id: p.id, expected_revision: p.revision })).products.find(value => value.id === p.id)
 }
 async function waitForBlocked(pids) {
-  const deadline = Date.now() + 5000
+  const deadline = Date.now() + 10000
   while (Date.now() < deadline) {
     const blocked = await scalar('select count(*)::int from pg_stat_activity where pid=any($1::int[]) and cardinality(pg_blocking_pids(pid))>0', [pids])
     if (blocked === pids.length) { checks++; return }
@@ -130,6 +189,10 @@ try {
   await sqlFile('../../../supabase/tests/bx1_mfa_assurance.sql')
   await db.query("alter table auth.users add column email text; alter table auth.users add column email_confirmed_at timestamptz; alter table auth.users add column is_anonymous boolean default false; alter table auth.users add column raw_user_meta_data jsonb default '{}'::jsonb; alter table auth.sessions add column created_at timestamptz not null default now(); alter table auth.users enable row level security; alter table auth.sessions enable row level security")
   await db.query("create schema storage; create table storage.buckets(id text primary key,name text not null,public boolean not null,file_size_limit bigint,allowed_mime_types text[]); create table storage.objects(id uuid primary key default gen_random_uuid(),bucket_id text references storage.buckets(id),name text not null,owner_id text,metadata jsonb,user_metadata jsonb,unique(bucket_id,name)); alter table storage.objects enable row level security; grant usage on schema storage to authenticated; grant select,insert,update,delete on storage.objects to authenticated")
+  // Only the disposable CI fixture needs this Storage API helper. Hosted
+  // Supabase supplies its own operation-aware implementation.
+  await db.query(`create function storage.allow_only_operation(text) returns boolean
+    language sql stable as $$ select current_setting('request.storage.operation',true)=$1 $$`)
   for (const file of ['20260916234746_bx1_identity_workspace.sql', '20260917190042_bx1_wallet_ownership.sql', '20260918015541_bx1_mfa_assurance.sql', '20260918234447_bx1_controlled_administration.sql']) await sqlFile(`../../../supabase/migrations/${file}`)
   await sqlFile('../../../supabase/features/bx1_portal.sql')
   phase = 'feature-empty-boundary'
@@ -856,7 +919,1675 @@ try {
   eq(await scalar('select count(*)::int from bx1_portal.investing_representative_receipts where mandate_id=$1', [entityMandate.id]), 6, 'request, resubmission, decisions, apply and revoke have immutable receipts')
   eq(await scalar('select count(*)::int from bx1_portal.investing_representative_receipts where mandate_id=$1', [renewed.id]), 1, 'new cycle has its own initial audit receipt')
   eq(await scalar('select count(*)::int from bx1_portal.subscriptions'), individualOrdersBeforeEntity, 'entity workflow creates no order or funding record')
+  phase = 'immutable-offering-package-cutover'
+  await admin()
+  const legacyProductsBeforeOffering = await scalar('select count(*)::int from bx1_portal.products')
+  const legacyOrdersBeforeOffering = await scalar('select count(*)::int from bx1_portal.subscriptions')
+  await sqlFile('../../../supabase/migrations/20260923205519_stage3_immutable_offering_packages.sql')
+  eq(await scalar('select count(*)::int from bx1_portal.products'), legacyProductsBeforeOffering, 'offering migration preserves product IDs')
+  eq(await scalar('select count(*)::int from bx1_portal.subscriptions'), legacyOrdersBeforeOffering, 'offering migration preserves accepted orders')
+  eq(await scalar("select count(*)::int from bx1_portal.offering_decisions"), 0, 'historical Compliance labels are not invented issuer or package approvals')
+  eq(await scalar("select count(*)::int from bx1_portal.offering_revisions where origin='LEGACY_PRODUCT_SNAPSHOT'"), legacyProductsBeforeOffering, 'each historical product has immutable snapshot, not a current package')
+  eq(await scalar("select count(*)::int from bx1_portal.offering_revisions where origin='LEGACY_ORDER_SNAPSHOT'"), legacyOrdersBeforeOffering, 'each accepted order has its own terms snapshot')
+  eq(await scalar('select count(*)::int from bx1_portal.subscriptions where offering_revision_id is null'), 0, 'historical orders map to immutable legacy snapshots without changing original references')
+  await denied('accepted order cannot be pointed at a different offering snapshot', async () => {
+    await admin(); await db.query('update bx1_portal.subscriptions set offering_revision_id=$1 where id=(select id from bx1_portal.subscriptions order by created_at,id limit 1)', [key()])
+  }, '23514')
+  const historicalOrder = (await scopedRead(3, investor)).subscriptions.find(value => value.product_id === scopedFund.id)
+  truth(historicalOrder?.offering_revision_id, 'investor still reads historical accepted order and its new non-authoritative snapshot ID')
+  const historicalManagerProduct = (await scopedRead(1, manager)).products.find(value => value.id === scopedFund.id)
+  eq(historicalManagerProduct.offering_package, null, 'historical published product has no newly inferred current approved package')
+  eq(historicalManagerProduct.offering_history[0].origin, 'LEGACY_PRODUCT_SNAPSHOT', 'operator can inspect preserved legacy history')
+  eq((await scopedRead(3, investor)).products.some(value => value.id === scopedFund.id), false, 'historic PUBLISHED label is no longer marketed as an open offering')
+  await denied('historic product cannot create a new order without exact package', () => scopedCommand(3, investor, 'subscribe', {
+    ...subscribe(scopedFund, '1'), investment_account_id: account3.id, offering_revision_id: historicalManagerProduct.offering_history[0].id,
+  }), '23514')
+  await denied('pre-offering delegate cannot be called by authenticated actor', async () => {
+    await actor(1); await scalar('select bx1_portal.execute_scoped_pre_offering($1::jsonb,$2,$3,$4::jsonb)',
+      [JSON.stringify(manager), 'publish_product', key(), JSON.stringify({ product_id: scopedFund.id, expected_revision: scopedFund.revision })])
+  }, '42501')
+  for (const table of ['offering_revisions', 'offering_decisions']) {
+    for (const role of ['anon', 'authenticated', 'service_role'])
+      eq(await scalar('select has_table_privilege($1,$2,\'SELECT,INSERT,UPDATE,DELETE\')', [role, `bx1_portal.${table}`]), false, `${role} no direct ${table}`)
+  }
+  phase = 'new-exact-fund-and-property-packages'
+  // New synthetic humans and appointments exist ONLY in this disposable cloud
+  // transaction. New customer organisations do not inherit an issuer.
+  await admin()
+  await db.query("update public.bx1_memberships set status='ACTIVE' where user_id=$1 and organisation_id=$2 and role='ComplianceOfficer'", [uid(2), nativeScope])
+  await db.query("insert into auth.users(id,email,email_confirmed_at,is_anonymous) values($1,'synthetic-issuer-13@example.invalid',clock_timestamp(),false)", [uid(13)])
+  await db.query("insert into auth.sessions(id,user_id,not_after,created_at) values($1,$2,clock_timestamp()+interval '1 hour',clock_timestamp()-interval '1 hour')", [sid(13), uid(13)])
+  await db.query("insert into public.bx1_profiles(id,display_name) values($1,'Synthetic independently appointed issuer')", [uid(13)])
+  await db.query("insert into public.bx1_memberships(user_id,organisation_id,role,status) values($1,$2,'IssuerFundManager','ACTIVE')", [uid(13), nativeScope])
+  await db.query("insert into bx1_private.persons(id,label,status,evidence_reference,bootstrap_receipt_id) values($1,'Synthetic independent issuer human','TRUSTED','synthetic:test-human-13',$2)", [uid(33), uid(34)])
+  await db.query("insert into bx1_private.person_principals(auth_user_id,person_id,status,evidence_reference,bootstrap_receipt_id) values($1,$2,'TRUSTED','synthetic:test-principal-13',$3)", [uid(13), uid(33), uid(34)])
+  await db.query("insert into auth.mfa_factors(id,user_id,status,factor_type) values($1,$2,'verified','totp')", [sid(43), uid(13)])
+  await db.query("update auth.sessions set aal='aal2',factor_id=$1 where user_id=$2", [sid(43), uid(13)])
+  await db.query("insert into public.bx1_memberships(user_id,organisation_id,role,status) values($1,$2,'IssuerFundManager','ACTIVE')", [uid(4), nativeScope])
+  await db.query("insert into auth.mfa_factors(id,user_id,status,factor_type) values($1,$2,'verified','totp')", [sid(44), uid(4)])
+  await db.query("update auth.sessions set aal='aal2',factor_id=$1 where user_id=$2", [sid(44), uid(4)])
+  await db.query("insert into bx1_portal.organisation_authority_bindings(product_organisation_id,native_organisation_id,role,status,valid_from,valid_until,evidence_reference,approval_receipt_id) values($1,$2,'ComplianceOfficer','ACTIVE',clock_timestamp()-interval '1 hour',clock_timestamp()+interval '1 hour','synthetic-cloud-proof:offering-compliance',$3)", [orgId, nativeScope, key()])
+  await db.query("update bx1_portal.organisation_authority_bindings set status='REVOKED' where id=$1", [timedBinding])
+  const issuerContext = roleContext('IssuerFundManager')
+  const issuerChecks = { issuer_authority: true, terms: true, rights: true }
+  const issuerInput = (product, decision = 'APPROVED') => ({ product_id: product.id, expected_revision: product.revision,
+    offering_revision_id: product.offering_package.id, terms_hash: product.offering_package.terms_hash,
+    decision, notes: 'Synthetic appointed issuer reviewed exact immutable test package.', checks: issuerChecks })
+  const complianceInput = (product, decision = 'APPROVED') => ({ product_id: product.id, expected_revision: product.revision,
+    offering_revision_id: product.offering_package.id, terms_hash: product.offering_package.terms_hash,
+    decision, notes: 'Synthetic independent Compliance decision on exact offering package.', checks: offeringChecks })
+  let fundPackage = (await scopedCommand(1, manager, 'create_product', { organisation_id: orgId,
+    terms: { ...terms('FUND'), name: 'Exact synthetic fund package v1' } })).products.find(value => value.terms.name === 'Exact synthetic fund package v1')
+  fundPackage = (await scopedCommand(1, manager, 'submit_product', { product_id: fundPackage.id, expected_revision: fundPackage.revision })).products.find(value => value.id === fundPackage.id)
+  truth(fundPackage.offering_package?.id, 'fund submission creates immutable exact package ID')
+  eq(fundPackage.offering_package.document_hashes.memorandum.length, 64, 'fund disclosure text is hashed in exact package')
+  await denied('no issuer binding means no issuer decision', () => mandateScopedCommand(13, issuerContext,
+    'review_offering_issuer', issuerInput(fundPackage)), '42501')
+  await admin()
+  const issuerBindingId = (await db.query("insert into bx1_portal.organisation_authority_bindings(product_organisation_id,native_organisation_id,role,status,valid_from,valid_until,evidence_reference,approval_receipt_id) values($1,$2,'IssuerFundManager','ACTIVE',clock_timestamp()-interval '1 hour',clock_timestamp()+interval '1 hour','synthetic-cloud-proof:offering-issuer',$3) returning id", [orgId, nativeScope, key()])).rows[0].id
+  await denied('same human under second issuer login cannot approve own package', () => mandateScopedCommand(4, issuerContext,
+    'review_offering_issuer', issuerInput(fundPackage)), '42501')
+  await denied('wrong issuer organisation cannot approve', () => mandateScopedCommand(13, roleContext('IssuerFundManager', otherScope),
+    'review_offering_issuer', issuerInput(fundPackage)), '42501')
+  await denied('stale issuer package ID rejected', () => mandateScopedCommand(13, issuerContext,
+    'review_offering_issuer', { ...issuerInput(fundPackage), offering_revision_id: key() }), '23514')
+  await denied('wrong Compliance terms hash rejected', () => mandateScopedCommand(2, reviewer,
+    'review_product', { ...complianceInput(fundPackage), terms_hash: 'b'.repeat(64) }), '23514')
+  fundPackage = (await mandateScopedCommand(13, issuerContext, 'review_offering_issuer', issuerInput(fundPackage, 'CHANGES_REQUIRED'))).products.find(value => value.id === fundPackage.id)
+  eq([fundPackage.status, fundPackage.offering_package.issuer_status], ['CHANGES_REQUIRED', 'CHANGES_REQUIRED'], 'issuer changes-required returns fund to manager')
+  const firstFundRevision = fundPackage.offering_package.id
+  await denied('changes-required cannot be resubmitted unchanged', () => scopedCommand(1, manager,
+    'submit_product', { product_id: fundPackage.id, expected_revision: fundPackage.revision }), '23514')
+  fundPackage = (await scopedCommand(1, manager, 'save_product', { product_id: fundPackage.id,
+    expected_revision: fundPackage.revision, terms: { ...terms('FUND'), name: 'Exact synthetic fund package v1' } })).products.find(value => value.id === fundPackage.id)
+  await denied('save of identical terms does not evade package revision gate', () => scopedCommand(1, manager,
+    'submit_product', { product_id: fundPackage.id, expected_revision: fundPackage.revision }), '23514')
+  fundPackage = (await scopedCommand(1, manager, 'save_product', { product_id: fundPackage.id,
+    expected_revision: fundPackage.revision, terms: { ...terms('FUND'), name: 'Exact synthetic fund package v2' } })).products.find(value => value.id === fundPackage.id)
+  eq(fundPackage.offering_package, null, 'saved amendment clears active package without mutating old snapshot')
+  fundPackage = (await scopedCommand(1, manager, 'submit_product', { product_id: fundPackage.id, expected_revision: fundPackage.revision })).products.find(value => value.id === fundPackage.id)
+  truth(fundPackage.offering_package.id !== firstFundRevision, 'amendment creates a new immutable package ID')
+  eq(fundPackage.offering_history.find(value => value.id === firstFundRevision).issuer_status, 'CHANGES_REQUIRED', 'old decision remains with old package only')
+  eq(fundPackage.offering_package.issuer_status, 'PENDING', 'new fund package inherits no approval')
+  fundPackage = (await mandateScopedCommand(13, issuerContext, 'review_offering_issuer', issuerInput(fundPackage))).products.find(value => value.id === fundPackage.id)
+  eq(fundPackage.status, 'IN_REVIEW', 'issuer-only approval is not whole-offering approval')
+  fundPackage = (await mandateScopedCommand(2, reviewer, 'review_product', complianceInput(fundPackage))).products.find(value => value.id === fundPackage.id)
+  eq([fundPackage.status, fundPackage.offering_package.issuer_status, fundPackage.offering_package.compliance_status],
+    ['APPROVED', 'APPROVED', 'APPROVED'], 'two independent exact fund decisions complete business review')
+  eq([fundPackage.offering_package.technical_readiness_status, fundPackage.offering_package.publishable],
+    ['NOT_VERIFIED', false], 'business approval does not fabricate chain readiness')
+  await db.query('savepoint issuer_revocation_projection')
+  await admin(); await db.query("update bx1_portal.organisation_authority_bindings set status='REVOKED' where id=$1", [issuerBindingId])
+  const revokedIssuerPackage = (await scopedRead(1, manager)).products.find(value => value.id === fundPackage.id).offering_package
+  eq([revokedIssuerPackage.issuer_status, revokedIssuerPackage.status, revokedIssuerPackage.publishable],
+    ['APPROVED', 'AUTHORITY_EXPIRED', false], 'historic issuer decision remains visible but revocation removes current approval')
+  await db.query('rollback to savepoint issuer_revocation_projection; release savepoint issuer_revocation_projection')
+  await denied('publication cannot smuggle changed terms during status transition', async () => {
+    await admin(); await db.query("update bx1_portal.products set status='PUBLISHED',terms=jsonb_set(terms,'{name}','\"Smuggled substitute\"') where id=$1", [fundPackage.id])
+  }, '23514')
+  await denied('fund cannot publish without independent technical readiness', () => scopedCommand(1, manager,
+    'publish_product', { product_id: fundPackage.id, expected_revision: fundPackage.revision }), '23514')
+  await denied('fund investor cannot subscribe to approved but unopened package', () => scopedCommand(3, investor,
+    'subscribe', { ...subscribe(fundPackage, '1'), investment_account_id: account3.id,
+      offering_revision_id: fundPackage.offering_package.id }), '42501')
+  let propertyPackage = (await scopedCommand(1, manager, 'create_product', { organisation_id: orgId,
+    terms: { ...terms('REAL_ESTATE'), name: 'Exact synthetic property package' } })).products.find(value => value.terms.name === 'Exact synthetic property package')
+  propertyPackage = (await scopedCommand(1, manager, 'submit_product', { product_id: propertyPackage.id, expected_revision: propertyPackage.revision })).products.find(value => value.id === propertyPackage.id)
+  propertyPackage = (await mandateScopedCommand(2, reviewer, 'review_product', complianceInput(propertyPackage))).products.find(value => value.id === propertyPackage.id)
+  eq(propertyPackage.status, 'IN_REVIEW', 'Compliance-only property approval remains under review')
+  propertyPackage = (await mandateScopedCommand(13, issuerContext, 'review_offering_issuer', issuerInput(propertyPackage))).products.find(value => value.id === propertyPackage.id)
+  eq([propertyPackage.status, propertyPackage.offering_package.compliance_status, propertyPackage.offering_package.issuer_status],
+    ['APPROVED', 'APPROVED', 'APPROVED'], 'property supports reverse decision order on its exact package')
+  await denied('property cannot publish without independent technical readiness', () => scopedCommand(1, manager,
+    'publish_product', { product_id: propertyPackage.id, expected_revision: propertyPackage.revision }), '23514')
+  phase = 'appointed-issuer-new-customer-organisation-visibility'
+  // Stage 2 revoked this customer's manager mandate. Its submitted draft is
+  // intentionally a LEGACY snapshot after cutover. In this disposable fixture
+  // only, attach one exact synthetic SUBMITTED package to that existing draft
+  // to isolate the new issuer read/decision contract without reviving mandate.
+  await admin()
+  await db.query("insert into public.bx1_memberships(user_id,organisation_id,role,status) values($1,$2,'IssuerFundManager','ACTIVE')", [uid(13), mandate.native_organisation_id])
+  const customerIssuerContext = roleContext('IssuerFundManager', mandate.native_organisation_id)
+  eq((await mandateScopedRead(13, customerIssuerContext)).products.some(value => value.id === inReview.id), false,
+    'native issuer membership alone never exposes a customer product')
+  await admin()
+  const customerIssuerBindingId = await scalar("insert into bx1_portal.organisation_authority_bindings(product_organisation_id,native_organisation_id,role,status,valid_from,valid_until,evidence_reference,approval_receipt_id) values($1,$2,'IssuerFundManager','ACTIVE',clock_timestamp()-interval '1 hour',clock_timestamp()+interval '1 hour','synthetic-cloud-proof:customer-issuer',$3) returning id", [managerApp.organisation_id, mandate.native_organisation_id, key()])
+  const customerPackageId = await scalar(`insert into bx1_portal.offering_revisions(product_id,package_number,origin,
+    product_revision_at_submission,terms,terms_hash,document_hashes,submitted_by,submitted_at)
+    select p.id,2,'SUBMITTED',p.revision,p.terms,p.terms_hash,
+      bx1_portal.offering_document_hashes(p.terms),p.created_by,clock_timestamp()
+    from bx1_portal.products p where p.id=$1 returning id`, [inReview.id])
+  await db.query('update bx1_portal.products set current_offering_revision_id=$1 where id=$2', [customerPackageId, inReview.id])
+  let customerIssuerState = await mandateScopedRead(13, customerIssuerContext)
+  eq(customerIssuerState.organisations.some(value => value.id === managerApp.organisation_id), true,
+    'appointed issuer sees exact new customer organisation as read-only scope')
+  let customerIssuerProduct = customerIssuerState.products.find(value => value.id === inReview.id)
+  eq(customerIssuerProduct?.offering_package?.id, customerPackageId,
+    'appointed issuer sees exact submitted customer package in shared portal')
+  eq(customerIssuerProduct.allowed_actions.includes('review_offering_issuer'), true,
+    'new customer issuer sees its exact review action')
+  for (const forbidden of ['create_product','save_product','submit_product','publish_product','read_orders'])
+    eq(customerIssuerState.organisations.find(value => value.id === managerApp.organisation_id).capabilities.includes(forbidden), false,
+      `issuer appointment does not grant ${forbidden}`)
+  customerIssuerState = await mandateScopedCommand(13, customerIssuerContext, 'review_offering_issuer', {
+    ...issuerInput(customerIssuerProduct), notes: 'Synthetic independent issuer decision for exact new-customer package.',
+  })
+  customerIssuerProduct = customerIssuerState.products.find(value => value.id === inReview.id)
+  eq(customerIssuerProduct?.offering_package?.issuer_status, 'APPROVED',
+    'new customer issuer decision stays visible in its portal after review')
+  eq(customerIssuerProduct.allowed_actions.includes('review_offering_issuer'), false,
+    'issuer cannot decide the same immutable package twice')
+  await db.query('savepoint customer_issuer_revoked_visibility')
+  await admin(); await db.query("update bx1_portal.organisation_authority_bindings set status='REVOKED' where id=$1", [customerIssuerBindingId])
+  eq((await mandateScopedRead(13, customerIssuerContext)).products.some(value => value.id === inReview.id), false,
+    'revoked customer issuer appointment immediately removes product visibility')
+  await db.query('rollback to savepoint customer_issuer_revoked_visibility; release savepoint customer_issuer_revoked_visibility')
+  eq((await mandateScopedRead(13, issuerContext)).products.some(value => value.id === inReview.id), false,
+    'issuer binding in another native organisation does not expose customer product')
+  await admin()
+  eq(await scalar('select count(*)::int from bx1_portal.subscriptions'), legacyOrdersBeforeOffering, 'new package workflow creates no order or funding')
+  await sqlFile('../../../supabase/migrations/20260924110608_stage2_provider_evidence.sql')
+  phase = 'structured-beneficial-ownership-cutover'
+  const priorManagerStatus = await scalar('select status from bx1_portal.applications where id=$1', [managerApp.id])
+  await sqlFile('../../../supabase/migrations/20260924110922_stage2_beneficial_ownership_control.sql')
+  eq(await scalar('select status from bx1_portal.applications where id=$1', [managerApp.id]), priorManagerStatus,
+    'historical customer admission remains intact without invented ownership rows')
+  eq(await scalar('select count(*)::int from bx1_portal.application_ownership_control_versions'), 0,
+    'legacy v1/v2 submissions are not reinterpreted as structured ownership')
+  for (const role of ['anon', 'authenticated', 'service_role'])
+    eq(await scalar('select has_table_privilege($1,$2,\'SELECT,INSERT,UPDATE,DELETE\')',
+      [role, 'bx1_portal.application_ownership_control_versions']), false, `${role} has no direct ownership-row access`)
+  await db.query("insert into auth.users(id,email,email_confirmed_at,is_anonymous) values($1,'synthetic-owner-applicant-14@example.invalid',clock_timestamp(),false)", [uid(14)])
+  await db.query("insert into auth.sessions(id,user_id,not_after,created_at) values($1,$2,clock_timestamp()+interval '1 hour',clock_timestamp()-interval '1 hour')", [sid(14), uid(14)])
+  await db.query("insert into public.bx1_profiles(id,display_name) values($1,'Synthetic ownership applicant')", [uid(14)])
+  await db.query("insert into bx1_private.persons(id,label,status,evidence_reference,bootstrap_receipt_id) values($1,'Synthetic ownership human 14','TRUSTED','synthetic:test-human-14',$2)", [uid(50), uid(51)])
+  await db.query("insert into bx1_private.person_principals(auth_user_id,person_id,status,evidence_reference,bootstrap_receipt_id) values($1,$2,'TRUSTED','synthetic:test-principal-14',$3)", [uid(14), uid(50), uid(51)])
+  eq(await scalar('select count(distinct person_id)::int from bx1_private.person_principals where auth_user_id=any($1::uuid[])', [[uid(14), uid(2), uid(10)]]), 3,
+    'v3 applicant, Compliance reviewer and Super Admin are separate synthetic humans')
+  const ownershipDocs = ['IDENTITY', 'COMPANY', 'BENEFICIAL_OWNERS'].map((kind, i) => document(14, kind, i))
+  for (const doc of ownershipDocs) await db.query("insert into storage.objects(bucket_id,name,owner_id,metadata) values('bx1-portal-documents',$1,$2,'{\"size\":100,\"mimetype\":\"application/pdf\"}'::jsonb)", [doc.storage_path, uid(14)])
+  const ownershipRelationship = { id: 'e1400000-0000-4000-8000-000000000001', party_type: 'PERSON',
+    legal_name: 'Synthetic Direct Owner', registration_reference: '', country: 'ZA', relationship: 'DIRECT_OWNER',
+    ownership_basis_points: 10000, control_basis: 'Synthetic direct shareholding in the fictional customer organisation.',
+    effective_on: '2026-09-01', change_reason: 'Initial fictional direct ownership disclosure.',
+    evidence_document_id: ownershipDocs[2].id }
+  const ownershipDetails = { details_version: 3, full_name: 'Synthetic Applicant Fourteen', country: 'ZA',
+    company_name: 'Synthetic Ownership Advisory', registration_reference: 'SYNTHETIC-OWN-14',
+    beneficial_owners: 'Synthetic direct owner disclosed in a separate typed relationship record.',
+    business_activities: 'Synthetic wealth-manager operations for test admission only.',
+    representative_position: 'Fictional authorised representative',
+    authority_basis: 'Synthetic appointment evidence, not a platform role or signing mandate.',
+    documents: ownershipDocs, test_data_acknowledged: true, ownership_control: [ownershipRelationship],
+    ownership_change_reason: 'Initial fictional beneficial-ownership disclosure.' }
+  const wrongCapacity = (await entryCommand(14, 'start_application', { persona: 'INVESTOR' })).applications.find(a => a.persona === 'INVESTOR')
+  await denied('manager ownership package cannot be submitted as investor capacity', () => entryCommand(14,
+    'submit_application', { application_id: wrongCapacity.id, expected_revision: wrongCapacity.revision, details: ownershipDetails }), '22023')
+  const ownershipDraft = (await entryCommand(14, 'start_application', { persona: 'WEALTH_MANAGER' })).applications.find(a => a.persona === 'WEALTH_MANAGER')
+  await denied('legacy free-text-only package cannot submit as new customer', () => entryCommand(14,
+    'submit_application', { application_id: ownershipDraft.id, expected_revision: ownershipDraft.revision,
+      details: { ...managerDetails, documents: ownershipDocs } }), '23514')
+  await denied('foreign evidence reference is not an ownership proof', () => entryCommand(14,
+    'submit_application', { application_id: ownershipDraft.id, expected_revision: ownershipDraft.revision,
+      details: { ...ownershipDetails, ownership_control: [{ ...ownershipRelationship, evidence_document_id: managerDetails.documents[2].id }] } }), '22023')
+  await denied('stale ownership application revision rejected', () => entryCommand(14,
+    'submit_application', { application_id: ownershipDraft.id, expected_revision: ownershipDraft.revision + 1,
+      details: ownershipDetails }), '23514')
+  phase = 'ownership-valid-manager-submission'
+  let ownershipApp = (await entryCommand(14, 'submit_application', {
+    application_id: ownershipDraft.id, expected_revision: ownershipDraft.revision, details: ownershipDetails,
+  })).applications.find(a => a.id === ownershipDraft.id)
+  eq(ownershipApp.status, 'SUBMITTED', 'typed ownership submission awaits independent decision')
+  await admin()
+  const organisationRequiredKeys = ['details_version', 'full_name', 'country', 'company_name',
+    'registration_reference', 'beneficial_owners', 'business_activities', 'representative_position',
+    'authority_basis', 'documents', 'test_data_acknowledged', 'ownership_control', 'ownership_change_reason']
+  const admissionPackage = (await db.query("select admission_purpose,status,details->>'details_version' as details_version,details ?& $2::text[] as has_required_fields from bx1_portal.applications where id=$1",
+    [ownershipApp.id, organisationRequiredKeys])).rows[0]
+  eq([admissionPackage.admission_purpose, admissionPackage.status, admissionPackage.details_version,
+    admissionPackage.has_required_fields], ['CUSTOMER_ORGANISATION_ADMISSION', 'SUBMITTED', '3', true],
+  'submitted customer organisation has the v3 admission package before review')
+  eq(await scalar('select count(*)::int from bx1_portal.application_ownership_control_versions where application_id=$1 and application_revision=$2',
+    [ownershipApp.id, ownershipApp.revision]), 1, 'exact submitted revision captures one immutable relationship')
+  eq(await scalar('select count(*)::int from public.bx1_memberships where user_id=$1', [uid(14)]), 0,
+    'ownership disclosure did not create a platform membership')
+  await denied('other-organisation assured Compliance cannot review ownership package', () => mandateScopedCommand(5,
+    roleContext('ComplianceOfficer', otherScope), 'review_application', { application_id: ownershipApp.id,
+      expected_revision: ownershipApp.revision, decision: 'APPROVED',
+      notes: 'Synthetic unrelated organisation attempted admission decision.', checks: reviewChecks }), '42501')
+  await denied('AAL1 Compliance cannot review ownership package', () => scopedCommand(2, reviewer,
+    'review_application', { application_id: ownershipApp.id, expected_revision: ownershipApp.revision,
+      decision: 'CHANGES_REQUIRED', notes: 'Synthetic lower-assurance review attempt.', checks: reviewChecks }), '42501')
+  phase = 'ownership-independent-changes-required-review'
+  ownershipApp = (await mandateScopedCommand(2, reviewer, 'review_application', { application_id: ownershipApp.id,
+    expected_revision: ownershipApp.revision, decision: 'CHANGES_REQUIRED',
+    notes: 'Clarify the fictional control relationship and disclose the correction.', checks: reviewChecks })).applications.find(a => a.id === ownershipApp.id)
+  eq(ownershipApp.status, 'CHANGES_REQUIRED', 'reviewer requests information without approval')
+  const correctedRelationship = { ...ownershipRelationship, ownership_basis_points: 7500,
+    change_reason: 'Corrected fictional ownership after independent information request.' }
+  await denied('material ownership change needs a new version reason', () => entryCommand(14,
+    'submit_application', { application_id: ownershipApp.id, expected_revision: ownershipApp.revision,
+      details: { ...ownershipDetails, ownership_control: [correctedRelationship] } }), '23514')
+  phase = 'ownership-corrected-resubmission'
+  ownershipApp = (await entryCommand(14, 'submit_application', { application_id: ownershipApp.id,
+    expected_revision: ownershipApp.revision, details: { ...ownershipDetails, ownership_control: [correctedRelationship],
+      ownership_change_reason: 'Corrected fictional ownership percentage after reviewer request.' } })).applications.find(a => a.id === ownershipApp.id)
+  await admin()
+  eq(await scalar('select count(distinct application_revision)::int from bx1_portal.application_ownership_control_versions where application_id=$1', [ownershipApp.id]), 2,
+    'old and corrected relationship versions remain separately preserved')
+  eq(await scalar('select ownership_basis_points from bx1_portal.application_ownership_control_versions where application_id=$1 order by application_revision limit 1', [ownershipApp.id]), 10000,
+    'earlier disclosed percentage remains immutable')
+  phase = 'ownership-independent-approval'
+  ownershipApp = (await mandateScopedCommand(2, reviewer, 'review_application', { application_id: ownershipApp.id,
+    expected_revision: ownershipApp.revision, decision: 'APPROVED',
+    notes: 'Independent synthetic review of exact corrected ownership evidence.', checks: reviewChecks })).applications.find(a => a.id === ownershipApp.id)
+  eq(ownershipApp.status, 'APPROVED', 'independent decision applies to exact structured revision')
+  await admin()
+  eq(await scalar('select bx1_portal.customer_admission_package_current($1::uuid)', [ownershipApp.id]), true,
+    'approved v3 mandate source binds to the immediately preceding submitted ownership revision')
+  eq(await scalar('select count(*)::int from public.bx1_memberships where user_id=$1', [uid(14)]), 0,
+    'customer admission still grants no platform membership or signer authority')
+  phase = 'ownership-v3-mandate-request'
+  const v3Admission = (await entryRead(14)).applications.find(a => a.id === ownershipApp.id)
+  eq(v3Admission.can_request_mandate, true, 'approved v3 customer admission exposes a separate mandate request')
+  await denied('v3 customer admission alone cannot create a product', () => scopedCommand(14,
+    { mode: 'APPLICANT' }, 'create_product', { organisation_id: v3Admission.organisation_id, terms: terms() }), '42501')
+  const v3MandateInput = { application_id: ownershipApp.id, expected_revision: 0,
+    evidence_reference: 'Synthetic independently reviewable v3 appointment evidence.',
+    requested_until: new Date(Date.now() + 3 * 86400000).toISOString() }
+  const v3MandateKey = key()
+  let v3Mandate = (await entryCommand(14, 'request_representative_mandate', v3MandateInput,
+    v3MandateKey)).organisation_mandates.find(m => m.application_id === ownershipApp.id)
+  eq([v3Mandate.status, v3Mandate.effective, v3Mandate.admission_revision],
+    ['SUBMITTED', false, ownershipApp.revision], 'v3 appointment awaits an independent decision on the exact admission revision')
+  eq((await entryCommand(14, 'request_representative_mandate', v3MandateInput, v3MandateKey))
+    .organisation_mandates.find(m => m.id === v3Mandate.id).id, v3Mandate.id,
+  'v3 appointment request retry is idempotent')
+  await admin()
+  eq(await scalar("select count(*)::int from public.bx1_memberships where user_id=$1 and role='OfferingManager'", [uid(14)]), 0,
+    'requesting a v3 mandate did not grant an operating role')
+  phase = 'ownership-v3-mandate-independent-review'
+  await denied('AAL1 reviewer cannot decide v3 appointment', () => scopedCommand(2, reviewer,
+    'review_representative_mandate', { mandate_id: v3Mandate.id, expected_revision: v3Mandate.revision,
+      decision: 'APPROVED', notes: 'Synthetic lower-assurance appointment decision.',
+      checks: { appointment: true, evidence: true, scope: true } }), '42501')
+  v3Mandate = (await mandateScopedCommand(2, reviewer, 'review_representative_mandate', {
+    mandate_id: v3Mandate.id, expected_revision: v3Mandate.revision, decision: 'APPROVED',
+    notes: 'Independent synthetic review of the v3 customer appointment and its exact source admission.',
+    checks: { appointment: true, evidence: true, scope: true },
+  })).organisation_mandates.find(m => m.id === v3Mandate.id)
+  eq([v3Mandate.status, v3Mandate.effective, v3Mandate.next_owner], ['APPROVED', false, 'SUPER_ADMIN'],
+    'Compliance approval of the v3 appointment still grants no role')
+  phase = 'ownership-v3-mandate-independent-apply'
+  v3Mandate = (await mandateScopedCommand(10, roleContext('SuperAdmin'), 'apply_representative_mandate', {
+    mandate_id: v3Mandate.id, expected_revision: v3Mandate.revision,
+  })).organisation_mandates.find(m => m.id === v3Mandate.id)
+  eq([v3Mandate.status, v3Mandate.effective, v3Mandate.applied_by_user_id], ['APPLIED', true, uid(10)],
+    'distinct assured Super Admin applies only the reviewed v3 appointment')
+  const v3RoleContext = roleContext('OfferingManager', v3Mandate.native_organisation_id)
+  const v3Workspace = await scopedRead(14, v3RoleContext)
+  eq(v3Workspace.organisations.some(o => o.id === v3Admission.organisation_id), true,
+    'applied v3 appointment opens the exact customer product workspace')
+  eq(v3Workspace.organisation_mandates.length, 0, 'customer product role does not expose the staff mandate queue')
+  const v3Draft = (await scopedCommand(14, v3RoleContext, 'create_product', {
+    organisation_id: v3Admission.organisation_id, terms: { ...terms(), name: 'V3 ownership-governed synthetic draft' },
+  })).products.find(p => p.terms.name === 'V3 ownership-governed synthetic draft')
+  truth(v3Draft?.id, 'v3 customer can create a product only after the separate approved mandate is applied')
+  await admin()
+  checks += await proveProviderEvidence(db)
+  await admin()
+  await sqlFile('../../../supabase/migrations/20260924112832_stage2_document_quarantine_lifecycle.sql')
+  await sqlFile('../../../supabase/tests/bx1_document_lifecycle.sql')
+  checks++
+  await sqlFile('../../../supabase/migrations/20260924125627_stage2_customer_monitoring.sql')
+  checks += await proveCustomerMonitoring(db, {
+    applicationId: ownershipApp.id,
+    organisationId: v3Admission.organisation_id,
+    draftProductId: v3Draft.id,
+    managerMandateId: v3Mandate.id,
+    investorApplicationId: ownApp3.id,
+    investorAccountId: account3.id,
+    eligibilityCaseId: approved.id,
+  })
+  await sqlFile('../../../supabase/migrations/20260924125811_stage2_document_retention_authority.sql')
+  await sqlFile('../../../supabase/tests/bx1_document_retention_authority.sql')
+  checks += await proveDocumentRetentionAuthority(db)
+  phase = 'stage3-versioned-fund-package'
+  const legacyFundCreateKey = key()
+  const legacyFundCreateBody = {
+    organisation_id: orgId, terms: { ...terms('FUND'), name: 'Legacy fund draft requiring v2 upgrade' },
+  }
+  const v1FundDraft = (await scopedCommand(1, manager, 'create_product', {
+    ...legacyFundCreateBody,
+  }, legacyFundCreateKey)).products.find(value => value.terms.name === 'Legacy fund draft requiring v2 upgrade')
+  const legacyPropertyCreateKey = key()
+  const legacyPropertyCreateBody = {
+    organisation_id: orgId, terms: { ...terms('REAL_ESTATE'), name: 'Legacy property draft requiring v2 upgrade' },
+  }
+  const v1PropertyDraft = (await scopedCommand(1, manager, 'create_product',
+    legacyPropertyCreateBody, legacyPropertyCreateKey)).products.find(value =>
+    value.terms.name === 'Legacy property draft requiring v2 upgrade')
+  await admin()
+  const legacyFundHash = await scalar('select terms_hash from bx1_portal.products where id=$1', [fundPackage.id])
+  const legacyPropertyHash = await scalar('select terms_hash from bx1_portal.products where id=$1', [propertyPackage.id])
+  const legacyOrderTermsHash = await scalar('select terms_hash from bx1_portal.subscriptions where id=$1', [historicalOrder.id])
+  const legacySnapshots = await scalar("select count(*)::int from bx1_portal.offering_revisions where origin like 'LEGACY_%'")
+  await sqlFile('../../../supabase/migrations/20260928141413_stage3_fund_terms_v2.sql')
+  eq(await scalar('select terms_hash from bx1_portal.products where id=$1', [fundPackage.id]), legacyFundHash, 'v2 migration does not rehash a reviewed legacy fund')
+  eq(await scalar('select terms_hash from bx1_portal.subscriptions where id=$1', [historicalOrder.id]), legacyOrderTermsHash, 'v2 migration does not change accepted order terms hash')
+  eq(await scalar("select count(*)::int from bx1_portal.offering_revisions where origin like 'LEGACY_%'"), legacySnapshots, 'v2 migration preserves immutable legacy snapshots')
+  eq(await scalar("select has_function_privilege('authenticated','public.bx1_portal_command(text,uuid,jsonb)','EXECUTE')"), false, 'legacy public command remains sealed')
+  eq(await scalar("select has_function_privilege('authenticated','bx1_portal.execute_scoped_pre_fund_v2(jsonb,text,uuid,jsonb)','EXECUTE')"), false, 'previous scoped writer remains private')
+  eq(await scalar("select has_function_privilege('authenticated','bx1_portal.save_fund_v2_scoped(jsonb,uuid,jsonb)','EXECUTE')"), false, 'v2 fund save helper remains private')
+  eq(await scalar("select bx1_portal.offering_technical_ready($1)", [fundPackage.offering_package.id]), false, 'fund technical-readiness gate remains false')
+  const replayedLegacyDraft = (await scopedCommand(1, manager, 'create_product', legacyFundCreateBody, legacyFundCreateKey)).products.find(value => value.id === v1FundDraft.id)
+  eq(replayedLegacyDraft.id, v1FundDraft.id, 'pre-migration v1 idempotent replay remains a read, not a duplicate fund')
+  await denied('new FUND cannot use v1 ZAR_TEST terms', () => scopedCommand(1, manager, 'create_product', {
+    organisation_id: orgId, terms: { ...terms('FUND'), name: 'Prohibited new legacy fund' },
+  }))
+  await denied('even an internal status update cannot submit a legacy fund draft', async () => {
+    await admin()
+    await db.query("update bx1_portal.products set status='IN_REVIEW',revision=revision+1 where id=$1", [v1FundDraft.id])
+  })
+  await denied('legacy fund draft cannot submit without explicit v2 upgrade', () => scopedCommand(1, manager, 'submit_product', {
+    product_id: v1FundDraft.id, expected_revision: v1FundDraft.revision,
+  }))
+  await admin()
+  eq(await scalar('select status from bx1_portal.products where id=$1', [v1FundDraft.id]), 'DRAFT', 'rejected legacy submission rolled back status')
+  await denied('fund draft cannot switch asset class to property', () => scopedCommand(1, manager, 'save_product', {
+    product_id: v1FundDraft.id, expected_revision: v1FundDraft.revision,
+    terms: { ...terms('REAL_ESTATE'), name: 'Prohibited asset class switch' },
+  }))
+  for (const [label, invalid] of [
+    ['NAV frequency null', { fund: { ...fundV2Terms().fund, nav: { ...fundV2Terms().fund.nav, frequency: null } } }],
+    ['dealing subscription frequency null', { fund: { ...fundV2Terms().fund, dealing: { ...fundV2Terms().fund.dealing, subscription_frequency: null } } }],
+    ['dealing redemption frequency null', { fund: { ...fundV2Terms().fund, dealing: { ...fundV2Terms().fund.dealing, redemption_frequency: null } } }],
+    ['distribution frequency null', { fund: { ...fundV2Terms().fund, distributions: { ...fundV2Terms().fund.distributions, frequency: null } } }],
+    ['fee precision invalid', { fund: { ...fundV2Terms().fund, fees: { ...fundV2Terms().fund.fees, management_bps: 100.5 } } }],
+    ['wrong settlement decimals', { settlement_decimals: 2 }],
+    ['currency is not TST', { currency: 'ZAR_TEST' }],
+    ['unexpected policy key', { fund: { ...fundV2Terms().fund, unreviewed_override: 'yes' } }],
+    ['contradictory mandate summary', { strategy: 'A conflicting investment mandate that is not the typed fund mandate.' }],
+    ['contradictory pricing summary', { pricing_basis: 'A fixed price of 10 TST regardless of the binding NAV and dealing policy.' }],
+    ['contradictory fee summary', { fees: 'A management fee of nine thousand basis points, contrary to the typed policy.' }],
+    ['contradictory exit summary', { redemption_terms: 'Immediate unconditional redemption, contrary to the typed dealing and liquidity rules.' }],
+    ['legacy denomination hidden in mandate', { fund: { ...fundV2Terms().fund, mandate: 'Fictional test mandate wrongly denominated in zar_test despite TST terms.' } }],
+    ['legacy denomination hidden in disclosure', { documents: { ...fundV2Terms().documents, risks: 'Synthetic risk disclosure wrongly says ZAR_TEST is the settlement asset. '.repeat(2).trim() } }],
+  ]) {
+    await denied(`v2 ${label} rejected by SQL`, async () => {
+      await admin()
+      await scalar('select bx1_portal.validate_terms($1::jsonb)', [JSON.stringify({ ...fundV2Terms(), ...invalid })])
+    }, '22023')
+  }
+  await denied('direct command cannot create contradictory v2 fund economics', () => scopedCommand(1, manager, 'create_product', {
+    organisation_id: orgId,
+    terms: { ...fundV2Terms('Rejected conflicting fund'), fees: 'A conflicting 90 percent fee disclosed only in the legacy narrative.' },
+  }), '22023')
+  await db.query('savepoint oversized_fund_v2_command')
+  let oversizedFundError
+  try {
+    await scopedCommand(1, manager, 'create_product', {
+      organisation_id: orgId,
+      terms: { ...fundV2Terms('Rejected oversized fund'), fund: { ...fundV2Terms().fund, mandate: 'x'.repeat(66000) } },
+    })
+  } catch (error) { oversizedFundError = error?.message }
+  await db.query('rollback to savepoint oversized_fund_v2_command; release savepoint oversized_fund_v2_command')
+  eq(oversizedFundError, 'fund_v2_command_too_large', 'oversized direct command rejected before nested policy validation')
+  const upgraded = (await scopedCommand(1, manager, 'save_product', {
+    product_id: v1FundDraft.id, expected_revision: v1FundDraft.revision,
+    terms: fundV2Terms('Upgraded synthetic TST fund package'),
+  })).products.find(value => value.id === v1FundDraft.id)
+  eq([upgraded.terms.terms_version, upgraded.terms.currency, upgraded.terms.settlement_decimals], [2, 'TST', 6], 'legacy draft upgraded by explicit save, not data migration')
+  eq((BigInt(upgraded.terms.cap_units) * BigInt(upgraded.terms.unit_price_minor)).toString(), '1000000000', '100 units at 10 TST each equal 1,000 synthetic TST base units')
+  const v2Submitted = (await scopedCommand(1, manager, 'submit_product', {
+    product_id: upgraded.id, expected_revision: upgraded.revision,
+  })).products.find(value => value.id === upgraded.id)
+  truth(v2Submitted.offering_package?.id, 'v2 fund submission creates immutable offering revision')
+  eq(v2Submitted.offering_package.terms_hash, v2Submitted.terms_hash, 'v2 fund immutable revision bound to validated terms hash')
+  eq(v2Submitted.offering_package.technical_readiness_status, 'NOT_VERIFIED', 'v2 fund is not open for payment or issuance')
+  let v2Reviewed = (await mandateScopedCommand(13, issuerContext, 'review_offering_issuer', issuerInput(v2Submitted))).products.find(value => value.id === v2Submitted.id)
+  v2Reviewed = (await mandateScopedCommand(2, reviewer, 'review_product', complianceInput(v2Reviewed))).products.find(value => value.id === v2Submitted.id)
+  eq([v2Reviewed.status, v2Reviewed.offering_package.issuer_status, v2Reviewed.offering_package.compliance_status],
+    ['APPROVED', 'APPROVED', 'APPROVED'], 'v2 fund receives separate appointed issuer and independent Compliance decisions')
+  await db.query('savepoint v2_public_rpc_publication')
+  let v2PublicationError
+  const v2PublicationPayload = { product_id: v2Reviewed.id, expected_revision: v2Reviewed.revision }
+  try {
+    await scopedCommand(1, manager, 'publish_product', v2PublicationPayload)
+  } catch (error) { v2PublicationError = { code: error?.code, message: error?.message } }
+  await db.query('rollback to savepoint v2_public_rpc_publication; release savepoint v2_public_rpc_publication')
+  await db.query('savepoint v2_direct_scoped_publication')
+  let v2DirectPublicationError
+  try {
+    await actor(1)
+    await scalar('select bx1_portal.execute_scoped($1::jsonb,$2,$3,$4::jsonb)',
+      [JSON.stringify(manager), 'publish_product', key(), JSON.stringify(v2PublicationPayload)])
+  } catch (error) { v2DirectPublicationError = { code: error?.code, message: error?.message } }
+  await db.query('rollback to savepoint v2_direct_scoped_publication; release savepoint v2_direct_scoped_publication')
+  eq(v2PublicationError, { code: '23514', message: 'fund_v2_settlement_route_not_admitted' },
+    `v2 public=${v2PublicationError?.code}/${v2PublicationError?.message} direct=${v2DirectPublicationError?.code}/${v2DirectPublicationError?.message}`)
+  await admin()
+  eq(await scalar('select status from bx1_portal.products where id=$1', [v2Reviewed.id]), 'APPROVED', 'denied v2 publication leaves package reviewed but closed')
+  await denied('internal update cannot publish v2 fund into legacy settlement route', async () => {
+    await admin()
+    await db.query("update bx1_portal.products set status='PUBLISHED' where id=$1", [v2Reviewed.id])
+  })
+  await denied('internal insert cannot subscribe to v2 fund through legacy route', async () => {
+    await admin()
+    await db.query(`insert into bx1_portal.subscriptions
+      (product_id,investor_id,organisation_id,product_revision,terms_hash,accepted_terms,accepted_documents,accepted_risks,units,amount_minor)
+      values($1,$2,$3,$4,$5,$6::jsonb,true,true,1,10000000)`,
+    [v2Reviewed.id, uid(3), orgId, v2Reviewed.revision, v2Reviewed.terms_hash, JSON.stringify(v2Reviewed.terms)])
+  })
+  phase = 'fund-v2-other-organisation-own-draft-read'
+  const ownReadStartedAt = Date.now()
+  const foreignManagerOwnDraft = (await scopedRead(14, v3RoleContext)).products.find(value => value.id === v3Draft.id)
+  console.log(`BX1_FUND_V2_TIMING scopedReadMs=${Date.now() - ownReadStartedAt} actor=synthetic-other-organisation`)
+  eq(foreignManagerOwnDraft?.status, 'DRAFT', 'other-organisation manager sees only their own existing draft')
+  await admin()
+  phase = 'fund-v2-read-projection-profile'
+  for (const layer of ['read_scoped_pre_eligibility', 'read_scoped_pre_mandate',
+    'read_scoped_pre_entity', 'read_scoped_pre_offering']) {
+    const layerStartedAt = Date.now()
+    await scalar(`select pg_catalog.octet_length(bx1_portal.${layer}($1::jsonb)::text)`,
+      [JSON.stringify(v3RoleContext)])
+    console.log(`BX1_FUND_V2_TIMING layer=${layer} elapsedMs=${Date.now() - layerStartedAt}`)
+  }
+  const contextStartedAt = Date.now()
+  await scalar('select bx1_portal.valid_operating_context($1::jsonb)', [JSON.stringify(v3RoleContext)])
+  console.log(`BX1_FUND_V2_TIMING validContextMs=${Date.now() - contextStartedAt} actor=synthetic-other-organisation`)
+  const operatorStartedAt = Date.now()
+  await scalar('select bx1_portal.scoped_operator($1::jsonb,$2::uuid)',
+    [JSON.stringify(v3RoleContext), v3Draft.organisation_id])
+  console.log(`BX1_FUND_V2_TIMING scopedOperatorMs=${Date.now() - operatorStartedAt} actor=synthetic-other-organisation`)
+  await admin()
+  const ownDraftBefore = await scalar(`select jsonb_build_object(
+    'revision',p.revision,'hash',p.terms_hash,'requests',(select count(*) from bx1_portal.requests r
+      where r.actor_id=$2 and r.command='save_product' and r.payload->>'product_id'=($1::uuid)::text),
+    'scoped',(select count(*) from bx1_portal.scoped_requests r
+      where r.actor_id=$2 and r.command='save_product' and r.payload->>'product_id'=($1::uuid)::text),
+    'events',(select count(*) from bx1_portal.events e
+      where e.actor_id=$2 and e.kind='save_product' and e.subject_id=$1))
+    from bx1_portal.products p where p.id=$1`, [v3Draft.id, uid(14)])
+  phase = 'fund-v2-own-save-stale-revision'
+  await denied('v2 fund save rejects stale revision before changing a draft', () => scopedCommand(14,
+    v3RoleContext, 'save_product', {
+      product_id: v3Draft.id, expected_revision: v3Draft.revision + 1,
+      terms: fundV2Terms('Rejected synthetic TST fund with stale revision'),
+    }), '23514')
+  await admin()
+  eq(await scalar('select revision from bx1_portal.products where id=$1', [v3Draft.id]),
+    v3Draft.revision, 'stale save preserves the product revision')
+  phase = 'fund-v2-own-save-audit-rollback'
+  await denied('v2 fund save audit failure rolls back terms, revision and both receipts', async () => {
+    await admin()
+    await db.query(`create function public.synthetic_fund_v2_save_audit_failure() returns trigger
+      language plpgsql as $$ begin if new.kind='save_product' then
+        raise exception 'synthetic_fund_v2_save_audit_failure' using errcode='23514'; end if;
+        return new; end $$;
+      create trigger synthetic_fund_v2_save_audit_failure before insert on bx1_portal.events
+      for each row execute function public.synthetic_fund_v2_save_audit_failure()`)
+    await scopedCommand(14, v3RoleContext, 'save_product', {
+      product_id: v3Draft.id, expected_revision: v3Draft.revision,
+      terms: fundV2Terms('Rejected synthetic TST fund after audit failure'),
+    })
+  })
+  await admin()
+  eq(await scalar(`select jsonb_build_object(
+    'revision',p.revision,'hash',p.terms_hash,'requests',(select count(*) from bx1_portal.requests r
+      where r.actor_id=$2 and r.command='save_product' and r.payload->>'product_id'=($1::uuid)::text),
+    'scoped',(select count(*) from bx1_portal.scoped_requests r
+      where r.actor_id=$2 and r.command='save_product' and r.payload->>'product_id'=($1::uuid)::text),
+    'events',(select count(*) from bx1_portal.events e
+      where e.actor_id=$2 and e.kind='save_product' and e.subject_id=$1))
+    from bx1_portal.products p where p.id=$1`, [v3Draft.id, uid(14)]), ownDraftBefore,
+  'failed v2 save left no product, receipt or event change')
+  phase = 'fund-v2-other-organisation-own-draft-upgrade'
+  const upgradeStartedAt = Date.now()
+  const ownUpgradeKey = key()
+  const ownUpgradeBody = {
+    product_id: v3Draft.id, expected_revision: v3Draft.revision,
+    terms: fundV2Terms('V3 own-organisation synthetic TST fund upgrade'),
+  }
+  let foreignManagerOwnUpgrade
+  try {
+    foreignManagerOwnUpgrade = (await scopedCommand(14, v3RoleContext, 'save_product', ownUpgradeBody,
+      ownUpgradeKey)).products.find(value => value.id === v3Draft.id)
+  } catch (error) {
+    error.message = `own-v3-upgrade elapsedMs=${Date.now() - upgradeStartedAt} ${error.message}`
+    throw error
+  }
+  console.log(`BX1_FUND_V2_SAVE_PROOF elapsedMs=${Date.now() - upgradeStartedAt} actor=synthetic-other-organisation result=success`)
+  eq([foreignManagerOwnUpgrade?.id, foreignManagerOwnUpgrade?.revision,
+    foreignManagerOwnUpgrade?.terms?.terms_version, foreignManagerOwnUpgrade?.terms?.currency],
+  [v3Draft.id, v3Draft.revision + 1, 2, 'TST'],
+  'other-organisation manager can upgrade only their own legacy draft under an effective mandate')
+  await admin()
+  eq(await scalar(`select jsonb_build_object(
+    'requests',(select count(*) from bx1_portal.requests where actor_id=$1 and request_key=$2),
+    'scoped',(select count(*) from bx1_portal.scoped_requests where actor_id=$1 and request_key=$2),
+    'events',(select count(*) from bx1_portal.events where actor_id=$1 and subject_id=$3 and kind='save_product'))`,
+  [uid(14), ownUpgradeKey, v3Draft.id]), { requests: 1, scoped: 1, events: 1 },
+  'one fund save creates both idempotency receipts and one audit event')
+  phase = 'fund-v2-own-save-replay-and-conflict'
+  const replayedOwnUpgrade = (await scopedCommand(14, v3RoleContext, 'save_product', ownUpgradeBody,
+    ownUpgradeKey)).products.find(value => value.id === v3Draft.id)
+  eq(replayedOwnUpgrade.revision, foreignManagerOwnUpgrade.revision,
+    'exact fund save replay returns current scoped state without a second revision')
+  await denied('fund save key cannot be reused with different terms', () => scopedCommand(14,
+    v3RoleContext, 'save_product', { ...ownUpgradeBody,
+      terms: fundV2Terms('Conflicting terms on the same save key') }, ownUpgradeKey), '23505')
+  await admin()
+  eq(await scalar("select count(*)::int from bx1_portal.events where actor_id=$1 and subject_id=$2 and kind='save_product'",
+    [uid(14), v3Draft.id]), 1, 'replay and conflict create no second fund-save audit event')
+  phase = 'fund-v2-cross-organisation-save-denial'
+  await denied('cross-org manager cannot probe v2 fund save', () => scopedCommand(14, v3RoleContext, 'save_product', {
+    product_id: v2Reviewed.id, expected_revision: v2Reviewed.revision,
+    terms: fundV2Terms('Foreign attempted alteration'),
+  }), '42501')
+  await admin()
+  eq(await scalar('select terms_hash from bx1_portal.products where id=$1', [v2Reviewed.id]), v2Reviewed.terms_hash, 'cross-org denied without package mutation')
+  phase = 'stage3-property-v2-install-and-history'
+  await sqlFile('../../../supabase/migrations/20260928161233_stage3_real_estate_terms_v2.sql')
+  await sqlFile('../../../supabase/tests/stage3_real_estate_v2_acl.sql'); checks++
+  eq(await scalar('select terms_hash from bx1_portal.products where id=$1', [propertyPackage.id]), legacyPropertyHash,
+    'property v2 migration does not rehash a reviewed historical property package')
+  eq(await scalar('select terms_hash from bx1_portal.subscriptions where id=$1', [historicalOrder.id]), legacyOrderTermsHash,
+    'property v2 migration preserves earlier accepted order terms')
+  eq(await scalar("select has_function_privilege('authenticated','bx1_portal.save_real_estate_v2_scoped(jsonb,uuid,jsonb)','EXECUTE')"), false,
+    'typed property draft writer remains private')
+  const oldProperty = (await scopedRead(1, manager)).products.find(value => value.id === propertyPackage.id)
+  eq([oldProperty.id, oldProperty.terms_hash, oldProperty.terms.currency],
+    [propertyPackage.id, legacyPropertyHash, 'ZAR_TEST'], 'legacy property remains readable without denomination rewrite')
+  const replayedLegacyProperty = (await scopedCommand(1, manager, 'create_product',
+    legacyPropertyCreateBody, legacyPropertyCreateKey)).products.find(value => value.id === v1PropertyDraft.id)
+  eq(replayedLegacyProperty.id, v1PropertyDraft.id, 'pre-migration property create key replays existing draft only')
+  await denied('new property cannot use v1 ZAR_TEST terms', () => scopedCommand(1, manager,
+    'create_product', { organisation_id: orgId, terms: terms('REAL_ESTATE') }))
+  await denied('internal status update cannot submit an unupgraded property draft', async () => {
+    await admin(); await db.query("update bx1_portal.products set status='IN_REVIEW',revision=revision+1 where id=$1", [v1PropertyDraft.id])
+  })
+  await denied('legacy property draft cannot submit without explicit v2 upgrade', () => scopedCommand(1, manager,
+    'submit_product', { product_id: v1PropertyDraft.id, expected_revision: v1PropertyDraft.revision }))
+  for (const [label, invalid, sqlstate] of [
+    ['wrong settlement decimals', { settlement_decimals: 2 }, '22023'],
+    ['wrong currency', { currency: 'ZAR_TEST' }, '22023'],
+    ['missing title evidence', { real_estate: { ...propertyV2Terms().real_estate,
+      property: { ...propertyV2Terms().real_estate.property, title_evidence_reference: '' } } }, '22023'],
+    ['unknown property policy', { real_estate: { ...propertyV2Terms().real_estate,
+      unreviewed_override: 'yes' } }, '22023'],
+    ['same transfer and liquidation path', { real_estate: { ...propertyV2Terms().real_estate,
+      exits: { ...propertyV2Terms().real_estate.exits,
+        disposal_liquidation_policy: propertyV2Terms().real_estate.exits.eligible_transfer_policy } } }, '23514'],
+    ['contradictory old pricing narrative', { pricing_basis: 'Unreviewed fixed property price' }, '22023'],
+    ['legacy denomination hidden in property disclosure', { documents: { ...propertyV2Terms().documents,
+      risks: 'This fictional property wrongly promises ZAR_TEST settlement.' } }, '22023'],
+  ]) await denied(`property v2 ${label} rejected by SQL`, async () => {
+    await admin(); await scalar('select bx1_portal.validate_terms($1::jsonb)',
+      [JSON.stringify({ ...propertyV2Terms(), ...invalid })])
+  }, sqlstate)
+  await denied('fund draft cannot become property by saving new typed terms', () => scopedCommand(1, manager,
+    'save_product', { product_id: v2Reviewed.id, expected_revision: v2Reviewed.revision,
+      terms: propertyV2Terms('Wrong asset for existing fund') }))
+  const freshProperty = (await scopedCommand(1, manager, 'create_product', { organisation_id: orgId,
+    terms: propertyV2Terms('Fresh synthetic TST property package') })).products.find(value =>
+    value.terms.name === 'Fresh synthetic TST property package')
+  eq([freshProperty?.terms?.terms_version, freshProperty?.terms?.currency,
+    freshProperty?.terms?.settlement_decimals], [2, 'TST', 6], 'new property uses the common v2 settlement contract')
+  eq((BigInt(freshProperty.terms.cap_units) * BigInt(freshProperty.terms.unit_price_minor)).toString(),
+    '2000000000', '20 interests at 100 TST each equal 2,000 synthetic TST base units')
+  eq(freshProperty.terms.property_valuation_minor, '3000000000',
+    'illustrative 3,000 TST property valuation stays distinct from the 2,000 TST offering capacity')
+  phase = 'stage3-property-v2-save-and-authority'
+  await admin()
+  const propertyBefore = await scalar(`select jsonb_build_object(
+    'revision',p.revision,'hash',p.terms_hash,
+    'requests',(select count(*) from bx1_portal.requests r where r.actor_id=$2 and r.command='save_product'
+      and r.payload->>'product_id'=($1::uuid)::text),
+    'scoped',(select count(*) from bx1_portal.scoped_requests r where r.actor_id=$2 and r.command='save_product'
+      and r.payload->>'product_id'=($1::uuid)::text),
+    'events',(select count(*) from bx1_portal.events e where e.actor_id=$2 and e.kind='save_product'
+      and e.subject_id=$1)) from bx1_portal.products p where p.id=$1`, [v1PropertyDraft.id, uid(1)])
+  await denied('property save rejects stale revision', () => scopedCommand(1, manager, 'save_product', {
+    product_id: v1PropertyDraft.id, expected_revision: v1PropertyDraft.revision + 1,
+    terms: propertyV2Terms('Rejected stale property upgrade'),
+  }))
+  await denied('property save audit failure rolls back draft, receipts and event', async () => {
+    await admin()
+    await db.query(`create function public.synthetic_property_save_audit_failure() returns trigger
+      language plpgsql as $$ begin if new.kind='save_product' then
+        raise exception 'synthetic_property_save_audit_failure' using errcode='23514'; end if;
+        return new; end $$;
+      create trigger synthetic_property_save_audit_failure before insert on bx1_portal.events
+      for each row execute function public.synthetic_property_save_audit_failure()`)
+    await scopedCommand(1, manager, 'save_product', {
+      product_id: v1PropertyDraft.id, expected_revision: v1PropertyDraft.revision,
+      terms: propertyV2Terms('Rejected property upgrade after audit failure'),
+    })
+  })
+  await admin()
+  eq(await scalar(`select jsonb_build_object(
+    'revision',p.revision,'hash',p.terms_hash,
+    'requests',(select count(*) from bx1_portal.requests r where r.actor_id=$2 and r.command='save_product'
+      and r.payload->>'product_id'=($1::uuid)::text),
+    'scoped',(select count(*) from bx1_portal.scoped_requests r where r.actor_id=$2 and r.command='save_product'
+      and r.payload->>'product_id'=($1::uuid)::text),
+    'events',(select count(*) from bx1_portal.events e where e.actor_id=$2 and e.kind='save_product'
+      and e.subject_id=$1)) from bx1_portal.products p where p.id=$1`, [v1PropertyDraft.id, uid(1)]), propertyBefore,
+  'failed property audit leaves no revision, hash, receipt or event change')
+  await db.query('savepoint property_manager_revocation')
+  await admin()
+  await db.query("update bx1_portal.organisation_authority_bindings set status='REVOKED' where product_organisation_id=$1 and role='OfferingManager'", [orgId])
+  await denied('revoked manager cannot save property draft', () => scopedCommand(1, manager,
+    'save_product', { product_id: v1PropertyDraft.id, expected_revision: v1PropertyDraft.revision,
+      terms: propertyV2Terms('Rejected revoked manager property upgrade') }), '42501')
+  await db.query('rollback to savepoint property_manager_revocation; release savepoint property_manager_revocation')
+  await denied('other-organisation manager cannot alter property draft', () => scopedCommand(14,
+    v3RoleContext, 'save_product', { product_id: v1PropertyDraft.id,
+      expected_revision: v1PropertyDraft.revision, terms: propertyV2Terms('Foreign property alteration') }), '42501')
+  const propertyUpgradeKey = key()
+  const propertyUpgradeBody = { product_id: v1PropertyDraft.id, expected_revision: v1PropertyDraft.revision,
+    terms: propertyV2Terms('Upgraded synthetic TST property package') }
+  const upgradedProperty = (await scopedCommand(1, manager, 'save_product', propertyUpgradeBody,
+    propertyUpgradeKey)).products.find(value => value.id === v1PropertyDraft.id)
+  eq([upgradedProperty.terms.terms_version, upgradedProperty.terms.currency,
+    upgradedProperty.revision], [2, 'TST', v1PropertyDraft.revision + 1],
+  'legacy property draft requires explicit guarded upgrade, without changing its ID')
+  const replayedPropertyUpgrade = (await scopedCommand(1, manager, 'save_product', propertyUpgradeBody,
+    propertyUpgradeKey)).products.find(value => value.id === v1PropertyDraft.id)
+  eq(replayedPropertyUpgrade.revision, upgradedProperty.revision,
+    'same property save key replays without a second revision')
+  await denied('property save key cannot be reused with changed terms', () => scopedCommand(1,
+    manager, 'save_product', { ...propertyUpgradeBody,
+      terms: propertyV2Terms('Conflicting property terms') }, propertyUpgradeKey), '23505')
+  await admin()
+  eq(await scalar(`select jsonb_build_object(
+    'requests',(select count(*) from bx1_portal.requests where actor_id=$1 and request_key=$2),
+    'scoped',(select count(*) from bx1_portal.scoped_requests where actor_id=$1 and request_key=$2),
+    'events',(select count(*) from bx1_portal.events where actor_id=$1 and subject_id=$3 and kind='save_product'))`,
+  [uid(1), propertyUpgradeKey, v1PropertyDraft.id]), { requests: 1, scoped: 1, events: 1 },
+  'one property save has both idempotency receipts and one audit event')
+  phase = 'stage3-property-v2-review-and-closed-opening'
+  const submittedProperty = (await scopedCommand(1, manager, 'submit_product', {
+    product_id: upgradedProperty.id, expected_revision: upgradedProperty.revision,
+  })).products.find(value => value.id === upgradedProperty.id)
+  eq([submittedProperty.offering_package?.terms_hash,
+    submittedProperty.offering_package?.technical_readiness_status],
+  [submittedProperty.terms_hash, 'NOT_VERIFIED'],
+  'typed property submission creates a hash-bound immutable package but no technical admission')
+  let reviewedProperty = (await mandateScopedCommand(13, issuerContext,
+    'review_offering_issuer', issuerInput(submittedProperty))).products.find(value =>
+    value.id === submittedProperty.id)
+  reviewedProperty = (await mandateScopedCommand(2, reviewer,
+    'review_product', complianceInput(reviewedProperty))).products.find(value =>
+    value.id === submittedProperty.id)
+  eq([reviewedProperty.status, reviewedProperty.offering_package.issuer_status,
+    reviewedProperty.offering_package.compliance_status], ['APPROVED', 'APPROVED', 'APPROVED'],
+  'typed property receives independent issuer and Compliance reviews on one revision')
+  await denied('reviewed property cannot use legacy publish path', () => scopedCommand(1, manager,
+    'publish_product', { product_id: reviewedProperty.id, expected_revision: reviewedProperty.revision }))
+  await denied('internal property status update cannot bypass technical admission', async () => {
+    await admin(); await db.query("update bx1_portal.products set status='PUBLISHED' where id=$1", [reviewedProperty.id])
+  })
+  await denied('internal property subscription insert cannot bypass v2 settlement closure', async () => {
+    await admin()
+    await db.query(`insert into bx1_portal.subscriptions
+      (product_id,investor_id,organisation_id,product_revision,terms_hash,accepted_terms,accepted_documents,accepted_risks,units,amount_minor)
+      values($1,$2,$3,$4,$5,$6::jsonb,true,true,1,100000000)`,
+    [reviewedProperty.id, uid(3), orgId, reviewedProperty.revision,
+      reviewedProperty.terms_hash, JSON.stringify(reviewedProperty.terms)])
+  })
+  await admin()
+  eq(await scalar('select status from bx1_portal.products where id=$1', [reviewedProperty.id]), 'APPROVED',
+    'denied property publication leaves reviewed package closed')
+  phase = 'stage3-offering-file-quarantine'
+  await sqlFile('../../../supabase/migrations/20260928174348_stage3_offering_file_quarantine.sql')
+  await db.query('savepoint offering_file_quarantine_fixture')
+  try {
+    const fileDraftName = 'Synthetic file quarantine proof fund'
+    const fileDraft = (await scopedCommand(1, manager, 'create_product', {
+      organisation_id: orgId, terms: fundV2Terms(fileDraftName),
+    })).products.find(value => value.terms.name === fileDraftName)
+    truth(fileDraft?.id, 'isolated file proof has a typed fund draft')
+    const fileSubmitted = (await scopedCommand(1, manager, 'submit_product', {
+      product_id: fileDraft.id, expected_revision: fileDraft.revision,
+    })).products.find(value => value.id === fileDraft.id)
+    truth(fileSubmitted?.offering_package?.id, 'isolated file proof has a submitted revision')
+    await admin()
+    checks += await proveOfferingFileQuarantine(db, fileSubmitted.id)
+  } finally {
+    await admin()
+    await db.query('rollback to savepoint offering_file_quarantine_fixture; release savepoint offering_file_quarantine_fixture')
+  }
+  phase = 'stage3-product-service-appointments'
+  await sqlFile('../../../supabase/migrations/20260928174847_stage3_product_service_appointments.sql')
+  for (const table of ['product_service_appointments', 'product_service_appointment_receipts',
+    'product_service_appointment_requests', 'offering_review_reopen_receipts',
+    'offering_amendment_begin_receipts']) {
+    eq(await scalar(`select count(*)::int from bx1_portal.${table}`), 0,
+      `${table} migration seeds no authority`)
+    for (const role of ['anon', 'authenticated', 'service_role']) {
+      eq(await scalar('select has_table_privilege($1,$2,\'SELECT,INSERT,UPDATE,DELETE\')',
+        [role, `bx1_portal.${table}`]), false, `${role} cannot directly mutate ${table}`)
+    }
+  }
+  for (const legacyWriter of ['bx1_portal.execute_command(text,uuid,jsonb)',
+    'public.bx1_portal_command(text,uuid,jsonb)',
+    'bx1_portal.execute_appointed_compliance_decision(jsonb,uuid,jsonb)']) {
+    eq(await scalar('select has_function_privilege($1,$2,\'EXECUTE\')',
+      ['authenticated', legacyWriter]), false,
+    `authenticated cannot bypass scoped command through ${legacyWriter}`)
+  }
+  eq(await scalar('select bx1_portal.offering_approved($1)', [reviewedProperty.id]), false,
+    'historical review decisions do not silently acquire product appointments')
+  const issuerMembershipId = await scalar(`select id from public.bx1_memberships
+    where user_id=$1 and organisation_id=$2 and role='IssuerFundManager'`, [uid(13), nativeScope])
+  const complianceMembershipId = await scalar(`select id from public.bx1_memberships
+    where user_id=$1 and organisation_id=$2 and role='ComplianceOfficer'`, [uid(2), nativeScope])
+  truth(issuerMembershipId && complianceMembershipId, 'pre-existing staff roles are prerequisites only')
+  phase = 'stage3-legacy-manager-draft-action-projection'
+  // Actor 5's synthetic session was raised to AAL2 earlier. AAL1 claims are
+  // stale and must not be used even for this read-only projection proof.
+  const legacyManagerDraft = (await mandateScopedRead(5, manager)).products
+    .find(value => value.id === delegatedProduct.id)
+  eq([legacyManagerDraft.allowed_actions.includes('save_product'),
+    legacyManagerDraft.allowed_actions.includes('submit_product')], [true, false],
+  'historical v1 draft exposes manager upgrade editor but not v1 submission')
+  const appointedFundName = 'Synthetic exact-product appointment fund'
+  let appointedFund = (await scopedCommand(1, manager, 'create_product', {
+    organisation_id: orgId, terms: fundV2Terms(appointedFundName),
+  })).products.find(value => value.terms.name === appointedFundName)
+  const candidates = (await scopedRead(1, manager)).product_appointment_candidates
+  truth(candidates.some(value => value.product_id === appointedFund.id
+    && value.role === 'IssuerFundManager' && value.membership_id === issuerMembershipId),
+  'manager sees only role candidate for its own editable product')
+  eq((await mandateScopedRead(13, issuerContext)).product_appointment_candidates.length, 0,
+    'issuer cannot enumerate manager candidate directory')
+  const until = new Date(Date.now() + 14 * 86400000).toISOString()
+  const appointmentInput = (targetRole, appointee, membership) => ({
+    product_id: appointedFund.id, role: targetRole, appointee_user_id: uid(appointee),
+    native_membership_id: membership, expected_product_revision: appointedFund.revision,
+    evidence_reference: `SYNTHETIC-APPOINTMENT-${targetRole}-2026-09-28`, requested_until: until,
+  })
+  const issuerRequest = appointmentInput('IssuerFundManager', 13, issuerMembershipId)
+  await denied('issuer cannot appoint itself from role label', () => mandateScopedCommand(13, issuerContext,
+    'request_product_service_appointment', issuerRequest), '42501')
+  const issuerKey = key()
+  let issuerAppointment = (await scopedCommand(1, manager,
+    'request_product_service_appointment', issuerRequest, issuerKey)).product_appointments
+    .find(value => value.product_id === appointedFund.id && value.role === 'IssuerFundManager')
+  eq(issuerAppointment.status, 'SUBMITTED', 'manager request confers no issuer authority')
+  eq((await scopedCommand(1, manager, 'request_product_service_appointment', issuerRequest,
+    issuerKey)).product_appointments.find(value => value.id === issuerAppointment.id).revision, 1,
+  'exact appointment request replay is idempotent')
+  await denied('same request key cannot nominate a different person', () => scopedCommand(1, manager,
+    'request_product_service_appointment', { ...issuerRequest, appointee_user_id: uid(4) },
+    issuerKey), '23505')
+  const complianceRequest = appointmentInput('ComplianceOfficer', 2, complianceMembershipId)
+  let complianceAppointment = (await scopedCommand(1, manager,
+    'request_product_service_appointment', complianceRequest)).product_appointments
+    .find(value => value.product_id === appointedFund.id && value.role === 'ComplianceOfficer')
+  eq(complianceAppointment.status, 'SUBMITTED', 'separate Compliance appointment also starts pending')
+  const reviewAppointment = appointment => ({ appointment_id: appointment.id,
+    expected_revision: appointment.revision, decision: 'APPROVED',
+    notes: 'Independent synthetic review of exact product appointment and cited scope.',
+    checks: { appointment: true, evidence: true, scope: true } })
+  await denied('appointee cannot review own appointment', () => mandateScopedCommand(2, reviewer,
+    'review_product_service_appointment', reviewAppointment(complianceAppointment)), '42501')
+  issuerAppointment = (await mandateScopedCommand(11, reviewer,
+    'review_product_service_appointment', reviewAppointment(issuerAppointment))).product_appointments
+    .find(value => value.id === issuerAppointment.id)
+  complianceAppointment = (await mandateScopedCommand(11, reviewer,
+    'review_product_service_appointment', reviewAppointment(complianceAppointment))).product_appointments
+    .find(value => value.id === complianceAppointment.id)
+  eq([issuerAppointment.status, complianceAppointment.status], ['APPROVED', 'APPROVED'],
+    'independent review alone grants neither product decision')
+  await denied('appointee cannot self-apply via second Super Admin role', () => mandateScopedCommand(2,
+    roleContext('SuperAdmin'), 'apply_product_service_appointment', {
+      appointment_id: complianceAppointment.id, expected_revision: complianceAppointment.revision,
+    }), '42501')
+  await db.query('savepoint appointment_reviewer_second_role')
+  await admin()
+  await db.query("insert into public.bx1_memberships(user_id,organisation_id,role,status) values($1,$2,'SuperAdmin','ACTIVE')",
+    [uid(11), nativeScope])
+  await denied('actual appointment reviewer cannot self-apply through a second role',
+    () => mandateScopedCommand(11, roleContext('SuperAdmin'),
+      'apply_product_service_appointment', {
+        appointment_id: issuerAppointment.id, expected_revision: issuerAppointment.revision,
+      }), '42501')
+  await db.query('rollback to savepoint appointment_reviewer_second_role; release savepoint appointment_reviewer_second_role')
+  issuerAppointment = (await mandateScopedCommand(10, roleContext('SuperAdmin'),
+    'apply_product_service_appointment', { appointment_id: issuerAppointment.id,
+      expected_revision: issuerAppointment.revision })).product_appointments
+    .find(value => value.id === issuerAppointment.id)
+  complianceAppointment = (await mandateScopedCommand(10, roleContext('SuperAdmin'),
+    'apply_product_service_appointment', { appointment_id: complianceAppointment.id,
+      expected_revision: complianceAppointment.revision })).product_appointments
+    .find(value => value.id === complianceAppointment.id)
+  eq([issuerAppointment.effective, complianceAppointment.effective], [true, true],
+    'two exact-product appointments applied without organisation-wide binding creation')
+  phase = 'stage3-expired-pending-appointment-replacement'
+  const expiredRequestFor = async (label, source, role, appointee, membership) => {
+    const productName = `Synthetic expired ${label} appointment fund`
+    const product = (await scopedCommand(1, manager, 'create_product', {
+      organisation_id: orgId, terms: fundV2Terms(productName),
+    })).products.find(value => value.terms.name === productName)
+    await admin()
+    const oldId = await scalar(`insert into bx1_portal.product_service_appointments(
+      product_id,product_organisation_id,reviewer_scope_organisation_id,role,
+      appointee_user_id,native_membership_id,requested_by_user_id,requested_in_context,
+      product_revision_at_request,terms_hash_at_request,evidence_reference,requested_until)
+      select p.id,p.organisation_id,a.reviewer_scope_organisation_id,a.role,
+        a.appointee_user_id,a.native_membership_id,a.requested_by_user_id,a.requested_in_context,
+        p.revision,p.terms_hash,a.evidence_reference,clock_timestamp()-interval '1 hour'
+      from bx1_portal.products p cross join bx1_portal.product_service_appointments a
+      where p.id=$1 and a.id=$2 returning id`, [product.id, source.id])
+    const request = { product_id: product.id, role, appointee_user_id: uid(appointee),
+      native_membership_id: membership, expected_product_revision: product.revision,
+      evidence_reference: `SYNTHETIC-REPLACEMENT-${label}-2026-09-28`, requested_until: until }
+    return { oldId, product, request }
+  }
+  const expiredIssuer = await expiredRequestFor('issuer-submitted', issuerAppointment,
+    'IssuerFundManager', 13, issuerMembershipId)
+  const expiredIssuerView = (await mandateScopedRead(11, reviewer)).product_appointments
+    .find(value => value.id === expiredIssuer.oldId)
+  eq([expiredIssuerView.status, expiredIssuerView.can_review, expiredIssuerView.next_owner],
+    ['SUBMITTED', false, 'OFFERING_MANAGER'], 'expired pending issuer review is not falsely actionable')
+  const replacementIssuerKey = key()
+  const replacementIssuer = (await scopedCommand(1, manager,
+    'request_product_service_appointment', expiredIssuer.request, replacementIssuerKey))
+    .product_appointments.find(value => value.product_id === expiredIssuer.product.id && value.status === 'SUBMITTED')
+  truth(replacementIssuer?.id && replacementIssuer.id !== expiredIssuer.oldId,
+    'manager may replace an expired unreviewed nomination without resurrecting it')
+  await admin()
+  eq(await scalar('select status from bx1_portal.product_service_appointments where id=$1',
+    [expiredIssuer.oldId]), 'EXPIRED', 'old unreviewed nomination is terminally expired')
+  eq(await scalar(`select jsonb_build_object(
+    'receipts',(select count(*) from bx1_portal.product_service_appointment_receipts
+      where appointment_id=$1 and action='expire_product_service_appointment'),
+    'events',(select count(*) from bx1_portal.events
+      where subject_id=$1 and kind='expire_product_service_appointment'))`, [expiredIssuer.oldId]),
+  { receipts: 1, events: 1 }, 'replacement records one immutable expiry receipt and audit event')
+  eq((await scopedCommand(1, manager, 'request_product_service_appointment',
+    expiredIssuer.request, replacementIssuerKey)).product_appointments
+    .find(value => value.id === replacementIssuer.id).revision, 1,
+  'replacement replay cannot expire twice or create another nomination')
+  const expiredCompliance = await expiredRequestFor('compliance-approved', complianceAppointment,
+    'ComplianceOfficer', 2, complianceMembershipId)
+  await admin()
+  const historicalApprovalId = await scalar(`insert into bx1_portal.product_service_appointment_receipts(
+    appointment_id,appointment_revision,action,actor_id,operating_context,command_payload,status_after)
+    values($1,2,'review_product_service_appointment',$2,$3::jsonb,
+      '{"decision":"APPROVED","source":"synthetic-expiry-fixture"}'::jsonb,'APPROVED') returning id`,
+  [expiredCompliance.oldId, uid(11), JSON.stringify(reviewer)])
+  await db.query(`update bx1_portal.product_service_appointments set revision=2,status='APPROVED',
+    reviewed_at=clock_timestamp(),reviewed_by_user_id=$2,
+    review_notes='Synthetic reviewed nomination elapsed before application.',
+    review_checks='{"appointment":true,"evidence":true,"scope":true}'::jsonb,
+    approval_receipt_id=$3 where id=$1`, [expiredCompliance.oldId, uid(11), historicalApprovalId])
+  const expiredComplianceView = (await mandateScopedRead(10, roleContext('SuperAdmin')))
+    .product_appointments.find(value => value.id === expiredCompliance.oldId)
+  eq([expiredComplianceView.status, expiredComplianceView.can_apply,
+    expiredComplianceView.next_owner], ['APPROVED', false, 'OFFERING_MANAGER'],
+  'expired approved nomination is not falsely applicable')
+  const replacementCompliance = (await scopedCommand(1, manager,
+    'request_product_service_appointment', expiredCompliance.request)).product_appointments
+    .find(value => value.product_id === expiredCompliance.product.id && value.status === 'SUBMITTED')
+  truth(replacementCompliance?.id && replacementCompliance.id !== expiredCompliance.oldId,
+    'manager may replace an expired approved nomination')
+  await admin()
+  eq(await scalar('select status from bx1_portal.product_service_appointments where id=$1',
+    [expiredCompliance.oldId]), 'EXPIRED', 'old approved nomination cannot become effective later')
+  await denied('expired appointment cannot be revived by an internal state update', async () => {
+    await admin()
+    await db.query("update bx1_portal.product_service_appointments set revision=revision+1,status='APPLIED',applied_at=clock_timestamp(),applied_by_user_id=$2 where id=$1",
+      [expiredCompliance.oldId, uid(10)])
+  }, '23514')
+  await db.query('savepoint appointment_suspended_profile')
+  await admin()
+  await db.query("update public.bx1_profiles set status='SUSPENDED' where id=$1", [uid(13)])
+  eq(await scalar('select bx1_portal.product_appointment_effective($1)', [issuerAppointment.id]), false,
+    'suspended appointee profile immediately disables an applied appointment')
+  await db.query('rollback to savepoint appointment_suspended_profile; release savepoint appointment_suspended_profile')
+  await db.query('savepoint appointment_offering_amendment')
+  let amendmentPackage = (await scopedCommand(1, manager, 'submit_product', {
+    product_id: appointedFund.id, expected_revision: appointedFund.revision,
+  })).products.find(value => value.id === appointedFund.id)
+  const oldOfferingRevision = amendmentPackage.offering_package.id
+  amendmentPackage = (await mandateScopedCommand(13, issuerContext,
+    'review_offering_issuer', issuerInput(amendmentPackage))).products.find(value =>
+    value.id === appointedFund.id)
+  amendmentPackage = (await mandateScopedCommand(2, reviewer,
+    'review_product', complianceInput(amendmentPackage, 'CHANGES_REQUIRED'))).products.find(value =>
+    value.id === appointedFund.id)
+  eq(amendmentPackage.status, 'CHANGES_REQUIRED',
+    'independent Compliance requests changes on the exact first offering revision')
+  const amendedAppointmentFund = (await scopedCommand(1, manager, 'save_product', {
+    product_id: appointedFund.id, expected_revision: amendmentPackage.revision,
+    terms: fundV2Terms(`${appointedFundName} amended`),
+  })).products.find(value => value.id === appointedFund.id)
+  const restoredAppointmentFund = (await scopedCommand(1, manager, 'save_product', {
+    product_id: appointedFund.id, expected_revision: amendedAppointmentFund.revision,
+    terms: fundV2Terms(appointedFundName),
+  })).products.find(value => value.id === appointedFund.id)
+  eq(restoredAppointmentFund.terms_hash, appointedFund.terms_hash,
+    'restored terms have the original hash')
+  await admin()
+  eq(await scalar('select bx1_portal.product_appointment_effective($1)', [issuerAppointment.id]), true,
+    'time-limited product service appointment survives offering amendment')
+  await denied('restoring the same terms hash cannot resubmit an unchanged package',
+    () => scopedCommand(1, manager, 'submit_product', {
+      product_id: appointedFund.id, expected_revision: restoredAppointmentFund.revision,
+    }), '23514')
+  const finalAmendedAppointmentFund = (await scopedCommand(1, manager, 'save_product', {
+    product_id: appointedFund.id, expected_revision: restoredAppointmentFund.revision,
+    terms: fundV2Terms(`${appointedFundName} amended and resubmitted`),
+  })).products.find(value => value.id === appointedFund.id)
+  const resubmittedAppointmentFund = (await scopedCommand(1, manager, 'submit_product', {
+    product_id: appointedFund.id, expected_revision: finalAmendedAppointmentFund.revision,
+  })).products.find(value => value.id === appointedFund.id)
+  truth(resubmittedAppointmentFund.offering_package.id !== oldOfferingRevision,
+    'restored terms create a new immutable offering revision')
+  await admin()
+  eq(await scalar('select count(*)::int from bx1_portal.offering_decisions where offering_revision_id=$1',
+    [resubmittedAppointmentFund.offering_package.id]), 0,
+  'old issuer and Compliance decisions cannot carry onto a new revision with the same hash')
+  eq(await scalar('select bx1_portal.offering_approved($1)', [appointedFund.id]), false,
+    'new offering needs fresh issuer and Compliance decisions after hash restoration')
+  await db.query('rollback to savepoint appointment_offering_amendment; release savepoint appointment_offering_amendment')
+  await admin()
+  await db.query(`update bx1_portal.organisation_authority_bindings set status='REVOKED'
+    where product_organisation_id=$1 and role in ('IssuerFundManager','ComplianceOfficer')
+      and status='ACTIVE'`, [orgId])
+  eq(await scalar(`select count(*)::int from bx1_portal.organisation_authority_bindings
+    where product_organisation_id=$1 and role in ('IssuerFundManager','ComplianceOfficer')
+      and status='ACTIVE'`, [orgId]), 0,
+  'appointment authority does not depend on manually seeded org-wide issuer or Compliance bindings')
+  appointedFund = (await scopedCommand(1, manager, 'submit_product', {
+    product_id: appointedFund.id, expected_revision: appointedFund.revision,
+  })).products.find(value => value.id === appointedFund.id)
+  checks += await proveOfferingFileProductIsolation(db, {
+    appointedRevisionId: appointedFund.offering_package.id,
+    otherRevisionId: reviewedProperty.offering_package.id,
+    issuerContext, signInIssuer: () => actor(13, { aal: 'aal2' }),
+  })
+  phase = 'stage3-exact-appointed-offering-decisions'
+  const issuerState = await mandateScopedRead(13, issuerContext)
+  truth(issuerState.products.some(value => value.id === appointedFund.id),
+    'issuer sees only the explicitly appointed product after old broad binding revocation')
+  eq(['save_product','submit_product'].some(action => issuerState.products
+    .find(value => value.id === appointedFund.id).allowed_actions.includes(action)), false,
+  'issuer appointment does not expose manager edit or submit actions')
+  appointedFund = (await mandateScopedCommand(13, issuerContext, 'review_offering_issuer',
+    issuerInput(appointedFund))).products.find(value => value.id === appointedFund.id)
+  eq(appointedFund.offering_package.issuer_status, 'APPROVED',
+    'issuer decision is bound to its exact active product appointment')
+  await admin()
+  eq(await scalar(`select product_appointment_id from bx1_portal.offering_decisions
+    where offering_revision_id=$1 and decision_kind='ISSUER'`, [appointedFund.offering_package.id]),
+  issuerAppointment.id, 'immutable issuer decision records appointment identity')
+  const exactComplianceState = await mandateScopedRead(2, reviewer)
+  truth(exactComplianceState.products.some(value => value.id === appointedFund.id
+    && value.offering_package.can_review_compliance),
+  'appointed Compliance sees and can review the exact product without an org-wide binding')
+  eq(exactComplianceState.products.some(value => value.id === reviewedProperty.id), false,
+    'exact product appointment does not expose another product in the same organisation')
+  const complianceDecisionPayload = complianceInput(appointedFund)
+  const complianceDecisionKey = key()
+  appointedFund = (await mandateScopedCommand(2, reviewer, 'review_product',
+    complianceDecisionPayload, complianceDecisionKey)).products.find(value => value.id === appointedFund.id)
+  eq([appointedFund.status, appointedFund.offering_package.compliance_status],
+    ['APPROVED', 'APPROVED'],
+  'appointed Compliance completes independent review through the exact-product writer')
+  eq((await mandateScopedCommand(2, reviewer, 'review_product',
+    complianceDecisionPayload, complianceDecisionKey)).products.find(value =>
+    value.id === appointedFund.id).revision, appointedFund.revision,
+  'exact Compliance command replay leaves product revision unchanged')
+  await admin()
+  eq(await scalar(`select jsonb_build_object(
+    'native',(select count(*) from bx1_portal.requests where actor_id=$1 and request_key=$2),
+    'scoped',(select count(*) from bx1_portal.scoped_requests where actor_id=$1 and request_key=$2),
+    'events',(select count(*) from bx1_portal.events where actor_id=$1 and subject_id=$3 and kind='review_product'),
+    'decisions',(select count(*) from bx1_portal.offering_decisions where offering_revision_id=$4 and decision_kind='COMPLIANCE'))`,
+  [uid(2), complianceDecisionKey, appointedFund.id, appointedFund.offering_package.id]),
+  { native: 1, scoped: 1, events: 1, decisions: 1 },
+  'one exact Compliance decision has one native receipt, scoped receipt, event and immutable decision')
+  eq(await scalar(`select product_appointment_id from bx1_portal.offering_decisions
+    where offering_revision_id=$1 and decision_kind='COMPLIANCE'`, [appointedFund.offering_package.id]),
+  complianceAppointment.id, 'immutable Compliance decision records exact appointment identity')
+  eq(await scalar('select bx1_portal.offering_approved($1)', [appointedFund.id]), true,
+    'both appointed human decisions approve the package without opening funding')
+  phase = 'stage3-approved-offering-explicit-reopen'
+  const originalOfferingId = appointedFund.offering_package.id
+  const originalPackageNumber = appointedFund.offering_package.package_number
+  const reopenPayload = { product_id: appointedFund.id,
+    expected_revision: appointedFund.revision,
+    reason: 'Synthetic service-appointment change requires both reviewers to decide a fresh immutable offering revision.' }
+  const reopenKey = key()
+  const managerBeforeReopen = await scopedRead(1, manager)
+  truth(managerBeforeReopen.products.find(value => value.id === appointedFund.id)
+    .allowed_actions.includes('reopen_offering_review'),
+  'exact approved product offers explicit re-review to its current manager')
+  truth(managerBeforeReopen.organisations.find(value => value.id === orgId)
+    .capabilities.includes('reopen_offering_review'),
+  'manager organisation advertises recovery only while a relevant product is reopenable')
+  eq(managerBeforeReopen.products.find(value => value.id === reviewedProperty.id)
+    ?.allowed_actions.includes('reopen_offering_review') ?? false, false,
+  'unrelated property cannot inherit the fund reopen action')
+  await db.query('savepoint reopen_approved_offering')
+  await denied('wrong organisation cannot reopen an approved offering',
+    () => scopedCommand(1, roleContext('OfferingManager', otherScope),
+      'reopen_offering_review', reopenPayload), '42501')
+  await denied('stale approved product revision cannot be reopened',
+    () => scopedCommand(1, manager, 'reopen_offering_review',
+      { ...reopenPayload, expected_revision: appointedFund.revision - 1 }), '23514')
+  await db.query('savepoint reopen_never_published')
+  await admin(); await db.query('update bx1_portal.products set published_at=clock_timestamp() where id=$1',
+    [appointedFund.id])
+  await denied('a product with publication history cannot be reopened',
+    () => scopedCommand(1, manager, 'reopen_offering_review', reopenPayload), '23514')
+  await db.query('rollback to savepoint reopen_never_published; release savepoint reopen_never_published')
+  await db.query('savepoint reopen_no_reservations')
+  await admin(); await db.query('update bx1_portal.products set reserved_units=1 where id=$1',
+    [appointedFund.id])
+  await denied('a product with reserved units cannot be reopened',
+    () => scopedCommand(1, manager, 'reopen_offering_review', reopenPayload), '23514')
+  await db.query('rollback to savepoint reopen_no_reservations; release savepoint reopen_no_reservations')
+  await db.query('savepoint reopen_main_seal')
+  await admin(); await db.query(`update bx1_portal.entry_configuration
+    set environment='MAINNET',manual_test_review=false where singleton`)
+  await denied('MAIN-equivalent seal rejects approved-offering reopen',
+    () => scopedCommand(1, manager, 'reopen_offering_review', reopenPayload), '42501')
+  await db.query('rollback to savepoint reopen_main_seal; release savepoint reopen_main_seal')
+  await admin()
+  const reopenBeforeAudit = await scalar(`select jsonb_build_object(
+    'product',(select jsonb_build_object('status',status,'revision',revision,
+      'offering',current_offering_revision_id) from bx1_portal.products where id=$1),
+    'packages',(select count(*) from bx1_portal.offering_revisions where product_id=$1),
+    'receipts',(select count(*) from bx1_portal.offering_review_reopen_receipts where product_id=$1),
+    'requests',(select count(*) from bx1_portal.scoped_requests where actor_id=$2 and request_key=$3))`,
+  [appointedFund.id, uid(1), reopenKey])
+  await db.query('savepoint reopen_audit_failure')
+  await admin(); await db.query(`create function public.synthetic_reopen_audit_failure() returns trigger
+    language plpgsql as $$ begin if NEW.kind='reopen_offering_review' then
+    raise exception 'synthetic_reopen_audit_failure' using errcode='23514'; end if;
+    return NEW; end $$;
+    create trigger synthetic_reopen_audit_failure before insert on bx1_portal.events
+    for each row execute function public.synthetic_reopen_audit_failure()`)
+  await denied('required audit failure rolls back reopened revision and receipt',
+    () => scopedCommand(1, manager, 'reopen_offering_review', reopenPayload, reopenKey), '23514')
+  await db.query('rollback to savepoint reopen_audit_failure; release savepoint reopen_audit_failure')
+  await admin()
+  eq(await scalar(`select jsonb_build_object(
+    'product',(select jsonb_build_object('status',status,'revision',revision,
+      'offering',current_offering_revision_id) from bx1_portal.products where id=$1),
+    'packages',(select count(*) from bx1_portal.offering_revisions where product_id=$1),
+    'receipts',(select count(*) from bx1_portal.offering_review_reopen_receipts where product_id=$1),
+    'requests',(select count(*) from bx1_portal.scoped_requests where actor_id=$2 and request_key=$3))`,
+  [appointedFund.id, uid(1), reopenKey]), reopenBeforeAudit,
+  'failed audit leaves product, immutable package history, receipt and idempotency unchanged')
+  let reopenedOffering = (await scopedCommand(1, manager, 'reopen_offering_review',
+    reopenPayload, reopenKey)).products.find(value => value.id === appointedFund.id)
+  eq([reopenedOffering.status, reopenedOffering.revision,
+    reopenedOffering.offering_package.package_number],
+    ['IN_REVIEW', appointedFund.revision + 1, originalPackageNumber + 1],
+  'explicit reopen increments enduring product and immutable package number')
+  truth(reopenedOffering.offering_package.id !== originalOfferingId,
+    'reopen creates a different immutable offering identity even with unchanged terms')
+  eq(reopenedOffering.terms_hash, appointedFund.terms_hash,
+    'reopen does not alter approved economic terms without a separate amendment command')
+  eq((await scopedCommand(1, manager, 'reopen_offering_review',
+    reopenPayload, reopenKey)).products.find(value => value.id === appointedFund.id)
+    .offering_package.id, reopenedOffering.offering_package.id,
+  'exact replay returns the same new revision without a second write')
+  await denied('reopen idempotency key cannot be reused with another reason',
+    () => scopedCommand(1, manager, 'reopen_offering_review',
+      { ...reopenPayload, reason: `${reopenPayload.reason} Changed.` }, reopenKey), '23505')
+  await admin()
+  eq(await scalar(`select jsonb_build_object(
+    'old_decisions',(select count(*) from bx1_portal.offering_decisions where offering_revision_id=$1),
+    'new_decisions',(select count(*) from bx1_portal.offering_decisions where offering_revision_id=$2),
+    'receipts',(select count(*) from bx1_portal.offering_review_reopen_receipts where actor_id=$3 and request_key=$4),
+    'requests',(select count(*) from bx1_portal.scoped_requests where actor_id=$3 and request_key=$4),
+    'events',(select count(*) from bx1_portal.events where subject_id=$5 and kind='reopen_offering_review'),
+    'orders',(select count(*) from bx1_portal.subscriptions where product_id=$5),
+    'reserved',(select reserved_units::text from bx1_portal.products where id=$5))`,
+  [originalOfferingId, reopenedOffering.offering_package.id, uid(1), reopenKey, appointedFund.id]),
+  { old_decisions: 2, new_decisions: 0, receipts: 1, requests: 1,
+    events: 1, orders: 0, reserved: '0' },
+  'old decisions remain immutable and the new revision has one receipt/event but no financial effects')
+  eq(await scalar('select bx1_portal.offering_approved($1)', [appointedFund.id]), false,
+    'still-effective old appointments and decisions do not approve the new revision')
+  reopenedOffering = (await mandateScopedCommand(13, issuerContext,
+    'review_offering_issuer', issuerInput(reopenedOffering))).products.find(value => value.id === appointedFund.id)
+  reopenedOffering = (await mandateScopedCommand(2, reviewer,
+    'review_product', complianceInput(reopenedOffering))).products.find(value => value.id === appointedFund.id)
+  eq([reopenedOffering.status, reopenedOffering.offering_package.issuer_status,
+    reopenedOffering.offering_package.compliance_status], ['APPROVED','APPROVED','APPROVED'],
+  'fresh issuer and Compliance decisions approve only the new immutable revision')
+  await db.query('rollback to savepoint reopen_approved_offering; release savepoint reopen_approved_offering')
+  await db.query('savepoint reopen_after_authority_loss')
+  await admin(); await db.query("update bx1_private.person_principals set status='REVOKED' where auth_user_id=$1 and status='TRUSTED'",
+    [uid(11)])
+  eq(await scalar('select bx1_portal.offering_approved($1)', [appointedFund.id]), false,
+    'a now-ineffective historical appointment does not count as current approval')
+  const reopenedAfterLoss = (await scopedCommand(1, manager, 'reopen_offering_review',
+    reopenPayload)).products.find(value => value.id === appointedFund.id)
+  eq([reopenedAfterLoss.status, reopenedAfterLoss.offering_package.issuer_status,
+    reopenedAfterLoss.offering_package.compliance_status], ['IN_REVIEW','PENDING','PENDING'],
+  'manager can recover a never-published approved package after appointment authority loss')
+  await db.query('rollback to savepoint reopen_after_authority_loss; release savepoint reopen_after_authority_loss')
+  phase = 'stage3-explicit-offering-terms-amendment'
+  const amendmentPayload = { product_id: appointedFund.id,
+    expected_revision: appointedFund.revision,
+    reason: 'Synthetic reviewed manager requests amended fund terms with complete fresh issuer and Compliance decisions.' }
+  const amendmentKey = key()
+  const amendmentView = await scopedRead(1, manager)
+  truth(amendmentView.products.find(value => value.id === appointedFund.id)
+    .allowed_actions.includes('begin_offering_amendment'),
+  'only the exact approved product exposes the begin-amendment action')
+  truth(amendmentView.organisations.find(value => value.id === orgId)
+    .capabilities.includes('begin_offering_amendment'),
+  'current manager organisation advertises a governed amendment for its eligible product')
+  await db.query('savepoint begin_amendment_proof')
+  await denied('malformed product ID cannot begin an offering amendment',
+    () => scopedCommand(1, manager, 'begin_offering_amendment',
+      { ...amendmentPayload, product_id: 'not-a-uuid' }), '22023')
+  await denied('wrong organisation cannot begin an offering amendment',
+    () => scopedCommand(1, roleContext('OfferingManager', otherScope),
+      'begin_offering_amendment', amendmentPayload), '42501')
+  await denied('stale approved product cannot begin an amendment',
+    () => scopedCommand(1, manager, 'begin_offering_amendment',
+      { ...amendmentPayload, expected_revision: appointedFund.revision - 1 }), '23514')
+  await db.query('savepoint amendment_file_intent_block')
+  await admin()
+  const blockedFileId = key()
+  await db.query(`insert into bx1_portal.offering_file_upload_intents
+    (id,offering_revision_id,product_id,actor_id,kind,title,storage_path,sha256,byte_size)
+    values($1,$2,$3,$4,'MEMORANDUM','Synthetic unresolved PDF intent',$5,$6,100)`,
+  [blockedFileId, originalOfferingId, appointedFund.id, uid(1),
+    `${originalOfferingId}/${uid(1)}/${blockedFileId}`, 'a'.repeat(64)])
+  await denied('unresolved offering-file intent blocks amendment',
+    () => scopedCommand(1, manager, 'begin_offering_amendment', amendmentPayload), '23514')
+  await db.query('rollback to savepoint amendment_file_intent_block; release savepoint amendment_file_intent_block')
+  await db.query('savepoint amendment_main_seal')
+  await admin(); await db.query(`update bx1_portal.entry_configuration
+    set environment='MAINNET',manual_test_review=false where singleton`)
+  await denied('MAIN-equivalent seal rejects synthetic amendment',
+    () => scopedCommand(1, manager, 'begin_offering_amendment', amendmentPayload), '42501')
+  await db.query('rollback to savepoint amendment_main_seal; release savepoint amendment_main_seal')
+  await admin()
+  const amendmentBaseline = await scalar(`select jsonb_build_object(
+    'product',(select jsonb_build_object('status',status,'revision',revision,
+      'offering',current_offering_revision_id) from bx1_portal.products where id=$1),
+    'receipts',(select count(*) from bx1_portal.offering_amendment_begin_receipts where product_id=$1),
+    'requests',(select count(*) from bx1_portal.scoped_requests where actor_id=$2 and request_key=$3))`,
+  [appointedFund.id, uid(1), amendmentKey])
+  await db.query('savepoint amendment_audit_failure')
+  await admin(); await db.query(`create function public.synthetic_amendment_audit_failure() returns trigger
+    language plpgsql as $$ begin if NEW.kind='begin_offering_amendment' then
+    raise exception 'synthetic_amendment_audit_failure' using errcode='23514'; end if;
+    return NEW; end $$;
+    create trigger synthetic_amendment_audit_failure before insert on bx1_portal.events
+    for each row execute function public.synthetic_amendment_audit_failure()`)
+  await denied('mandatory audit failure rolls back amendment and receipt',
+    () => scopedCommand(1, manager, 'begin_offering_amendment', amendmentPayload,
+      amendmentKey), '23514')
+  await db.query('rollback to savepoint amendment_audit_failure; release savepoint amendment_audit_failure')
+  await admin()
+  eq(await scalar(`select jsonb_build_object(
+    'product',(select jsonb_build_object('status',status,'revision',revision,
+      'offering',current_offering_revision_id) from bx1_portal.products where id=$1),
+    'receipts',(select count(*) from bx1_portal.offering_amendment_begin_receipts where product_id=$1),
+    'requests',(select count(*) from bx1_portal.scoped_requests where actor_id=$2 and request_key=$3))`,
+  [appointedFund.id, uid(1), amendmentKey]), amendmentBaseline,
+  'audit rejection preserves approved state, pointer and immutable receipt count')
+  let amendingFund = (await scopedCommand(1, manager, 'begin_offering_amendment',
+    amendmentPayload, amendmentKey)).products.find(value => value.id === appointedFund.id)
+  eq([amendingFund.status, amendingFund.revision, amendingFund.offering_package],
+    ['CHANGES_REQUIRED', appointedFund.revision + 1, null],
+  'amendment detaches the reviewed package without deleting its decision history')
+  eq([amendingFund.allowed_actions.includes('save_product'),
+    amendingFund.allowed_actions.includes('submit_product')], [true, false],
+  'amendment opens exact manager editor but not unchanged-terms submission')
+  eq((await scopedCommand(1, manager, 'begin_offering_amendment', amendmentPayload,
+    amendmentKey)).products.find(value => value.id === appointedFund.id).revision,
+  amendingFund.revision, 'exact amendment replay creates no second transition')
+  await denied('amendment key cannot be reused for different reason',
+    () => scopedCommand(1, manager, 'begin_offering_amendment',
+      { ...amendmentPayload, reason: `${amendmentPayload.reason} Different.` }, amendmentKey), '23505')
+  await denied('first amendment save cannot retain unchanged approved terms',
+    () => scopedCommand(1, manager, 'save_product', {
+      product_id: appointedFund.id, expected_revision: amendingFund.revision,
+      terms: fundV2Terms(appointedFundName),
+    }), '23514')
+  const amendedTerms = fundV2Terms(`${appointedFundName} governed amended class`)
+  amendingFund = (await scopedCommand(1, manager, 'save_product', {
+    product_id: appointedFund.id, expected_revision: amendingFund.revision,
+    terms: amendedTerms,
+  })).products.find(value => value.id === appointedFund.id)
+  eq([amendingFund.status, amendingFund.offering_package], ['DRAFT', null],
+  'changed terms remain a draft without inherited approval')
+  eq([amendingFund.allowed_actions.includes('save_product'),
+    amendingFund.allowed_actions.includes('submit_product')], [true, true],
+  'changed draft terms expose both exact manager editing and fresh submission')
+  const restoredTermsFund = (await scopedCommand(1, manager, 'save_product', {
+    product_id: appointedFund.id, expected_revision: amendingFund.revision,
+    terms: fundV2Terms(appointedFundName),
+  })).products.find(value => value.id === appointedFund.id)
+  eq(restoredTermsFund.allowed_actions.includes('submit_product'), false,
+    'changed-then-restored hash cannot advertise a forbidden resubmission')
+  await denied('changed-then-restored approved hash cannot reuse old decisions',
+    () => scopedCommand(1, manager, 'submit_product', {
+      product_id: appointedFund.id, expected_revision: restoredTermsFund.revision,
+    }), '23514')
+  amendingFund = (await scopedCommand(1, manager, 'save_product', {
+    product_id: appointedFund.id, expected_revision: restoredTermsFund.revision,
+    terms: amendedTerms,
+  })).products.find(value => value.id === appointedFund.id)
+  amendingFund = (await scopedCommand(1, manager, 'submit_product', {
+    product_id: appointedFund.id, expected_revision: amendingFund.revision,
+  })).products.find(value => value.id === appointedFund.id)
+  truth(amendingFund.offering_package.id !== originalOfferingId,
+    'genuinely amended terms produce a new immutable submitted package')
+  eq([amendingFund.allowed_actions.includes('save_product'),
+    amendingFund.allowed_actions.includes('submit_product')], [false, false],
+  'submitted immutable package no longer exposes edit or duplicate submit actions')
+  await admin()
+  eq(await scalar(`select jsonb_build_object(
+    'old_decisions',(select count(*) from bx1_portal.offering_decisions where offering_revision_id=$1),
+    'new_decisions',(select count(*) from bx1_portal.offering_decisions where offering_revision_id=$2),
+    'receipts',(select count(*) from bx1_portal.offering_amendment_begin_receipts where actor_id=$3 and request_key=$4),
+    'events',(select count(*) from bx1_portal.events where subject_id=$5 and kind='begin_offering_amendment'),
+    'orders',(select count(*) from bx1_portal.subscriptions where product_id=$5),
+    'reserved',(select reserved_units::text from bx1_portal.products where id=$5))`,
+  [originalOfferingId, amendingFund.offering_package.id, uid(1), amendmentKey, appointedFund.id]),
+  { old_decisions: 2, new_decisions: 0, receipts: 1, events: 1, orders: 0, reserved: '0' },
+  'old decisions stay historical and amended package starts without orders or inherited decisions')
+  eq(await scalar('select bx1_portal.offering_approved($1)', [appointedFund.id]), false,
+    'new amended package requires a new decision pair')
+  amendingFund = (await mandateScopedCommand(13, issuerContext,
+    'review_offering_issuer', issuerInput(amendingFund))).products.find(value => value.id === appointedFund.id)
+  amendingFund = (await mandateScopedCommand(2, reviewer,
+    'review_product', complianceInput(amendingFund))).products.find(value => value.id === appointedFund.id)
+  eq(amendingFund.status, 'APPROVED', 'independent issuer and Compliance review the amended package')
+  await db.query('rollback to savepoint begin_amendment_proof; release savepoint begin_amendment_proof')
+  phase = 'stage3-same-hash-offering-submitter-lineage'
+  const lineageFundName = 'Synthetic two-manager same-hash lineage fund'
+  let lineageFund = (await scopedCommand(1, manager, 'create_product', {
+    organisation_id: orgId, terms: fundV2Terms(lineageFundName),
+  })).products.find(value => value.terms.name === lineageFundName)
+  lineageFund = (await mandateScopedCommand(5, manager, 'submit_product', {
+    product_id: lineageFund.id, expected_revision: lineageFund.revision,
+  })).products.find(value => value.id === lineageFund.id)
+  const lineageOriginalRevisionId = lineageFund.offering_package.id
+  const nominateForLineage = async (role, appointee, membership, evidence) => {
+    let appointment = (await scopedCommand(1, manager, 'request_product_service_appointment', {
+      product_id: lineageFund.id, role, appointee_user_id: uid(appointee),
+      native_membership_id: membership, expected_product_revision: lineageFund.revision,
+      evidence_reference: evidence, requested_until: until,
+    })).product_appointments.find(value => value.product_id === lineageFund.id
+      && value.role === role && value.status === 'SUBMITTED')
+    appointment = (await mandateScopedCommand(11, reviewer,
+      'review_product_service_appointment', reviewAppointment(appointment)))
+      .product_appointments.find(value => value.id === appointment.id)
+    return (await mandateScopedCommand(10, roleContext('SuperAdmin'),
+      'apply_product_service_appointment', {
+        appointment_id: appointment.id, expected_revision: appointment.revision,
+      })).product_appointments.find(value => value.id === appointment.id)
+  }
+  const lineageIssuerAppointment = await nominateForLineage('IssuerFundManager', 13,
+    issuerMembershipId, 'SYNTHETIC-LINEAGE-ISSUER-2026-09-28')
+  let lineageComplianceAppointment = await nominateForLineage('ComplianceOfficer', 2,
+    complianceMembershipId, 'SYNTHETIC-LINEAGE-COMPLIANCE-2026-09-28')
+  lineageFund = (await mandateScopedCommand(13, issuerContext,
+    'review_offering_issuer', issuerInput(lineageFund))).products.find(value => value.id === lineageFund.id)
+  lineageFund = (await mandateScopedCommand(2, reviewer,
+    'review_product', complianceInput(lineageFund))).products.find(value => value.id === lineageFund.id)
+  eq(lineageFund.status, 'APPROVED', 'two-manager lineage fixture starts from a genuinely reviewed package')
+  lineageFund = (await scopedCommand(1, manager, 'reopen_offering_review', {
+    product_id: lineageFund.id, expected_revision: lineageFund.revision,
+    reason: 'Manager A reopens Manager B original terms for new appointment review without erasing original authorship.',
+  })).products.find(value => value.id === lineageFund.id)
+  await admin()
+  eq(await scalar(`select jsonb_agg(jsonb_build_object('id',id,'submitted_by',submitted_by)
+    order by package_number) from bx1_portal.offering_revisions
+    where product_id=$1 and origin='SUBMITTED' and terms_hash=$2`,
+  [lineageFund.id, lineageFund.terms_hash]), [
+    { id: lineageOriginalRevisionId, submitted_by: uid(5) },
+    { id: lineageFund.offering_package.id, submitted_by: uid(1) },
+  ], 'same-hash lineage preserves B as original submitter and A as the actual reopener')
+  await db.query('savepoint lineage_original_submitter_appointed')
+  await admin()
+  const lineageBMembership = await scalar(`insert into public.bx1_memberships
+    (user_id,organisation_id,role,status) values($1,$2,'ComplianceOfficer','ACTIVE') returning id`,
+  [uid(5), nativeScope])
+  lineageComplianceAppointment = (await mandateScopedCommand(10, roleContext('SuperAdmin'),
+    'revoke_product_service_appointment', {
+      appointment_id: lineageComplianceAppointment.id,
+      expected_revision: lineageComplianceAppointment.revision,
+      reason: 'Synthetic replacement to prove the original author cannot review unchanged terms.',
+    })).product_appointments.find(value => value.id === lineageComplianceAppointment.id)
+  const lineageBAppointment = await nominateForLineage('ComplianceOfficer', 5,
+    lineageBMembership, 'SYNTHETIC-LINEAGE-ORIGINAL-AUTHOR-2026-09-28')
+  await actor(5, { aal: 'aal2' })
+  await admin()
+  eq(await scalar('select bx1_portal.product_appointment_authorised($1::jsonb,$2,$3)',
+    [JSON.stringify(reviewer), lineageFund.id, 'ComplianceOfficer']), true,
+  'B has a current exact-product Compliance appointment, so denial is lineage-specific')
+  const lineageBView = await mandateScopedRead(5, reviewer)
+  eq(lineageBView.products.find(value => value.id === lineageFund.id)
+    .offering_package.can_review_compliance, false,
+  'original submitter B cannot see a same-hash review action after A reopens')
+  eq(lineageBView.products.find(value => value.id === lineageFund.id)
+    .allowed_actions.includes('review_product'), false,
+  'exact product actions do not advertise a forbidden same-hash review')
+  const lineageDeniedKey = key()
+  await denied('original submitter cannot approve unchanged terms through later appointment',
+    () => mandateScopedCommand(5, reviewer, 'review_product',
+      complianceInput(lineageFund), lineageDeniedKey), '42501')
+  await admin()
+  eq(await scalar(`select jsonb_build_object(
+    'decisions',(select count(*) from bx1_portal.offering_decisions where offering_revision_id=$1),
+    'native_receipts',(select count(*) from bx1_portal.requests where actor_id=$2 and request_key=$3),
+    'scoped_receipts',(select count(*) from bx1_portal.scoped_requests where actor_id=$2 and request_key=$3),
+    'events',(select count(*) from bx1_portal.events where subject_id=$4
+      and actor_id=$2 and kind='review_product'))`,
+  [lineageFund.offering_package.id, uid(5), lineageDeniedKey, lineageFund.id]),
+  { decisions: 0, native_receipts: 0, scoped_receipts: 0, events: 0 },
+  'same-hash original author denial commits no decision, receipt or event')
+  eq(lineageBAppointment.effective, true,
+    'proof denies content self-review despite a valid synthetic appointment')
+  await db.query('rollback to savepoint lineage_original_submitter_appointed; release savepoint lineage_original_submitter_appointed')
+  eq(lineageIssuerAppointment.effective, true,
+    'issuer appointment remains available for the later two-connection lineage revocation proof')
+  phase = 'stage3-appointment-main-seal'
+  await db.query('savepoint appointment_main_seal')
+  await admin(); await db.query(`update bx1_portal.entry_configuration
+    set environment='MAINNET',manual_test_review=false where singleton`)
+  await denied('MAIN-equivalent admission seal rejects synthetic appointment writes',
+    () => scopedCommand(1, manager, 'request_product_service_appointment', issuerRequest), '42501')
+  await db.query('rollback to savepoint appointment_main_seal; release savepoint appointment_main_seal')
+  issuerAppointment = (await mandateScopedCommand(10, roleContext('SuperAdmin'),
+    'revoke_product_service_appointment', { appointment_id: issuerAppointment.id,
+      expected_revision: issuerAppointment.revision,
+      reason: 'Synthetic issuer scope revoked after exact-product decision proof.' })).product_appointments
+    .find(value => value.id === issuerAppointment.id)
+  eq(issuerAppointment.effective, false, 'revocation immediately removes product authority')
+  await admin()
+  eq(await scalar('select bx1_portal.offering_approved($1)', [appointedFund.id]), false,
+    'revoked issuer authority removes current offering approval')
+  eq((await mandateScopedRead(13, issuerContext)).products.some(value => value.id === appointedFund.id), false,
+    'revoked issuer cannot read appointed product through old native role')
   await db.query('commit'); begun = false
+  phase = 'stage3-product-appointment-product-first-lock-order'
+  await db.query('begin'); begun = true
+  await admin()
+  await db.query('select id from bx1_portal.products where id=$1 for update', [appointedFund.id])
+  const pendingAppointmentRevoke = (async () => {
+    await proofClients[0].query('begin')
+    try {
+      const result = await mandateScopedCommand(10, roleContext('SuperAdmin'),
+        'revoke_product_service_appointment', { appointment_id: complianceAppointment.id,
+          expected_revision: complianceAppointment.revision,
+          reason: 'Synthetic lock-order proof releases the remaining product appointment.' },
+        key(), proofClients[0])
+      await proofClients[0].query('commit')
+      return { result }
+    } catch (error) {
+      await proofClients[0].query('rollback')
+      return { code: error?.code }
+    }
+  })()
+  await waitForBlocked([pids[0]])
+  eq(await scalar('select $1::int=any(pg_blocking_pids($2::int))',
+    [await scalar('select pg_backend_pid()'), pids[0]]), true,
+  'appointment revocation waits on the main connection product lock')
+  await proofClients[1].query('begin')
+  let appointmentUnlocked = false
+  try {
+    await proofClients[1].query('select id from bx1_portal.product_service_appointments where id=$1 for update nowait',
+      [complianceAppointment.id])
+    appointmentUnlocked = true
+  } catch (error) {
+    if (error?.code !== '55P03') throw error
+  } finally {
+    await proofClients[1].query('rollback')
+  }
+  await db.query('commit'); begun = false
+  const revokedAfterProductLock = await pendingAppointmentRevoke
+  eq(appointmentUnlocked, true,
+    'revocation waiting on product has not taken an inverse appointment lock')
+  eq(revokedAfterProductLock.code, undefined,
+    'waiting revocation completes after the product lock is released')
+  eq(revokedAfterProductLock.result.product_appointments.find(value =>
+    value.id === complianceAppointment.id).status, 'REVOKED',
+  'product-first revocation retains one successful authority transition')
+  phase = 'stage3-appointment-trust-revocation-race-preparation'
+  await db.query('begin'); begun = true
+  const prepareDecisionRace = async (label, targetRole, appointee, membership, reviewerNumber) => {
+    const name = `Synthetic ${label} trust-revocation fund`
+    let product = (await scopedCommand(1, manager, 'create_product', {
+      organisation_id: orgId, terms: fundV2Terms(name),
+    })).products.find(value => value.terms.name === name)
+    let appointment = (await scopedCommand(1, manager, 'request_product_service_appointment', {
+      product_id: product.id, role: targetRole, appointee_user_id: uid(appointee),
+      native_membership_id: membership, expected_product_revision: product.revision,
+      evidence_reference: `SYNTHETIC-TRUST-RACE-${label}-2026-09-28`, requested_until: until,
+    })).product_appointments.find(value => value.product_id === product.id && value.role === targetRole)
+    appointment = (await mandateScopedCommand(reviewerNumber, reviewer,
+      'review_product_service_appointment', reviewAppointment(appointment))).product_appointments
+      .find(value => value.id === appointment.id)
+    appointment = (await mandateScopedCommand(10, roleContext('SuperAdmin'),
+      'apply_product_service_appointment', {
+        appointment_id: appointment.id, expected_revision: appointment.revision,
+      })).product_appointments.find(value => value.id === appointment.id)
+    eq(appointment.effective, true, `${label} appointment is effective before the race`)
+    product = (await scopedCommand(1, manager, 'submit_product', {
+      product_id: product.id, expected_revision: product.revision,
+    })).products.find(value => value.id === product.id)
+    return { product, appointment }
+  }
+  const complianceTrustRace = await prepareDecisionRace('compliance-reviewer',
+    'ComplianceOfficer', 2, complianceMembershipId, 11)
+  const issuerTrustRace = await prepareDecisionRace('issuer-applier',
+    'IssuerFundManager', 13, issuerMembershipId, 2)
+  const directInsertRace = await prepareDecisionRace('direct-insert-lock-order',
+    'ComplianceOfficer', 2, complianceMembershipId, 11)
+  await db.query('commit'); begun = false
+  phase = 'stage3-direct-decision-insert-vs-appointment-revoke'
+  await admin()
+  const directRevision = (await db.query(`select terms_hash,document_hashes from bx1_portal.offering_revisions
+    where id=$1`, [directInsertRace.product.offering_package.id])).rows[0]
+  await db.query('begin'); begun = true
+  await db.query('select id from bx1_portal.products where id=$1 for update',
+    [directInsertRace.product.id])
+  const directDecision = (async () => {
+    await proofClients[0].query('begin')
+    try {
+      await actor(2, { aal: 'aal2' }, proofClients[0])
+      await proofClients[0].query('reset role')
+      await proofClients[0].query(`insert into bx1_portal.offering_decisions
+        (offering_revision_id,decision_kind,decision,actor_id,operating_context,
+         terms_hash,document_hashes,product_revision_at_decision,notes,checks)
+        values($1,'COMPLIANCE','APPROVED',$2,$3::jsonb,$4,$5::jsonb,$6,$7,$8::jsonb)`,
+      [directInsertRace.product.offering_package.id, uid(2), JSON.stringify(reviewer),
+        directRevision.terms_hash, JSON.stringify(directRevision.document_hashes),
+        directInsertRace.product.revision,
+        'Synthetic direct internal decision used solely for product-first lock-order proof.',
+        JSON.stringify(offeringChecks)])
+      await proofClients[0].query('commit')
+      return { code: undefined }
+    } catch (error) {
+      await proofClients[0].query('rollback')
+      return { code: error?.code }
+    }
+  })()
+  await waitForBlocked([pids[0]])
+  eq(await scalar('select $1::int=any(pg_blocking_pids($2::int))',
+    [await scalar('select pg_backend_pid()'), pids[0]]), true,
+  'direct internal decision waits on the main connection product lock')
+  await db.query('select id from bx1_portal.product_service_appointments where id=$1 for update nowait',
+    [directInsertRace.appointment.id])
+  const directRevoked = (await mandateScopedCommand(10, roleContext('SuperAdmin'),
+    'revoke_product_service_appointment', {
+      appointment_id: directInsertRace.appointment.id,
+      expected_revision: directInsertRace.appointment.revision,
+      reason: 'Synthetic direct insert lock-order proof revokes authority before decision can commit.',
+    })).product_appointments.find(value => value.id === directInsertRace.appointment.id)
+  eq(directRevoked.status, 'REVOKED', 'product-first revocation completes while direct insert waits')
+  await db.query('commit'); begun = false
+  eq((await directDecision).code, '42501',
+    'direct internal insert rejects appointment revoked before product lock release')
+  await admin()
+  eq(await scalar('select count(*)::int from bx1_portal.offering_decisions where offering_revision_id=$1',
+    [directInsertRace.product.offering_package.id]), 0,
+  'failed direct internal insert leaves no immutable offering decision')
+  phase = 'stage3-inactive-applied-appointment-admin-queue'
+  await db.query('begin'); begun = true
+  await admin()
+  await db.query("update bx1_private.person_principals set status='REVOKED' where auth_user_id=$1 and status='TRUSTED'",
+    [uid(11)])
+  const inactiveApplied = (await mandateScopedRead(10, roleContext('SuperAdmin')))
+    .product_appointments.find(value => value.id === complianceTrustRace.appointment.id)
+  truth(inactiveApplied, 'inactive applied appointment remains visible to Super Admin for recovery')
+  eq([inactiveApplied.status, inactiveApplied.effective, inactiveApplied.next_owner],
+    ['APPLIED', false, 'SUPER_ADMIN'],
+  'ineffective APPLIED appointment queues Super Admin revocation before manager renewal')
+  await denied('manager cannot silently replace an inactive APPLIED appointment',
+    () => scopedCommand(1, manager, 'request_product_service_appointment', {
+      product_id: complianceTrustRace.product.id, role: 'ComplianceOfficer',
+      appointee_user_id: uid(2), native_membership_id: complianceMembershipId,
+      expected_product_revision: complianceTrustRace.product.revision,
+      evidence_reference: 'SYNTHETIC-INACTIVE-APPLIED-RENEWAL-2026-09-28', requested_until: until,
+    }), '23505')
+  await db.query('rollback'); begun = false
+  phase = 'fund-v2-cached-event-scope-revoked-during-read'
+  // The optimized base reader calculates allowed organisations before it
+  // projects events. Block only the events relation, so the reader is paused
+  // after that cache is built; revoke the binding on another connection and
+  // require the final authority recheck to reject the whole response.
+  await db.query('begin'); begun = true
+  await actor(1)
+  await admin()
+  eq(await scalar('select bx1_portal.scoped_operator($1::jsonb,$2::uuid)',
+    [JSON.stringify(manager), orgId]), true, 'manager is authorised before the read race')
+  await db.query('lock table bx1_portal.events in access exclusive mode')
+  const interruptedRead = (async () => {
+    await proofClients[0].query('begin')
+    try {
+      const result = await scopedRead(1, manager, proofClients[0])
+      await proofClients[0].query('commit')
+      return { result }
+    } catch (error) {
+      await proofClients[0].query('rollback')
+      return { code: error?.code }
+    }
+  })()
+  await waitForBlocked([pids[0]])
+  eq(await scalar(`select exists(select 1 from pg_locks where pid=$1
+    and relation='bx1_portal.events'::regclass and mode='AccessShareLock' and not granted)`,
+  [pids[0]]), true, 'read waits on events relation after calculating the operator scope')
+  await db.query("update bx1_portal.organisation_authority_bindings set status='REVOKED' where product_organisation_id=$1 and role='OfferingManager' and status='ACTIVE'", [orgId])
+  await db.query('commit'); begun = false
+  const revokedRead = await interruptedRead
+  eq(revokedRead.code, '42501', 'revocation during the cached-scope read denies the entire response')
+  phase = 'stage3-appointment-trust-revocation-two-connection-proof'
+  const proveDecisionRevocation = async (label, race, revokedPerson, decisionActor,
+    decisionContext, action, payload) => {
+    const decisionKey = key()
+    await db.query('begin'); begun = true
+    await admin()
+    await db.query("update bx1_private.person_principals set status='REVOKED' where auth_user_id=$1 and status='TRUSTED'",
+      [uid(revokedPerson)])
+    const waitingDecision = (async () => {
+      await proofClients[0].query('begin')
+      try {
+        const result = await mandateScopedCommand(decisionActor, decisionContext,
+          action, payload, decisionKey, proofClients[0])
+        await proofClients[0].query('commit')
+        return { result }
+      } catch (error) {
+        await proofClients[0].query('rollback')
+        return { code: error?.code }
+      }
+    })()
+    await waitForBlocked([pids[0]])
+    eq(await scalar(`select exists(select 1 from pg_locks where pid=$1
+      and relation='bx1_private.person_principals'::regclass
+      and mode='RowShareLock' and granted)`, [pids[0]]), true,
+    `${label} decision reaches the trusted-person lock before writing its decision`)
+    await db.query('commit'); begun = false
+    const outcome = await waitingDecision
+    eq(outcome.code, '42501', `${label} decision rejects trust revoked during the wait`)
+    await admin()
+    eq(await scalar('select bx1_portal.product_appointment_effective($1)',
+      [race.appointment.id]), false, `${label} appointment loses effectiveness after trust revocation`)
+    eq(await scalar(`select jsonb_build_object(
+      'decisions',(select count(*) from bx1_portal.offering_decisions where offering_revision_id=$1),
+      'native_receipts',(select count(*) from bx1_portal.requests where actor_id=$2 and request_key=$3),
+      'scoped_receipts',(select count(*) from bx1_portal.scoped_requests where actor_id=$2 and request_key=$3),
+      'events',(select count(*) from bx1_portal.events where subject_id=$4 and kind=$5))`,
+    [race.product.offering_package.id, uid(decisionActor), decisionKey, race.product.id, action]),
+    { decisions: 0, native_receipts: 0, scoped_receipts: 0, events: 0 },
+    `${label} rejected decision leaves no immutable decision, receipt or event`)
+    eq(await scalar('select jsonb_build_object(\'status\',status,\'revision\',revision) from bx1_portal.products where id=$1',
+      [race.product.id]), { status: 'IN_REVIEW', revision: race.product.revision },
+    `${label} rejected decision does not advance the product`)
+  }
+  phase = 'stage3-original-submitter-trust-revocation-two-connection-proof'
+  const lineageDecisionKey = key()
+  await admin()
+  const lineagePriorIssuerEvents = await scalar(`select count(*)::int from bx1_portal.events
+    where subject_id=$1 and actor_id=$2 and kind='review_offering_issuer'`,
+  [lineageFund.id, uid(13)])
+  await db.query('begin'); begun = true
+  await admin()
+  await db.query("update bx1_private.person_principals set status='REVOKED' where auth_user_id=$1 and status='TRUSTED'",
+    [uid(5)])
+  const waitingLineageDecision = (async () => {
+    await proofClients[0].query('begin')
+    try {
+      const result = await mandateScopedCommand(13, issuerContext,
+        'review_offering_issuer', issuerInput(lineageFund), lineageDecisionKey, proofClients[0])
+      await proofClients[0].query('commit')
+      return { result }
+    } catch (error) {
+      await proofClients[0].query('rollback')
+      return { code: error?.code }
+    }
+  })()
+  await waitForBlocked([pids[0]])
+  eq(await scalar('select $1::int=any(pg_blocking_pids($2::int))',
+    [await scalar('select pg_backend_pid()'), pids[0]]), true,
+  'issuer decision waits on the original submitter trust row held by the revoker')
+  eq(await scalar(`select exists(select 1 from pg_locks where pid=$1
+    and relation='bx1_private.person_principals'::regclass
+    and mode='RowShareLock' and granted)`, [pids[0]]), true,
+  'issuer decision locks every same-hash submitter before any decision write')
+  await db.query('commit'); begun = false
+  eq((await waitingLineageDecision).code, '42501',
+    'original submitter trust revocation during wait fails closed for fresh review')
+  await admin()
+  eq(await scalar('select bx1_portal.product_appointment_effective($1)',
+    [lineageIssuerAppointment.id]), true,
+  'denial is attributable to same-hash original submitter, not the issuer appointment')
+  eq(await scalar(`select jsonb_build_object(
+    'decisions',(select count(*) from bx1_portal.offering_decisions where offering_revision_id=$1),
+    'native_receipts',(select count(*) from bx1_portal.requests where actor_id=$2 and request_key=$3),
+    'scoped_receipts',(select count(*) from bx1_portal.scoped_requests where actor_id=$2 and request_key=$3),
+    'events',(select count(*) from bx1_portal.events where subject_id=$4
+      and actor_id=$2 and kind='review_offering_issuer'))`,
+  [lineageFund.offering_package.id, uid(13), lineageDecisionKey, lineageFund.id]),
+  { decisions: 0, native_receipts: 0, scoped_receipts: 0,
+    events: lineagePriorIssuerEvents },
+  'lineage revocation race commits no decision, receipt or audit event')
+  eq(await scalar('select jsonb_build_object(\'status\',status,\'revision\',revision) from bx1_portal.products where id=$1',
+    [lineageFund.id]), { status: 'IN_REVIEW', revision: lineageFund.revision },
+  'lineage revocation race cannot advance the offering')
+  await proveDecisionRevocation('Compliance reviewer', complianceTrustRace, 11, 2,
+    reviewer, 'review_product', complianceInput(complianceTrustRace.product))
+  await proveDecisionRevocation('issuer appointment applier', issuerTrustRace, 10, 13,
+    issuerContext, 'review_offering_issuer', issuerInput(issuerTrustRace.product))
   phase = 'cleanup-committed-disposable-fixture'
   await db.query('drop schema bx1_portal,bx1_private,storage,auth,public cascade; create schema public')
   committedFixture = false

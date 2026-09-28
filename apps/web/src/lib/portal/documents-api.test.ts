@@ -139,6 +139,30 @@ describe('private evidence context continuity', () => {
     expect(rpc).toHaveBeenCalledWith('bx1_application_document_lookup', { application_id: applicationId, revision: 2, document_id: id, operating_context: { mode: 'ROLE', organisationId, role: 'ComplianceOfficer' } })
     expect(download).not.toHaveBeenCalled()
   })
+  it('recovers only the signed-in applicant\'s pending scan queue after reload', async () => {
+    const rpc = vi.fn().mockReturnValue({ abortSignal: vi.fn().mockResolvedValue({ data: [
+      { id, kind: 'IDENTITY', title: 'Fictional identity', state: 'QUARANTINED', created_at: '2026-09-24T11:00:00Z' },
+    ], error: null }) })
+    mocks.create.mockReturnValue({ rpc })
+    const response = await GET(new NextRequest(`${origin}/api/portal/documents?queue=1`))
+    expect(response.status).toBe(200)
+    expect((await response.json()).documents[0].state).toBe('QUARANTINED')
+    expect(mocks.read).toHaveBeenCalledWith(expect.anything(), { mode: 'APPLICANT' })
+    expect(rpc).toHaveBeenCalledWith('bx1_document_scan_queue')
+  })
+  it('returns a usable manifest only after guarded scanned promotion', async () => {
+    const rpc = vi.fn().mockReturnValue({ abortSignal: vi.fn().mockResolvedValue({
+      data: { id, state: 'SCANNED_CLEAN', document }, error: null,
+    }) })
+    mocks.create.mockReturnValue({ rpc })
+    const response = await GET(new NextRequest(`${origin}/api/portal/documents?status=${id}`))
+    expect(response.status).toBe(200)
+    expect((await response.json()).document).toEqual(document)
+    expect(rpc).toHaveBeenCalledWith('bx1_document_scan_status', { document_id: id })
+    rpc.mockReturnValue({ abortSignal: vi.fn().mockResolvedValue({ data: { id, state: 'SCANNED_CLEAN' }, error: null }) })
+    expect((await GET(new NextRequest(`${origin}/api/portal/documents?status=${id}`))).status).toBe(503)
+    expect((await GET(new NextRequest(`${origin}/api/portal/documents?status=${id}&role=Investor`))).status).toBe(400)
+  })
   it('refuses unscoped uploads before any private backend call', async () => {
     const response = await POST(new NextRequest(`${origin}/api/portal/documents`, { method: 'POST', headers: { origin, host: new URL(origin).host, 'content-type': 'multipart/form-data; boundary=synthetic' }, body: '' }))
     expect(response.status).toBe(403); expect(mocks.read).not.toHaveBeenCalled()
@@ -159,7 +183,7 @@ describe('private evidence context continuity', () => {
   }
   it('preserves the legacy synthetic upload until a verified receipt policy cutover', async () => {
     const upload = vi.fn().mockResolvedValue({ error: null })
-    mocks.create.mockReturnValue({ rpc: vi.fn().mockReturnValue({ abortSignal: vi.fn().mockResolvedValue({ data: false, error: null }) }), storage: { from: () => ({ upload }) } })
+    mocks.create.mockReturnValue({ rpc: vi.fn((name: string) => ({ abortSignal: vi.fn().mockResolvedValue({ data: name === 'bx1_document_lifecycle_mode' ? 'SYNTHETIC_TEST_ONLY' : false, error: null }) })), storage: { from: () => ({ upload }) } })
     const response = await POST(uploadRequest())
     expect(response.status).toBe(201)
     expect((await response.json()).validation_state).toBe('LEGACY_UNVERIFIED')
@@ -168,7 +192,7 @@ describe('private evidence context continuity', () => {
   })
   it('fails before Storage upload when strict receipts lack the server-only writer', async () => {
     const upload = vi.fn()
-    mocks.create.mockReturnValue({ rpc: vi.fn().mockReturnValue({ abortSignal: vi.fn().mockResolvedValue({ data: true, error: null }) }), storage: { from: () => ({ upload }) } })
+    mocks.create.mockReturnValue({ rpc: vi.fn((name: string) => ({ abortSignal: vi.fn().mockResolvedValue({ data: name === 'bx1_document_lifecycle_mode' ? 'SYNTHETIC_TEST_ONLY' : true, error: null }) })), storage: { from: () => ({ upload }) } })
     receipts.config.mockImplementation(() => { throw new Error('unavailable') })
     const response = await POST(uploadRequest())
     expect(response.status).toBe(503)
@@ -181,7 +205,7 @@ describe('private evidence context continuity', () => {
     const sessionId = '77777777-7777-4777-8777-777777777777'
     const token = `synthetic.${Buffer.from(JSON.stringify({ sub: actor, session_id: sessionId })).toString('base64url')}.signature`
     mocks.create.mockReturnValue({
-      rpc: vi.fn().mockReturnValue({ abortSignal: vi.fn().mockResolvedValue({ data: true, error: null }) }),
+      rpc: vi.fn((name: string) => ({ abortSignal: vi.fn().mockResolvedValue({ data: name === 'bx1_document_lifecycle_mode' ? 'SYNTHETIC_TEST_ONLY' : true, error: null }) })),
       storage: { from: () => ({ upload, download }) },
       auth: { getSession: vi.fn().mockResolvedValue({ data: { session: { access_token: token } }, error: null }),
         getUser: vi.fn().mockResolvedValue({ data: { user: { id: actor } }, error: null }) },
@@ -196,7 +220,7 @@ describe('private evidence context continuity', () => {
   it('does not register a strict receipt for a different stored object', async () => {
     const upload = vi.fn().mockResolvedValue({ error: null })
     const download = vi.fn().mockResolvedValue({ error: null, data: new Blob([Buffer.from('%PDF-1.4\nfictional evidence altered')], { type: 'application/pdf' }) })
-    mocks.create.mockReturnValue({ rpc: vi.fn().mockReturnValue({ abortSignal: vi.fn().mockResolvedValue({ data: true, error: null }) }), storage: { from: () => ({ upload, download }) } })
+    mocks.create.mockReturnValue({ rpc: vi.fn((name: string) => ({ abortSignal: vi.fn().mockResolvedValue({ data: name === 'bx1_document_lifecycle_mode' ? 'SYNTHETIC_TEST_ONLY' : true, error: null }) })), storage: { from: () => ({ upload, download }) } })
     receipts.config.mockReturnValue({})
     const response = await POST(uploadRequest())
     expect(response.status).toBeGreaterThanOrEqual(400)

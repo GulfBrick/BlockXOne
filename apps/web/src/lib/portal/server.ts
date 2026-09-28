@@ -3,7 +3,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { createPageSupabaseClient } from '@/lib/supabase/page'
 import { readVerifiedUser } from '@/lib/supabase/server'
 import { isDemoEnvironment } from '@/lib/testnet-fund/contracts'
-import type { PortalPageData, PortalSnapshot } from './contracts'
+import { customerMonitoringSnapshotSchema, type PortalPageData, type PortalSnapshot } from './contracts'
 import { portalContextMatches, type PortalOperatingContext } from './operating-context'
 import { fundingSnapshotSchema } from './funding-contracts'
 
@@ -33,6 +33,7 @@ export function isPortalSnapshot(value: unknown, userId: string): value is Porta
   const v = value as Partial<PortalSnapshot>
   return v.actor?.id === userId && typeof v.actor.email === 'string' && typeof v.actor.can_review === 'boolean'
     && ['applications', 'organisations', 'products', 'subscriptions', 'events'].every(key => Array.isArray((v as Record<string, unknown>)[key]))
+    && (v.customer_monitoring === undefined || customerMonitoringSnapshotSchema.safeParse(v.customer_monitoring).success)
     && (v.funding === undefined || fundingSnapshotSchema.safeParse(v.funding).success)
 }
 export async function loadPortalPage(): Promise<PortalPageData> {

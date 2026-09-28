@@ -19,7 +19,7 @@ vi.mock('@/components/portal/entry-screen', () => ({ EntryScreen: () => createEl
 
 import RegisterPage, { generateMetadata as registrationMetadata } from '@/app/register/page'
 import { PortalPage } from '@/components/portal/portal-page'
-import { loadPortalPage, readPortal } from './server'
+import { isPortalSnapshot, loadPortalPage, readPortal } from './server'
 import { APPLICANT_CONTEXT } from './operating-context'
 
 const origin = 'https://block-x-one-admission-test.vercel.app'
@@ -57,6 +57,12 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllEnvs())
 
 describe('actual customer page admission', () => {
+  it('rejects malformed guarded monitoring data instead of treating it as an empty Compliance queue', () => {
+    const item = { application_id: organisation, application_revision: 1, state: 'ON_HOLD', case_revision: 1, admission_expires_at: null, renewal_due: null, new_actions_allowed: false }
+    expect(isPortalSnapshot({ ...snapshot, customer_monitoring: [item] }, user.id)).toBe(true)
+    expect(isPortalSnapshot({ ...snapshot, customer_monitoring: [{ ...item, new_actions_allowed: 'true' }] }, user.id)).toBe(false)
+    expect(isPortalSnapshot({ ...snapshot, customer_monitoring: [item, item] }, user.id)).toBe(false)
+  })
   it('shows explicit Continue, Switch account and Add a capacity for a signed-in person', async () => {
     const html = renderToStaticMarkup(await RegisterPage({ searchParams: Promise.resolve({ intent: 'wealth-manager' }) }))
     expect(html).toContain('You are already signed in.')
