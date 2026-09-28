@@ -64,7 +64,7 @@ const serverActionAllowedOrigins = isProduction
   : ['localhost:3000']
 
 const apiOrigin = configuredApiUrl ? new URL(configuredApiUrl).origin : ''
-const demoRequestOrigin = configuredDemoRequestEndpoint
+const demoRequestOrigin = demoRequestEnabled && configuredDemoRequestEndpoint
   ? new URL(configuredDemoRequestEndpoint).origin
   : ''
 const isTestnetKycSurface = authMode === 'supabase'
