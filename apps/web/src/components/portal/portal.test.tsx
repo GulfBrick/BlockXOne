@@ -347,7 +347,7 @@ describe('onboarding and subscription boundaries', () => {
   })
   it('makes old fund-draft denomination migration an explicit manager action', () => {
     const oldTerms = historicalTerms('FUND')
-    const item = product({ status: 'DRAFT', terms: oldTerms })
+    const item = product({ status: 'DRAFT', terms: oldTerms, allowed_actions: ['save_product'] })
     const manager = snapshot(); manager.operating_context = operating('OfferingManager'); manager.organisations = [operatorOrganisation()]; manager.products = [item]
     const html = renderToStaticMarkup(<PortalScreen data={data(manager)} view="/portal/products/detail" id={productId} operatingContext={operating('OfferingManager')} />)
     expect(html).toContain('Historical fund draft needs an explicit terms upgrade')
@@ -358,7 +358,7 @@ describe('onboarding and subscription boundaries', () => {
     expect(html).toMatch(/disabled=""[^>]*>Save revised draft/)
   })
   it('requires an explicit property-draft upgrade and keeps old cents off new TST economics', () => {
-    const item = product({ status: 'DRAFT', terms: historicalTerms('REAL_ESTATE') })
+    const item = product({ status: 'DRAFT', terms: historicalTerms('REAL_ESTATE'), allowed_actions: ['save_product'] })
     const manager = snapshot(); manager.operating_context = operating('OfferingManager'); manager.organisations = [operatorOrganisation()]; manager.products = [item]
     const html = renderToStaticMarkup(<PortalScreen data={data(manager)} view="/portal/products/detail" id={productId} operatingContext={operating('OfferingManager')} />)
     expect(html).toContain('Historical property draft needs an explicit terms upgrade')
@@ -386,7 +386,7 @@ describe('onboarding and subscription boundaries', () => {
   it('blocks an uncorrected old denomination inside a nested v2 fund policy', () => {
     const sample = fictionalProductTerms('FUND')
     if (!isFundTermsV2(sample)) throw new Error('Expected a v2 fund test fixture')
-    const item = product({ status: 'DRAFT', terms: { ...sample, fund: { ...sample.fund, mandate: 'An invalid ZAR_TEST reference remains in this nested mandate.' } } })
+    const item = product({ status: 'DRAFT', allowed_actions: ['save_product'], terms: { ...sample, fund: { ...sample.fund, mandate: 'An invalid ZAR_TEST reference remains in this nested mandate.' } } })
     const manager = snapshot(); manager.operating_context = operating('OfferingManager'); manager.organisations = [operatorOrganisation()]; manager.products = [item]
     const html = renderToStaticMarkup(<PortalScreen data={data(manager)} view="/portal/products/detail" id={productId} operatingContext={operating('OfferingManager')} />)
     expect(html).toContain('This v2 fund still contains ZAR_TEST wording')
@@ -395,7 +395,7 @@ describe('onboarding and subscription boundaries', () => {
   it('blocks an old denomination inside a nested v2 property policy', () => {
     const sample = fictionalProductTerms('REAL_ESTATE')
     if (!isRealEstateTermsV2(sample)) throw new Error('Expected a v2 property test fixture')
-    const item = product({ status: 'DRAFT', terms: { ...sample, real_estate: { ...sample.real_estate, spv: { ...sample.real_estate.spv, interest_rights: 'An invalid ZAR_TEST reference remains in this property right.' } } } })
+    const item = product({ status: 'DRAFT', allowed_actions: ['save_product'], terms: { ...sample, real_estate: { ...sample.real_estate, spv: { ...sample.real_estate.spv, interest_rights: 'An invalid ZAR_TEST reference remains in this property right.' } } } })
     const manager = snapshot(); manager.operating_context = operating('OfferingManager'); manager.organisations = [operatorOrganisation()]; manager.products = [item]
     const html = renderToStaticMarkup(<PortalScreen data={data(manager)} view="/portal/products/detail" id={productId} operatingContext={operating('OfferingManager')} />)
     expect(html).toContain('This v2 property still contains ZAR_TEST wording')
@@ -475,14 +475,54 @@ describe('operational landings and one subscription hand-off', () => {
     const actions = renderToStaticMarkup(<ProductActions product={product({ status: 'DRAFT' })} onSaved={vi.fn()} availableCommands={[]} />)
     expect(actions).not.toContain('Submit product for review</button>')
   })
+  it('requires both manager capability and an exact product action for the draft editor and submission', () => {
+    const value = snapshot(); value.operating_context = operating('OfferingManager')
+    value.organisations = [operatorOrganisation()]
+    const show = (allowed_actions?: string[]) => {
+      value.products = [product({ status: 'DRAFT', allowed_actions })]
+      return renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal/products/detail" id={productId} operatingContext={operating('OfferingManager')} />)
+    }
+    const noGrant = show()
+    expect(noGrant).not.toContain('Edit product draft')
+    expect(noGrant).not.toContain('Submit immutable offering package</button>')
+    const saveOnly = show(['save_product'])
+    expect(saveOnly).toContain('Edit product draft')
+    expect(saveOnly).not.toContain('Submit immutable offering package</button>')
+    const submitOnly = show(['submit_product'])
+    expect(submitOnly).not.toContain('Edit product draft')
+    expect(submitOnly).toContain('Submit immutable offering package</button>')
+    const both = show(['save_product', 'submit_product'])
+    expect(both).toContain('Edit product draft')
+    expect(both).toContain('Submit immutable offering package</button>')
+    value.organisations = [{ ...operatorOrganisation(), capabilities: ['read_orders'] }]
+    const noOrganisationGrant = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal/products/detail" id={productId} operatingContext={operating('OfferingManager')} />)
+    expect(noOrganisationGrant).not.toContain('Edit product draft')
+    expect(noOrganisationGrant).not.toContain('Submit immutable offering package</button>')
+  })
   it('shows the compliance queue as work and does not combine reviewer authority into an issuer context', () => {
-    const value = snapshot(); value.actor.can_review = true; value.operating_context = operating('ComplianceOfficer'); value.products = [product({ status: 'IN_REVIEW' })]; value.applications = [application({ user_id: other, status: 'SUBMITTED', details: { ...application().details, full_name: 'Scoped Review Applicant' } })]
+    const value = snapshot(); value.actor.can_review = true; value.operating_context = operating('ComplianceOfficer');
+    const submitted = product({ status: 'IN_REVIEW' })
+    value.products = [product({ status: 'IN_REVIEW', offering_package: { ...submitted.offering_package!, can_review_compliance: true }, allowed_actions: ['review_product'] })]
+    value.applications = [application({ user_id: other, status: 'SUBMITTED', details: { ...application().details, full_name: 'Scoped Review Applicant' } })]
     const reviewer = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal" operatingContext={operating('ComplianceOfficer')} />)
     expect(reviewer).toContain('Compliance work queue'); expect(reviewer).toContain('Scoped Review Applicant'); expect(reviewer).toContain('Review case'); expect(reviewer).toContain('Review offering')
     value.operating_context = operating('OfferingManager'); value.organisations = [operatorOrganisation()]
     const issuer = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal" operatingContext={operating('OfferingManager')} />)
     expect(issuer).not.toContain('Scoped Review Applicant'); expect(issuer).not.toContain('Review case</a>')
     expect(issuer).not.toContain('href="/portal/compliance?')
+  })
+  it('does not put a dead offering review in the Compliance queue', () => {
+    const value = snapshot(); value.actor.can_review = true; value.operating_context = operating('ComplianceOfficer')
+    const pending = product({ status: 'IN_REVIEW' })
+    const show = (can_review_compliance: boolean, allowed_actions: string[]) => {
+      value.products = [product({ status: 'IN_REVIEW', offering_package: { ...pending.offering_package!, can_review_compliance }, allowed_actions })]
+      return renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal/compliance" operatingContext={operating('ComplianceOfficer')} />)
+    }
+    expect(show(false, ['review_product'])).not.toContain('Review offering</a>')
+    expect(show(true, [])).not.toContain('Review offering</a>')
+    const actionable = show(true, ['review_product'])
+    expect(actionable).toContain('Offering Compliance')
+    expect(actionable).toContain('Review offering</a>')
   })
   it('retains selected context in product, order, detail, breadcrumb and refresh links', () => {
     const context = operating('OfferingManager'); const value = snapshot(); value.operating_context = context; value.organisations = [operatorOrganisation()]; value.products = [product()]; value.subscriptions = [order({ investor_id: other })]

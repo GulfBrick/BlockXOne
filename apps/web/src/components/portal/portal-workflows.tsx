@@ -278,8 +278,11 @@ export function ProductActions({ product, onSaved, availableCommands }: { produc
   const [amendReason, setAmendReason] = useState('')
   const legacyFundDraft = product.terms.asset_type === 'FUND' && !isFundTermsV2(product.terms) && ['DRAFT', 'CHANGES_REQUIRED'].includes(product.status)
   const legacyPropertyDraft = product.terms.asset_type === 'REAL_ESTATE' && !isRealEstateTermsV2(product.terms) && ['DRAFT', 'CHANGES_REQUIRED'].includes(product.status)
-  const canSubmit = !legacyFundDraft && !legacyPropertyDraft && ['DRAFT', 'CHANGES_REQUIRED'].includes(product.status) && (availableCommands === undefined || availableCommands.includes('submit_product'))
-  const canEditLegacyFund = availableCommands === undefined || availableCommands.includes('save_product')
+  const canSubmit = !legacyFundDraft && !legacyPropertyDraft && ['DRAFT', 'CHANGES_REQUIRED'].includes(product.status)
+    && availableCommands?.includes('submit_product') === true
+    && product.allowed_actions?.includes('submit_product') === true
+  const canEditLegacyFund = availableCommands?.includes('save_product') === true
+    && product.allowed_actions?.includes('save_product') === true
   const pkg = product.offering_package
   const canPublish = product.status === 'APPROVED' && pkg?.origin === 'SUBMITTED' && pkg.terms_hash === product.terms_hash && pkg.issuer_status === 'APPROVED' && pkg.compliance_status === 'APPROVED' && pkg.technical_readiness_status === 'VERIFIED' && pkg.publishable === true && product.allowed_actions?.includes('publish_product') === true && (availableCommands === undefined || availableCommands.includes('publish_product'))
   const canReopen = product.status === 'APPROVED'
