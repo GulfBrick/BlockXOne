@@ -4,12 +4,13 @@ import { offeringFileId, sha256Hex, OfferingFileReceiptError } from './offering-
 
 vi.mock('server-only', () => ({}))
 const mocks = vi.hoisted(() => ({ read: vi.fn(), create: vi.fn(), writer: vi.fn(),
-  session: vi.fn(), register: vi.fn() }))
+  session: vi.fn(), reserve: vi.fn(), register: vi.fn() }))
 vi.mock('@/lib/supabase/server', async original => ({ ...await original<object>(), createRequestSupabaseClient: mocks.create }))
 vi.mock('./server', async original => ({ ...await original<object>(), readPortal: mocks.read }))
 vi.mock('./offering-files-server', async original => ({ ...await original<object>(),
   requireOfferingFileReceiptWriter: mocks.writer,
   verifiedOfferingFileSession: mocks.session,
+  reserveOfferingFile: mocks.reserve,
   registerOfferingFile: mocks.register }))
 import { GET, POST } from '@/app/api/portal/offering-documents/route'
 
@@ -42,6 +43,9 @@ beforeEach(() => {
     SUPABASE_URL: 'https://fegnnnlseuejkrusbbkv.supabase.co' })) vi.stubEnv(key, value)
   mocks.read.mockResolvedValue({ user: { id: actor }, snapshot })
   mocks.session.mockResolvedValue({ id: '55555555-5555-4555-8555-555555555555', aal: 'aal1' })
+  mocks.reserve.mockImplementation(async input => ({ id: input.fileId,
+    path: `${input.revisionId}/${input.actorId}/${input.fileId}`,
+    revision_id: input.revisionId, sha256: input.sha256, size: input.size }))
 })
 afterEach(() => vi.unstubAllEnvs())
 
@@ -50,6 +54,18 @@ describe('offering-file API quarantine', () => {
     mocks.writer.mockImplementationOnce(() => { throw new OfferingFileReceiptError() })
     const upload = vi.fn(), download = vi.fn(), rpc = vi.fn()
     mocks.create.mockReturnValue({ storage: { from: () => ({ upload, download }) }, rpc })
+    const result = await POST(request())
+    expect(result.status).toBe(503)
+    expect(upload).not.toHaveBeenCalled()
+    expect(download).not.toHaveBeenCalled()
+    expect(mocks.reserve).not.toHaveBeenCalled()
+    expect(mocks.register).not.toHaveBeenCalled()
+  })
+
+  it('does not call Storage if the trusted upload reservation is not confirmed', async () => {
+    mocks.reserve.mockResolvedValueOnce(null)
+    const upload = vi.fn(), download = vi.fn()
+    mocks.create.mockReturnValue({ storage: { from: () => ({ upload, download }) }, rpc: vi.fn() })
     const result = await POST(request())
     expect(result.status).toBe(503)
     expect(upload).not.toHaveBeenCalled()
@@ -84,6 +100,7 @@ describe('offering-file API quarantine', () => {
     expect(result.status).toBe(202)
     expect((await result.json()).document.validation_state).toBe('QUARANTINED')
     expect(rpc).not.toHaveBeenCalled()
+    expect(mocks.reserve).toHaveBeenCalledOnce()
     expect(mocks.register).toHaveBeenCalledWith(expect.objectContaining({
       context, productId, revisionId, fileId: id, sha256, size: pdf.length,
     }))

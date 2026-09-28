@@ -4,7 +4,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { documentReceiptDatabaseConfig, documentReceiptQuery } from './document-receipts'
 
 export class OfferingFileReceiptError extends Error {
-  constructor() { super('The trusted offering-file receipt is unavailable. The file remains quarantined.'); this.name = 'OfferingFileReceiptError' }
+  constructor() { super('The private file reservation or receipt could not be confirmed. Refresh before retrying the same file.'); this.name = 'OfferingFileReceiptError' }
 }
 
 export function requireOfferingFileReceiptWriter(): void {
@@ -29,19 +29,29 @@ export async function verifiedOfferingFileSession(client: SupabaseClient, actorI
 }
 
 /** The restricted role has no browser-exposed register RPC or raw table grants. */
-export async function registerOfferingFile(input: {
+type OfferingFileWriterInput = {
   actorId: string; sessionId: string; aal: 'aal1' | 'aal2'; context: object;
   productId: string; revisionId: string; fileId: string; kind: string; title: string;
   sha256: string; size: number;
-}): Promise<unknown> {
+}
+
+async function writeOfferingFile(operation: 'reserve' | 'register', input: OfferingFileWriterInput): Promise<unknown> {
   try {
     return await documentReceiptQuery<unknown>(
-      `select bx1_private.register_offering_file($1::uuid,$2::uuid,$3::text,$4::jsonb,
+      `select bx1_private.${operation}_offering_file($1::uuid,$2::uuid,$3::text,$4::jsonb,
         $5::uuid,$6::uuid,$7::uuid,$8::text,$9::text,$10::text,$11::integer) as result`,
       [input.actorId, input.sessionId, input.aal, JSON.stringify(input.context),
         input.productId, input.revisionId, input.fileId, input.kind, input.title, input.sha256, input.size],
     )
   } catch { throw new OfferingFileReceiptError() }
+}
+
+export async function reserveOfferingFile(input: OfferingFileWriterInput): Promise<unknown> {
+  return writeOfferingFile('reserve', input)
+}
+
+export async function registerOfferingFile(input: OfferingFileWriterInput): Promise<unknown> {
+  return writeOfferingFile('register', input)
 }
 
 export function offeringFileId(revisionId: string, actorId: string, kind: string, sha256: string): string {

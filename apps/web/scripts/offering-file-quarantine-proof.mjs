@@ -19,12 +19,23 @@ export async function proveOfferingFileQuarantine(db, productId) {
   const directWriter = await db.query(`select
     pg_catalog.to_regprocedure('public.bx1_offering_file_register(jsonb,uuid,uuid,uuid,text,text,text,integer)') is null as no_public_writer,
     has_function_privilege('authenticated',
+      'bx1_private.reserve_offering_file(uuid,uuid,text,jsonb,uuid,uuid,uuid,text,text,text,integer)','EXECUTE') as browser_can_reserve,
+    has_function_privilege('authenticated',
       'bx1_private.register_offering_file(uuid,uuid,text,jsonb,uuid,uuid,uuid,text,text,text,integer)','EXECUTE') as browser_can_register,
+    has_function_privilege('bx1_document_receipt_writer',
+      'bx1_private.reserve_offering_file(uuid,uuid,text,jsonb,uuid,uuid,uuid,text,text,text,integer)','EXECUTE') as trusted_writer_can_reserve,
     has_function_privilege('bx1_document_receipt_writer',
       'bx1_private.register_offering_file(uuid,uuid,text,jsonb,uuid,uuid,uuid,text,text,text,integer)','EXECUTE') as trusted_writer_can_register`)
   assert.deepEqual(directWriter.rows[0], { no_public_writer: true,
-    browser_can_register: false, trusted_writer_can_register: true },
+    browser_can_reserve: false, browser_can_register: false,
+    trusted_writer_can_reserve: true, trusted_writer_can_register: true },
   'an authenticated browser cannot forge a digest or occupy a receipt through RPC')
+  const privateIntent = await db.query(`select count(*)::int as count from pg_catalog.pg_class
+    where oid='bx1_portal.offering_file_upload_intents'::regclass and relrowsecurity`)
+  assert.equal(privateIntent.rows[0].count, 1, 'bounded upload intents are RLS protected')
+  assert.equal((await db.query(`select has_table_privilege('authenticated',
+    'bx1_portal.offering_file_upload_intents','INSERT') as allowed`)).rows[0].allowed, false,
+  'browser cannot manufacture upload intents')
   await db.query('savepoint bx1_forged_digest_denial')
   let forgedDigestError
   try {
@@ -63,15 +74,51 @@ export async function proveOfferingFileQuarantine(db, productId) {
     const actorContext = JSON.stringify({ mode: 'ROLE', organisationId: managerScope.rows[0].organisation_id,
       role: 'OfferingManager' })
     const fileId = randomUUID(), digest = 'd'.repeat(64)
+    await db.query('set local role bx1_document_receipt_writer')
+    const args = [item.submitted_by, session.rows[0].id, session.rows[0].aal, actorContext,
+      item.product_id, item.revision_id, fileId, digest]
+    const reserved = await db.query(`select bx1_private.reserve_offering_file(
+      $1::uuid,$2::uuid,$3::text,$4::jsonb,$5::uuid,$6::uuid,$7::uuid,
+      'MEMORANDUM'::text,'Synthetic trusted-only file'::text,$8::text,100::integer) as result`, args)
+    const path = `${item.revision_id}/${item.submitted_by}/${fileId}`
+    assert.equal(reserved.rows[0].result.path, path, 'trusted writer reserves only its exact path')
+    await db.query('savepoint bx1_duplicate_file_category')
+    let duplicateCategoryError
+    try {
+      await db.query(`select bx1_private.reserve_offering_file(
+        $1::uuid,$2::uuid,$3::text,$4::jsonb,$5::uuid,$6::uuid,$7::uuid,
+        'MEMORANDUM'::text,'Another memorandum'::text,$8::text,100::integer)`,
+      [...args.slice(0, 6), randomUUID(), digest])
+    } catch (error) { duplicateCategoryError = error }
+    await db.query('rollback to savepoint bx1_duplicate_file_category; release savepoint bx1_duplicate_file_category')
+    assert.equal(duplicateCategoryError?.code, '23505', 'even abandoned uploads consume the sole slot for a revision/category')
+    await db.query('reset role')
+    await db.query('savepoint bx1_unreceipted_file_decision')
+    let unreceiptedApprovalError
+    try {
+      await db.query(`insert into bx1_portal.offering_decisions
+        (offering_revision_id,decision_kind,decision,actor_id,operating_context,
+          terms_hash,document_hashes,product_revision_at_decision,notes,checks)
+        values($1::uuid,'ISSUER','APPROVED',$2::uuid,'{"mode":"APPLICANT"}'::jsonb,
+          $3,$4,$5,'Synthetic unreceipted-file gate; rolled back.','{}'::jsonb)`,
+      [item.revision_id,item.submitted_by,item.terms_hash,item.document_hashes,item.revision])
+    } catch (error) { unreceiptedApprovalError = error }
+    await db.query('rollback to savepoint bx1_unreceipted_file_decision; release savepoint bx1_unreceipted_file_decision')
+    assert.equal(unreceiptedApprovalError?.message, 'offering_uploaded_files_unverified',
+      'a reserved or partly uploaded file prevents package approval without a receipt')
+    const allowed = await db.query(`select bx1_portal.offering_file_upload_allowed($1,$2) as reserved,
+      bx1_portal.offering_file_upload_allowed($3,$2) as unreserved`,
+    [path, item.submitted_by, `${item.revision_id}/${item.submitted_by}/${randomUUID()}`])
+    assert.deepEqual(allowed.rows[0], { reserved: true, unreserved: false },
+      'Storage preflight sees a server-issued intent but denies an arbitrary sibling path')
     await db.query(`insert into storage.objects(bucket_id,name,owner_id,metadata)
       values('bx1-offering-quarantine',$1,$2,'{"size":100,"mimetype":"application/pdf"}'::jsonb)`,
-    [`${item.revision_id}/${item.submitted_by}/${fileId}`, item.submitted_by])
+    [path, item.submitted_by])
     await db.query('set local role bx1_document_receipt_writer')
     const receipt = await db.query(`select bx1_private.register_offering_file(
       $1::uuid,$2::uuid,$3::text,$4::jsonb,$5::uuid,$6::uuid,$7::uuid,
       'MEMORANDUM'::text,'Synthetic trusted-only file'::text,$8::text,100::integer) as result`,
-    [item.submitted_by, session.rows[0].id, session.rows[0].aal, actorContext,
-      item.product_id, item.revision_id, fileId, digest])
+    args)
     assert.equal(receipt.rows[0].result.id, fileId, 'trusted writer receives its exact immutable receipt')
     await db.query('reset role')
     const event = await db.query(`select count(*)::int as count from bx1_portal.events
@@ -125,7 +172,7 @@ export async function proveOfferingFileQuarantine(db, productId) {
 
   const stillClean = await db.query('select count(*)::int as count from bx1_portal.offering_file_quarantine where offering_revision_id=$1', [item.revision_id])
   assert.equal(stillClean.rows[0].count, 0, 'probe must not leave a staged file on the test product')
-  return 16
+  return 23
 }
 
 /** Run after product appointments: one issuer login, two products in one organisation. */

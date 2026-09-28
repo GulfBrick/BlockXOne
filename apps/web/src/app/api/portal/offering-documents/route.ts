@@ -7,7 +7,7 @@ import { createRequestSupabaseClient } from '@/lib/supabase/server'
 import { offeringFileBucket, offeringFileKindSchema,
   offeringFileLookupSchema, offeringFileMaxBytes, offeringFilePath, offeringFileReceiptSchema,
   offeringFileListItemSchema } from '@/lib/portal/offering-files'
-import { isPdfHeader, offeringFileId, sha256Hex, registerOfferingFile,
+import { isPdfHeader, offeringFileId, sha256Hex, registerOfferingFile, reserveOfferingFile,
   requireOfferingFileReceiptWriter, verifiedOfferingFileSession, OfferingFileReceiptError } from '@/lib/portal/offering-files-server'
 
 export const dynamic = 'force-dynamic'
@@ -77,6 +77,18 @@ export async function POST(request: NextRequest) {
     const sha256 = sha256Hex(bytes)
     const id = offeringFileId(revisionId, user.id, kindResult.data, sha256)
     const path = offeringFilePath(revisionId, user.id, id)
+    const writerInput = { actorId: user.id, sessionId: uploadSession.id, aal: uploadSession.aal,
+      context, productId, revisionId, fileId: id, kind: kindResult.data,
+      title: title.trim(), sha256, size: bytes.length }
+    const reserved = await reserveOfferingFile(writerInput)
+    if (!reserved || typeof reserved !== 'object'
+      || (reserved as Record<string, unknown>).id !== id
+      || (reserved as Record<string, unknown>).path !== path
+      || (reserved as Record<string, unknown>).revision_id !== revisionId
+      || (reserved as Record<string, unknown>).sha256 !== sha256
+      || (reserved as Record<string, unknown>).size !== bytes.length) {
+      throw new PortalError('The private upload reservation could not be verified.', 503)
+    }
     const uploaded = await client.storage.from(offeringFileBucket).upload(path, bytes, {
       contentType: 'application/pdf', cacheControl: '0', upsert: false, metadata: { sha256 },
     })
@@ -99,9 +111,7 @@ export async function POST(request: NextRequest) {
     if (currentSession.id !== uploadSession.id || currentSession.aal !== uploadSession.aal) {
       throw new PortalError('The signed-in session changed during upload; the file remains quarantined.', 403)
     }
-    const data = await registerOfferingFile({ actorId: user.id, sessionId: currentSession.id,
-      aal: currentSession.aal, context, productId, revisionId, fileId: id,
-      kind: kindResult.data, title: title.trim(), sha256, size: bytes.length })
+    const data = await registerOfferingFile(writerInput)
     const receipt = offeringFileReceiptSchema.safeParse(data)
     if (!receipt.success || receipt.data.id !== id || receipt.data.revision_id !== revisionId
       || receipt.data.sha256 !== sha256 || receipt.data.size !== bytes.length

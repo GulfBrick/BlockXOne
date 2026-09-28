@@ -47,6 +47,30 @@ revoke all on bx1_portal.offering_file_quarantine from public,anon,authenticated
 create trigger bx1_offering_file_immutable before update or delete on bx1_portal.offering_file_quarantine
   for each row execute function bx1_portal.immutable_record();
 
+-- Exactly three immutable categories can be reserved for a submitted revision.
+-- This is the authoritative quota, including abandoned uploads: Storage RLS
+-- accepts only a path reserved here by the restricted server-side writer.
+create table bx1_portal.offering_file_upload_intents (
+  id uuid primary key,
+  offering_revision_id uuid not null,
+  product_id uuid not null,
+  actor_id uuid not null references auth.users(id) on delete restrict,
+  kind text not null check(kind in ('MEMORANDUM','RISKS','SUBSCRIPTION_TERMS')),
+  title text not null check(char_length(title) between 1 and 160),
+  storage_path text not null unique,
+  sha256 text not null check(sha256 ~ '^[0-9a-f]{64}$'),
+  byte_size integer not null check(byte_size between 1 and 4194304),
+  reserved_at timestamptz not null default pg_catalog.clock_timestamp(),
+  unique(offering_revision_id,kind),
+  foreign key(offering_revision_id,product_id)
+    references bx1_portal.offering_revisions(id,product_id) on delete restrict,
+  check(storage_path=offering_revision_id::text||'/'||actor_id::text||'/'||id::text)
+);
+alter table bx1_portal.offering_file_upload_intents enable row level security;
+revoke all on bx1_portal.offering_file_upload_intents from public,anon,authenticated,service_role;
+create trigger bx1_offering_file_intent_immutable before update or delete
+  on bx1_portal.offering_file_upload_intents for each row execute function bx1_portal.immutable_record();
+
 -- File registration and an issuer/Compliance decision serialize on the same
 -- product. A late supplementary upload can never silently join a decided
 -- revision; these files still do not form part of that decision's evidence.
@@ -57,8 +81,10 @@ begin
     join bx1_portal.products p on p.id=r.product_id
     where r.id=NEW.offering_revision_id for update of p;
   if not found then raise exception 'offering_revision_unavailable' using errcode='23514'; end if;
-  if NEW.decision='APPROVED' and exists(select 1 from bx1_portal.offering_file_quarantine f
-    where f.offering_revision_id=NEW.offering_revision_id) then
+  if NEW.decision='APPROVED' and (exists(select 1 from bx1_portal.offering_file_upload_intents i
+    where i.offering_revision_id=NEW.offering_revision_id)
+    or exists(select 1 from bx1_portal.offering_file_quarantine f
+      where f.offering_revision_id=NEW.offering_revision_id)) then
     raise exception 'offering_uploaded_files_unverified' using errcode='23514';
   end if;
   return NEW;
@@ -96,7 +122,10 @@ begin
     or auth.uid() is null or object_owner is distinct from auth.uid()::text then return false; end if;
   v_revision:=pg_catalog.split_part(object_name,'/',1)::uuid;
   v_actor:=pg_catalog.split_part(object_name,'/',2)::uuid;
-  return v_actor=auth.uid() and bx1_portal.offering_file_manager(v_revision);
+  return v_actor=auth.uid() and bx1_portal.offering_file_manager(v_revision)
+    and exists(select 1 from bx1_portal.offering_file_upload_intents i
+      where i.offering_revision_id=v_revision and i.actor_id=v_actor
+        and i.storage_path=object_name);
 exception when others then return false;
 end $$;
 
@@ -167,18 +196,12 @@ begin
     or bx1_portal.product_appointment_authorised(c,v_product.id,'IssuerFundManager');
 end $$;
 
--- The browser cannot register a content digest. Only the existing, restricted
--- server-side document-receipt writer may do so after fetching the saved bytes
--- and comparing them to the incoming PDF. The JWT-derived session and AAL are
--- checked against live Auth state here and used only for this transaction.
-create function bx1_private.register_offering_file(p_actor uuid,p_session uuid,p_aal text,
-  operating_context jsonb,target_product uuid,target_revision uuid,file_id uuid,
-  file_kind text,file_title text,file_sha256 text,file_size integer)
-returns jsonb language plpgsql volatile security definer set search_path='' as $$
-declare v_product bx1_portal.products; v_record bx1_portal.offering_file_quarantine;
-  v_path text; v_inserted integer;
+-- A restricted server writer passes claims from a Supabase-verified token.
+-- The database additionally checks that the exact session and AAL remain live.
+create function bx1_private.offering_file_session_context(p_actor uuid,p_session uuid,p_aal text)
+returns void language plpgsql volatile security definer set search_path='' as $$
 begin
-  if p_actor is null or p_session is null or p_aal not in ('aal1','aal2')
+  if p_actor is null or p_session is null or p_aal is null or p_aal not in ('aal1','aal2')
     or not exists(select 1 from auth.sessions s join auth.users u on u.id=s.user_id
       where s.id=p_session and s.user_id=p_actor and s.aal::text=p_aal
         and s.oauth_client_id is null and (s.not_after is null or s.not_after>pg_catalog.clock_timestamp())
@@ -191,6 +214,16 @@ begin
   perform pg_catalog.set_config('request.jwt.claims',pg_catalog.jsonb_build_object(
     'sub',p_actor,'session_id',p_session,'aal',p_aal,'role','authenticated')::text,true);
   perform pg_catalog.set_config('request.jwt.claim.sub',p_actor::text,true);
+end $$;
+
+create function bx1_private.reserve_offering_file(p_actor uuid,p_session uuid,p_aal text,
+  operating_context jsonb,target_product uuid,target_revision uuid,file_id uuid,
+  file_kind text,file_title text,file_sha256 text,file_size integer)
+returns jsonb language plpgsql volatile security definer set search_path='' as $$
+declare v_product bx1_portal.products; v_intent bx1_portal.offering_file_upload_intents;
+  v_path text;
+begin
+  perform bx1_private.offering_file_session_context(p_actor,p_session,p_aal);
   if file_id is null or file_kind is null
     or file_kind not in ('MEMORANDUM','RISKS','SUBSCRIPTION_TERMS')
     or file_title is null or char_length(file_title) not between 1 and 160
@@ -205,6 +238,53 @@ begin
     or bx1_portal.scoped_operator(operating_context,v_product.organisation_id) is not true then
     raise exception 'offering_file_scope_denied' using errcode='42501'; end if;
   v_path:=target_revision::text||'/'||p_actor::text||'/'||file_id::text;
+  insert into bx1_portal.offering_file_upload_intents
+    (id,offering_revision_id,product_id,actor_id,kind,title,storage_path,sha256,byte_size)
+    values(file_id,target_revision,target_product,p_actor,file_kind,file_title,v_path,file_sha256,file_size)
+    on conflict(id) do nothing;
+  select * into v_intent from bx1_portal.offering_file_upload_intents where id=file_id for share;
+  if v_intent.id is null or v_intent.offering_revision_id is distinct from target_revision
+    or v_intent.product_id is distinct from target_product or v_intent.actor_id is distinct from p_actor
+    or v_intent.kind is distinct from file_kind or v_intent.title is distinct from file_title
+    or v_intent.storage_path is distinct from v_path or v_intent.sha256 is distinct from file_sha256
+    or v_intent.byte_size is distinct from file_size then
+    raise exception 'offering_file_intent_conflict' using errcode='23514'; end if;
+  return pg_catalog.jsonb_build_object('id',v_intent.id,'path',v_intent.storage_path,
+    'revision_id',v_intent.offering_revision_id,'sha256',v_intent.sha256,'size',v_intent.byte_size);
+end $$;
+
+-- The browser cannot register a content digest. The same restricted writer
+-- registers only a pre-reserved file after the web route fetches and compares
+-- actual saved bytes. A changed file cannot occupy an existing category.
+create function bx1_private.register_offering_file(p_actor uuid,p_session uuid,p_aal text,
+  operating_context jsonb,target_product uuid,target_revision uuid,file_id uuid,
+  file_kind text,file_title text,file_sha256 text,file_size integer)
+returns jsonb language plpgsql volatile security definer set search_path='' as $$
+declare v_product bx1_portal.products; v_record bx1_portal.offering_file_quarantine;
+  v_intent bx1_portal.offering_file_upload_intents; v_path text; v_inserted integer;
+begin
+  perform bx1_private.offering_file_session_context(p_actor,p_session,p_aal);
+  if file_id is null or file_kind is null
+    or file_kind not in ('MEMORANDUM','RISKS','SUBSCRIPTION_TERMS')
+    or file_title is null or char_length(file_title) not between 1 and 160
+    or file_sha256 is null or file_sha256 !~ '^[0-9a-f]{64}$'
+    or file_size is null or file_size not between 1 and 4194304 then
+    raise exception 'offering_file_invalid' using errcode='22023'; end if;
+  select * into v_product from bx1_portal.products where id=target_product for update;
+  if v_product.id is null or v_product.current_offering_revision_id is distinct from target_revision
+    or bx1_portal.offering_file_manager(target_revision) is not true
+    or (operating_context <> '{"mode":"APPLICANT"}'::jsonb
+      and operating_context->>'role' is distinct from 'OfferingManager')
+    or bx1_portal.scoped_operator(operating_context,v_product.organisation_id) is not true then
+    raise exception 'offering_file_scope_denied' using errcode='42501'; end if;
+  v_path:=target_revision::text||'/'||p_actor::text||'/'||file_id::text;
+  select * into v_intent from bx1_portal.offering_file_upload_intents where id=file_id for share;
+  if v_intent.id is null or v_intent.offering_revision_id is distinct from target_revision
+    or v_intent.product_id is distinct from target_product or v_intent.actor_id is distinct from p_actor
+    or v_intent.kind is distinct from file_kind or v_intent.title is distinct from file_title
+    or v_intent.storage_path is distinct from v_path or v_intent.sha256 is distinct from file_sha256
+    or v_intent.byte_size is distinct from file_size then
+    raise exception 'offering_file_intent_mismatch' using errcode='23514'; end if;
   perform 1 from storage.objects o where o.bucket_id='bx1-offering-quarantine'
     and o.name=v_path and o.owner_id=p_actor::text
     and o.metadata->>'size'=file_size::text
@@ -274,6 +354,8 @@ revoke all on function bx1_portal.offering_file_manager(uuid),
   bx1_portal.offering_file_upload_allowed(text,text),
   bx1_portal.offering_file_owner_read_allowed(text,text),
   bx1_portal.offering_file_visible(jsonb,uuid),
+  bx1_private.offering_file_session_context(uuid,uuid,text),
+  bx1_private.reserve_offering_file(uuid,uuid,text,jsonb,uuid,uuid,uuid,text,text,text,integer),
   bx1_private.register_offering_file(uuid,uuid,text,jsonb,uuid,uuid,uuid,text,text,text,integer),
   bx1_portal.list_offering_files(jsonb,uuid),
   bx1_portal.lookup_offering_file(jsonb,uuid,uuid),
@@ -286,7 +368,9 @@ do $test_grants$ begin
   grant execute on function bx1_portal.offering_file_upload_allowed(text,text) to anon,authenticated;
   grant execute on function bx1_portal.offering_file_owner_read_allowed(text,text) to anon,authenticated;
   if exists(select 1 from bx1_portal.entry_configuration where singleton and environment='TESTNET' and manual_test_review) then
-    grant execute on function bx1_private.register_offering_file(uuid,uuid,text,jsonb,uuid,uuid,uuid,text,text,text,integer)
+    grant execute on function
+      bx1_private.reserve_offering_file(uuid,uuid,text,jsonb,uuid,uuid,uuid,text,text,text,integer),
+      bx1_private.register_offering_file(uuid,uuid,text,jsonb,uuid,uuid,uuid,text,text,text,integer)
       to bx1_document_receipt_writer;
     grant execute on function bx1_portal.list_offering_files(jsonb,uuid),
       bx1_portal.lookup_offering_file(jsonb,uuid,uuid),
