@@ -106,6 +106,7 @@
 .field input, .field select, .field textarea { width: 100%; min-height: 45px; border: 1px solid var(--bxo-border-default); background: var(--bxo-surface-secondary); border-radius: 6px; padding: 11px 13px; color: var(--portal-ink); font: inherit; font-size: 14px; font-weight: 400; }
 .field input::placeholder, .field textarea::placeholder { color: var(--bxo-text-secondary); }
 .field input:disabled, .field select:disabled { background: var(--bxo-surface-secondary); color: var(--bxo-text-secondary); }
+.field input:read-only, .field textarea:read-only { border-style: dashed; color: var(--bxo-text-secondary); cursor: default; }
 .field textarea { min-height: 114px; resize: vertical; }
 .fieldHint { color: var(--portal-muted); font-size: 11px; font-weight: 400; }
 .fieldError { color: var(--portal-danger); font-size: 11px; }

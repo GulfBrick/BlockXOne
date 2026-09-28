@@ -1,11 +1,20 @@
 import { describe, expect, it } from 'vitest'
-import { PORTAL_PATHS, applicationDetailsSchema, applicationDocumentLookupSchema, applicationDocumentVersionsSchema, applicationDraftDetailsSchema, customerMonitoringSnapshotSchema, isWealthManagerDetailsV2, evidenceSchema, formatTestMoney, portalCommandSchema, productTermsSchema, subscriptionQuote, type PortalProduct, type ProductTerms } from './contracts'
+import { FUND_V2_CANONICAL_REFERENCES, PORTAL_PATHS, applicationDetailsSchema, applicationDocumentLookupSchema, applicationDocumentVersionsSchema, applicationDraftDetailsSchema, customerMonitoringSnapshotSchema, isWealthManagerDetailsV2, evidenceSchema, formatTestMoney, portalCommandSchema, productTermsSchema, subscriptionQuote, type FundTermsV2, type PortalProduct, type ProductTerms } from './contracts'
 import { isSupabaseWebPathAllowed } from '@/lib/auth-mode'
 import { isProductionWebPathBlocked } from '@/lib/release-policy'
 
 const id = 'd22789ee-7f73-4acf-a414-3de0b62ea801'
 const key = '113800c3-cf6e-437e-abdf-a3b09a03fcff'
 const terms: ProductTerms = { asset_type: 'FUND', name: 'Synthetic Balanced Fund', issuer_name: 'Fictional Fund Issuer', summary: 'A wholly synthetic investment product for testing.', strategy: 'A fictional diversified strategy with no real capital.', share_class: 'Class A', currency: 'ZAR_TEST', unit_price_minor: '12345678901234567890', cap_units: '100000', minimum_units: '10', pricing_basis: 'Fixed price for this test offering.', fees: 'No actual charges in this test environment.', redemption_terms: 'Synthetic redemption requires confirmed cancellation of units.', eligible_countries: ['ZA'], eligible_investor_types: ['INDIVIDUAL'], property_address: '', property_valuation_minor: '0', rental_income_policy: '', documents: { memorandum: 'Fictional test memorandum; this is not an actual investment offer.', risks: 'Test-only disclosure: no real money, asset ownership or returns exist.', subscription_terms: 'Acceptance only reserves synthetic units and never proves funding.' } }
+const fundV2: FundTermsV2 = { ...terms, ...FUND_V2_CANONICAL_REFERENCES, asset_type: 'FUND', currency: 'TST', terms_version: 2, settlement_decimals: 6, unit_price_minor: '10000000', cap_units: '100', minimum_units: '1', fund: {
+  mandate: 'Synthetic diversified portfolio under a reviewed test mandate only.', class_rights: 'Each fictional class unit carries a pro-rata test entitlement under the fund register.',
+  nav: { valuation_method: 'Synthetic marked-to-model NAV with independent dated review.', frequency: 'MONTHLY', pricing_cutoff: 'Month-end 16:00 Africa/Johannesburg', correction_policy: 'Material NAV errors require a reviewed correction version and investor treatment.' },
+  dealing: { subscription_frequency: 'MONTHLY', redemption_frequency: 'MONTHLY', notice_days: 5, settlement_days: 5 },
+  fees: { management_bps: 0, performance_bps: 0, other_fees: 'No test fees are charged.' },
+  liquidity: { lockup_days: 0, gate_bps: 10000, suspension_policy: 'Suspend dealing when reviewed NAV or test liquidity is unavailable.' },
+  distributions: { frequency: 'NONE', policy: 'Accumulation class retains all fictional income in synthetic NAV.' },
+  redemption: { price_basis: 'NAV', conditions: 'A reviewed NAV, dealing date and protected units are required before payout.' },
+} }
 const product: PortalProduct = { id, organisation_id: id, created_by: id, revision: 4, status: 'PUBLISHED', terms, terms_hash: 'a'.repeat(64), reserved_units: '20', created_at: '2026-09-21T00:00:00Z', reviewer_id: null, review_notes: null, reviewed_at: null, published_at: null, review_checks: {}, offering_package: { id: key, package_number: 1, origin: 'SUBMITTED', terms_hash: 'a'.repeat(64), document_hashes: { memorandum: 'b'.repeat(64), risks: 'c'.repeat(64), subscription_terms: 'd'.repeat(64) }, submitted_at: '2026-09-21T00:00:00Z', issuer_status: 'APPROVED', compliance_status: 'APPROVED', technical_readiness_status: 'VERIFIED', publishable: false, subscribable: true, can_review_issuer: false } }
 
 describe('customer portal contracts', () => {
@@ -77,7 +86,29 @@ describe('customer portal contracts', () => {
     expect(applicationDraftDetailsSchema.parse({ details_version: 2, business_activities: wm.business_activities })).toEqual({ details_version: 2, business_activities: wm.business_activities })
     expect(applicationDetailsSchema.safeParse({ ...old, authority_basis: wm.authority_basis }).success).toBe(false)
   })
-  it('accepts complete typed fund terms', () => expect(productTermsSchema.safeParse(terms).success).toBe(true))
+  it('preserves historical fund terms for reading without treating them as a new writable package', () => {
+    expect(productTermsSchema.safeParse(terms).success).toBe(true)
+    expect(portalCommandSchema.safeParse({ command: 'create_product', key, payload: { organisation_id: id, terms } }).success).toBe(false)
+    expect(portalCommandSchema.safeParse({ command: 'save_product', key, payload: { product_id: id, expected_revision: 1, terms } }).success).toBe(false)
+  })
+  it('requires the complete six-decimal v2 fund contract for new fund writes', () => {
+    expect(productTermsSchema.safeParse(fundV2).success).toBe(true)
+    expect(portalCommandSchema.safeParse({ command: 'create_product', key, payload: { organisation_id: id, terms: fundV2 } }).success).toBe(true)
+    expect(portalCommandSchema.safeParse({ command: 'save_product', key, payload: { product_id: id, expected_revision: 1, terms: fundV2 } }).success).toBe(true)
+    for (const malformed of [
+      { currency: 'ZAR_TEST' }, { settlement_decimals: 2 }, { unit_price_minor: '10.000000' },
+      { fund: { ...fundV2.fund, extra_authority: 'self-approved' } },
+      { fund: { ...fundV2.fund, nav: { ...fundV2.fund.nav, frequency: 'ANNUALLY' } } },
+      { fund: { ...fundV2.fund, dealing: { ...fundV2.fund.dealing, notice_days: 1.5 } } },
+      { fund: { ...fundV2.fund, fees: { ...fundV2.fund.fees, management_bps: 10001 } } },
+      { strategy: 'An incompatible second mandate copied from an old fund.' },
+      { pricing_basis: 'A conflicting fixed price outside fund NAV rules.' },
+      { fees: 'A conflicting fee schedule outside fund.fees.' },
+      { redemption_terms: 'An incompatible instant redemption promise outside fund policies.' },
+      { fund: { ...fundV2.fund, mandate: 'A stale ZAR_TEST reference in the new mandate is invalid.' } },
+      { documents: { ...fundV2.documents, risks: `${fundV2.documents.risks} A stale ZAR_TEST disclosure.` } },
+    ]) expect(productTermsSchema.safeParse({ ...fundV2, ...malformed }).success).toBe(false)
+  })
   it('requires real-estate-specific terms', () => {
     expect(productTermsSchema.safeParse({ ...terms, asset_type: 'REAL_ESTATE' }).success).toBe(false)
     expect(productTermsSchema.safeParse({ ...terms, asset_type: 'REAL_ESTATE', property_address: 'Fictional Street 10, Test City', property_valuation_minor: '500000000', rental_income_policy: 'Fictional net rent after disclosed operating costs.' }).success).toBe(true)

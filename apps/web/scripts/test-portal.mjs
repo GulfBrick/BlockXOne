@@ -9,6 +9,8 @@ import { proveDocumentRetentionAuthority } from './document-retention-authority-
 if (process.argv.length !== 2 || process.env.GITHUB_ACTIONS !== 'true') throw new Error('Portal SQL proof requires cloud CI without arguments')
 const expected = 'postgresql://postgres:bx1-synthetic-ci-only@127.0.0.1:5432/bx1_demo_ci'
 if (process.env.BX1_PORTAL_SQL_TEST_URL !== expected) throw new Error('Portal SQL proof requires the exact disposable CI database')
+const fundV2LegacyCrossrefs = JSON.parse(await readFile(new URL('../src/lib/portal/fund-v2-legacy-crossrefs.json', import.meta.url), 'utf8'))
+assert.deepEqual(Object.keys(fundV2LegacyCrossrefs).sort(), ['fees', 'pricing_basis', 'redemption_terms', 'strategy'], 'one shared v2 cross-reference contract')
 const options = { connectionString: expected, ssl: false, connectionTimeoutMillis: 5000, query_timeout: 20000, statement_timeout: 15000, application_name: 'bx1-portal-cloud-ci' }
 const db = new pg.Client(options)
 let phase = 'initialise', checks = 0, begun = false, connected = false, keySequence = 0
@@ -54,6 +56,20 @@ const application = (n, persona = 'INVESTOR', revision = 0, country = 'ZA') => (
 const reviewChecks = { identity: true, ownership: true, screening: true, suitability: true }
 const offeringChecks = { issuer: true, terms: true, disclosures: true, eligibility: true }
 const terms = (asset = 'FUND') => ({ asset_type: asset, name: `Synthetic ${asset} product`, issuer_name: 'Synthetic test issuer', summary: 'Fictional offering solely for testing a customer investment journey.', strategy: 'Fictional long-term diversified test strategy. This is not an investment offer.', share_class: 'Test Class A', currency: 'ZAR_TEST', unit_price_minor: '9007199254740993', cap_units: '10', minimum_units: '1', pricing_basis: 'Fixed synthetic unit price for workflow checks.', fees: 'No real fees or payments in this test.', redemption_terms: 'Future governed redemption service; not yet available for this test product.', eligible_countries: ['ZA'], eligible_investor_types: ['INDIVIDUAL', 'ENTITY'], property_address: asset === 'REAL_ESTATE' ? '100 Fictional Test Street' : '', property_valuation_minor: asset === 'REAL_ESTATE' ? '1234567890' : '0', rental_income_policy: asset === 'REAL_ESTATE' ? 'Fictional rental income policy requiring future reconciliation.' : '', documents: { memorandum: 'Synthetic memorandum. No property, fund interest or investment is offered. '.repeat(2).trim(), risks: 'Synthetic risk disclosure. This test does not represent real investment or ownership. '.repeat(2).trim(), subscription_terms: 'Synthetic subscription terms. Reservations do not confirm funding, assets or token delivery. '.repeat(2).trim() } })
+const fundV2Terms = (name = 'Synthetic TST fund package') => ({
+  ...terms('FUND'), ...fundV2LegacyCrossrefs, name, terms_version: 2, currency: 'TST', settlement_decimals: 6,
+  unit_price_minor: '10000000', cap_units: '100', minimum_units: '1',
+  fund: {
+    mandate: 'Fictional diversified fund mandate with no real portfolio or investable claim.',
+    class_rights: 'Synthetic Class A equal economic rights, with no live ownership or transfer right.',
+    nav: { valuation_method: 'Synthetic marked portfolio value divided by issued test units.', frequency: 'MONTHLY', pricing_cutoff: '16:00 UTC on last business day', correction_policy: 'Corrections require a reviewed replacement NAV version and disclosure.' },
+    dealing: { subscription_frequency: 'MONTHLY', redemption_frequency: 'MONTHLY', notice_days: 10, settlement_days: 5 },
+    fees: { management_bps: 100, performance_bps: 0, other_fees: 'No other synthetic fees are charged.' },
+    liquidity: { lockup_days: 0, gate_bps: 10000, suspension_policy: 'A separately reviewed suspension decision is required before dealing stops.' },
+    distributions: { frequency: 'NONE', policy: 'No distributions in this fictional initial fund class.' },
+    redemption: { price_basis: 'NAV', conditions: 'Redemption depends on the reviewed dealing calendar and available liquidity.' },
+  },
+})
 async function approveApplication(n, persona = 'INVESTOR', country = 'ZA') {
   const submitted = await command(n, 'submit_application', application(n, persona, 0, country))
   const a = submitted.applications.find(value => value.user_id === uid(n))
@@ -1191,6 +1207,103 @@ try {
   await sqlFile('../../../supabase/migrations/20260924125811_stage2_document_retention_authority.sql')
   await sqlFile('../../../supabase/tests/bx1_document_retention_authority.sql')
   checks += await proveDocumentRetentionAuthority(db)
+  phase = 'stage3-versioned-fund-package'
+  const legacyFundCreateKey = key()
+  const legacyFundCreateBody = {
+    organisation_id: orgId, terms: { ...terms('FUND'), name: 'Legacy fund draft requiring v2 upgrade' },
+  }
+  const v1FundDraft = (await scopedCommand(1, manager, 'create_product', {
+    ...legacyFundCreateBody,
+  }, legacyFundCreateKey)).products.find(value => value.terms.name === 'Legacy fund draft requiring v2 upgrade')
+  await admin()
+  const legacyFundHash = await scalar('select terms_hash from bx1_portal.products where id=$1', [fundPackage.id])
+  const legacyOrderTermsHash = await scalar('select terms_hash from bx1_portal.subscriptions where id=$1', [historicalOrder.id])
+  const legacySnapshots = await scalar("select count(*)::int from bx1_portal.offering_revisions where origin like 'LEGACY_%'")
+  await sqlFile('../../../supabase/migrations/20260928141413_stage3_fund_terms_v2.sql')
+  eq(await scalar('select terms_hash from bx1_portal.products where id=$1', [fundPackage.id]), legacyFundHash, 'v2 migration does not rehash a reviewed legacy fund')
+  eq(await scalar('select terms_hash from bx1_portal.subscriptions where id=$1', [historicalOrder.id]), legacyOrderTermsHash, 'v2 migration does not change accepted order terms hash')
+  eq(await scalar("select count(*)::int from bx1_portal.offering_revisions where origin like 'LEGACY_%'"), legacySnapshots, 'v2 migration preserves immutable legacy snapshots')
+  eq(await scalar("select has_function_privilege('authenticated','public.bx1_portal_command(text,uuid,jsonb)','EXECUTE')"), false, 'legacy public command remains sealed')
+  eq(await scalar("select has_function_privilege('authenticated','bx1_portal.execute_scoped_pre_fund_v2(jsonb,text,uuid,jsonb)','EXECUTE')"), false, 'previous scoped writer remains private')
+  eq(await scalar("select bx1_portal.offering_technical_ready($1)", [fundPackage.offering_package.id]), false, 'fund technical-readiness gate remains false')
+  const replayedLegacyDraft = (await scopedCommand(1, manager, 'create_product', legacyFundCreateBody, legacyFundCreateKey)).products.find(value => value.id === v1FundDraft.id)
+  eq(replayedLegacyDraft.id, v1FundDraft.id, 'pre-migration v1 idempotent replay remains a read, not a duplicate fund')
+  await denied('new FUND cannot use v1 ZAR_TEST terms', () => scopedCommand(1, manager, 'create_product', {
+    organisation_id: orgId, terms: { ...terms('FUND'), name: 'Prohibited new legacy fund' },
+  }))
+  await denied('legacy fund draft cannot submit without explicit v2 upgrade', () => scopedCommand(1, manager, 'submit_product', {
+    product_id: v1FundDraft.id, expected_revision: v1FundDraft.revision,
+  }))
+  await admin()
+  eq(await scalar('select status from bx1_portal.products where id=$1', [v1FundDraft.id]), 'DRAFT', 'rejected legacy submission rolled back status')
+  await denied('fund draft cannot switch asset class to property', () => scopedCommand(1, manager, 'save_product', {
+    product_id: v1FundDraft.id, expected_revision: v1FundDraft.revision,
+    terms: { ...terms('REAL_ESTATE'), name: 'Prohibited asset class switch' },
+  }))
+  for (const [label, invalid] of [
+    ['NAV frequency null', { fund: { ...fundV2Terms().fund, nav: { ...fundV2Terms().fund.nav, frequency: null } } }],
+    ['dealing subscription frequency null', { fund: { ...fundV2Terms().fund, dealing: { ...fundV2Terms().fund.dealing, subscription_frequency: null } } }],
+    ['dealing redemption frequency null', { fund: { ...fundV2Terms().fund, dealing: { ...fundV2Terms().fund.dealing, redemption_frequency: null } } }],
+    ['distribution frequency null', { fund: { ...fundV2Terms().fund, distributions: { ...fundV2Terms().fund.distributions, frequency: null } } }],
+    ['fee precision invalid', { fund: { ...fundV2Terms().fund, fees: { ...fundV2Terms().fund.fees, management_bps: 100.5 } } }],
+    ['wrong settlement decimals', { settlement_decimals: 2 }],
+    ['currency is not TST', { currency: 'ZAR_TEST' }],
+    ['unexpected policy key', { fund: { ...fundV2Terms().fund, unreviewed_override: 'yes' } }],
+    ['contradictory mandate summary', { strategy: 'A conflicting investment mandate that is not the typed fund mandate.' }],
+    ['contradictory pricing summary', { pricing_basis: 'A fixed price of 10 TST regardless of the binding NAV and dealing policy.' }],
+    ['contradictory fee summary', { fees: 'A management fee of nine thousand basis points, contrary to the typed policy.' }],
+    ['contradictory exit summary', { redemption_terms: 'Immediate unconditional redemption, contrary to the typed dealing and liquidity rules.' }],
+    ['legacy denomination hidden in mandate', { fund: { ...fundV2Terms().fund, mandate: 'Fictional test mandate wrongly denominated in zar_test despite TST terms.' } }],
+    ['legacy denomination hidden in disclosure', { documents: { ...fundV2Terms().documents, risks: 'Synthetic risk disclosure wrongly says ZAR_TEST is the settlement asset. '.repeat(2).trim() } }],
+  ]) {
+    await denied(`v2 ${label} rejected by SQL`, async () => {
+      await admin()
+      await scalar('select bx1_portal.validate_terms($1::jsonb)', [JSON.stringify({ ...fundV2Terms(), ...invalid })])
+    }, '22023')
+  }
+  await denied('direct command cannot create contradictory v2 fund economics', () => scopedCommand(1, manager, 'create_product', {
+    organisation_id: orgId,
+    terms: { ...fundV2Terms('Rejected conflicting fund'), fees: 'A conflicting 90 percent fee disclosed only in the legacy narrative.' },
+  }), '22023')
+  await db.query('savepoint oversized_fund_v2_command')
+  let oversizedFundError
+  try {
+    await scopedCommand(1, manager, 'create_product', {
+      organisation_id: orgId,
+      terms: { ...fundV2Terms('Rejected oversized fund'), fund: { ...fundV2Terms().fund, mandate: 'x'.repeat(66000) } },
+    })
+  } catch (error) { oversizedFundError = error?.message }
+  await db.query('rollback to savepoint oversized_fund_v2_command; release savepoint oversized_fund_v2_command')
+  eq(oversizedFundError, 'fund_v2_command_too_large', 'oversized direct command rejected before nested policy validation')
+  const upgraded = (await scopedCommand(1, manager, 'save_product', {
+    product_id: v1FundDraft.id, expected_revision: v1FundDraft.revision,
+    terms: fundV2Terms('Upgraded synthetic TST fund package'),
+  })).products.find(value => value.id === v1FundDraft.id)
+  eq([upgraded.terms.terms_version, upgraded.terms.currency, upgraded.terms.settlement_decimals], [2, 'TST', 6], 'legacy draft upgraded by explicit save, not data migration')
+  eq((BigInt(upgraded.terms.cap_units) * BigInt(upgraded.terms.unit_price_minor)).toString(), '1000000000', '100 units at 10 TST each equal 1,000 synthetic TST base units')
+  const v2Submitted = (await scopedCommand(1, manager, 'submit_product', {
+    product_id: upgraded.id, expected_revision: upgraded.revision,
+  })).products.find(value => value.id === upgraded.id)
+  truth(v2Submitted.offering_package?.id, 'v2 fund submission creates immutable offering revision')
+  eq(v2Submitted.offering_package.terms_hash, v2Submitted.terms_hash, 'v2 fund immutable revision bound to validated terms hash')
+  eq(v2Submitted.offering_package.technical_readiness_status, 'NOT_VERIFIED', 'v2 fund is not open for payment or issuance')
+  let v2Reviewed = (await mandateScopedCommand(13, issuerContext, 'review_offering_issuer', issuerInput(v2Submitted))).products.find(value => value.id === v2Submitted.id)
+  v2Reviewed = (await mandateScopedCommand(2, reviewer, 'review_product', complianceInput(v2Reviewed))).products.find(value => value.id === v2Submitted.id)
+  eq([v2Reviewed.status, v2Reviewed.offering_package.issuer_status, v2Reviewed.offering_package.compliance_status],
+    ['APPROVED', 'APPROVED', 'APPROVED'], 'v2 fund receives separate appointed issuer and independent Compliance decisions')
+  await denied('approved v2 TST fund cannot reach ZAR_TEST publication route', () => scopedCommand(1, manager, 'publish_product', {
+    product_id: v2Reviewed.id, expected_revision: v2Reviewed.revision,
+  }))
+  await admin()
+  eq(await scalar('select status from bx1_portal.products where id=$1', [v2Reviewed.id]), 'APPROVED', 'denied v2 publication leaves package reviewed but closed')
+  const foreignManagerOwnDraft = (await scopedRead(14, v3RoleContext)).products.find(value => value.id === v3Draft.id)
+  eq(foreignManagerOwnDraft?.allowed_actions.includes('save_product'), true, 'foreign manager can edit their own organisation draft')
+  await denied('cross-org manager cannot probe v2 fund save', () => scopedCommand(14, v3RoleContext, 'save_product', {
+    product_id: v2Reviewed.id, expected_revision: v2Reviewed.revision,
+    terms: fundV2Terms('Foreign attempted alteration'),
+  }), '42501')
+  await admin()
+  eq(await scalar('select terms_hash from bx1_portal.products where id=$1', [v2Reviewed.id]), v2Reviewed.terms_hash, 'cross-org denied without package mutation')
   await db.query('commit'); begun = false
   phase = 'cleanup-committed-disposable-fixture'
   await db.query('drop schema bx1_portal,bx1_private,storage,auth,public cascade; create schema public')

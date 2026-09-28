@@ -144,6 +144,7 @@ try {
   await sqlFile('../../../supabase/tests/bx1_document_lifecycle.sql')
   await sqlFile('../../../supabase/migrations/20260924125627_stage2_customer_monitoring.sql')
   await sqlFile('../../../supabase/migrations/20260924125811_stage2_document_retention_authority.sql')
+  await sqlFile('../../../supabase/migrations/20260928141413_stage3_fund_terms_v2.sql')
   eq(await scalar("select has_table_privilege(current_user,'bx1_private.person_principals','REFERENCES')"), false,
     'retention migration leaves MAIN migrator without direct identity-table REFERENCES')
   eq(await scalar("select count(*)::int from pg_auth_members m join pg_roles r on r.oid=m.roleid where r.rolname='bx1_authority_owner' and m.member=(select oid from pg_roles where rolname=current_user) and (m.inherit_option or m.set_option)"), 0,
@@ -154,7 +155,7 @@ try {
     'bx1_portal.read_scoped(jsonb)',
     'bx1_portal.execute_scoped(jsonb,text,uuid,jsonb)',
   ]) eq(await scalar("select has_function_privilege('authenticated',$1,'EXECUTE')", [signature]), false,
-    `MAIN retains sealed ${signature} after monitoring and retention installation`)
+    `MAIN retains sealed ${signature} after the v2 fund terms installation`)
   eq(await scalar('select count(*)::int from bx1_portal.customer_monitoring_cases'), 0,
     'MAIN monitoring definition seeds no customer decision')
   eq(await scalar("select state='NOT_ADMITTED' and policy_version=0 from bx1_private.document_retention_admission where singleton"), true,

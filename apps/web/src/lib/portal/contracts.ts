@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import type { PortalOperatingContext } from './operating-context'
 import { fundingCommandOptions, type FundingSnapshot } from './funding-contracts'
+import fundV2LegacyCrossrefs from './fund-v2-legacy-crossrefs.json'
 
 /** One customer workflow; environment-specific providers never manufacture settlement. */
 export const PORTAL_PATHS = ['/portal', '/portal/onboarding', '/portal/products', '/portal/products/new', '/portal/products/detail', '/portal/compliance', '/portal/compliance/detail', '/portal/opportunities', '/portal/opportunities/detail', '/portal/portfolio', '/portal/orders/detail'] as const
@@ -110,13 +111,42 @@ export type PortalOrganisationMandate = {
   admission_purpose: AdmissionPurpose; effective: boolean; next_owner: RepresentativeMandateNextOwner;
   can_request: boolean; can_review: boolean; can_apply: boolean; can_revoke: boolean;
 }
-export type ProductTerms = {
-  asset_type: 'FUND' | 'REAL_ESTATE'; name: string; issuer_name: string; summary: string;
-  strategy: string; share_class: string; currency: 'ZAR_TEST'; unit_price_minor: string;
+type ProductTermsBase = {
+  name: string; issuer_name: string; summary: string;
+  strategy: string; share_class: string; unit_price_minor: string;
   cap_units: string; minimum_units: string; pricing_basis: string; fees: string;
   redemption_terms: string; eligible_countries: string[]; eligible_investor_types: InvestorType[];
   property_address: string; property_valuation_minor: string; rental_income_policy: string;
   documents: { memorandum: string; risks: string; subscription_terms: string };
+}
+/** Historical denomination and package shape remain readable without reinterpretation. */
+export type LegacyProductTerms = ProductTermsBase & {
+  asset_type: 'FUND' | 'REAL_ESTATE'; currency: 'ZAR_TEST';
+  terms_version?: never; settlement_decimals?: never; fund?: never;
+}
+export type FundTermsV2 = ProductTermsBase & {
+  asset_type: 'FUND'; currency: 'TST'; terms_version: 2; settlement_decimals: 6;
+  fund: {
+    mandate: string; class_rights: string;
+    nav: { valuation_method: string; frequency: 'DAILY' | 'WEEKLY' | 'MONTHLY'; pricing_cutoff: string; correction_policy: string };
+    dealing: { subscription_frequency: 'DAILY' | 'WEEKLY' | 'MONTHLY'; redemption_frequency: 'DAILY' | 'WEEKLY' | 'MONTHLY' | 'QUARTERLY'; notice_days: number; settlement_days: number };
+    fees: { management_bps: number; performance_bps: number; other_fees: string };
+    liquidity: { lockup_days: number; gate_bps: number; suspension_policy: string };
+    distributions: { frequency: 'NONE' | 'MONTHLY' | 'QUARTERLY' | 'ANNUALLY'; policy: string };
+    redemption: { price_basis: 'NAV'; conditions: string };
+  };
+}
+export type ProductTerms = LegacyProductTerms | FundTermsV2
+/** v2 keeps the legacy keys for package compatibility; nested fund policies are authoritative. */
+export const FUND_V2_CANONICAL_REFERENCES = fundV2LegacyCrossrefs
+export function containsLegacyDenomination(value: unknown): boolean {
+  if (typeof value === 'string') return /ZAR_TEST/i.test(value)
+  if (Array.isArray(value)) return value.some(containsLegacyDenomination)
+  if (value && typeof value === 'object') return Object.values(value).some(containsLegacyDenomination)
+  return false
+}
+export function isFundTermsV2(terms: ProductTerms): terms is FundTermsV2 {
+  return terms.asset_type === 'FUND' && terms.terms_version === 2 && terms.currency === 'TST'
 }
 export type PortalOfferingPackage = {
   id: string; package_number: number; origin: 'SUBMITTED' | 'LEGACY_PRODUCT_SNAPSHOT' | 'LEGACY_ORDER_SNAPSHOT';
@@ -145,7 +175,7 @@ export type PortalSubscription = {
   id: string; product_id: string; investor_id: string; product_name: string; organisation_id: string;
   product_revision: number; offering_revision_id?: string | null; terms_hash: string; units: string; amount_minor: string;
   status: 'AWAITING_FUNDING' | 'CANCELLED'; created_at: string;
-  investment_account_id?: string | null; currency?: 'ZAR_TEST';
+  investment_account_id?: string | null; currency?: 'ZAR_TEST' | 'TST';
   can_cancel?: boolean; funding_obligation_id?: string | null;
   allowed_actions?: string[];
 }
@@ -237,9 +267,33 @@ export const wealthManagerApplicationDetailsV3Schema = wealthManagerApplicationD
 export const entityInvestorApplicationDetailsV3Schema = legacyApplicationDetailsSchema.omit({ details_version: true, investor_type: true }).extend({ details_version: z.literal(3), investor_type: z.literal('ENTITY'), ...ownershipControlFields.shape }).strict().superRefine(ownershipEvidenceMatches)
 export const applicationDetailsSchema = z.union([legacyApplicationDetailsSchema, wealthManagerApplicationDetailsV2Schema, wealthManagerApplicationDetailsV3Schema, entityInvestorApplicationDetailsV3Schema])
 export const applicationDraftDetailsSchema = z.union([legacyApplicationDetailsSchema.partial(), wealthManagerApplicationDetailsV2Schema.partial(), wealthManagerApplicationDetailsV3Schema.innerType().partial(), entityInvestorApplicationDetailsV3Schema.innerType().partial()])
-export const productTermsSchema = z.object({ asset_type: z.enum(['FUND', 'REAL_ESTATE']), name: text(3, 120), issuer_name: text(3, 160), summary: text(30, 600), strategy: text(30, 4000), share_class: text(1, 80), currency: z.literal('ZAR_TEST'), unit_price_minor: positive, cap_units: positive, minimum_units: positive, pricing_basis: text(10, 1200), fees: text(10, 1200), redemption_terms: text(20, 2400), eligible_countries: z.array(country).min(1).max(30), eligible_investor_types: z.array(z.enum(['INDIVIDUAL', 'ENTITY'])).min(1).max(2), property_address: text(0, 300), property_valuation_minor: z.string().regex(/^(0|[1-9][0-9]{0,19})$/), rental_income_policy: text(0, 2000), documents: z.object({ memorandum: text(50, 12000), risks: text(50, 12000), subscription_terms: text(50, 12000) }).strict() }).strict().superRefine((v, ctx) => {
+const productTermsBaseSchema = z.object({ name: text(3, 120), issuer_name: text(3, 160), summary: text(30, 600), strategy: text(30, 4000), share_class: text(1, 80), unit_price_minor: positive, cap_units: positive, minimum_units: positive, pricing_basis: text(10, 1200), fees: text(10, 1200), redemption_terms: text(20, 2400), eligible_countries: z.array(country).min(1).max(30), eligible_investor_types: z.array(z.enum(['INDIVIDUAL', 'ENTITY'])).min(1).max(2), property_address: text(0, 300), property_valuation_minor: z.string().regex(/^(0|[1-9][0-9]{0,19})$/), rental_income_policy: text(0, 2000), documents: z.object({ memorandum: text(50, 12000), risks: text(50, 12000), subscription_terms: text(50, 12000) }).strict() })
+const legacyProductTermsSchema = productTermsBaseSchema.extend({ asset_type: z.enum(['FUND', 'REAL_ESTATE']), currency: z.literal('ZAR_TEST') }).strict()
+const fundTermsV2Schema = productTermsBaseSchema.extend({
+  asset_type: z.literal('FUND'), currency: z.literal('TST'), terms_version: z.literal(2), settlement_decimals: z.literal(6),
+  fund: z.object({
+    mandate: text(30, 4000), class_rights: text(20, 2400),
+    nav: z.object({ valuation_method: text(20, 2000), frequency: z.enum(['DAILY', 'WEEKLY', 'MONTHLY']), pricing_cutoff: text(10, 300), correction_policy: text(20, 2000) }).strict(),
+    dealing: z.object({ subscription_frequency: z.enum(['DAILY', 'WEEKLY', 'MONTHLY']), redemption_frequency: z.enum(['DAILY', 'WEEKLY', 'MONTHLY', 'QUARTERLY']), notice_days: z.number().int().min(0).max(365), settlement_days: z.number().int().min(0).max(30) }).strict(),
+    fees: z.object({ management_bps: z.number().int().min(0).max(10_000), performance_bps: z.number().int().min(0).max(10_000), other_fees: text(10, 2000) }).strict(),
+    liquidity: z.object({ lockup_days: z.number().int().min(0).max(3650), gate_bps: z.number().int().min(0).max(10_000), suspension_policy: text(20, 2000) }).strict(),
+    distributions: z.object({ frequency: z.enum(['NONE', 'MONTHLY', 'QUARTERLY', 'ANNUALLY']), policy: text(20, 2000) }).strict(),
+    redemption: z.object({ price_basis: z.literal('NAV'), conditions: text(20, 2400) }).strict(),
+  }).strict(),
+}).strict()
+export const productTermsSchema = z.union([legacyProductTermsSchema, fundTermsV2Schema]).superRefine((v, ctx) => {
   if (/^[1-9][0-9]{0,19}$/.test(v.minimum_units) && /^[1-9][0-9]{0,19}$/.test(v.cap_units) && BigInt(v.minimum_units) > BigInt(v.cap_units)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['minimum_units'], message: 'Minimum subscription must fit within the fund capacity.' })
   if (v.asset_type === 'REAL_ESTATE' && (v.property_address.length < 10 || !/^[1-9][0-9]{0,19}$/.test(v.property_valuation_minor) || v.rental_income_policy.length < 20)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['property_address'], message: 'Provide property, valuation and rental-income terms.' })
+  if (v.asset_type === 'FUND' && v.currency === 'TST') {
+    for (const field of ['strategy', 'pricing_basis', 'fees', 'redemption_terms'] as const) {
+      if (v[field] !== FUND_V2_CANONICAL_REFERENCES[field]) ctx.addIssue({ code: z.ZodIssueCode.custom, path: [field], message: 'The authoritative fund policy reference must not be edited.' })
+    }
+    if (containsLegacyDenomination(v)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['fund'], message: 'A v2 fund package cannot retain ZAR_TEST references.' })
+  }
+})
+/** Historical v1 fund records can be displayed, but new fund writes need the v2 package. */
+export const writableProductTermsSchema = productTermsSchema.refine(v => v.asset_type !== 'FUND' || isFundTermsV2(v as ProductTerms), {
+  message: 'Upgrade the fund draft to six-decimal TST terms before saving or submitting.',
 })
 export const reviewChecks = z.object({ identity: z.boolean(), ownership: z.boolean(), screening: z.boolean(), suitability: z.boolean() }).strict()
 export const offeringChecks = z.object({ issuer: z.boolean(), terms: z.boolean(), disclosures: z.boolean(), eligibility: z.boolean() }).strict()
@@ -264,8 +318,8 @@ export const portalCommandSchema = z.discriminatedUnion('command', [
   z.object({ command: z.literal('review_representative_mandate'), key: id, payload: z.object({ mandate_id: id, expected_revision: z.number().int().positive(), decision: z.enum(['APPROVED', 'CHANGES_REQUIRED', 'REJECTED']), notes: text(20, 3000), checks: representativeMandateChecks }).strict() }).strict(),
   z.object({ command: z.literal('apply_representative_mandate'), key: id, payload: z.object({ mandate_id: id, expected_revision: z.number().int().positive() }).strict() }).strict(),
   z.object({ command: z.literal('revoke_representative_mandate'), key: id, payload: z.object({ mandate_id: id, expected_revision: z.number().int().positive(), reason: text(20, 1000) }).strict() }).strict(),
-  z.object({ command: z.literal('create_product'), key: id, payload: z.object({ organisation_id: id, terms: productTermsSchema }).strict() }).strict(),
-  z.object({ command: z.literal('save_product'), key: id, payload: z.object({ product_id: id, expected_revision: z.number().int().positive(), terms: productTermsSchema }).strict() }).strict(),
+  z.object({ command: z.literal('create_product'), key: id, payload: z.object({ organisation_id: id, terms: writableProductTermsSchema }).strict() }).strict(),
+  z.object({ command: z.literal('save_product'), key: id, payload: z.object({ product_id: id, expected_revision: z.number().int().positive(), terms: writableProductTermsSchema }).strict() }).strict(),
   z.object({ command: z.literal('submit_product'), key: id, payload: z.object({ product_id: id, expected_revision: z.number().int().positive() }).strict() }).strict(),
   z.object({ command: z.literal('review_product'), key: id, payload: z.object({ product_id: id, offering_revision_id: id, expected_revision: z.number().int().positive(), terms_hash: hash, decision: z.enum(['APPROVED', 'CHANGES_REQUIRED']), notes: text(20, 3000), checks: offeringChecks }).strict() }).strict(),
   z.object({ command: z.literal('review_offering_issuer'), key: id, payload: z.object({ product_id: id, offering_revision_id: id, expected_revision: z.number().int().positive(), terms_hash: hash, decision: z.enum(['APPROVED', 'CHANGES_REQUIRED']), notes: text(20, 3000), checks: z.object({ issuer_authority: z.boolean(), terms: z.boolean(), rights: z.boolean() }).strict() }).strict() }).strict(),
