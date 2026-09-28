@@ -154,18 +154,15 @@ create policy bx1_offering_file_delete_restrict on storage.objects as restrictiv
 
 create function bx1_portal.offering_file_visible(c jsonb,target_revision uuid) returns boolean
 language plpgsql volatile security definer set search_path='' as $$
-declare v_product bx1_portal.products; v_scope uuid;
+declare v_product bx1_portal.products;
 begin
   if bx1_portal.valid_operating_context(c) is not true then return false; end if;
   select p.* into v_product from bx1_portal.offering_revisions r
     join bx1_portal.products p on p.id=r.product_id
     where r.id=target_revision and r.origin='SUBMITTED';
   if v_product.id is null then return false; end if;
-  select o.reviewer_scope into v_scope from bx1_portal.organisations o
-    where o.id=v_product.organisation_id;
   return bx1_portal.scoped_operator(c,v_product.organisation_id)
-    or (bx1_portal.scoped_reviewer(c,v_scope,v_product.organisation_id)
-      and bx1_portal.product_appointment_authorised(c,v_product.id,'ComplianceOfficer'))
+    or bx1_portal.product_appointment_authorised(c,v_product.id,'ComplianceOfficer')
     or bx1_portal.product_appointment_authorised(c,v_product.id,'IssuerFundManager');
 end $$;
 
