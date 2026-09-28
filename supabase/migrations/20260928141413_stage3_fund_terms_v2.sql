@@ -214,7 +214,7 @@ begin
     end if;
   elsif action='submit_product' then
     select p.terms into existing_terms from bx1_portal.products p
-      where p.id=case when body->>'product_id' ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+      where p.id=case when body->>'product_id' ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
         then (body->>'product_id')::uuid else null end
         and bx1_portal.scoped_operator(c,p.organisation_id) is true;
     if existing_terms->>'asset_type'='FUND' then
@@ -224,7 +224,7 @@ begin
     end if;
   elsif action in ('publish_product','subscribe') then
     select p.terms into existing_terms from bx1_portal.products p
-      where p.id=case when body->>'product_id' ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+      where p.id=case when body->>'product_id' ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
         then (body->>'product_id')::uuid else null end
         and ((action='publish_product' and bx1_portal.scoped_operator(c,p.organisation_id) is true)
           or (action='subscribe' and bx1_portal.scoped_product_visible(c,p.id) is true));
