@@ -179,7 +179,7 @@ export function OfferingDocuments({ product }: { product: PortalProduct }) {
   const current = pkg?.origin === 'SUBMITTED' && pkg.terms_hash === product.terms_hash
   return <Panel title="Offering documents" description={current ? `In-form text disclosures · immutable package ${pkg.package_number}` : 'In-form text disclosures · not a current submitted package'}>
     <div className={styles.stack}>{([{ key: 'memorandum', label: 'Offering memorandum' }, { key: 'risks', label: 'Risk disclosures' }, { key: 'subscription_terms', label: 'Subscription agreement' }] as const).map(document => <details key={document.key}><summary className={styles.textLink}>{document.label}</summary><p className={styles.copy}>{product.terms.documents[document.key]}</p></details>)}</div>
-    <p className={`${styles.muted} ${styles.sectionGap}`}>These disclosures are saved text, not signed documents or evidence of an e-signature. Their digests bind submitted text to the package; private uploaded document and signature evidence remain separate work.</p>
+    <p className={`${styles.muted} ${styles.sectionGap}`}>These disclosures are saved text, not signed documents or evidence of an e-signature. Their digests bind submitted text to the package. Separately staged PDFs remain quarantined and unscanned; signature evidence is not connected.</p>
   </Panel>
 }
 
