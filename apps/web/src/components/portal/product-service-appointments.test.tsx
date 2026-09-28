@@ -60,6 +60,8 @@ describe('connected product service appointment surfaces', () => {
     expect(applicant).not.toContain('Request an independent service appointment')
     const draft = renderToStaticMarkup(<ProductAppointmentRequest product={product({ status: 'DRAFT', offering_package: null })} snapshot={snapshot()} operatingContext={managerContext} onSaved={() => {}} />)
     expect(draft).toContain('Request an independent service appointment')
+    const inactive = renderToStaticMarkup(<ProductAppointmentRequest product={product()} snapshot={snapshot({ product_appointments: [appointment({ status: 'APPLIED', effective: false, next_owner: 'NONE' })] })} operatingContext={managerContext} onSaved={() => {}} />)
+    expect(inactive).toContain('Super Admin: revoke inactive appointment before replacement')
   })
   it('treats an unavailable appointment snapshot as unavailable, not an empty queue', () => {
     const unavailable = snapshot({ product_appointments: undefined })
