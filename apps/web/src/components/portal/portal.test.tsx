@@ -218,6 +218,20 @@ describe('onboarding and subscription boundaries', () => {
     expect(subscription).toContain('Offering is not open')
     expect(subscription).not.toContain('Accept terms and reserve units</button>')
   })
+  it('shows a reasoned fresh-review action only to the manager with an approved package', () => {
+    const approved = product({ status: 'APPROVED' })
+    const manager = renderToStaticMarkup(<ProductActions product={approved} onSaved={vi.fn()}
+      availableCommands={['reopen_offering_review']} />)
+    expect(manager).toContain('Reopen this package for independent review')
+    expect(manager).toContain('Create new review revision')
+    expect(manager).toContain('Earlier decisions remain historical evidence')
+    const unscoped = renderToStaticMarkup(<ProductActions product={approved} onSaved={vi.fn()}
+      availableCommands={[]} />)
+    expect(unscoped).not.toContain('Create new review revision')
+    const draft = renderToStaticMarkup(<ProductActions product={product({ status: 'DRAFT' })}
+      onSaved={vi.fn()} availableCommands={['reopen_offering_review']} />)
+    expect(draft).not.toContain('Create new review revision')
+  })
   it('shows an issuer decision only when the backend grants exact package review authority', () => {
     const submitted = product({ status: 'IN_REVIEW' })
     const noGrant = renderToStaticMarkup(<IssuerOfferingReview product={submitted} snapshot={snapshot()} onSaved={vi.fn()} />)

@@ -274,12 +274,14 @@ export function ProductNarrative({ product }: { product: PortalProduct }) {
 
 export function ProductActions({ product, onSaved, availableCommands }: { product: PortalProduct; onSaved: (snapshot: PortalSnapshot) => void; availableCommands?: readonly string[] }) {
   const command = usePortalCommand(onSaved)
+  const [reopenReason, setReopenReason] = useState('')
   const legacyFundDraft = product.terms.asset_type === 'FUND' && !isFundTermsV2(product.terms) && ['DRAFT', 'CHANGES_REQUIRED'].includes(product.status)
   const legacyPropertyDraft = product.terms.asset_type === 'REAL_ESTATE' && !isRealEstateTermsV2(product.terms) && ['DRAFT', 'CHANGES_REQUIRED'].includes(product.status)
   const canSubmit = !legacyFundDraft && !legacyPropertyDraft && ['DRAFT', 'CHANGES_REQUIRED'].includes(product.status) && (availableCommands === undefined || availableCommands.includes('submit_product'))
   const canEditLegacyFund = availableCommands === undefined || availableCommands.includes('save_product')
   const pkg = product.offering_package
   const canPublish = product.status === 'APPROVED' && pkg?.origin === 'SUBMITTED' && pkg.terms_hash === product.terms_hash && pkg.issuer_status === 'APPROVED' && pkg.compliance_status === 'APPROVED' && pkg.technical_readiness_status === 'VERIFIED' && pkg.publishable === true && product.allowed_actions?.includes('publish_product') === true && (availableCommands === undefined || availableCommands.includes('publish_product'))
+  const canReopen = product.status === 'APPROVED' && availableCommands?.includes('reopen_offering_review') === true
   return <Panel title="Offering hand-offs" description="Each action uses a server-checked organisation, actor and immutable package."><CommandFeedback command={command} />{product.review_notes ? <Notice title="Compliance notes" tone="warning">{product.review_notes}</Notice> : null}
     <ol className={`${styles.timeline} ${styles.sectionGap}`}>
       <li><strong>Manager submits the package</strong><p>Submission fixes the terms and in-form document digests under one package reference.</p></li>
@@ -289,6 +291,11 @@ export function ProductActions({ product, onSaved, availableCommands }: { produc
     </ol>
     <div className={styles.sectionGap}>{legacyFundDraft || legacyPropertyDraft ? <Notice title={legacyFundDraft ? 'Fund terms upgrade required' : 'Property terms upgrade required'} tone="warning">The historical ZAR_TEST draft cannot be submitted as a new package. {canEditLegacyFund ? <a href={legacyFundDraft ? '#fund-draft-editor' : '#property-draft-editor'} className={styles.textLink}>Open the draft editor and upgrade to the v2 TST {legacyFundDraft ? 'fund' : 'property'} policy.</a> : 'An authorised Offering Manager must upgrade and save the draft before submission.'}</Notice> : canSubmit ? <button className={styles.button} disabled={command.busy || command.unknown} onClick={() => void command.submit('submit_product', { product_id: product.id, expected_revision: product.revision })}>Submit immutable offering package</button> : canPublish ? <button className={styles.button} disabled={command.busy || command.unknown} onClick={() => void command.submit('publish_product', { product_id: product.id, expected_revision: product.revision })}>Open approved offering</button> : product.status === 'PUBLISHED' && !isOfferingSubscribable(product) ? <Notice title="Historical opening is not current" tone="warning">This row retains its recorded PUBLISHED status, but the backend has not verified its present package and readiness for new subscriptions.</Notice> : <StatusBadge status={product.status} />}</div>
     {product.status === 'APPROVED' && !canPublish ? <div className={styles.sectionGap}><Notice title="Opening is not available" tone="warning">The backend has not confirmed a current issuer decision, independent Compliance decision and technical-readiness evidence for this package. An APPROVED workflow status alone is not permission to publish.</Notice></div> : null}
+    {canReopen ? <form className={`${styles.form} ${styles.sectionGap}`} onSubmit={event => {
+      event.preventDefault()
+      if (reopenReason.trim().length < 20) return
+      void command.submit('reopen_offering_review', { product_id: product.id, expected_revision: product.revision, reason: reopenReason.trim() })
+    }}><h3>Reopen this package for independent review</h3><p className={styles.muted}>Creates a new immutable package revision with the same terms. Earlier decisions remain historical evidence and cannot approve the new revision. Use this when an appointment has ended or the package requires fresh issuer and Compliance decisions; it does not reopen funding.</p><Field label="Reason for re-review" hint="20 to 1,000 characters recorded with the new revision."><textarea required minLength={20} maxLength={1000} value={reopenReason} onChange={event => setReopenReason(event.target.value)} /></Field><button type="submit" className={styles.buttonSecondary} disabled={command.busy || command.unknown || reopenReason.trim().length < 20}>Create new review revision</button></form> : null}
   </Panel>
 }
 

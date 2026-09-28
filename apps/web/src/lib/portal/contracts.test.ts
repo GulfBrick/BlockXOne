@@ -218,6 +218,16 @@ describe('customer portal contracts', () => {
       payload: { appointment_id: id, expected_revision: 3,
         reason: 'Synthetic appointment revoked after the controlled review.' } }).success).toBe(true)
   })
+  it('requires a reason and expected product revision for a fresh offering review', () => {
+    const payload = { product_id: id, expected_revision: 4,
+      reason: 'Appointed issuer authority expired; submit this unchanged package for fresh decisions.' }
+    expect(portalCommandSchema.safeParse({ command: 'reopen_offering_review', key, payload }).success).toBe(true)
+    for (const change of [{ expected_revision: 0 }, { reason: 'Too short' },
+      { approved_by_user_id: id }, { current_offering_revision_id: id }]) {
+      expect(portalCommandSchema.safeParse({ command: 'reopen_offering_review', key,
+        payload: { ...payload, ...change } }).success).toBe(false)
+    }
+  })
   it('requires the exact case revision and a recorded reason for eligibility revocation', () => {
     const payload = { eligibility_case_id: id, expected_revision: 3, reason: 'Synthetic independent reviewer found the account is no longer eligible.' }
     expect(portalCommandSchema.safeParse({ command: 'revoke_product_eligibility', key, payload }).success).toBe(true)
