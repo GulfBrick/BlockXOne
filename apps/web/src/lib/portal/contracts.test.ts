@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { FUND_V2_CANONICAL_REFERENCES, PORTAL_PATHS, applicationDetailsSchema, applicationDocumentLookupSchema, applicationDocumentVersionsSchema, applicationDraftDetailsSchema, customerMonitoringSnapshotSchema, isWealthManagerDetailsV2, evidenceSchema, formatTestMoney, portalCommandSchema, productTermsSchema, subscriptionQuote, type FundTermsV2, type PortalProduct, type ProductTerms } from './contracts'
+import { FUND_V2_CANONICAL_REFERENCES, REAL_ESTATE_V2_CANONICAL_REFERENCES, PORTAL_PATHS, applicationDetailsSchema, applicationDocumentLookupSchema, applicationDocumentVersionsSchema, applicationDraftDetailsSchema, customerMonitoringSnapshotSchema, isRealEstateTermsV2, isWealthManagerDetailsV2, evidenceSchema, formatTestMoney, portalCommandSchema, productTermsSchema, subscriptionQuote, type FundTermsV2, type RealEstateTermsV2, type PortalProduct, type ProductTerms } from './contracts'
 import { isSupabaseWebPathAllowed } from '@/lib/auth-mode'
 import { isProductionWebPathBlocked } from '@/lib/release-policy'
 
@@ -14,6 +14,15 @@ const fundV2: FundTermsV2 = { ...terms, ...FUND_V2_CANONICAL_REFERENCES, asset_t
   liquidity: { lockup_days: 0, gate_bps: 10000, suspension_policy: 'Suspend dealing when reviewed NAV or test liquidity is unavailable.' },
   distributions: { frequency: 'NONE', policy: 'Accumulation class retains all fictional income in synthetic NAV.' },
   redemption: { price_basis: 'NAV', conditions: 'A reviewed NAV, dealing date and protected units are required before payout.' },
+} }
+const oldProperty: ProductTerms = { ...terms, asset_type: 'REAL_ESTATE', property_address: 'Fictional Street 10, Test City', property_valuation_minor: '500000000', rental_income_policy: 'Fictional net rent after disclosed operating costs.' }
+const propertyV2: RealEstateTermsV2 = { ...oldProperty, ...REAL_ESTATE_V2_CANONICAL_REFERENCES, asset_type: 'REAL_ESTATE', currency: 'TST', terms_version: 2, settlement_decimals: 6, unit_price_minor: '100000000', cap_units: '20', minimum_units: '1', property_valuation_minor: '3000000000', real_estate: {
+  spv: { legal_name: 'Synthetic Property SPV', registration_reference: 'FICTIONAL-SPV-001', jurisdiction: 'ZA', interest_rights: 'Each class unit grants a stated claim against the fictional SPV but not direct title to its property.' },
+  property: { title_evidence_reference: 'FICTIONAL-TITLE-001', control_evidence_reference: 'FICTIONAL-CONTROL-001', valuation_method: 'Synthetic appraisal subject to dated independent review.', valuation_frequency: 'ANNUALLY', correction_policy: 'Material appraisal errors require a correction version and review of affected interests.' },
+  financing: { debt_policy: 'No real debt exists in this rehearsal; new debt requires an approved schedule.', lender_consent_policy: 'Required lender consents must be evidenced before changes to control or disposal.' },
+  cashflow: { rent_policy: 'Synthetic rent is recognised only after independent evidence review.', expense_policy: 'Property operating expenses and taxes reduce distributable income.', reserve_policy: 'Reviewed maintenance and contingency reserves are retained first.', distribution_policy: 'Approved net income and dated entitlements precede any payout.' },
+  governance: { consent_rights: 'Material disposals and financing changes require documented holder consent.', voting_policy: 'Votes use a dated holder snapshot and approved threshold.' },
+  exits: { eligible_transfer_policy: 'Eligible interest transfers settle consideration and change the holder while the product continues.', disposal_liquidation_policy: 'Disposal and liquidation apply an approved proceeds waterfall, payouts and reconciled supply closure.' },
 } }
 const product: PortalProduct = { id, organisation_id: id, created_by: id, revision: 4, status: 'PUBLISHED', terms, terms_hash: 'a'.repeat(64), reserved_units: '20', created_at: '2026-09-21T00:00:00Z', reviewer_id: null, review_notes: null, reviewed_at: null, published_at: null, review_checks: {}, offering_package: { id: key, package_number: 1, origin: 'SUBMITTED', terms_hash: 'a'.repeat(64), document_hashes: { memorandum: 'b'.repeat(64), risks: 'c'.repeat(64), subscription_terms: 'd'.repeat(64) }, submitted_at: '2026-09-21T00:00:00Z', issuer_status: 'APPROVED', compliance_status: 'APPROVED', technical_readiness_status: 'VERIFIED', publishable: false, subscribable: true, can_review_issuer: false } }
 
@@ -109,9 +118,30 @@ describe('customer portal contracts', () => {
       { documents: { ...fundV2.documents, risks: `${fundV2.documents.risks} A stale ZAR_TEST disclosure.` } },
     ]) expect(productTermsSchema.safeParse({ ...fundV2, ...malformed }).success).toBe(false)
   })
-  it('requires real-estate-specific terms', () => {
+  it('preserves historical property terms for reading but rejects new legacy-denominated writes', () => {
     expect(productTermsSchema.safeParse({ ...terms, asset_type: 'REAL_ESTATE' }).success).toBe(false)
-    expect(productTermsSchema.safeParse({ ...terms, asset_type: 'REAL_ESTATE', property_address: 'Fictional Street 10, Test City', property_valuation_minor: '500000000', rental_income_policy: 'Fictional net rent after disclosed operating costs.' }).success).toBe(true)
+    expect(productTermsSchema.safeParse(oldProperty).success).toBe(true)
+    expect(portalCommandSchema.safeParse({ command: 'create_product', key, payload: { organisation_id: id, terms: oldProperty } }).success).toBe(false)
+    expect(portalCommandSchema.safeParse({ command: 'save_product', key, payload: { product_id: id, expected_revision: 1, terms: oldProperty } }).success).toBe(false)
+  })
+  it('requires complete six-decimal v2 property terms without converting valuation to offering cap', () => {
+    expect(productTermsSchema.safeParse(propertyV2).success).toBe(true)
+    expect(isRealEstateTermsV2(propertyV2)).toBe(true)
+    expect(portalCommandSchema.safeParse({ command: 'create_product', key, payload: { organisation_id: id, terms: propertyV2 } }).success).toBe(true)
+    expect(portalCommandSchema.safeParse({ command: 'save_product', key, payload: { product_id: id, expected_revision: 1, terms: propertyV2 } }).success).toBe(true)
+    expect(BigInt(propertyV2.property_valuation_minor)).not.toBe(BigInt(propertyV2.unit_price_minor) * BigInt(propertyV2.cap_units))
+    for (const malformed of [
+      { currency: 'ZAR_TEST' }, { settlement_decimals: 2 }, { property_valuation_minor: '0' },
+      { real_estate: { ...propertyV2.real_estate, privileged_signer: id } },
+      { real_estate: { ...propertyV2.real_estate, spv: { ...propertyV2.real_estate.spv, jurisdiction: 'South Africa' } } },
+      { real_estate: { ...propertyV2.real_estate, property: { ...propertyV2.real_estate.property, control_evidence_reference: '' } } },
+      { real_estate: { ...propertyV2.real_estate, cashflow: { ...propertyV2.real_estate.cashflow, reserve_policy: 'none' } } },
+      { real_estate: { ...propertyV2.real_estate, exits: { ...propertyV2.real_estate.exits, eligible_transfer_policy: 'instant liquidity' } } },
+      { real_estate: { ...propertyV2.real_estate, exits: { ...propertyV2.real_estate.exits, eligible_transfer_policy: propertyV2.real_estate.exits.disposal_liquidation_policy } } },
+      { strategy: 'A competing investment strategy outside real_estate.spv.' },
+      { rental_income_policy: 'A competing income schedule outside real_estate.cashflow.' },
+      { documents: { ...propertyV2.documents, risks: `${propertyV2.documents.risks} ZAR_TEST.` } },
+    ]) expect(productTermsSchema.safeParse({ ...propertyV2, ...malformed }).success).toBe(false)
   })
   it.each(['0', '-1', '1.1', '1e3', '+1', '01', ' 1', '999999999999999999999'])('rejects noncanonical financial quantity %s', unit_price_minor => expect(productTermsSchema.safeParse({ ...terms, unit_price_minor }).success).toBe(false))
   it('rejects live currency and arbitrary metadata', () => {

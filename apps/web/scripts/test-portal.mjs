@@ -70,6 +70,45 @@ const fundV2Terms = (name = 'Synthetic TST fund package') => ({
     redemption: { price_basis: 'NAV', conditions: 'Redemption depends on the reviewed dealing calendar and available liquidity.' },
   },
 })
+const propertyV2Terms = (name = 'Synthetic TST property package') => ({
+  ...terms('REAL_ESTATE'), name, terms_version: 2, currency: 'TST', settlement_decimals: 6,
+  unit_price_minor: '100000000', cap_units: '20', minimum_units: '1', property_valuation_minor: '3000000000',
+  strategy: 'The real_estate.spv and real_estate.property policies define the property interest and control for this package.',
+  pricing_basis: 'The real_estate.property valuation policy is the authoritative pricing basis for this package.',
+  fees: 'The real_estate.cashflow expense and reserve policies govern charges for this package.',
+  redemption_terms: 'The real_estate.exits policies distinguish eligible interest transfer from disposal and liquidation for this package.',
+  rental_income_policy: 'The real_estate.cashflow rent and distribution policies govern income for this package.',
+  real_estate: {
+    spv: {
+      legal_name: 'Fictional Property SPV', registration_reference: 'SYNTHETIC-SPV-001', jurisdiction: 'ZA',
+      interest_rights: 'Each synthetic interest has the specified SPV class rights, not direct title to the fictional property.',
+    },
+    property: {
+      title_evidence_reference: 'SYNTHETIC-TITLE-001', control_evidence_reference: 'SYNTHETIC-CONTROL-001',
+      valuation_method: 'Illustrative synthetic appraisal, requiring separate dated independent review before actual pricing.',
+      valuation_frequency: 'ANNUALLY',
+      correction_policy: 'A material valuation error requires a reviewed correction version and treatment of affected holders.',
+    },
+    financing: {
+      debt_policy: 'No actual debt is represented; any synthetic priority and covenant effects require reviewed terms.',
+      lender_consent_policy: 'Required lender consent must be evidenced before a transfer, disposal or change of control.',
+    },
+    cashflow: {
+      rent_policy: 'Synthetic rent claims are not distributable cash until independent settlement reconciliation.',
+      expense_policy: 'Property expenses and taxes are recorded before a synthetic net income calculation.',
+      reserve_policy: 'A reviewed maintenance and contingency reserve is retained before income distribution.',
+      distribution_policy: 'Record-date entitlement, approved income and authorised payout evidence are required.',
+    },
+    governance: {
+      consent_rights: 'Material disposal and financing changes require documented holder consent under the class terms.',
+      voting_policy: 'Voting eligibility and threshold use a dated register snapshot, not a wallet connection.',
+    },
+    exits: {
+      eligible_transfer_policy: 'Eligible interest transfer settles consideration and updates the holder while the product continues.',
+      disposal_liquidation_policy: 'Property disposal and liquidation require a creditor and reserve waterfall, authorised payouts and supply closure.',
+    },
+  },
+})
 async function approveApplication(n, persona = 'INVESTOR', country = 'ZA') {
   const submitted = await command(n, 'submit_application', application(n, persona, 0, country))
   const a = submitted.applications.find(value => value.user_id === uid(n))
@@ -1215,8 +1254,16 @@ try {
   const v1FundDraft = (await scopedCommand(1, manager, 'create_product', {
     ...legacyFundCreateBody,
   }, legacyFundCreateKey)).products.find(value => value.terms.name === 'Legacy fund draft requiring v2 upgrade')
+  const legacyPropertyCreateKey = key()
+  const legacyPropertyCreateBody = {
+    organisation_id: orgId, terms: { ...terms('REAL_ESTATE'), name: 'Legacy property draft requiring v2 upgrade' },
+  }
+  const v1PropertyDraft = (await scopedCommand(1, manager, 'create_product',
+    legacyPropertyCreateBody, legacyPropertyCreateKey)).products.find(value =>
+    value.terms.name === 'Legacy property draft requiring v2 upgrade')
   await admin()
   const legacyFundHash = await scalar('select terms_hash from bx1_portal.products where id=$1', [fundPackage.id])
+  const legacyPropertyHash = await scalar('select terms_hash from bx1_portal.products where id=$1', [propertyPackage.id])
   const legacyOrderTermsHash = await scalar('select terms_hash from bx1_portal.subscriptions where id=$1', [historicalOrder.id])
   const legacySnapshots = await scalar("select count(*)::int from bx1_portal.offering_revisions where origin like 'LEGACY_%'")
   await sqlFile('../../../supabase/migrations/20260928141413_stage3_fund_terms_v2.sql')
@@ -1434,7 +1481,189 @@ try {
   }), '42501')
   await admin()
   eq(await scalar('select terms_hash from bx1_portal.products where id=$1', [v2Reviewed.id]), v2Reviewed.terms_hash, 'cross-org denied without package mutation')
+  phase = 'stage3-property-v2-install-and-history'
+  await sqlFile('../../../supabase/migrations/20260928161233_stage3_real_estate_terms_v2.sql')
+  await sqlFile('../../../supabase/tests/stage3_real_estate_v2_acl.sql'); checks++
+  eq(await scalar('select terms_hash from bx1_portal.products where id=$1', [propertyPackage.id]), legacyPropertyHash,
+    'property v2 migration does not rehash a reviewed historical property package')
+  eq(await scalar('select terms_hash from bx1_portal.subscriptions where id=$1', [historicalOrder.id]), legacyOrderTermsHash,
+    'property v2 migration preserves earlier accepted order terms')
+  eq(await scalar("select has_function_privilege('authenticated','bx1_portal.save_real_estate_v2_scoped(jsonb,uuid,jsonb)','EXECUTE')"), false,
+    'typed property draft writer remains private')
+  const oldProperty = (await scopedRead(1, manager)).products.find(value => value.id === propertyPackage.id)
+  eq([oldProperty.id, oldProperty.terms_hash, oldProperty.terms.currency],
+    [propertyPackage.id, legacyPropertyHash, 'ZAR_TEST'], 'legacy property remains readable without denomination rewrite')
+  const replayedLegacyProperty = (await scopedCommand(1, manager, 'create_product',
+    legacyPropertyCreateBody, legacyPropertyCreateKey)).products.find(value => value.id === v1PropertyDraft.id)
+  eq(replayedLegacyProperty.id, v1PropertyDraft.id, 'pre-migration property create key replays existing draft only')
+  await denied('new property cannot use v1 ZAR_TEST terms', () => scopedCommand(1, manager,
+    'create_product', { organisation_id: orgId, terms: terms('REAL_ESTATE') }))
+  await denied('internal status update cannot submit an unupgraded property draft', async () => {
+    await admin(); await db.query("update bx1_portal.products set status='IN_REVIEW',revision=revision+1 where id=$1", [v1PropertyDraft.id])
+  })
+  await denied('legacy property draft cannot submit without explicit v2 upgrade', () => scopedCommand(1, manager,
+    'submit_product', { product_id: v1PropertyDraft.id, expected_revision: v1PropertyDraft.revision }))
+  for (const [label, invalid, sqlstate] of [
+    ['wrong settlement decimals', { settlement_decimals: 2 }, '22023'],
+    ['wrong currency', { currency: 'ZAR_TEST' }, '22023'],
+    ['missing title evidence', { real_estate: { ...propertyV2Terms().real_estate,
+      property: { ...propertyV2Terms().real_estate.property, title_evidence_reference: '' } } }, '22023'],
+    ['unknown property policy', { real_estate: { ...propertyV2Terms().real_estate,
+      unreviewed_override: 'yes' } }, '22023'],
+    ['same transfer and liquidation path', { real_estate: { ...propertyV2Terms().real_estate,
+      exits: { ...propertyV2Terms().real_estate.exits,
+        disposal_liquidation_policy: propertyV2Terms().real_estate.exits.eligible_transfer_policy } } }, '23514'],
+    ['contradictory old pricing narrative', { pricing_basis: 'Unreviewed fixed property price' }, '22023'],
+    ['legacy denomination hidden in property disclosure', { documents: { ...propertyV2Terms().documents,
+      risks: 'This fictional property wrongly promises ZAR_TEST settlement.' } }, '22023'],
+  ]) await denied(`property v2 ${label} rejected by SQL`, async () => {
+    await admin(); await scalar('select bx1_portal.validate_terms($1::jsonb)',
+      [JSON.stringify({ ...propertyV2Terms(), ...invalid })])
+  }, sqlstate)
+  await denied('fund draft cannot become property by saving new typed terms', () => scopedCommand(1, manager,
+    'save_product', { product_id: v2Reviewed.id, expected_revision: v2Reviewed.revision,
+      terms: propertyV2Terms('Wrong asset for existing fund') }))
+  const freshProperty = (await scopedCommand(1, manager, 'create_product', { organisation_id: orgId,
+    terms: propertyV2Terms('Fresh synthetic TST property package') })).products.find(value =>
+    value.terms.name === 'Fresh synthetic TST property package')
+  eq([freshProperty?.terms?.terms_version, freshProperty?.terms?.currency,
+    freshProperty?.terms?.settlement_decimals], [2, 'TST', 6], 'new property uses the common v2 settlement contract')
+  eq((BigInt(freshProperty.terms.cap_units) * BigInt(freshProperty.terms.unit_price_minor)).toString(),
+    '2000000000', '20 interests at 100 TST each equal 2,000 synthetic TST base units')
+  eq(freshProperty.terms.property_valuation_minor, '3000000000',
+    'illustrative 3,000 TST property valuation stays distinct from the 2,000 TST offering capacity')
+  phase = 'stage3-property-v2-save-and-authority'
+  const propertyBefore = await scalar(`select jsonb_build_object(
+    'revision',p.revision,'hash',p.terms_hash,
+    'requests',(select count(*) from bx1_portal.requests r where r.actor_id=$2 and r.command='save_product'
+      and r.payload->>'product_id'=($1::uuid)::text),
+    'scoped',(select count(*) from bx1_portal.scoped_requests r where r.actor_id=$2 and r.command='save_product'
+      and r.payload->>'product_id'=($1::uuid)::text),
+    'events',(select count(*) from bx1_portal.events e where e.actor_id=$2 and e.kind='save_product'
+      and e.subject_id=$1)) from bx1_portal.products p where p.id=$1`, [v1PropertyDraft.id, uid(1)])
+  await denied('property save rejects stale revision', () => scopedCommand(1, manager, 'save_product', {
+    product_id: v1PropertyDraft.id, expected_revision: v1PropertyDraft.revision + 1,
+    terms: propertyV2Terms('Rejected stale property upgrade'),
+  }))
+  await denied('property save audit failure rolls back draft, receipts and event', async () => {
+    await admin()
+    await db.query(`create function public.synthetic_property_save_audit_failure() returns trigger
+      language plpgsql as $$ begin if new.kind='save_product' then
+        raise exception 'synthetic_property_save_audit_failure' using errcode='23514'; end if;
+        return new; end $$;
+      create trigger synthetic_property_save_audit_failure before insert on bx1_portal.events
+      for each row execute function public.synthetic_property_save_audit_failure()`)
+    await scopedCommand(1, manager, 'save_product', {
+      product_id: v1PropertyDraft.id, expected_revision: v1PropertyDraft.revision,
+      terms: propertyV2Terms('Rejected property upgrade after audit failure'),
+    })
+  })
+  await admin()
+  eq(await scalar(`select jsonb_build_object(
+    'revision',p.revision,'hash',p.terms_hash,
+    'requests',(select count(*) from bx1_portal.requests r where r.actor_id=$2 and r.command='save_product'
+      and r.payload->>'product_id'=($1::uuid)::text),
+    'scoped',(select count(*) from bx1_portal.scoped_requests r where r.actor_id=$2 and r.command='save_product'
+      and r.payload->>'product_id'=($1::uuid)::text),
+    'events',(select count(*) from bx1_portal.events e where e.actor_id=$2 and e.kind='save_product'
+      and e.subject_id=$1)) from bx1_portal.products p where p.id=$1`, [v1PropertyDraft.id, uid(1)]), propertyBefore,
+  'failed property audit leaves no revision, hash, receipt or event change')
+  await db.query('savepoint property_manager_revocation')
+  await admin()
+  await db.query("update bx1_portal.organisation_authority_bindings set status='REVOKED' where product_organisation_id=$1 and role='OfferingManager'", [orgId])
+  await denied('revoked manager cannot save property draft', () => scopedCommand(1, manager,
+    'save_product', { product_id: v1PropertyDraft.id, expected_revision: v1PropertyDraft.revision,
+      terms: propertyV2Terms('Rejected revoked manager property upgrade') }), '42501')
+  await db.query('rollback to savepoint property_manager_revocation; release savepoint property_manager_revocation')
+  await denied('other-organisation manager cannot alter property draft', () => scopedCommand(14,
+    v3RoleContext, 'save_product', { product_id: v1PropertyDraft.id,
+      expected_revision: v1PropertyDraft.revision, terms: propertyV2Terms('Foreign property alteration') }), '42501')
+  const propertyUpgradeKey = key()
+  const propertyUpgradeBody = { product_id: v1PropertyDraft.id, expected_revision: v1PropertyDraft.revision,
+    terms: propertyV2Terms('Upgraded synthetic TST property package') }
+  const upgradedProperty = (await scopedCommand(1, manager, 'save_product', propertyUpgradeBody,
+    propertyUpgradeKey)).products.find(value => value.id === v1PropertyDraft.id)
+  eq([upgradedProperty.terms.terms_version, upgradedProperty.terms.currency,
+    upgradedProperty.revision], [2, 'TST', v1PropertyDraft.revision + 1],
+  'legacy property draft requires explicit guarded upgrade, without changing its ID')
+  const replayedPropertyUpgrade = (await scopedCommand(1, manager, 'save_product', propertyUpgradeBody,
+    propertyUpgradeKey)).products.find(value => value.id === v1PropertyDraft.id)
+  eq(replayedPropertyUpgrade.revision, upgradedProperty.revision,
+    'same property save key replays without a second revision')
+  await denied('property save key cannot be reused with changed terms', () => scopedCommand(1,
+    manager, 'save_product', { ...propertyUpgradeBody,
+      terms: propertyV2Terms('Conflicting property terms') }, propertyUpgradeKey), '23505')
+  await admin()
+  eq(await scalar(`select jsonb_build_object(
+    'requests',(select count(*) from bx1_portal.requests where actor_id=$1 and request_key=$2),
+    'scoped',(select count(*) from bx1_portal.scoped_requests where actor_id=$1 and request_key=$2),
+    'events',(select count(*) from bx1_portal.events where actor_id=$1 and subject_id=$3 and kind='save_product'))`,
+  [uid(1), propertyUpgradeKey, v1PropertyDraft.id]), { requests: 1, scoped: 1, events: 1 },
+  'one property save has both idempotency receipts and one audit event')
+  phase = 'stage3-property-v2-review-and-closed-opening'
+  const submittedProperty = (await scopedCommand(1, manager, 'submit_product', {
+    product_id: upgradedProperty.id, expected_revision: upgradedProperty.revision,
+  })).products.find(value => value.id === upgradedProperty.id)
+  eq([submittedProperty.offering_package?.terms_hash,
+    submittedProperty.offering_package?.technical_readiness_status],
+  [submittedProperty.terms_hash, 'NOT_VERIFIED'],
+  'typed property submission creates a hash-bound immutable package but no technical admission')
+  let reviewedProperty = (await mandateScopedCommand(13, issuerContext,
+    'review_offering_issuer', issuerInput(submittedProperty))).products.find(value =>
+    value.id === submittedProperty.id)
+  reviewedProperty = (await mandateScopedCommand(2, reviewer,
+    'review_product', complianceInput(reviewedProperty))).products.find(value =>
+    value.id === submittedProperty.id)
+  eq([reviewedProperty.status, reviewedProperty.offering_package.issuer_status,
+    reviewedProperty.offering_package.compliance_status], ['APPROVED', 'APPROVED', 'APPROVED'],
+  'typed property receives independent issuer and Compliance reviews on one revision')
+  await denied('reviewed property cannot use legacy publish path', () => scopedCommand(1, manager,
+    'publish_product', { product_id: reviewedProperty.id, expected_revision: reviewedProperty.revision }))
+  await denied('internal property status update cannot bypass technical admission', async () => {
+    await admin(); await db.query("update bx1_portal.products set status='PUBLISHED' where id=$1", [reviewedProperty.id])
+  })
+  await denied('internal property subscription insert cannot bypass v2 settlement closure', async () => {
+    await admin()
+    await db.query(`insert into bx1_portal.subscriptions
+      (product_id,investor_id,organisation_id,product_revision,terms_hash,accepted_terms,accepted_documents,accepted_risks,units,amount_minor)
+      values($1,$2,$3,$4,$5,$6::jsonb,true,true,1,100000000)`,
+    [reviewedProperty.id, uid(3), orgId, reviewedProperty.revision,
+      reviewedProperty.terms_hash, JSON.stringify(reviewedProperty.terms)])
+  })
+  await admin()
+  eq(await scalar('select status from bx1_portal.products where id=$1', [reviewedProperty.id]), 'APPROVED',
+    'denied property publication leaves reviewed package closed')
   await db.query('commit'); begun = false
+  phase = 'fund-v2-cached-event-scope-revoked-during-read'
+  // The optimized base reader calculates allowed organisations before it
+  // projects events. Block only the events relation, so the reader is paused
+  // after that cache is built; revoke the binding on another connection and
+  // require the final authority recheck to reject the whole response.
+  await db.query('begin'); begun = true
+  await actor(1)
+  eq(await scalar('select bx1_portal.scoped_operator($1::jsonb,$2::uuid)',
+    [JSON.stringify(manager), orgId]), true, 'manager is authorised before the read race')
+  await admin()
+  await db.query('lock table bx1_portal.events in access exclusive mode')
+  const interruptedRead = (async () => {
+    await proofClients[0].query('begin')
+    try {
+      const result = await scopedRead(1, manager, proofClients[0])
+      await proofClients[0].query('commit')
+      return { result }
+    } catch (error) {
+      await proofClients[0].query('rollback')
+      return { code: error?.code }
+    }
+  })()
+  await waitForBlocked([pids[0]])
+  eq(await scalar(`select exists(select 1 from pg_locks where pid=$1
+    and relation='bx1_portal.events'::regclass and mode='AccessShareLock' and not granted)`,
+  [pids[0]]), true, 'read waits on events relation after calculating the operator scope')
+  await db.query("update bx1_portal.organisation_authority_bindings set status='REVOKED' where product_organisation_id=$1 and role='OfferingManager' and status='ACTIVE'", [orgId])
+  await db.query('commit'); begun = false
+  const revokedRead = await interruptedRead
+  eq(revokedRead.code, '42501', 'revocation during the cached-scope read denies the entire response')
   phase = 'cleanup-committed-disposable-fixture'
   await db.query('drop schema bx1_portal,bx1_private,storage,auth,public cascade; create schema public')
   committedFixture = false

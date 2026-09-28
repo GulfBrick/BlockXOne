@@ -145,6 +145,8 @@ try {
   await sqlFile('../../../supabase/migrations/20260924125627_stage2_customer_monitoring.sql')
   await sqlFile('../../../supabase/migrations/20260924125811_stage2_document_retention_authority.sql')
   await sqlFile('../../../supabase/migrations/20260928141413_stage3_fund_terms_v2.sql')
+  await sqlFile('../../../supabase/migrations/20260928161233_stage3_real_estate_terms_v2.sql')
+  await sqlFile('../../../supabase/tests/stage3_real_estate_v2_acl.sql'); checks++
   eq(await scalar("select has_table_privilege(current_user,'bx1_private.person_principals','REFERENCES')"), false,
     'retention migration leaves MAIN migrator without direct identity-table REFERENCES')
   eq(await scalar("select count(*)::int from pg_auth_members m join pg_roles r on r.oid=m.roleid where r.rolname='bx1_authority_owner' and m.member=(select oid from pg_roles where rolname=current_user) and (m.inherit_option or m.set_option)"), 0,
@@ -155,8 +157,9 @@ try {
     'bx1_portal.read_scoped(jsonb)',
     'bx1_portal.execute_scoped(jsonb,text,uuid,jsonb)',
     'bx1_portal.save_fund_v2_scoped(jsonb,uuid,jsonb)',
+    'bx1_portal.save_real_estate_v2_scoped(jsonb,uuid,jsonb)',
   ]) eq(await scalar("select has_function_privilege('authenticated',$1,'EXECUTE')", [signature]), false,
-    `MAIN retains sealed ${signature} after the v2 fund terms installation`)
+    `MAIN retains sealed ${signature} after both v2 template installations`)
   eq(await scalar('select count(*)::int from bx1_portal.customer_monitoring_cases'), 0,
     'MAIN monitoring definition seeds no customer decision')
   eq(await scalar("select state='NOT_ADMITTED' and policy_version=0 from bx1_private.document_retention_admission where singleton"), true,
@@ -250,6 +253,11 @@ try {
   await denied('missing enrolled MFA cannot use entry', async () => { await actor(1, { aal: 'aal1' }); await scalar('select public.bx1_entry_read()') })
   await denied('legacy portal writer is denied directly', async () => { await actor(2); await scalar("select public.bx1_portal_command('submit_application',$1,'{}')", [key()]) })
   await denied('scoped legacy writer is denied directly', async () => { await actor(2); await scalar("select public.bx1_portal_command_scoped('submit_application',$1,'{}','{\"mode\":\"APPLICANT\"}')", [key()]) })
+  await denied('MAIN cannot create a property v2 package through the scoped command', async () => {
+    await actor(2); await scalar("select public.bx1_portal_command_scoped('create_product',$1,$2::jsonb,$3::jsonb)",
+      [key(), JSON.stringify({ organisation_id: id(100), terms: { asset_type: 'REAL_ESTATE', terms_version: 2 } }),
+        JSON.stringify({ mode: 'ROLE', organisationId: id(100), role: 'OfferingManager' })])
+  })
   await denied('private legacy helper is denied directly', async () => { await actor(2); await scalar("select bx1_portal.execute_command('submit_application',$1,'{}')", [key()]) })
   await denied('entry-only seal cannot be invoked by applicant', async () => { await actor(2); await scalar('select bx1_portal.seal_entry_only_baseline()') })
   await denied('direct application writes are denied', async () => { await actor(2); await db.query("insert into bx1_portal.applications(user_id,persona,status,details) values($1,'INVESTOR','DRAFT','{}')", [id(2)]) })

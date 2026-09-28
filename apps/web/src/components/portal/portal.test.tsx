@@ -1,12 +1,12 @@
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { PORTAL_PATHS, isFundTermsV2, isWealthManagerDetailsV2, productTermsSchema, type PortalApplication, type PortalEntityInvestmentAccount, type PortalInvestmentAccount, type PortalInvestingRepresentativeMandate, type PortalOrganisation, type PortalOrganisationMandate, type PortalPageData, type PortalProduct, type PortalProductEligibility, type PortalSnapshot, type PortalSubscription, type WealthManagerApplicationDetailsV3 } from '@/lib/portal/contracts'
+import { PORTAL_PATHS, isFundTermsV2, isRealEstateTermsV2, isWealthManagerDetailsV2, productTermsSchema, type LegacyProductTerms, type PortalApplication, type PortalEntityInvestmentAccount, type PortalInvestmentAccount, type PortalInvestingRepresentativeMandate, type PortalOrganisation, type PortalOrganisationMandate, type PortalPageData, type PortalProduct, type PortalProductEligibility, type PortalSnapshot, type PortalSubscription, type RealEstateTermsV2, type WealthManagerApplicationDetailsV3 } from '@/lib/portal/contracts'
 import { APPLICANT_CONTEXT, portalScopeHref, type PortalOperatingContext } from '@/lib/portal/operating-context'
 import type { Bx1Role } from '@/lib/supabase/contracts'
 import { PortalScreen, productManagementOrganisations } from './portal-screens'
 import { portalNavigation, PortalShell } from './portal-shell'
-import { fictionalProductTerms } from './product-form'
+import { fictionalProductTerms, upgradeLegacyDraftTerms } from './product-form'
 import { ApplicationReview, InvestmentAccountPanel, IssuerOfferingReview, OfferingPackageEvidence, ProductActions, ProductEligibilityPanel, ProductReview, SubscriptionForm, activeIndividualAccounts, currentInvestorApplication, currentProductEligibility } from './portal-workflows'
 import { postPortalCommand, prepareDurablePortalCommand, reconcilePortalMarker } from './portal-client'
 import { money } from './portal-primitives'
@@ -75,6 +75,10 @@ function product(change: Partial<PortalProduct> = {}): PortalProduct {
   return { id: productId, organisation_id: organisation, created_by: other, revision: 3, status, terms: fictionalProductTerms(), terms_hash: 'ab'.repeat(32), reserved_units: '0', created_at: '2026-09-20T10:00:00Z', reviewer_id: actor, review_notes: null, reviewed_at: '2026-09-20T11:00:00Z', published_at: '2026-09-20T12:00:00Z', review_checks: {},
     offering_package: submitted ? { id: offeringRevisionId, package_number: 1, origin: 'SUBMITTED', terms_hash: 'ab'.repeat(32), document_hashes: { memorandum: 'cd'.repeat(32), risks: 'de'.repeat(32), subscription_terms: 'ef'.repeat(32) }, submitted_at: '2026-09-20T10:00:00Z', issuer_status: status === 'IN_REVIEW' ? 'PENDING' : 'APPROVED', compliance_status: status === 'IN_REVIEW' ? 'PENDING' : 'APPROVED', technical_readiness_status: status === 'PUBLISHED' ? 'VERIFIED' : 'NOT_VERIFIED', publishable: false, subscribable: status === 'PUBLISHED', can_review_issuer: false } : null,
     offering_history: [], ...change }
+}
+function historicalTerms(kind: LegacyProductTerms['asset_type']): LegacyProductTerms {
+  const { real_estate: _property, terms_version: _version, settlement_decimals: _decimals, ...base } = fictionalProductTerms('REAL_ESTATE') as RealEstateTermsV2
+  return { ...base, asset_type: kind, currency: 'ZAR_TEST', unit_price_minor: '10000', cap_units: '10000', minimum_units: '10', property_address: kind === 'FUND' ? '' : base.property_address, property_valuation_minor: kind === 'FUND' ? '0' : '500000000', rental_income_policy: kind === 'FUND' ? '' : 'Fictional rent after disclosed operating expenses and reserves.' }
 }
 function data(value = snapshot()): PortalPageData { return { user: { id: actor, email: 'synthetic@example.invalid' }, snapshot: value } }
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers() })
@@ -257,6 +261,16 @@ describe('onboarding and subscription boundaries', () => {
         expect(terms.fund.distributions.frequency).toBe('QUARTERLY')
         expect(terms.fund.distributions.policy).toContain('reviewed record-date entitlement')
       }
+    } else {
+      expect(isRealEstateTermsV2(terms)).toBe(true)
+      if (isRealEstateTermsV2(terms)) {
+        expect(terms.currency).toBe('TST')
+        expect(terms.unit_price_minor).toBe('100000000')
+        expect(terms.cap_units).toBe('20')
+        expect(terms.property_valuation_minor).toBe('3000000000')
+        expect(terms.real_estate.exits.eligible_transfer_policy).toContain('product continues')
+        expect(terms.real_estate.exits.disposal_liquidation_policy).toContain('liquidation')
+      }
     }
   })
   it.each(['FUND', 'REAL_ESTATE'] as const)('does not claim a financial obligation is created by the new %s subscription template', kind => {
@@ -280,7 +294,7 @@ describe('onboarding and subscription boundaries', () => {
     expect(newHtml).toContain('NAV and dealing')
     expect(newHtml).toContain('Redemption gate')
     expect(newHtml).not.toContain('The fund.nav and fund.dealing policies are the authoritative pricing terms')
-    const old = product({ status: 'IN_REVIEW', terms: { ...fictionalProductTerms('REAL_ESTATE'), asset_type: 'FUND', property_address: '', property_valuation_minor: '0', rental_income_policy: '' } })
+    const old = product({ status: 'IN_REVIEW', terms: historicalTerms('FUND') })
     issuer.products = [old]
     const oldHtml = renderToStaticMarkup(<PortalScreen data={data(issuer)} view="/portal/products/detail" id={productId} operatingContext={operating('IssuerFundManager')} />)
     expect(oldHtml).toContain('Historical fund terms v1')
@@ -289,11 +303,21 @@ describe('onboarding and subscription boundaries', () => {
     const property = product({ status: 'DRAFT', terms: fictionalProductTerms('REAL_ESTATE') })
     issuer.products = [property]
     const propertyHtml = renderToStaticMarkup(<PortalScreen data={data(issuer)} view="/portal/products/detail" id={productId} operatingContext={operating('IssuerFundManager')} />)
-    expect(propertyHtml).toContain('Preliminary property terms v1')
-    expect(propertyHtml).not.toContain('Historical property snapshot v1')
+    expect(propertyHtml).toContain('Real-estate policy v2')
+    expect(propertyHtml).toContain('100.000000 TST')
+    expect(propertyHtml).toContain('3,000.000000 TST')
+    expect(propertyHtml).toContain('separate from offering cap')
+    expect(propertyHtml).toContain('Eligible interest transfer; product continues')
+    expect(propertyHtml).toContain('Property disposal and liquidation; product closes')
+    expect(propertyHtml).toContain('do not prove legal title')
+    issuer.products = [product({ status: 'IN_REVIEW', terms: historicalTerms('REAL_ESTATE') })]
+    const oldPropertyHtml = renderToStaticMarkup(<PortalScreen data={data(issuer)} view="/portal/products/detail" id={productId} operatingContext={operating('IssuerFundManager')} />)
+    expect(oldPropertyHtml).toContain('Preliminary property terms v1')
+    expect(oldPropertyHtml).toContain('Historical property terms')
+    expect(oldPropertyHtml).toContain('not reinterpreted as TST')
   })
   it('makes old fund-draft denomination migration an explicit manager action', () => {
-    const oldTerms = { ...fictionalProductTerms('REAL_ESTATE'), asset_type: 'FUND' as const, property_address: '', property_valuation_minor: '0', rental_income_policy: '' }
+    const oldTerms = historicalTerms('FUND')
     const item = product({ status: 'DRAFT', terms: oldTerms })
     const manager = snapshot(); manager.operating_context = operating('OfferingManager'); manager.organisations = [operatorOrganisation()]; manager.products = [item]
     const html = renderToStaticMarkup(<PortalScreen data={data(manager)} view="/portal/products/detail" id={productId} operatingContext={operating('OfferingManager')} />)
@@ -304,6 +328,32 @@ describe('onboarding and subscription boundaries', () => {
     expect(html).toContain('Save revised draft')
     expect(html).toMatch(/disabled=""[^>]*>Save revised draft/)
   })
+  it('requires an explicit property-draft upgrade and keeps old cents off new TST economics', () => {
+    const item = product({ status: 'DRAFT', terms: historicalTerms('REAL_ESTATE') })
+    const manager = snapshot(); manager.operating_context = operating('OfferingManager'); manager.organisations = [operatorOrganisation()]; manager.products = [item]
+    const html = renderToStaticMarkup(<PortalScreen data={data(manager)} view="/portal/products/detail" id={productId} operatingContext={operating('OfferingManager')} />)
+    expect(html).toContain('Historical property draft needs an explicit terms upgrade')
+    expect(html).toContain('Upgrade this property draft to v2 TST terms')
+    expect(html).toContain('Open the draft editor and upgrade to the v2 TST property policy.')
+    expect(html).not.toContain('Submit immutable offering package</button>')
+    expect(html).toMatch(/disabled=""[^>]*>Save revised draft/)
+  })
+  it.each(['FUND', 'REAL_ESTATE'] as const)('does not copy hidden v1 economics or disclosures into the new %s TST draft', kind => {
+    const original = historicalTerms(kind)
+    const contaminated = {
+      ...original,
+      name: 'LEGACY 99.99 yield product', summary: 'A historical 99.99 percent return promise that must not survive draft upgrade.',
+      issuer_name: 'LEGACY-ISSUER-99.99', property_address: 'Legacy 99.99 property value example',
+      documents: { ...original.documents, memorandum: `${original.documents.memorandum} An old 99.99 return was promised.`, risks: `${original.documents.risks} The old minimum is 99.99.`, subscription_terms: `${original.documents.subscription_terms} Old price 99.99.` },
+    } satisfies LegacyProductTerms
+    const before = JSON.stringify(contaminated)
+    const upgraded = upgradeLegacyDraftTerms(contaminated)
+    expect(upgraded).toEqual(fictionalProductTerms(kind))
+    expect(JSON.stringify(upgraded)).not.toContain('99.99')
+    expect(JSON.stringify(contaminated)).toBe(before)
+    expect(upgraded.currency).toBe('TST')
+    expect(productTermsSchema.safeParse(upgraded).success).toBe(true)
+  })
   it('blocks an uncorrected old denomination inside a nested v2 fund policy', () => {
     const sample = fictionalProductTerms('FUND')
     if (!isFundTermsV2(sample)) throw new Error('Expected a v2 fund test fixture')
@@ -311,6 +361,15 @@ describe('onboarding and subscription boundaries', () => {
     const manager = snapshot(); manager.operating_context = operating('OfferingManager'); manager.organisations = [operatorOrganisation()]; manager.products = [item]
     const html = renderToStaticMarkup(<PortalScreen data={data(manager)} view="/portal/products/detail" id={productId} operatingContext={operating('OfferingManager')} />)
     expect(html).toContain('This v2 fund still contains ZAR_TEST wording')
+    expect(html).toMatch(/disabled=""[^>]*>Save revised draft/)
+  })
+  it('blocks an old denomination inside a nested v2 property policy', () => {
+    const sample = fictionalProductTerms('REAL_ESTATE')
+    if (!isRealEstateTermsV2(sample)) throw new Error('Expected a v2 property test fixture')
+    const item = product({ status: 'DRAFT', terms: { ...sample, real_estate: { ...sample.real_estate, spv: { ...sample.real_estate.spv, interest_rights: 'An invalid ZAR_TEST reference remains in this property right.' } } } })
+    const manager = snapshot(); manager.operating_context = operating('OfferingManager'); manager.organisations = [operatorOrganisation()]; manager.products = [item]
+    const html = renderToStaticMarkup(<PortalScreen data={data(manager)} view="/portal/products/detail" id={productId} operatingContext={operating('OfferingManager')} />)
+    expect(html).toContain('This v2 property still contains ZAR_TEST wording')
     expect(html).toMatch(/disabled=""[^>]*>Save revised draft/)
   })
 })

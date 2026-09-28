@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import type { PlatformEnvironment } from '@/lib/platform-release'
-import { isFundTermsV2, isOfferingSubscribable, isWealthManagerDetailsV2, subscriptionQuote, type LegacyApplicationDetails, type PortalApplication, type PortalEntityInvestmentAccount, type PortalInvestmentAccount, type PortalInvestingRepresentativeMandate, type PortalProduct, type PortalProductEligibility, type PortalSnapshot } from '@/lib/portal/contracts'
+import { isFundTermsV2, isRealEstateTermsV2, isOfferingSubscribable, isWealthManagerDetailsV2, subscriptionQuote, type LegacyApplicationDetails, type PortalApplication, type PortalEntityInvestmentAccount, type PortalInvestmentAccount, type PortalInvestingRepresentativeMandate, type PortalProduct, type PortalProductEligibility, type PortalSnapshot } from '@/lib/portal/contracts'
 import { portalScopeHref, type PortalOperatingContext } from '@/lib/portal/operating-context'
 import { CommandFeedback, usePortalCommand } from './portal-client'
 import { ApplicationDetailsSummary, ApplicationDocumentHistory, PrivateDocument } from './onboarding-form'
@@ -214,18 +214,20 @@ export function OfferingPackageEvidence({ product, showIssuerRationale = false }
 export function ProductFacts({ product }: { product: PortalProduct }) {
   const terms = product.terms
   const legacySnapshot = product.offering_package?.origin === 'LEGACY_PRODUCT_SNAPSHOT' || product.offering_package?.origin === 'LEGACY_ORDER_SNAPSHOT'
-  const versionLabel = isFundTermsV2(terms) ? 'Fund policy v2' : terms.asset_type === 'FUND' ? 'Historical fund terms v1' : legacySnapshot ? 'Historical property snapshot v1' : 'Preliminary property terms v1'
-  const denominationLabel = isFundTermsV2(terms) ? 'Valueless TST · 6 decimal places' : terms.asset_type === 'FUND' ? 'Historical ZAR_TEST · 2 decimal places' : 'Synthetic ZAR_TEST · 2 decimal places'
+  const versionLabel = isFundTermsV2(terms) ? 'Fund policy v2' : isRealEstateTermsV2(terms) ? 'Real-estate policy v2' : terms.asset_type === 'FUND' ? 'Historical fund terms v1' : legacySnapshot ? 'Historical property snapshot v1' : 'Preliminary property terms v1'
+  const denominationLabel = isFundTermsV2(terms) || isRealEstateTermsV2(terms) ? 'Valueless TST · 6 decimal places' : terms.asset_type === 'FUND' ? 'Historical ZAR_TEST · 2 decimal places' : 'Historical ZAR_TEST · 2 decimal places'
   const description = legacySnapshot ? 'Preserved historical package snapshot' : product.offering_package?.origin === 'SUBMITTED' ? `Current submitted package ${product.offering_package.package_number}` : product.status === 'DRAFT' ? 'Current editable draft; not submitted' : 'Saved terms without a current submitted package'
-  return <Panel title="Offering terms" description={description}><DetailList rows={[{ label: 'Asset type', value: terms.asset_type === 'FUND' ? 'Investment fund' : 'Real-estate investment' }, { label: 'Terms version', value: versionLabel }, { label: 'Issuer name (unverified)', value: terms.issuer_name }, { label: 'Share class', value: terms.share_class }, { label: 'Settlement denomination', value: denominationLabel }, { label: 'Price per whole unit', value: money(terms.unit_price_minor, terms.currency) }, { label: 'Minimum subscription', value: `${terms.minimum_units} units` }, { label: 'Offering capacity', value: `${terms.cap_units} units` }, { label: 'Reserved subscriptions', value: `${product.reserved_units} units` }, { label: 'Eligible countries', value: terms.eligible_countries.join(', ') }, { label: 'Investor types', value: terms.eligible_investor_types.map(value => value === 'ENTITY' ? 'Entity' : 'Individual').join(', ') }, { label: 'Workflow status', value: product.status === 'PUBLISHED' && !isOfferingSubscribable(product) ? 'Historical PUBLISHED state; not open for new subscriptions' : <StatusBadge status={product.status} /> }, { label: 'Workflow revision', value: product.revision }]} /></Panel>
+  return <Panel title="Offering terms" description={description}><DetailList rows={[{ label: 'Asset type', value: terms.asset_type === 'FUND' ? 'Investment fund' : 'Real-estate investment' }, { label: 'Terms version', value: versionLabel }, { label: 'Issuer name (unverified)', value: terms.issuer_name }, { label: 'Share class', value: terms.share_class }, { label: 'Settlement denomination', value: denominationLabel }, { label: 'Price per whole unit', value: money(terms.unit_price_minor, terms.currency) }, { label: 'Minimum subscription', value: `${terms.minimum_units} units` }, { label: 'Offering capacity', value: `${terms.cap_units} units` }, ...(terms.asset_type === 'REAL_ESTATE' ? [{ label: 'Illustrative property valuation (separate from offering cap)', value: money(terms.property_valuation_minor, terms.currency) }] : []), { label: 'Reserved subscriptions', value: `${product.reserved_units} units` }, { label: 'Eligible countries', value: terms.eligible_countries.join(', ') }, { label: 'Investor types', value: terms.eligible_investor_types.map(value => value === 'ENTITY' ? 'Entity' : 'Individual').join(', ') }, { label: 'Workflow status', value: product.status === 'PUBLISHED' && !isOfferingSubscribable(product) ? 'Historical PUBLISHED state; not open for new subscriptions' : <StatusBadge status={product.status} /> }, { label: 'Workflow revision', value: product.revision }]} /></Panel>
 }
 
 export function ProductNarrative({ product }: { product: PortalProduct }) {
   const terms = product.terms
   const fund = isFundTermsV2(terms) ? terms.fund : null
-  return <Panel title={fund ? 'Fund mandate and operating terms' : 'Investment mandate'}>
+  const property = isRealEstateTermsV2(terms) ? terms.real_estate : null
+  return <Panel title={fund ? 'Fund mandate and operating terms' : property ? 'Property interest and operating terms' : 'Investment mandate'}>
     {fund ? <Notice title="Disclosed policy, not completed servicing">These terms describe the fictional fund package submitted for review. They do not prove a calculated NAV, available liquidity, a completed distribution or an executable redemption.</Notice> : null}
-    {!fund ? <><h3>Strategy</h3><p className={styles.copy}>{terms.strategy}</p>
+    {property ? <Notice title="Disclosed property policy, not title or cash evidence">The references and terms below are proposed for review. They do not prove legal title, property control, an independent valuation, rent received, consent, payment or an executable exit.</Notice> : null}
+    {!fund && !property ? <><h3>Strategy</h3><p className={styles.copy}>{terms.strategy}</p>
       <hr className={styles.divider} /><h3 className={styles.sectionGap}>Pricing basis</h3><p className={styles.copy}>{terms.pricing_basis}</p>
       <h3 className={styles.sectionGap}>Fees and expenses</h3><p className={styles.copy}>{terms.fees}</p>
       <h3 className={styles.sectionGap}>Liquidity and exit</h3><p className={styles.copy}>{terms.redemption_terms}</p></> : null}
@@ -245,14 +247,36 @@ export function ProductNarrative({ product }: { product: PortalProduct }) {
         { label: 'Redemption price basis', value: fund.redemption.price_basis }, { label: 'Redemption conditions', value: fund.redemption.conditions },
       ]} /></div>
     </div> : terms.asset_type === 'FUND' ? <div className={styles.sectionGap}><Notice title="Historical fund terms" tone="warning">This preserved ZAR_TEST package predates the structured fund policy. Its earlier amount and document hashes are not reinterpreted as TST.</Notice></div> : null}
-    {terms.asset_type === 'REAL_ESTATE' ? <><h3 className={styles.sectionGap}>Property and rental income</h3><p className={styles.copy}>{terms.property_address}</p><p className={styles.muted}>Fictional valuation: {money(terms.property_valuation_minor, terms.currency)}</p><p className={styles.copy}>{terms.rental_income_policy}</p></> : null}
+    {property ? <div className={styles.stack}>
+      <div><h3 className={styles.sectionGap}>SPV, property and legal interest</h3><DetailList rows={[
+        { label: 'Fictional SPV', value: property.spv.legal_name }, { label: 'Registration reference', value: property.spv.registration_reference }, { label: 'Jurisdiction', value: property.spv.jurisdiction },
+        { label: 'Interest rights', value: property.spv.interest_rights }, { label: 'Property', value: terms.property_address },
+        { label: 'Title evidence reference (unverified)', value: property.property.title_evidence_reference }, { label: 'Control evidence reference (unverified)', value: property.property.control_evidence_reference },
+      ]} /></div>
+      <div><h3>Valuation and financing</h3><DetailList rows={[
+        { label: 'Illustrative property valuation; not offering cap', value: money(terms.property_valuation_minor, terms.currency) },
+        { label: 'Valuation method', value: property.property.valuation_method }, { label: 'Valuation frequency', value: property.property.valuation_frequency.toLowerCase() },
+        { label: 'Correction policy', value: property.property.correction_policy }, { label: 'Debt policy', value: property.financing.debt_policy },
+        { label: 'Lender consents', value: property.financing.lender_consent_policy },
+      ]} /></div>
+      <div><h3>Rent, expenses, reserves and distributions</h3><DetailList rows={[
+        { label: 'Rent', value: property.cashflow.rent_policy }, { label: 'Expenses and taxes', value: property.cashflow.expense_policy },
+        { label: 'Reserves', value: property.cashflow.reserve_policy }, { label: 'Distribution', value: property.cashflow.distribution_policy },
+      ]} /></div>
+      <div><h3>Consents and exits</h3><DetailList rows={[
+        { label: 'Consent rights', value: property.governance.consent_rights }, { label: 'Voting', value: property.governance.voting_policy },
+        { label: 'Eligible interest transfer; product continues', value: property.exits.eligible_transfer_policy },
+        { label: 'Property disposal and liquidation; product closes', value: property.exits.disposal_liquidation_policy },
+      ]} /></div>
+    </div> : terms.asset_type === 'REAL_ESTATE' ? <><div className={styles.sectionGap}><Notice title="Historical property terms" tone="warning">This preserved ZAR_TEST package predates the structured SPV, property and exit policy. Its old price and valuation are not reinterpreted as TST.</Notice></div><h3 className={styles.sectionGap}>Property and rental income</h3><p className={styles.copy}>{terms.property_address}</p><p className={styles.muted}>Historical fictional valuation: {money(terms.property_valuation_minor, terms.currency)}</p><p className={styles.copy}>{terms.rental_income_policy}</p></> : null}
   </Panel>
 }
 
 export function ProductActions({ product, onSaved, availableCommands }: { product: PortalProduct; onSaved: (snapshot: PortalSnapshot) => void; availableCommands?: readonly string[] }) {
   const command = usePortalCommand(onSaved)
   const legacyFundDraft = product.terms.asset_type === 'FUND' && !isFundTermsV2(product.terms) && ['DRAFT', 'CHANGES_REQUIRED'].includes(product.status)
-  const canSubmit = !legacyFundDraft && ['DRAFT', 'CHANGES_REQUIRED'].includes(product.status) && (availableCommands === undefined || availableCommands.includes('submit_product'))
+  const legacyPropertyDraft = product.terms.asset_type === 'REAL_ESTATE' && !isRealEstateTermsV2(product.terms) && ['DRAFT', 'CHANGES_REQUIRED'].includes(product.status)
+  const canSubmit = !legacyFundDraft && !legacyPropertyDraft && ['DRAFT', 'CHANGES_REQUIRED'].includes(product.status) && (availableCommands === undefined || availableCommands.includes('submit_product'))
   const canEditLegacyFund = availableCommands === undefined || availableCommands.includes('save_product')
   const pkg = product.offering_package
   const canPublish = product.status === 'APPROVED' && pkg?.origin === 'SUBMITTED' && pkg.terms_hash === product.terms_hash && pkg.issuer_status === 'APPROVED' && pkg.compliance_status === 'APPROVED' && pkg.technical_readiness_status === 'VERIFIED' && pkg.publishable === true && product.allowed_actions?.includes('publish_product') === true && (availableCommands === undefined || availableCommands.includes('publish_product'))
@@ -263,7 +287,7 @@ export function ProductActions({ product, onSaved, availableCommands }: { produc
       <li><strong>Compliance decides separately</strong><p>An independent Compliance Officer records checks against the same reference.</p></li>
       <li><strong>Technical readiness and opening</strong><p>Publication needs verified deployment evidence. Orders remain unavailable until the backend opens this exact package.</p></li>
     </ol>
-    <div className={styles.sectionGap}>{legacyFundDraft ? <Notice title="Fund terms upgrade required" tone="warning">The historical ZAR_TEST draft cannot be submitted as a new fund package. {canEditLegacyFund ? <a href="#fund-draft-editor" className={styles.textLink}>Open the draft editor and upgrade to the v2 TST fund policy.</a> : 'An authorised Offering Manager must upgrade and save the draft before submission.'}</Notice> : canSubmit ? <button className={styles.button} disabled={command.busy || command.unknown} onClick={() => void command.submit('submit_product', { product_id: product.id, expected_revision: product.revision })}>Submit immutable offering package</button> : canPublish ? <button className={styles.button} disabled={command.busy || command.unknown} onClick={() => void command.submit('publish_product', { product_id: product.id, expected_revision: product.revision })}>Open approved offering</button> : product.status === 'PUBLISHED' && !isOfferingSubscribable(product) ? <Notice title="Historical opening is not current" tone="warning">This row retains its recorded PUBLISHED status, but the backend has not verified its present package and readiness for new subscriptions.</Notice> : <StatusBadge status={product.status} />}</div>
+    <div className={styles.sectionGap}>{legacyFundDraft || legacyPropertyDraft ? <Notice title={legacyFundDraft ? 'Fund terms upgrade required' : 'Property terms upgrade required'} tone="warning">The historical ZAR_TEST draft cannot be submitted as a new package. {canEditLegacyFund ? <a href={legacyFundDraft ? '#fund-draft-editor' : '#property-draft-editor'} className={styles.textLink}>Open the draft editor and upgrade to the v2 TST {legacyFundDraft ? 'fund' : 'property'} policy.</a> : 'An authorised Offering Manager must upgrade and save the draft before submission.'}</Notice> : canSubmit ? <button className={styles.button} disabled={command.busy || command.unknown} onClick={() => void command.submit('submit_product', { product_id: product.id, expected_revision: product.revision })}>Submit immutable offering package</button> : canPublish ? <button className={styles.button} disabled={command.busy || command.unknown} onClick={() => void command.submit('publish_product', { product_id: product.id, expected_revision: product.revision })}>Open approved offering</button> : product.status === 'PUBLISHED' && !isOfferingSubscribable(product) ? <Notice title="Historical opening is not current" tone="warning">This row retains its recorded PUBLISHED status, but the backend has not verified its present package and readiness for new subscriptions.</Notice> : <StatusBadge status={product.status} />}</div>
     {product.status === 'APPROVED' && !canPublish ? <div className={styles.sectionGap}><Notice title="Opening is not available" tone="warning">The backend has not confirmed a current issuer decision, independent Compliance decision and technical-readiness evidence for this package. An APPROVED workflow status alone is not permission to publish.</Notice></div> : null}
   </Panel>
 }
@@ -318,7 +342,7 @@ export function IssuerOfferingReview({ product, snapshot, onSaved }: { product: 
     && product.status === 'IN_REVIEW' && pkg.issuer_status === 'PENDING' && pkg.terms_hash === product.terms_hash && product.created_by !== snapshot.actor.id
   return <Panel title="Appointed issuer decision" description="Issuer authority is separate from the manager who prepared this package and from Compliance review.">
     <CommandFeedback command={command} />
-    <Notice title="Preliminary TEST terms only">The present fund and property fields are not a complete legal rights schedule or e-signature package. A manual test issuer decision records review of this draft evidence; it is not legal sign-off, verified deployment or permission to open subscriptions.</Notice>
+    <Notice title="TEST package review only">The typed fund or property policies are proposed package disclosures, not a complete legal rights schedule or e-signature package. Property title and control evidence are not independently checked here. A manual test issuer decision is not legal sign-off, verified deployment or permission to open subscriptions.</Notice>
     {permitted ? <form className={styles.form} onSubmit={event => { event.preventDefault(); void command.submit('review_offering_issuer', { product_id: product.id, offering_revision_id: pkg.id, expected_revision: product.revision, terms_hash: pkg.terms_hash, decision, notes, checks }) }}>
       <fieldset className={styles.fieldset} disabled={command.busy || command.unknown}><legend>Issuer evidence checks</legend>
         {([{ key: 'issuer_authority', label: 'Appointed issuer authority and product mandate verified for this test' }, { key: 'terms', label: 'Exact preliminary package economics and exit terms reviewed' }, { key: 'rights', label: 'Rights and obligations represented in these preliminary terms reviewed' }] as const).map(item => <label key={item.key} className={styles.check}><input type="checkbox" checked={checks[item.key]} onChange={event => setChecks(current => ({ ...current, [item.key]: event.target.checked }))} />{item.label}</label>)}

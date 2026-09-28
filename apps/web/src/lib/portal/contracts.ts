@@ -122,7 +122,7 @@ type ProductTermsBase = {
 /** Historical denomination and package shape remain readable without reinterpretation. */
 export type LegacyProductTerms = ProductTermsBase & {
   asset_type: 'FUND' | 'REAL_ESTATE'; currency: 'ZAR_TEST';
-  terms_version?: never; settlement_decimals?: never; fund?: never;
+  terms_version?: never; settlement_decimals?: never; fund?: never; real_estate?: never;
 }
 export type FundTermsV2 = ProductTermsBase & {
   asset_type: 'FUND'; currency: 'TST'; terms_version: 2; settlement_decimals: 6;
@@ -136,9 +136,28 @@ export type FundTermsV2 = ProductTermsBase & {
     redemption: { price_basis: 'NAV'; conditions: string };
   };
 }
-export type ProductTerms = LegacyProductTerms | FundTermsV2
+export type RealEstateTermsV2 = ProductTermsBase & {
+  asset_type: 'REAL_ESTATE'; currency: 'TST'; terms_version: 2; settlement_decimals: 6;
+  real_estate: {
+    spv: { legal_name: string; registration_reference: string; jurisdiction: string; interest_rights: string };
+    property: { title_evidence_reference: string; control_evidence_reference: string; valuation_method: string; valuation_frequency: 'QUARTERLY' | 'ANNUALLY'; correction_policy: string };
+    financing: { debt_policy: string; lender_consent_policy: string };
+    cashflow: { rent_policy: string; expense_policy: string; reserve_policy: string; distribution_policy: string };
+    governance: { consent_rights: string; voting_policy: string };
+    exits: { eligible_transfer_policy: string; disposal_liquidation_policy: string };
+  };
+}
+export type ProductTerms = LegacyProductTerms | FundTermsV2 | RealEstateTermsV2
 /** v2 keeps the legacy keys for package compatibility; nested fund policies are authoritative. */
 export const FUND_V2_CANONICAL_REFERENCES = fundV2LegacyCrossrefs
+/** Property v2 retains the old package keys solely as fixed pointers to typed policies. */
+export const REAL_ESTATE_V2_CANONICAL_REFERENCES = {
+  strategy: 'The real_estate.spv and real_estate.property policies define the property interest and control for this package.',
+  pricing_basis: 'The real_estate.property valuation policy is the authoritative pricing basis for this package.',
+  fees: 'The real_estate.cashflow expense and reserve policies govern charges for this package.',
+  redemption_terms: 'The real_estate.exits policies distinguish eligible interest transfer from disposal and liquidation for this package.',
+  rental_income_policy: 'The real_estate.cashflow rent and distribution policies govern income for this package.',
+} as const
 export function containsLegacyDenomination(value: unknown): boolean {
   if (typeof value === 'string') return /ZAR_TEST/i.test(value)
   if (Array.isArray(value)) return value.some(containsLegacyDenomination)
@@ -147,6 +166,9 @@ export function containsLegacyDenomination(value: unknown): boolean {
 }
 export function isFundTermsV2(terms: ProductTerms): terms is FundTermsV2 {
   return terms.asset_type === 'FUND' && terms.terms_version === 2 && terms.currency === 'TST'
+}
+export function isRealEstateTermsV2(terms: ProductTerms): terms is RealEstateTermsV2 {
+  return terms.asset_type === 'REAL_ESTATE' && terms.terms_version === 2 && terms.currency === 'TST'
 }
 export type PortalOfferingPackage = {
   id: string; package_number: number; origin: 'SUBMITTED' | 'LEGACY_PRODUCT_SNAPSHOT' | 'LEGACY_ORDER_SNAPSHOT';
@@ -281,8 +303,19 @@ const fundTermsV2Schema = productTermsBaseSchema.extend({
     redemption: z.object({ price_basis: z.literal('NAV'), conditions: text(20, 2400) }).strict(),
   }).strict(),
 }).strict()
-export const productTermsSchema = z.union([legacyProductTermsSchema, fundTermsV2Schema]).superRefine((v, ctx) => {
-  if (/^[1-9][0-9]{0,19}$/.test(v.minimum_units) && /^[1-9][0-9]{0,19}$/.test(v.cap_units) && BigInt(v.minimum_units) > BigInt(v.cap_units)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['minimum_units'], message: 'Minimum subscription must fit within the fund capacity.' })
+const realEstateTermsV2Schema = productTermsBaseSchema.extend({
+  asset_type: z.literal('REAL_ESTATE'), currency: z.literal('TST'), terms_version: z.literal(2), settlement_decimals: z.literal(6),
+  real_estate: z.object({
+    spv: z.object({ legal_name: text(3, 160), registration_reference: text(3, 100), jurisdiction: country, interest_rights: text(20, 2400) }).strict(),
+    property: z.object({ title_evidence_reference: text(10, 400), control_evidence_reference: text(10, 400), valuation_method: text(20, 2000), valuation_frequency: z.enum(['QUARTERLY', 'ANNUALLY']), correction_policy: text(20, 2000) }).strict(),
+    financing: z.object({ debt_policy: text(20, 2000), lender_consent_policy: text(20, 2000) }).strict(),
+    cashflow: z.object({ rent_policy: text(20, 2000), expense_policy: text(20, 2000), reserve_policy: text(20, 2000), distribution_policy: text(20, 2000) }).strict(),
+    governance: z.object({ consent_rights: text(20, 2000), voting_policy: text(20, 2000) }).strict(),
+    exits: z.object({ eligible_transfer_policy: text(20, 2400), disposal_liquidation_policy: text(20, 2400) }).strict(),
+  }).strict(),
+}).strict()
+export const productTermsSchema = z.union([legacyProductTermsSchema, fundTermsV2Schema, realEstateTermsV2Schema]).superRefine((v, ctx) => {
+  if (/^[1-9][0-9]{0,19}$/.test(v.minimum_units) && /^[1-9][0-9]{0,19}$/.test(v.cap_units) && BigInt(v.minimum_units) > BigInt(v.cap_units)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['minimum_units'], message: 'Minimum subscription must fit within the offering capacity.' })
   if (v.asset_type === 'REAL_ESTATE' && (v.property_address.length < 10 || !/^[1-9][0-9]{0,19}$/.test(v.property_valuation_minor) || v.rental_income_policy.length < 20)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['property_address'], message: 'Provide property, valuation and rental-income terms.' })
   if (v.asset_type === 'FUND' && v.currency === 'TST') {
     for (const field of ['strategy', 'pricing_basis', 'fees', 'redemption_terms'] as const) {
@@ -290,10 +323,17 @@ export const productTermsSchema = z.union([legacyProductTermsSchema, fundTermsV2
     }
     if (containsLegacyDenomination(v)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['fund'], message: 'A v2 fund package cannot retain ZAR_TEST references.' })
   }
+  if (v.asset_type === 'REAL_ESTATE' && v.currency === 'TST') {
+    for (const field of ['strategy', 'pricing_basis', 'fees', 'redemption_terms', 'rental_income_policy'] as const) {
+      if (v[field] !== REAL_ESTATE_V2_CANONICAL_REFERENCES[field]) ctx.addIssue({ code: z.ZodIssueCode.custom, path: [field], message: 'The authoritative property policy reference must not be edited.' })
+    }
+    if (containsLegacyDenomination(v)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['real_estate'], message: 'A v2 property package cannot retain ZAR_TEST references.' })
+    if (v.real_estate.exits.eligible_transfer_policy === v.real_estate.exits.disposal_liquidation_policy) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['real_estate', 'exits'], message: 'Interest transfer and property liquidation must describe different outcomes.' })
+  }
 })
-/** Historical v1 fund records can be displayed, but new fund writes need the v2 package. */
-export const writableProductTermsSchema = productTermsSchema.refine(v => v.asset_type !== 'FUND' || isFundTermsV2(v as ProductTerms), {
-  message: 'Upgrade the fund draft to six-decimal TST terms before saving or submitting.',
+/** Historical v1 records remain readable; all new product writes use typed TST packages. */
+export const writableProductTermsSchema = productTermsSchema.refine(v => v.asset_type === 'FUND' ? isFundTermsV2(v as ProductTerms) : isRealEstateTermsV2(v as ProductTerms), {
+  message: 'Upgrade this historical draft to a typed six-decimal TST package before saving or submitting.',
 })
 export const reviewChecks = z.object({ identity: z.boolean(), ownership: z.boolean(), screening: z.boolean(), suitability: z.boolean() }).strict()
 export const offeringChecks = z.object({ issuer: z.boolean(), terms: z.boolean(), disclosures: z.boolean(), eligibility: z.boolean() }).strict()
