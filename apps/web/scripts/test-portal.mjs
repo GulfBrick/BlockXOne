@@ -1642,9 +1642,9 @@ try {
   // require the final authority recheck to reject the whole response.
   await db.query('begin'); begun = true
   await actor(1)
+  await admin()
   eq(await scalar('select bx1_portal.scoped_operator($1::jsonb,$2::uuid)',
     [JSON.stringify(manager), orgId]), true, 'manager is authorised before the read race')
-  await admin()
   await db.query('lock table bx1_portal.events in access exclusive mode')
   const interruptedRead = (async () => {
     await proofClients[0].query('begin')
