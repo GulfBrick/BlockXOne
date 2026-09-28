@@ -219,7 +219,7 @@ describe('onboarding and subscription boundaries', () => {
     expect(subscription).not.toContain('Accept terms and reserve units</button>')
   })
   it('shows a reasoned fresh-review action only to the manager with an approved package', () => {
-    const approved = product({ status: 'APPROVED' })
+    const approved = product({ status: 'APPROVED', allowed_actions: ['reopen_offering_review'] })
     const manager = renderToStaticMarkup(<ProductActions product={approved} onSaved={vi.fn()}
       availableCommands={['reopen_offering_review']} />)
     expect(manager).toContain('Reopen this package for independent review')
@@ -228,6 +228,9 @@ describe('onboarding and subscription boundaries', () => {
     const unscoped = renderToStaticMarkup(<ProductActions product={approved} onSaved={vi.fn()}
       availableCommands={[]} />)
     expect(unscoped).not.toContain('Create new review revision')
+    const noProductGrant = renderToStaticMarkup(<ProductActions product={product({ status: 'APPROVED' })}
+      onSaved={vi.fn()} availableCommands={['reopen_offering_review']} />)
+    expect(noProductGrant).not.toContain('Create new review revision')
     const draft = renderToStaticMarkup(<ProductActions product={product({ status: 'DRAFT' })}
       onSaved={vi.fn()} availableCommands={['reopen_offering_review']} />)
     expect(draft).not.toContain('Create new review revision')

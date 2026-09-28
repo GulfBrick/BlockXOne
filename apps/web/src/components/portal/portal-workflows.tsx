@@ -281,7 +281,9 @@ export function ProductActions({ product, onSaved, availableCommands }: { produc
   const canEditLegacyFund = availableCommands === undefined || availableCommands.includes('save_product')
   const pkg = product.offering_package
   const canPublish = product.status === 'APPROVED' && pkg?.origin === 'SUBMITTED' && pkg.terms_hash === product.terms_hash && pkg.issuer_status === 'APPROVED' && pkg.compliance_status === 'APPROVED' && pkg.technical_readiness_status === 'VERIFIED' && pkg.publishable === true && product.allowed_actions?.includes('publish_product') === true && (availableCommands === undefined || availableCommands.includes('publish_product'))
-  const canReopen = product.status === 'APPROVED' && availableCommands?.includes('reopen_offering_review') === true
+  const canReopen = product.status === 'APPROVED'
+    && availableCommands?.includes('reopen_offering_review') === true
+    && product.allowed_actions?.includes('reopen_offering_review') === true
   return <Panel title="Offering hand-offs" description="Each action uses a server-checked organisation, actor and immutable package."><CommandFeedback command={command} />{product.review_notes ? <Notice title="Compliance notes" tone="warning">{product.review_notes}</Notice> : null}
     <ol className={`${styles.timeline} ${styles.sectionGap}`}>
       <li><strong>Manager submits the package</strong><p>Submission fixes the terms and in-form document digests under one package reference.</p></li>
