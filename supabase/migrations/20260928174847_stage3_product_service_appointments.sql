@@ -198,6 +198,8 @@ begin
         and a.requested_until<=pg_catalog.clock_timestamp() then 'OFFERING_MANAGER'
       when a.status='SUBMITTED' then 'COMPLIANCE'
       when a.status='APPROVED' then 'SUPER_ADMIN'
+      when a.status='APPLIED' and bx1_portal.product_appointment_effective(a.id) is not true
+        then 'SUPER_ADMIN'
       when a.status in ('CHANGES_REQUIRED','REJECTED') then 'OFFERING_MANAGER'
       else 'NONE' end,
     'can_review',is_reviewer and a.status='SUBMITTED'
@@ -424,13 +426,20 @@ begin
   if new.actor_id is distinct from auth.uid() or target_product is null
     or target_role is null then
     raise exception 'offering_product_appointment_required' using errcode='42501'; end if;
+  -- BEFORE INSERT triggers run by name. The file-review trigger can run
+  -- after this one, and it takes the product FOR UPDATE. Take that lock first
+  -- here as well: appointment revoke/review/apply all use product -> appointment.
+  -- Otherwise a privileged direct insert can hold the appointment FOR SHARE
+  -- while waiting for the product, deadlocking a concurrent revocation.
+  select * into p from bx1_portal.products where id=target_product for update;
+  if p.id is null then
+    raise exception 'offering_product_appointment_required' using errcode='42501'; end if;
   select * into candidate from bx1_portal.product_service_appointments a
     where a.product_id=target_product and a.role=target_role
       and a.appointee_user_id=new.actor_id and a.status='APPLIED'
     order by a.id limit 1 for share;
   if candidate.id is null then
     raise exception 'offering_product_appointment_required' using errcode='42501'; end if;
-  select * into p from bx1_portal.products where id=target_product;
   select * into o from bx1_portal.organisations where id=p.organisation_id;
   -- This DB trigger also protects privileged internal writers. The canonical
   -- command path already holds the product lock; pin every trusted human who

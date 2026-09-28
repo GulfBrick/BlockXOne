@@ -158,7 +158,7 @@ async function scopedPublishedProduct(orgId, asset, name, cap = '10') {
   return (await scopedCommand(1, roleContext('IssuerFundManager'), 'publish_product', { product_id: p.id, expected_revision: p.revision })).products.find(value => value.id === p.id)
 }
 async function waitForBlocked(pids) {
-  const deadline = Date.now() + 5000
+  const deadline = Date.now() + 10000
   while (Date.now() < deadline) {
     const blocked = await scalar('select count(*)::int from pg_stat_activity where pid=any($1::int[]) and cardinality(pg_blocking_pids(pid))>0', [pids])
     if (blocked === pids.length) { checks++; return }
@@ -1968,6 +1968,9 @@ try {
     }
   })()
   await waitForBlocked([pids[0]])
+  eq(await scalar('select $1::int=any(pg_blocking_pids($2::int))',
+    [await scalar('select pg_backend_pid()'), pids[0]]), true,
+  'appointment revocation waits on the main connection product lock')
   await proofClients[1].query('begin')
   let appointmentUnlocked = false
   try {
@@ -2017,7 +2020,76 @@ try {
     'ComplianceOfficer', 2, complianceMembershipId, 11)
   const issuerTrustRace = await prepareDecisionRace('issuer-applier',
     'IssuerFundManager', 13, issuerMembershipId, 2)
+  const directInsertRace = await prepareDecisionRace('direct-insert-lock-order',
+    'ComplianceOfficer', 2, complianceMembershipId, 11)
   await db.query('commit'); begun = false
+  phase = 'stage3-direct-decision-insert-vs-appointment-revoke'
+  await admin()
+  const directRevision = (await db.query(`select terms_hash,document_hashes from bx1_portal.offering_revisions
+    where id=$1`, [directInsertRace.product.offering_package.id])).rows[0]
+  await db.query('begin'); begun = true
+  await db.query('select id from bx1_portal.products where id=$1 for update',
+    [directInsertRace.product.id])
+  const directDecision = (async () => {
+    await proofClients[0].query('begin')
+    try {
+      await actor(2, { aal: 'aal2' }, proofClients[0])
+      await proofClients[0].query('reset role')
+      await proofClients[0].query(`insert into bx1_portal.offering_decisions
+        (offering_revision_id,decision_kind,decision,actor_id,operating_context,
+         terms_hash,document_hashes,product_revision_at_decision,notes,checks)
+        values($1,'COMPLIANCE','APPROVED',$2,$3::jsonb,$4,$5::jsonb,$6,$7,$8::jsonb)`,
+      [directInsertRace.product.offering_package.id, uid(2), JSON.stringify(reviewer),
+        directRevision.terms_hash, JSON.stringify(directRevision.document_hashes),
+        directInsertRace.product.revision,
+        'Synthetic direct internal decision used solely for product-first lock-order proof.',
+        JSON.stringify(offeringChecks)])
+      await proofClients[0].query('commit')
+      return { code: undefined }
+    } catch (error) {
+      await proofClients[0].query('rollback')
+      return { code: error?.code }
+    }
+  })()
+  await waitForBlocked([pids[0]])
+  eq(await scalar('select $1::int=any(pg_blocking_pids($2::int))',
+    [await scalar('select pg_backend_pid()'), pids[0]]), true,
+  'direct internal decision waits on the main connection product lock')
+  await db.query('select id from bx1_portal.product_service_appointments where id=$1 for update nowait',
+    [directInsertRace.appointment.id])
+  const directRevoked = (await mandateScopedCommand(10, roleContext('SuperAdmin'),
+    'revoke_product_service_appointment', {
+      appointment_id: directInsertRace.appointment.id,
+      expected_revision: directInsertRace.appointment.revision,
+      reason: 'Synthetic direct insert lock-order proof revokes authority before decision can commit.',
+    })).product_appointments.find(value => value.id === directInsertRace.appointment.id)
+  eq(directRevoked.status, 'REVOKED', 'product-first revocation completes while direct insert waits')
+  await db.query('commit'); begun = false
+  eq((await directDecision).code, '42501',
+    'direct internal insert rejects appointment revoked before product lock release')
+  await admin()
+  eq(await scalar('select count(*)::int from bx1_portal.offering_decisions where offering_revision_id=$1',
+    [directInsertRace.product.offering_package.id]), 0,
+  'failed direct internal insert leaves no immutable offering decision')
+  phase = 'stage3-inactive-applied-appointment-admin-queue'
+  await db.query('begin'); begun = true
+  await admin()
+  await db.query("update bx1_private.person_principals set status='REVOKED' where auth_user_id=$1 and status='TRUSTED'",
+    [uid(11)])
+  const inactiveApplied = (await mandateScopedRead(10, roleContext('SuperAdmin')))
+    .product_appointments.find(value => value.id === complianceTrustRace.appointment.id)
+  truth(inactiveApplied, 'inactive applied appointment remains visible to Super Admin for recovery')
+  eq([inactiveApplied.status, inactiveApplied.effective, inactiveApplied.next_owner],
+    ['APPLIED', false, 'SUPER_ADMIN'],
+  'ineffective APPLIED appointment queues Super Admin revocation before manager renewal')
+  await denied('manager cannot silently replace an inactive APPLIED appointment',
+    () => scopedCommand(1, manager, 'request_product_service_appointment', {
+      product_id: complianceTrustRace.product.id, role: 'ComplianceOfficer',
+      appointee_user_id: uid(2), native_membership_id: complianceMembershipId,
+      expected_product_revision: complianceTrustRace.product.revision,
+      evidence_reference: 'SYNTHETIC-INACTIVE-APPLIED-RENEWAL-2026-09-28', requested_until: until,
+    }), '23505')
+  await db.query('rollback'); begun = false
   phase = 'fund-v2-cached-event-scope-revoked-during-read'
   // The optimized base reader calculates allowed organisations before it
   // projects events. Block only the events relation, so the reader is paused
