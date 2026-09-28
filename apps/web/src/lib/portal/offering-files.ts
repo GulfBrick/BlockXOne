@@ -2,6 +2,10 @@ import { z } from 'zod'
 
 export const offeringFileBucket = 'bx1-offering-quarantine'
 export const offeringFileMaxBytes = 4_194_304
+// A quarantined upload currently has no independent scan, promotion or
+// disposition workflow. Keep the user write path closed until that workflow
+// can resolve an intent without stranding the offering revision.
+export const offeringFileIntakeEnabled = false
 
 export const offeringFileKindSchema = z.enum(['MEMORANDUM', 'RISKS', 'SUBSCRIPTION_TERMS'])
 export const offeringFileReceiptSchema = z.object({

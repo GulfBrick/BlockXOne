@@ -3,7 +3,7 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import type { PortalProduct } from '@/lib/portal/contracts'
 import type { PortalOperatingContext } from '@/lib/portal/operating-context'
-import { offeringFileKindSchema, offeringFileListItemSchema } from '@/lib/portal/offering-files'
+import { offeringFileIntakeEnabled, offeringFileKindSchema, offeringFileListItemSchema } from '@/lib/portal/offering-files'
 import { Field, Notice, Panel } from './portal-primitives'
 import styles from './portal.module.css'
 
@@ -27,7 +27,7 @@ export function OfferingFilePanel({ product, context, actorId }: {
   const [kind, setKind] = useState<'MEMORANDUM' | 'RISKS' | 'SUBSCRIPTION_TERMS'>('MEMORANDUM')
   const [title, setTitle] = useState('')
   const [file, setFile] = useState<File | null>(null)
-  const canStage = Boolean(context && revision && product.status === 'IN_REVIEW'
+  const canStage = Boolean(offeringFileIntakeEnabled && context && revision && product.status === 'IN_REVIEW'
     && (context.mode === 'APPLICANT' || context.role === 'OfferingManager')
     && product.offering_package?.issuer_status === 'PENDING'
     && product.offering_package?.compliance_status === 'PENDING')
@@ -90,7 +90,7 @@ export function OfferingFilePanel({ product, context, actorId }: {
 
   return <Panel title="Private offering-file intake" description="Supplemental PDFs linked to a submitted package; separate from its approved disclosure text.">
     {!revision || !context ? <Notice title="No current file register">Submit a new offering package in an authorised context before staging a file.</Notice> : <div className={styles.stack}>
-      <Notice title="Quarantine only" tone="warning">An uploaded PDF is unscanned and is not an approved offering disclosure, a verified title document, or e-signature evidence. Staging a PDF blocks approval of this exact revision until independent file verification is connected. There is no delete or unstage shortcut; submit a corrected new revision if necessary. It does not satisfy publication requirements.</Notice>
+      <Notice title="PDF intake unavailable" tone="warning">Offering PDF uploads are disabled until independent file verification and a safe resolution path are connected. A quarantined PDF is not an approved offering disclosure, a verified title document, or e-signature evidence. Existing unverified file intents would block approval of their exact revision; no new upload is accepted here.</Notice>
       {files === null ? <p className={styles.muted}>Checking the private file register…</p>
         : files === undefined ? <Notice title="Private file register unavailable" tone="warning">Refresh the saved package before making another upload. No absence of a file is inferred.</Notice>
         : files.length ? <ul>{files.map(item => <li key={item.id}><strong>{item.kind.replaceAll('_', ' ')}</strong> · {item.title} · quarantined, unscanned<br /><span className={styles.mono}>{item.sha256}</span>{item.can_download ? <> · <a className={styles.textLink} href={fileUrl(revision, context, item.id)}>Download my unscanned PDF</a></> : null}</li>)}</ul>
@@ -102,7 +102,7 @@ export function OfferingFilePanel({ product, context, actorId }: {
         <Field label="Private PDF, maximum 4 MiB"><input type="file" required accept="application/pdf,.pdf" onChange={event => setFile(event.target.files?.[0] ?? null)} /></Field>
         {files?.some(item => item.kind === kind) ? <p className={styles.muted}>This category already has an immutable quarantined file in this revision. A correction requires a new revision.</p> : null}
         <button type="submit" className={styles.buttonSecondary} disabled={busy || files === null || files === undefined || files?.some(item => item.kind === kind) || !file || !title.trim()}>{busy ? 'Staging private PDF…' : 'Stage in quarantine'}</button>
-      </form> : <p className={styles.muted}>Only an authorised manager may stage a file before any issuer or Compliance decision. A corrected file requires a new offering revision.</p>}
+      </form> : <p className={styles.muted}>The PDF action is closed. Submitted text disclosures remain a separate package workflow; do not treat them as signed files.</p>}
     </div>}
   </Panel>
 }

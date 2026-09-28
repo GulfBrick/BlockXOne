@@ -106,11 +106,29 @@ export async function proveOfferingFileQuarantine(db, productId) {
     await db.query('rollback to savepoint bx1_unreceipted_file_decision; release savepoint bx1_unreceipted_file_decision')
     assert.equal(unreceiptedApprovalError?.message, 'offering_uploaded_files_unverified',
       'a reserved or partly uploaded file prevents package approval without a receipt')
-    const allowed = await db.query(`select bx1_portal.offering_file_upload_allowed($1,$2) as reserved,
+    // Storage evaluates INSERT RLS under the authenticated upload JWT, not the
+    // trusted receipt-writer role used to reserve the intent above.
+    await db.query('reset role')
+    await db.query("select set_config('request.jwt.claims',$1,true)", [JSON.stringify({
+      sub: item.submitted_by, session_id: session.rows[0].id, role: 'authenticated',
+      aal: session.rows[0].aal, exp: Math.floor(Date.now() / 1000) + 3600,
+    })])
+    await db.query("select set_config('request.jwt.claim.sub',$1,true)", [item.submitted_by])
+    await db.query('set local role authenticated')
+    const allowed = await db.query(`select auth.uid() as actor,
+      bx1_portal.offering_file_upload_allowed($1,$2) as reserved,
       bx1_portal.offering_file_upload_allowed($3,$2) as unreserved`,
     [path, item.submitted_by, `${item.revision_id}/${item.submitted_by}/${randomUUID()}`])
-    assert.deepEqual(allowed.rows[0], { reserved: true, unreserved: false },
-      'Storage preflight sees a server-issued intent but denies an arbitrary sibling path')
+    await db.query('reset role')
+    const preflightDiagnostics = await db.query(`select
+      bx1_portal.fresh_session() as fresh_session,
+      bx1_portal.offering_file_manager($2::uuid) as manager,
+      exists(select 1 from bx1_portal.offering_file_upload_intents i
+        where i.storage_path=$1) as reserved_intent`, [path, item.revision_id])
+    assert.deepEqual({ reserved: allowed.rows[0].reserved, unreserved: allowed.rows[0].unreserved },
+      { reserved: true, unreserved: false },
+      `Storage preflight intent scope failed: ${JSON.stringify({ ...allowed.rows[0],
+        ...preflightDiagnostics.rows[0] })}`)
     await db.query(`insert into storage.objects(bucket_id,name,owner_id,metadata)
       values('bx1-offering-quarantine',$1,$2,'{"size":100,"mimetype":"application/pdf"}'::jsonb)`,
     [path, item.submitted_by])

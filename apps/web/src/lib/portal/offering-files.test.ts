@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 vi.mock('server-only', () => ({}))
-import { offeringFilePath, offeringFileReceiptSchema } from './offering-files'
+import { offeringFileIntakeEnabled, offeringFilePath, offeringFileReceiptSchema } from './offering-files'
 
 import { isPdfHeader, offeringFileId, sha256Hex } from './offering-files-server'
 
@@ -8,6 +8,9 @@ const revision = '11111111-1111-4111-8111-111111111111'
 const actor = '22222222-2222-4222-8222-222222222222'
 
 describe('offering-file quarantine identity', () => {
+  it('keeps the release upload action closed until independent verification can resolve it', () => {
+    expect(offeringFileIntakeEnabled).toBe(false)
+  })
   it('gives an exact retry the same immutable file path, but a changed byte or kind a different path', () => {
     const a = offeringFileId(revision, actor, 'MEMORANDUM', 'a'.repeat(64))
     expect(a).toBe(offeringFileId(revision, actor, 'MEMORANDUM', 'a'.repeat(64)))

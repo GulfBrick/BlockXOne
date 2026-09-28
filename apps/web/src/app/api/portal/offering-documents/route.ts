@@ -4,7 +4,7 @@ import { portalFailure, readPortalBody } from '@/lib/portal/http'
 import { portalOperatingContextSchema } from '@/lib/portal/operating-context'
 import { hasCanonicalOrigin, privateResponse, responseCookieAdapter } from '@/lib/supabase/http'
 import { createRequestSupabaseClient } from '@/lib/supabase/server'
-import { offeringFileBucket, offeringFileKindSchema,
+import { offeringFileBucket, offeringFileIntakeEnabled, offeringFileKindSchema,
   offeringFileLookupSchema, offeringFileMaxBytes, offeringFilePath, offeringFileReceiptSchema,
   offeringFileListItemSchema } from '@/lib/portal/offering-files'
 import { isPdfHeader, offeringFileId, sha256Hex, registerOfferingFile, reserveOfferingFile,
@@ -36,6 +36,9 @@ export async function POST(request: NextRequest) {
   const jar = responseCookieAdapter(request)
   try {
     requirePortalEnvironment()
+    if (!offeringFileIntakeEnabled) {
+      throw new PortalError('Offering PDF intake is unavailable until independent file verification is connected.', 503)
+    }
     if (request.nextUrl.search || !hasCanonicalOrigin(request)) throw new PortalError('Invalid upload origin.', 403)
     const contentType = request.headers.get('content-type') ?? ''
     if (!contentType.startsWith('multipart/form-data;')) throw new PortalError('Select a PDF to upload.', 415)

@@ -3,6 +3,9 @@ import { NextRequest } from 'next/server'
 import { offeringFileId, sha256Hex, OfferingFileReceiptError } from './offering-files-server'
 
 vi.mock('server-only', () => ({}))
+// Exercise the future guarded upload branch in isolation. The real release
+// constant remains false and is asserted separately.
+vi.mock('./offering-files', async original => ({ ...await original<object>(), offeringFileIntakeEnabled: true }))
 const mocks = vi.hoisted(() => ({ read: vi.fn(), create: vi.fn(), writer: vi.fn(),
   session: vi.fn(), reserve: vi.fn(), register: vi.fn() }))
 vi.mock('@/lib/supabase/server', async original => ({ ...await original<object>(), createRequestSupabaseClient: mocks.create }))

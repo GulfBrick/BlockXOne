@@ -11,11 +11,12 @@ const product = { id: '33333333-3333-4333-8333-333333333333', status: 'IN_REVIEW
     issuer_status: 'PENDING', compliance_status: 'PENDING' } } as PortalProduct
 
 describe('offering file intake', () => {
-  it('warns before upload that quarantine blocks approval and proves neither scan nor signature', () => {
+  it('closes the upload action until independent verification can resolve a quarantined file', () => {
     const html = renderToStaticMarkup(<OfferingFilePanel product={product} context={context} actorId={actorId} />)
-    expect(html).toContain('Staging a PDF blocks approval of this exact revision')
+    expect(html).toContain('Offering PDF uploads are disabled')
     expect(html).toContain('not an approved offering disclosure')
-    expect(html).toContain('Stage in quarantine')
+    expect(html).not.toContain('Stage in quarantine')
+    expect(html).not.toContain('type="file"')
     expect(html).not.toContain('Mark clean')
     expect(html).not.toContain('Approve file')
   })
@@ -24,6 +25,6 @@ describe('offering file intake', () => {
     const reviewed = { ...product, offering_package: { ...product.offering_package!, issuer_status: 'APPROVED' as const } }
     const html = renderToStaticMarkup(<OfferingFilePanel product={reviewed} context={context} actorId={actorId} />)
     expect(html).not.toContain('Stage in quarantine')
-    expect(html).toContain('A corrected file requires a new offering revision')
+    expect(html).toContain('The PDF action is closed')
   })
 })
