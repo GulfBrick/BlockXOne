@@ -1746,6 +1746,81 @@ try {
     .find(value => value.id === complianceAppointment.id)
   eq([issuerAppointment.effective, complianceAppointment.effective], [true, true],
     'two exact-product appointments applied without organisation-wide binding creation')
+  phase = 'stage3-expired-pending-appointment-replacement'
+  const expiredRequestFor = async (label, source, role, appointee, membership) => {
+    const productName = `Synthetic expired ${label} appointment fund`
+    const product = (await scopedCommand(1, manager, 'create_product', {
+      organisation_id: orgId, terms: fundV2Terms(productName),
+    })).products.find(value => value.terms.name === productName)
+    await admin()
+    const oldId = await scalar(`insert into bx1_portal.product_service_appointments(
+      product_id,product_organisation_id,reviewer_scope_organisation_id,role,
+      appointee_user_id,native_membership_id,requested_by_user_id,requested_in_context,
+      product_revision_at_request,terms_hash_at_request,evidence_reference,requested_until)
+      select p.id,p.organisation_id,a.reviewer_scope_organisation_id,a.role,
+        a.appointee_user_id,a.native_membership_id,a.requested_by_user_id,a.requested_in_context,
+        p.revision,p.terms_hash,a.evidence_reference,clock_timestamp()-interval '1 hour'
+      from bx1_portal.products p cross join bx1_portal.product_service_appointments a
+      where p.id=$1 and a.id=$2 returning id`, [product.id, source.id])
+    const request = { product_id: product.id, role, appointee_user_id: uid(appointee),
+      native_membership_id: membership, expected_product_revision: product.revision,
+      evidence_reference: `SYNTHETIC-REPLACEMENT-${label}-2026-09-28`, requested_until: until }
+    return { oldId, product, request }
+  }
+  const expiredIssuer = await expiredRequestFor('issuer-submitted', issuerAppointment,
+    'IssuerFundManager', 13, issuerMembershipId)
+  const expiredIssuerView = (await mandateScopedRead(11, reviewer)).product_appointments
+    .find(value => value.id === expiredIssuer.oldId)
+  eq([expiredIssuerView.status, expiredIssuerView.can_review, expiredIssuerView.next_owner],
+    ['SUBMITTED', false, 'OFFERING_MANAGER'], 'expired pending issuer review is not falsely actionable')
+  const replacementIssuerKey = key()
+  const replacementIssuer = (await scopedCommand(1, manager,
+    'request_product_service_appointment', expiredIssuer.request, replacementIssuerKey))
+    .product_appointments.find(value => value.product_id === expiredIssuer.product.id && value.status === 'SUBMITTED')
+  truth(replacementIssuer?.id && replacementIssuer.id !== expiredIssuer.oldId,
+    'manager may replace an expired unreviewed nomination without resurrecting it')
+  eq(await scalar('select status from bx1_portal.product_service_appointments where id=$1',
+    [expiredIssuer.oldId]), 'EXPIRED', 'old unreviewed nomination is terminally expired')
+  eq(await scalar(`select jsonb_build_object(
+    'receipts',(select count(*) from bx1_portal.product_service_appointment_receipts
+      where appointment_id=$1 and action='expire_product_service_appointment'),
+    'events',(select count(*) from bx1_portal.events
+      where subject_id=$1 and kind='expire_product_service_appointment'))`, [expiredIssuer.oldId]),
+  { receipts: 1, events: 1 }, 'replacement records one immutable expiry receipt and audit event')
+  eq((await scopedCommand(1, manager, 'request_product_service_appointment',
+    expiredIssuer.request, replacementIssuerKey)).product_appointments
+    .find(value => value.id === replacementIssuer.id).revision, 1,
+  'replacement replay cannot expire twice or create another nomination')
+  const expiredCompliance = await expiredRequestFor('compliance-approved', complianceAppointment,
+    'ComplianceOfficer', 2, complianceMembershipId)
+  await admin()
+  const historicalApprovalId = await scalar(`insert into bx1_portal.product_service_appointment_receipts(
+    appointment_id,appointment_revision,action,actor_id,operating_context,command_payload,status_after)
+    values($1,2,'review_product_service_appointment',$2,$3::jsonb,
+      '{"decision":"APPROVED","source":"synthetic-expiry-fixture"}'::jsonb,'APPROVED') returning id`,
+  [expiredCompliance.oldId, uid(11), JSON.stringify(reviewer)])
+  await db.query(`update bx1_portal.product_service_appointments set revision=2,status='APPROVED',
+    reviewed_at=clock_timestamp(),reviewed_by_user_id=$2,
+    review_notes='Synthetic reviewed nomination elapsed before application.',
+    review_checks='{"appointment":true,"evidence":true,"scope":true}'::jsonb,
+    approval_receipt_id=$3 where id=$1`, [expiredCompliance.oldId, uid(11), historicalApprovalId])
+  const expiredComplianceView = (await mandateScopedRead(10, roleContext('SuperAdmin')))
+    .product_appointments.find(value => value.id === expiredCompliance.oldId)
+  eq([expiredComplianceView.status, expiredComplianceView.can_apply,
+    expiredComplianceView.next_owner], ['APPROVED', false, 'OFFERING_MANAGER'],
+  'expired approved nomination is not falsely applicable')
+  const replacementCompliance = (await scopedCommand(1, manager,
+    'request_product_service_appointment', expiredCompliance.request)).product_appointments
+    .find(value => value.product_id === expiredCompliance.product.id && value.status === 'SUBMITTED')
+  truth(replacementCompliance?.id && replacementCompliance.id !== expiredCompliance.oldId,
+    'manager may replace an expired approved nomination')
+  eq(await scalar('select status from bx1_portal.product_service_appointments where id=$1',
+    [expiredCompliance.oldId]), 'EXPIRED', 'old approved nomination cannot become effective later')
+  await denied('expired appointment cannot be revived by an internal state update', async () => {
+    await admin()
+    await db.query("update bx1_portal.product_service_appointments set revision=revision+1,status='APPLIED',applied_at=clock_timestamp(),applied_by_user_id=$2 where id=$1",
+      [expiredCompliance.oldId, uid(10)])
+  }, '23514')
   await db.query('savepoint appointment_suspended_profile')
   await admin()
   await db.query("update public.bx1_profiles set status='SUSPENDED' where id=$1", [uid(13)])
@@ -1913,6 +1988,36 @@ try {
   eq(revokedAfterProductLock.result.product_appointments.find(value =>
     value.id === complianceAppointment.id).status, 'REVOKED',
   'product-first revocation retains one successful authority transition')
+  phase = 'stage3-appointment-trust-revocation-race-preparation'
+  await db.query('begin'); begun = true
+  const prepareDecisionRace = async (label, targetRole, appointee, membership, reviewerNumber) => {
+    const name = `Synthetic ${label} trust-revocation fund`
+    let product = (await scopedCommand(1, manager, 'create_product', {
+      organisation_id: orgId, terms: fundV2Terms(name),
+    })).products.find(value => value.terms.name === name)
+    let appointment = (await scopedCommand(1, manager, 'request_product_service_appointment', {
+      product_id: product.id, role: targetRole, appointee_user_id: uid(appointee),
+      native_membership_id: membership, expected_product_revision: product.revision,
+      evidence_reference: `SYNTHETIC-TRUST-RACE-${label}-2026-09-28`, requested_until: until,
+    })).product_appointments.find(value => value.product_id === product.id && value.role === targetRole)
+    appointment = (await mandateScopedCommand(reviewerNumber, reviewer,
+      'review_product_service_appointment', reviewAppointment(appointment))).product_appointments
+      .find(value => value.id === appointment.id)
+    appointment = (await mandateScopedCommand(10, roleContext('SuperAdmin'),
+      'apply_product_service_appointment', {
+        appointment_id: appointment.id, expected_revision: appointment.revision,
+      })).product_appointments.find(value => value.id === appointment.id)
+    eq(appointment.effective, true, `${label} appointment is effective before the race`)
+    product = (await scopedCommand(1, manager, 'submit_product', {
+      product_id: product.id, expected_revision: product.revision,
+    })).products.find(value => value.id === product.id)
+    return { product, appointment }
+  }
+  const complianceTrustRace = await prepareDecisionRace('compliance-reviewer',
+    'ComplianceOfficer', 2, complianceMembershipId, 11)
+  const issuerTrustRace = await prepareDecisionRace('issuer-applier',
+    'IssuerFundManager', 13, issuerMembershipId, 2)
+  await db.query('commit'); begun = false
   phase = 'fund-v2-cached-event-scope-revoked-during-read'
   // The optimized base reader calculates allowed organisations before it
   // projects events. Block only the events relation, so the reader is paused
@@ -1943,6 +2048,53 @@ try {
   await db.query('commit'); begun = false
   const revokedRead = await interruptedRead
   eq(revokedRead.code, '42501', 'revocation during the cached-scope read denies the entire response')
+  phase = 'stage3-appointment-trust-revocation-two-connection-proof'
+  const proveDecisionRevocation = async (label, race, revokedPerson, decisionActor,
+    decisionContext, action, payload) => {
+    const decisionKey = key()
+    await db.query('begin'); begun = true
+    await admin()
+    await db.query("update bx1_private.person_principals set status='REVOKED' where auth_user_id=$1 and status='TRUSTED'",
+      [uid(revokedPerson)])
+    const waitingDecision = (async () => {
+      await proofClients[0].query('begin')
+      try {
+        const result = await mandateScopedCommand(decisionActor, decisionContext,
+          action, payload, decisionKey, proofClients[0])
+        await proofClients[0].query('commit')
+        return { result }
+      } catch (error) {
+        await proofClients[0].query('rollback')
+        return { code: error?.code }
+      }
+    })()
+    await waitForBlocked([pids[0]])
+    eq(await scalar(`select exists(select 1 from pg_locks where pid=$1
+      and relation='bx1_private.person_principals'::regclass
+      and mode='RowShareLock' and granted)`, [pids[0]]), true,
+    `${label} decision reaches the trusted-person lock before writing its decision`)
+    await db.query('commit'); begun = false
+    const outcome = await waitingDecision
+    eq(outcome.code, '42501', `${label} decision rejects trust revoked during the wait`)
+    await admin()
+    eq(await scalar('select bx1_portal.product_appointment_effective($1)',
+      [race.appointment.id]), false, `${label} appointment loses effectiveness after trust revocation`)
+    eq(await scalar(`select jsonb_build_object(
+      'decisions',(select count(*) from bx1_portal.offering_decisions where offering_revision_id=$1),
+      'native_receipts',(select count(*) from bx1_portal.requests where actor_id=$2 and request_key=$3),
+      'scoped_receipts',(select count(*) from bx1_portal.scoped_requests where actor_id=$2 and request_key=$3),
+      'events',(select count(*) from bx1_portal.events where subject_id=$4 and kind=$5))`,
+    [race.product.offering_package.id, uid(decisionActor), decisionKey, race.product.id, action]),
+    { decisions: 0, native_receipts: 0, scoped_receipts: 0, events: 0 },
+    `${label} rejected decision leaves no immutable decision, receipt or event`)
+    eq(await scalar('select jsonb_build_object(\'status\',status,\'revision\',revision) from bx1_portal.products where id=$1',
+      [race.product.id]), { status: 'IN_REVIEW', revision: race.product.revision },
+    `${label} rejected decision does not advance the product`)
+  }
+  await proveDecisionRevocation('Compliance reviewer', complianceTrustRace, 11, 2,
+    reviewer, 'review_product', complianceInput(complianceTrustRace.product))
+  await proveDecisionRevocation('issuer appointment applier', issuerTrustRace, 10, 13,
+    issuerContext, 'review_offering_issuer', issuerInput(issuerTrustRace.product))
   phase = 'cleanup-committed-disposable-fixture'
   await db.query('drop schema bx1_portal,bx1_private,storage,auth,public cascade; create schema public')
   committedFixture = false
