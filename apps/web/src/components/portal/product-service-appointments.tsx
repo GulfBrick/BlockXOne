@@ -26,7 +26,10 @@ export function ProductAppointmentRequest({ product, snapshot, operatingContext,
     && snapshot.organisations.some(org => org.id === product.organisation_id && org.status === 'ACTIVE'
       && org.authority_source === 'NATIVE_BINDING' && org.native_organisation_id === operatingContext.organisationId
       && org.roles.includes('OfferingManager'))
-  const hasOpenRole = appointments.some(item => item.role === role && ['SUBMITTED', 'APPROVED', 'APPLIED'].includes(item.status))
+  const expiredPending = appointments.some(item => item.role === role && ['SUBMITTED', 'APPROVED'].includes(item.status)
+    && Date.parse(item.requested_until) <= Date.now())
+  const hasOpenRole = appointments.some(item => item.role === role && (item.status === 'APPLIED'
+    || (['SUBMITTED', 'APPROVED'].includes(item.status) && Date.parse(item.requested_until) > Date.now())))
   const canRequest = isManager && Boolean(candidate) && !hasOpenRole && evidence.trim().length >= 20 && Boolean(expiryDay)
 
   return <Panel title="Product service appointments" description="Appoint separate people for this exact product. An issuer name or manager relationship does not grant review or signing authority.">
@@ -49,6 +52,7 @@ export function ProductAppointmentRequest({ product, snapshot, operatingContext,
           <Field label="Appointment evidence reference" hint="20 to 400 characters identifying the synthetic appointment evidence. This is not an uploaded or verified document."><textarea required minLength={20} maxLength={400} value={evidence} onChange={event => setEvidence(event.target.value)} /></Field>
           <Field label="Appointment end date" hint="Choose a date more than one hour and no more than 90 days ahead; the server enforces the limit."><input required type="date" value={expiryDay} onChange={event => setExpiryDay(event.target.value)} /></Field>
           {hasOpenRole ? <Notice title="Current appointment already exists">Review or revoke the existing {roleLabel(role)} case before requesting another appointment for this product.</Notice> : null}
+          {expiredPending && !hasOpenRole ? <Notice title="Earlier request expired">You can submit a new request. The server will close the expired case with an audit receipt before opening its replacement.</Notice> : null}
           <CommandFeedback command={command} /><button className={styles.button} type="submit" disabled={!canRequest || command.busy || command.unknown}>Request appointment review</button>
         </form> : null}</>}
   </Panel>

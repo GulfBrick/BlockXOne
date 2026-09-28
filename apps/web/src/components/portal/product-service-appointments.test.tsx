@@ -34,7 +34,7 @@ function appointment(change: Partial<PortalProductServiceAppointment> = {}): Por
     reviewer_scope_organisation_id: reviewOrganisation, role: 'IssuerFundManager',
     appointee_user_id: appointee, native_membership_id: membership, requested_by_user_id: person,
     product_revision_at_request: 2, terms_hash_at_request: termsHash, evidence_reference: 'Synthetic board mandate REF-001',
-    requested_until: '2026-10-20T00:00:00Z', status: 'SUBMITTED', revision: 1,
+    requested_until: '2099-10-20T00:00:00Z', status: 'SUBMITTED', revision: 1,
     requested_at: '2026-09-20T10:00:00Z', reviewed_at: null, reviewed_by_user_id: null,
     review_notes: null, approval_receipt_id: null, applied_at: null, applied_by_user_id: null,
     revoked_at: null, revoke_reason: null, effective: false, next_owner: 'COMPLIANCE',
@@ -62,6 +62,9 @@ describe('connected product service appointment surfaces', () => {
     expect(draft).toContain('Request an independent service appointment')
     const inactive = renderToStaticMarkup(<ProductAppointmentRequest product={product()} snapshot={snapshot({ product_appointments: [appointment({ status: 'APPLIED', effective: false, next_owner: 'NONE' })] })} operatingContext={managerContext} onSaved={() => {}} />)
     expect(inactive).toContain('Super Admin: revoke inactive appointment before replacement')
+    const expired = renderToStaticMarkup(<ProductAppointmentRequest product={product()} snapshot={snapshot({ product_appointments: [appointment({ requested_until: '2026-09-01T00:00:00Z', can_review: false, next_owner: 'OFFERING_MANAGER' })] })} operatingContext={managerContext} onSaved={() => {}} />)
+    expect(expired).toContain('Earlier request expired')
+    expect(expired).not.toContain('Current appointment already exists')
   })
   it('treats an unavailable appointment snapshot as unavailable, not an empty queue', () => {
     const unavailable = snapshot({ product_appointments: undefined })

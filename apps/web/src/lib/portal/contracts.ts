@@ -118,7 +118,7 @@ export type PortalProductServiceAppointment = {
   appointee_user_id: string; native_membership_id: string;
   requested_by_user_id: string; product_revision_at_request: number;
   terms_hash_at_request: string; evidence_reference: string; requested_until: string;
-  status: 'SUBMITTED' | 'APPROVED' | 'CHANGES_REQUIRED' | 'REJECTED' | 'APPLIED' | 'REVOKED';
+  status: 'SUBMITTED' | 'APPROVED' | 'CHANGES_REQUIRED' | 'REJECTED' | 'APPLIED' | 'REVOKED' | 'EXPIRED';
   revision: number; requested_at: string; reviewed_at: string | null;
   reviewed_by_user_id: string | null; review_notes: string | null;
   approval_receipt_id: string | null; applied_at: string | null;
