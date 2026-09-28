@@ -161,7 +161,8 @@ begin
     join bx1_portal.products p on p.id=r.product_id
     where r.id=target_revision and r.origin='SUBMITTED';
   if v_product.id is null then return false; end if;
-  return bx1_portal.scoped_operator(c,v_product.organisation_id)
+  return ((c->>'mode'='APPLICANT' or c->>'role'='OfferingManager')
+      and bx1_portal.scoped_operator(c,v_product.organisation_id))
     or bx1_portal.product_appointment_authorised(c,v_product.id,'ComplianceOfficer')
     or bx1_portal.product_appointment_authorised(c,v_product.id,'IssuerFundManager');
 end $$;
