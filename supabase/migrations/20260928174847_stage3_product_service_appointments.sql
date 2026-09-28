@@ -11,6 +11,11 @@ do $baseline$ begin
   end if;
 end $baseline$;
 
+-- Appointments are time-limited, revocable service authority for an enduring
+-- product. The terms hash at request is an audit reference, not a gate that
+-- could be revived by change-then-revert. Every offering decision remains
+-- bound to one immutable revision, terms hash and document hashes instead.
+
 create table bx1_portal.product_service_appointments (
   id uuid primary key default pg_catalog.gen_random_uuid(),
   product_id uuid not null references bx1_portal.products(id) on delete restrict,
@@ -122,12 +127,13 @@ create function bx1_portal.product_appointment_effective(target_id uuid) returns
 language sql volatile security definer set search_path='' as $$
   select exists(select 1 from bx1_portal.product_service_appointments a
     join bx1_portal.products p on p.id=a.product_id and p.organisation_id=a.product_organisation_id
-      and p.terms_hash=a.terms_hash_at_request
     join bx1_portal.organisations o on o.id=p.organisation_id
       and o.reviewer_scope=a.reviewer_scope_organisation_id
     join public.bx1_memberships m on m.id=a.native_membership_id
       and m.user_id=a.appointee_user_id and m.role=a.role
       and m.organisation_id=a.reviewer_scope_organisation_id
+    join public.bx1_profiles profile on profile.id=a.appointee_user_id
+      and profile.status='ACTIVE'
     join bx1_portal.entry_configuration cfg on cfg.singleton
       and cfg.environment='TESTNET' and cfg.manual_test_review
       and cfg.reviewer_scope=a.reviewer_scope_organisation_id
@@ -206,7 +212,7 @@ declare actor uuid:=auth.uid(); a bx1_portal.product_service_appointments;
   p bx1_portal.products; o bx1_portal.organisations;
   m public.bx1_memberships;
   previous bx1_portal.product_service_appointment_requests;
-  receipt_id uuid; decision text; requested_until timestamptz;
+  receipt_id uuid; decision text; requested_until timestamptz; target_product uuid;
 begin
   if bx1_portal.entry_manual_review_enabled() is not true
     or bx1_portal.valid_operating_context(c) is not true
@@ -252,6 +258,8 @@ begin
     perform bx1_portal.lock_entity_people(array[actor,(body->>'appointee_user_id')::uuid]);
     if m.id is null or m.user_id<>(body->>'appointee_user_id')::uuid
       or m.role<>body->>'role' or bx1_portal.native_membership_effective(m.id) is not true
+      or not exists(select 1 from public.bx1_profiles profile
+        where profile.id=m.user_id and profile.status='ACTIVE')
       or m.organisation_id<>o.reviewer_scope
       or bx1_portal.entity_people_independent(actor,m.user_id) is not true
       or bx1_portal.current_product_organisation(o.id) is not true then
@@ -283,31 +291,42 @@ begin
     if pg_catalog.jsonb_typeof(body->'expected_revision') is distinct from 'number'
       or body->>'expected_revision' !~ '^[1-9][0-9]{0,8}$' then
       raise exception 'product_appointment_revision_invalid' using errcode='22023'; end if;
+    -- The offering-decision writer locks the product before the appointment.
+    -- Use the same order for review/apply/revoke to avoid inverse-lock cycles.
+    select product_id into target_product from bx1_portal.product_service_appointments
+      where id=(body->>'appointment_id')::uuid;
+    if target_product is null then
+      raise exception 'product_appointment_stale' using errcode='23514'; end if;
+    select * into p from bx1_portal.products where id=target_product for update;
     select * into a from bx1_portal.product_service_appointments
       where id=(body->>'appointment_id')::uuid for update;
     if a.id is null or a.revision<>(body->>'expected_revision')::integer then
       raise exception 'product_appointment_stale' using errcode='23514'; end if;
-    select * into p from bx1_portal.products where id=a.product_id for share;
+    if p.id is distinct from a.product_id then
+      raise exception 'product_appointment_stale' using errcode='23514'; end if;
     select * into o from bx1_portal.organisations where id=a.product_organisation_id for share;
     select * into m from public.bx1_memberships where id=a.native_membership_id for share;
     perform bx1_portal.lock_entity_people(array[actor,a.requested_by_user_id,
       a.appointee_user_id,a.reviewed_by_user_id]);
     if action='review_product_service_appointment' then
-      if a.status<>'SUBMITTED' or p.terms_hash is distinct from a.terms_hash_at_request
+      if a.status<>'SUBMITTED'
         or a.requested_until<=pg_catalog.clock_timestamp()
         or bx1_portal.representative_mandate_actor(c,a.reviewer_scope_organisation_id,'ComplianceOfficer') is not true
         or bx1_portal.entity_people_independent(actor,a.requested_by_user_id) is not true
         or bx1_portal.entity_people_independent(actor,a.appointee_user_id) is not true then
         raise exception 'product_appointment_review_denied' using errcode='42501'; end if;
       if decision='APPROVED' and (m.organisation_id<>a.reviewer_scope_organisation_id
-        or bx1_portal.native_membership_effective(m.id) is not true) then
+        or bx1_portal.native_membership_effective(m.id) is not true
+        or not exists(select 1 from public.bx1_profiles profile
+          where profile.id=m.user_id and profile.status='ACTIVE')) then
         raise exception 'product_appointment_target_changed' using errcode='42501'; end if;
     elsif action='apply_product_service_appointment' then
       if a.status<>'APPROVED' or a.approval_receipt_id is null
-        or p.terms_hash is distinct from a.terms_hash_at_request
         or a.requested_until<=pg_catalog.clock_timestamp()
         or m.organisation_id<>a.reviewer_scope_organisation_id
         or bx1_portal.native_membership_effective(m.id) is not true
+        or not exists(select 1 from public.bx1_profiles profile
+          where profile.id=m.user_id and profile.status='ACTIVE')
         or bx1_portal.representative_mandate_actor(c,a.reviewer_scope_organisation_id,'SuperAdmin') is not true
         or bx1_portal.entity_people_independent(actor,a.requested_by_user_id) is not true
         or bx1_portal.entity_people_independent(actor,a.appointee_user_id) is not true
@@ -428,6 +447,7 @@ begin
   return bx1_portal.scoped_operator(c,o.id)
     or bx1_portal.scoped_reviewer(c,o.reviewer_scope,o.id)
     or bx1_portal.product_appointment_authorised(c,p.id,'IssuerFundManager')
+    or bx1_portal.product_appointment_authorised(c,p.id,'ComplianceOfficer')
     or ((c->>'mode'='APPLICANT' or c->>'role'='Investor') and p.status='PUBLISHED'
       and bx1_portal.offering_operational(p.id)
       and bx1_portal.current_product_organisation(o.id) and bx1_portal.is_eligible(p.terms));
@@ -462,6 +482,139 @@ language sql volatile security definer set search_path='' as $$
       and bx1_portal.entity_people_independent(compliance.actor_id,r.submitted_by));
 $$;
 
+alter function bx1_portal.offering_package_projection(jsonb,uuid)
+  rename to offering_package_projection_pre_appointment;
+create function bx1_portal.offering_package_projection(c jsonb,target_product uuid) returns jsonb
+language plpgsql volatile security definer set search_path='' as $$
+declare result jsonb; p bx1_portal.products; r bx1_portal.offering_revisions;
+  issuer bx1_portal.offering_decisions; compliance bx1_portal.offering_decisions;
+  appointed boolean; can_review boolean;
+begin
+  result:=bx1_portal.offering_package_projection_pre_appointment(c,target_product);
+  if result is null then return null; end if;
+  select * into p from bx1_portal.products where id=target_product;
+  select * into r from bx1_portal.offering_revisions
+    where id=p.current_offering_revision_id and product_id=p.id;
+  select * into issuer from bx1_portal.offering_decisions
+    where offering_revision_id=r.id and decision_kind='ISSUER';
+  select * into compliance from bx1_portal.offering_decisions
+    where offering_revision_id=r.id and decision_kind='COMPLIANCE';
+  appointed:=bx1_portal.product_appointment_authorised(c,p.id,'ComplianceOfficer');
+  can_review:=appointed and p.status='IN_REVIEW' and compliance.id is null
+    and r.origin='SUBMITTED' and r.terms_hash=p.terms_hash and r.terms=p.terms
+    and bx1_portal.entity_people_independent(auth.uid(),r.submitted_by)
+    and bx1_portal.entity_people_independent(auth.uid(),p.created_by)
+    and bx1_portal.entity_people_independent(auth.uid(),
+      (select o.owner_id from bx1_portal.organisations o where o.id=p.organisation_id))
+    and (issuer.id is null or bx1_portal.entity_people_independent(auth.uid(),issuer.actor_id));
+  result:=pg_catalog.jsonb_set(result,'{can_review_compliance}',pg_catalog.to_jsonb(can_review));
+  if appointed then
+    result:=pg_catalog.jsonb_set(result,'{issuer_review_notes}',
+      coalesce(pg_catalog.to_jsonb(issuer.notes),'null'::jsonb));
+    result:=pg_catalog.jsonb_set(result,'{issuer_review_checks}',
+      coalesce(pg_catalog.to_jsonb(issuer.checks),'null'::jsonb));
+  elsif bx1_portal.scoped_operator(c,p.organisation_id) is not true then
+    result:=pg_catalog.jsonb_set(result,'{issuer_review_notes}','null'::jsonb);
+    result:=pg_catalog.jsonb_set(result,'{issuer_review_checks}','null'::jsonb);
+  end if;
+  return result;
+end $$;
+
+-- The inherited scoped review writer requires an organisation-wide
+-- Compliance binding twice. It must not be loosened globally: customer KYC,
+-- documents and other products still use that organisation scope. Route only
+-- the offering decision for this exact appointed product through the guarded
+-- base transition, then record the immutable, appointment-bound decision.
+create function bx1_portal.execute_appointed_compliance_decision(c jsonb,key uuid,body jsonb)
+returns jsonb language plpgsql volatile security definer set search_path='' as $$
+declare actor uuid:=auth.uid(); p bx1_portal.products; o bx1_portal.organisations;
+  r bx1_portal.offering_revisions; issuer bx1_portal.offering_decisions;
+  a bx1_portal.product_service_appointments; prior bx1_portal.scoped_requests;
+  decision text; original_revision integer;
+begin
+  if bx1_portal.entry_manual_review_enabled() is not true
+    or bx1_portal.valid_operating_context(c) is not true
+    or key is null or key='00000000-0000-0000-0000-000000000000'
+    or pg_catalog.jsonb_typeof(body) is distinct from 'object'
+    or pg_catalog.octet_length(body::text)>65536 then
+    raise exception 'offering_compliance_appointment_required' using errcode='42501'; end if;
+  perform bx1_portal.entry_lock_actor();
+  select * into prior from bx1_portal.scoped_requests
+    where actor_id=actor and request_key=key;
+  if prior.actor_id is not null then
+    if prior.command is distinct from 'review_product'
+      or prior.operating_context is distinct from c or prior.payload is distinct from body then
+      raise exception 'offering_idempotency_conflict' using errcode='23505'; end if;
+    return bx1_portal.read_scoped(c);
+  end if;
+  if exists(select 1 from bx1_portal.requests where actor_id=actor and request_key=key)
+    or exists(select 1 from bx1_portal.entry_requests where actor_id=actor and request_key=key)
+    or exists(select 1 from bx1_portal.product_service_appointment_requests
+      where actor_id=actor and request_key=key) then
+    raise exception 'offering_prior_key_conflict' using errcode='23505'; end if;
+  perform bx1_portal.require_keys(body,array['product_id','expected_revision',
+    'offering_revision_id','terms_hash','decision','notes','checks']);
+  select * into p from bx1_portal.products where id=(body->>'product_id')::uuid for update;
+  if p.id is null then
+    raise exception 'offering_product_denied' using errcode='42501'; end if;
+  select * into o from bx1_portal.organisations where id=p.organisation_id for share;
+  select * into r from bx1_portal.offering_revisions
+    where id=p.current_offering_revision_id and product_id=p.id;
+  if o.id is null or r.id is null or r.origin<>'SUBMITTED' or p.status<>'IN_REVIEW'
+    or r.terms_hash is distinct from p.terms_hash or r.terms is distinct from p.terms
+    or pg_catalog.jsonb_typeof(body->'expected_revision') is distinct from 'number'
+    or body->>'expected_revision' !~ '^[1-9][0-9]{0,8}$'
+    or (body->>'expected_revision')::integer<>p.revision
+    or body->>'offering_revision_id' is distinct from r.id::text
+    or body->>'terms_hash' is distinct from r.terms_hash then
+    raise exception 'offering_stale_package' using errcode='23514'; end if;
+  perform bx1_portal.require_text(body,'notes',20,3000);
+  decision:=body->>'decision';
+  if decision not in ('APPROVED','CHANGES_REQUIRED') then
+    raise exception 'offering_decision_invalid' using errcode='22023'; end if;
+  original_revision:=p.revision;
+  select * into issuer from bx1_portal.offering_decisions
+    where offering_revision_id=r.id and decision_kind='ISSUER';
+  if exists(select 1 from bx1_portal.offering_decisions
+    where offering_revision_id=r.id and decision_kind='COMPLIANCE') then
+    raise exception 'offering_decision_already_recorded' using errcode='23514'; end if;
+  select * into a from bx1_portal.product_service_appointments appointed
+    where appointed.product_id=p.id and appointed.role='ComplianceOfficer'
+      and appointed.appointee_user_id=actor and appointed.status='APPLIED'
+    order by appointed.id limit 1 for share;
+  if a.id is null then
+    raise exception 'offering_compliance_appointment_required' using errcode='42501'; end if;
+  perform m.id from public.bx1_memberships m where m.id=a.native_membership_id for share;
+  perform profile.id from public.bx1_profiles profile where profile.id=actor for share;
+  perform bx1_portal.lock_entity_people(array[actor,r.submitted_by,o.owner_id,issuer.actor_id]);
+  if bx1_portal.product_appointment_authorised(c,p.id,'ComplianceOfficer') is not true
+    or bx1_portal.current_product_organisation(o.id) is not true
+    or bx1_portal.entity_people_independent(actor,r.submitted_by) is not true
+    or bx1_portal.entity_people_independent(actor,p.created_by) is not true
+    or bx1_portal.entity_people_independent(actor,o.owner_id) is not true
+    or (issuer.id is not null and
+      bx1_portal.entity_people_independent(actor,issuer.actor_id) is not true) then
+    raise exception 'offering_compliance_appointment_required' using errcode='42501'; end if;
+  -- The base transition preserves revision/state/check validation and its
+  -- product/request/event audit path. Its reviewer predicate checks the
+  -- native Compliance scope, not a customer-wide authority binding.
+  perform bx1_portal.execute_command('review_product',key,
+    body-'offering_revision_id'-'terms_hash');
+  insert into bx1_portal.offering_decisions(offering_revision_id,decision_kind,decision,
+    actor_id,operating_context,terms_hash,document_hashes,product_revision_at_decision,notes,checks)
+    values(r.id,'COMPLIANCE',decision,actor,c,r.terms_hash,r.document_hashes,
+      original_revision,body->>'notes',body->'checks');
+  if decision='APPROVED' and coalesce(issuer.decision,'PENDING')<>'APPROVED' then
+    update bx1_portal.products set status='IN_REVIEW' where id=p.id;
+  end if;
+  insert into bx1_portal.scoped_requests(actor_id,request_key,operating_context,command,payload)
+    values(actor,key,c,'review_product',body);
+  if bx1_portal.valid_operating_context(c) is not true
+    or bx1_portal.product_appointment_authorised(c,p.id,'ComplianceOfficer') is not true then
+    raise exception 'offering_compliance_authority_changed' using errcode='42501'; end if;
+  return bx1_portal.read_scoped(c);
+end $$;
+
 alter function bx1_portal.read_scoped(jsonb) rename to read_scoped_pre_product_appointment;
 alter function bx1_portal.execute_scoped(jsonb,text,uuid,jsonb) rename to execute_scoped_pre_product_appointment;
 
@@ -493,6 +646,7 @@ begin
       join public.bx1_profiles profile on profile.id=m.user_id
       join auth.users u on u.id=m.user_id and u.email is not null
       where c->>'mode'='ROLE' and c->>'role'='OfferingManager'
+        and profile.status='ACTIVE'
         and bx1_portal.scoped_operator(c,p.organisation_id)
         and bx1_portal.native_membership_effective(m.id)
         and bx1_portal.entity_people_independent(auth.uid(),m.user_id)
@@ -550,7 +704,7 @@ end $$;
 
 create function bx1_portal.execute_scoped(c jsonb,action text,key uuid,body jsonb) returns jsonb
 language plpgsql volatile security definer set search_path='' as $$
-declare target_product uuid; target_role text; appointment_id uuid;
+declare target_product uuid; appointment_id uuid;
 begin
   if action in ('request_product_service_appointment','review_product_service_appointment',
     'apply_product_service_appointment','revoke_product_service_appointment') then
@@ -560,18 +714,18 @@ begin
   if c->>'mode'='ROLE' and c->>'role'='IssuerFundManager'
     and action<>'review_offering_issuer' then
     raise exception 'product_issuer_operator_action_denied' using errcode='42501'; end if;
-  if action in ('review_product','review_offering_issuer') then
+  if action='review_product' then
+    return bx1_portal.execute_appointed_compliance_decision(c,key,body); end if;
+  if action='review_offering_issuer' then
     if pg_catalog.jsonb_typeof(body) is distinct from 'object'
       or pg_catalog.jsonb_typeof(body->'product_id') is distinct from 'string' then
       raise exception 'offering_product_appointment_required' using errcode='42501'; end if;
     target_product:=(body->>'product_id')::uuid;
-    target_role:=case action when 'review_product' then 'ComplianceOfficer'
-      else 'IssuerFundManager' end;
     select a.id into appointment_id from bx1_portal.product_service_appointments a
-      where a.product_id=target_product and a.role=target_role
+      where a.product_id=target_product and a.role='IssuerFundManager'
         and a.appointee_user_id=auth.uid() and a.status='APPLIED'
-      order by a.id limit 1 for share;
-    if appointment_id is null or bx1_portal.product_appointment_authorised(c,target_product,target_role) is not true
+      order by a.id limit 1;
+    if appointment_id is null or bx1_portal.product_appointment_authorised(c,target_product,'IssuerFundManager') is not true
       or bx1_portal.product_appointment_effective(appointment_id) is not true then
       raise exception 'offering_product_appointment_required' using errcode='42501'; end if;
   end if;
@@ -591,6 +745,9 @@ revoke all on function bx1_portal.guard_product_service_appointment(),
   bx1_portal.product_appointment_authorised(jsonb,uuid,text),
   bx1_portal.product_appointment_projection(jsonb,uuid),
   bx1_portal.execute_product_service_appointment(jsonb,text,uuid,jsonb),
+  bx1_portal.execute_appointed_compliance_decision(jsonb,uuid,jsonb),
+  bx1_portal.offering_package_projection_pre_appointment(jsonb,uuid),
+  bx1_portal.offering_package_projection(jsonb,uuid),
   bx1_portal.guard_offering_decision_appointment(),
   bx1_portal.read_scoped_pre_product_appointment(jsonb),
   bx1_portal.execute_scoped_pre_product_appointment(jsonb,text,uuid,jsonb),

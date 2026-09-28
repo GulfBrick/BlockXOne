@@ -4,7 +4,7 @@ import pg from 'pg'
 import { proveProviderEvidence } from './provider-evidence-proof.mjs'
 import { proveCustomerMonitoring } from './customer-monitoring-proof.mjs'
 import { proveDocumentRetentionAuthority } from './document-retention-authority-proof.mjs'
-import { proveOfferingFileQuarantine } from './offering-file-quarantine-proof.mjs'
+import { proveOfferingFileQuarantine, proveOfferingFileProductIsolation } from './offering-file-quarantine-proof.mjs'
 
 // Exact disposable GitHub PostgreSQL17 service only. No local/project execution.
 if (process.argv.length !== 2 || process.env.GITHUB_ACTIONS !== 'true') throw new Error('Portal SQL proof requires cloud CI without arguments')
@@ -189,6 +189,10 @@ try {
   await sqlFile('../../../supabase/tests/bx1_mfa_assurance.sql')
   await db.query("alter table auth.users add column email text; alter table auth.users add column email_confirmed_at timestamptz; alter table auth.users add column is_anonymous boolean default false; alter table auth.users add column raw_user_meta_data jsonb default '{}'::jsonb; alter table auth.sessions add column created_at timestamptz not null default now(); alter table auth.users enable row level security; alter table auth.sessions enable row level security")
   await db.query("create schema storage; create table storage.buckets(id text primary key,name text not null,public boolean not null,file_size_limit bigint,allowed_mime_types text[]); create table storage.objects(id uuid primary key default gen_random_uuid(),bucket_id text references storage.buckets(id),name text not null,owner_id text,metadata jsonb,user_metadata jsonb,unique(bucket_id,name)); alter table storage.objects enable row level security; grant usage on schema storage to authenticated; grant select,insert,update,delete on storage.objects to authenticated")
+  // Only the disposable CI fixture needs this Storage API helper. Hosted
+  // Supabase supplies its own operation-aware implementation.
+  await db.query(`create function storage.allow_only_operation(text) returns boolean
+    language sql stable as $$ select current_setting('request.storage.operation',true)=$1 $$`)
   for (const file of ['20260916234746_bx1_identity_workspace.sql', '20260917190042_bx1_wallet_ownership.sql', '20260918015541_bx1_mfa_assurance.sql', '20260918234447_bx1_controlled_administration.sql']) await sqlFile(`../../../supabase/migrations/${file}`)
   await sqlFile('../../../supabase/features/bx1_portal.sql')
   phase = 'feature-empty-boundary'
@@ -1665,6 +1669,13 @@ try {
         [role, `bx1_portal.${table}`]), false, `${role} cannot directly mutate ${table}`)
     }
   }
+  for (const legacyWriter of ['bx1_portal.execute_command(text,uuid,jsonb)',
+    'public.bx1_portal_command(text,uuid,jsonb)',
+    'bx1_portal.execute_appointed_compliance_decision(jsonb,uuid,jsonb)']) {
+    eq(await scalar('select has_function_privilege($1,$2,\'EXECUTE\')',
+      ['authenticated', legacyWriter]), false,
+    `authenticated cannot bypass scoped command through ${legacyWriter}`)
+  }
   eq(await scalar('select bx1_portal.offering_approved($1)', [reviewedProperty.id]), false,
     'historical review decisions do not silently acquire product appointments')
   const issuerMembershipId = await scalar(`select id from public.bx1_memberships
@@ -1735,6 +1746,58 @@ try {
     .find(value => value.id === complianceAppointment.id)
   eq([issuerAppointment.effective, complianceAppointment.effective], [true, true],
     'two exact-product appointments applied without organisation-wide binding creation')
+  await db.query('savepoint appointment_suspended_profile')
+  await admin()
+  await db.query("update public.bx1_profiles set status='SUSPENDED' where id=$1", [uid(13)])
+  eq(await scalar('select bx1_portal.product_appointment_effective($1)', [issuerAppointment.id]), false,
+    'suspended appointee profile immediately disables an applied appointment')
+  await db.query('rollback to savepoint appointment_suspended_profile; release savepoint appointment_suspended_profile')
+  await db.query('savepoint appointment_offering_amendment')
+  let amendmentPackage = (await scopedCommand(1, manager, 'submit_product', {
+    product_id: appointedFund.id, expected_revision: appointedFund.revision,
+  })).products.find(value => value.id === appointedFund.id)
+  const oldOfferingRevision = amendmentPackage.offering_package.id
+  amendmentPackage = (await mandateScopedCommand(13, issuerContext,
+    'review_offering_issuer', issuerInput(amendmentPackage))).products.find(value =>
+    value.id === appointedFund.id)
+  amendmentPackage = (await mandateScopedCommand(2, reviewer,
+    'review_product', complianceInput(amendmentPackage, 'CHANGES_REQUIRED'))).products.find(value =>
+    value.id === appointedFund.id)
+  eq(amendmentPackage.status, 'CHANGES_REQUIRED',
+    'independent Compliance requests changes on the exact first offering revision')
+  const amendedAppointmentFund = (await scopedCommand(1, manager, 'save_product', {
+    product_id: appointedFund.id, expected_revision: amendmentPackage.revision,
+    terms: fundV2Terms(`${appointedFundName} amended`),
+  })).products.find(value => value.id === appointedFund.id)
+  const restoredAppointmentFund = (await scopedCommand(1, manager, 'save_product', {
+    product_id: appointedFund.id, expected_revision: amendedAppointmentFund.revision,
+    terms: fundV2Terms(appointedFundName),
+  })).products.find(value => value.id === appointedFund.id)
+  eq(restoredAppointmentFund.terms_hash, appointedFund.terms_hash,
+    'restored terms have the original hash')
+  await admin()
+  eq(await scalar('select bx1_portal.product_appointment_effective($1)', [issuerAppointment.id]), true,
+    'time-limited product service appointment survives offering amendment')
+  await denied('restoring the same terms hash cannot resubmit an unchanged package',
+    () => scopedCommand(1, manager, 'submit_product', {
+      product_id: appointedFund.id, expected_revision: restoredAppointmentFund.revision,
+    }), '23514')
+  const finalAmendedAppointmentFund = (await scopedCommand(1, manager, 'save_product', {
+    product_id: appointedFund.id, expected_revision: restoredAppointmentFund.revision,
+    terms: fundV2Terms(`${appointedFundName} amended and resubmitted`),
+  })).products.find(value => value.id === appointedFund.id)
+  const resubmittedAppointmentFund = (await scopedCommand(1, manager, 'submit_product', {
+    product_id: appointedFund.id, expected_revision: finalAmendedAppointmentFund.revision,
+  })).products.find(value => value.id === appointedFund.id)
+  truth(resubmittedAppointmentFund.offering_package.id !== oldOfferingRevision,
+    'restored terms create a new immutable offering revision')
+  await admin()
+  eq(await scalar('select count(*)::int from bx1_portal.offering_decisions where offering_revision_id=$1',
+    [resubmittedAppointmentFund.offering_package.id]), 0,
+  'old issuer and Compliance decisions cannot carry onto a new revision with the same hash')
+  eq(await scalar('select bx1_portal.offering_approved($1)', [appointedFund.id]), false,
+    'new offering needs fresh issuer and Compliance decisions after hash restoration')
+  await db.query('rollback to savepoint appointment_offering_amendment; release savepoint appointment_offering_amendment')
   await admin()
   await db.query(`update bx1_portal.organisation_authority_bindings set status='REVOKED'
     where product_organisation_id=$1 and role in ('IssuerFundManager','ComplianceOfficer')
@@ -1746,6 +1809,11 @@ try {
   appointedFund = (await scopedCommand(1, manager, 'submit_product', {
     product_id: appointedFund.id, expected_revision: appointedFund.revision,
   })).products.find(value => value.id === appointedFund.id)
+  checks += await proveOfferingFileProductIsolation(db, {
+    appointedRevisionId: appointedFund.offering_package.id,
+    otherRevisionId: reviewedProperty.offering_package.id,
+    issuerContext, signInIssuer: () => actor(13, { aal: 'aal2' }),
+  })
   const issuerState = await mandateScopedRead(13, issuerContext)
   truth(issuerState.products.some(value => value.id === appointedFund.id),
     'issuer sees only the explicitly appointed product after old broad binding revocation')
@@ -1756,10 +1824,37 @@ try {
   eq(await scalar(`select product_appointment_id from bx1_portal.offering_decisions
     where offering_revision_id=$1 and decision_kind='ISSUER'`, [appointedFund.offering_package.id]),
   issuerAppointment.id, 'immutable issuer decision records appointment identity')
-  await denied('Compliance appointment does not loosen inherited broader reviewer gate',
-    () => mandateScopedCommand(2, reviewer, 'review_product', complianceInput(appointedFund)), '42501')
-  eq(await scalar('select bx1_portal.offering_approved($1)', [appointedFund.id]), false,
-    'incomplete Compliance path cannot manufacture whole-package approval')
+  const exactComplianceState = await mandateScopedRead(2, reviewer)
+  truth(exactComplianceState.products.some(value => value.id === appointedFund.id
+    && value.offering_package.can_review_compliance),
+  'appointed Compliance sees and can review the exact product without an org-wide binding')
+  eq(exactComplianceState.products.some(value => value.id === reviewedProperty.id), false,
+    'exact product appointment does not expose another product in the same organisation')
+  const complianceDecisionPayload = complianceInput(appointedFund)
+  const complianceDecisionKey = key()
+  appointedFund = (await mandateScopedCommand(2, reviewer, 'review_product',
+    complianceDecisionPayload, complianceDecisionKey)).products.find(value => value.id === appointedFund.id)
+  eq([appointedFund.status, appointedFund.offering_package.compliance_status],
+    ['APPROVED', 'APPROVED'],
+  'appointed Compliance completes independent review through the exact-product writer')
+  eq((await mandateScopedCommand(2, reviewer, 'review_product',
+    complianceDecisionPayload, complianceDecisionKey)).products.find(value =>
+    value.id === appointedFund.id).revision, appointedFund.revision,
+  'exact Compliance command replay leaves product revision unchanged')
+  await admin()
+  eq(await scalar(`select jsonb_build_object(
+    'native',(select count(*) from bx1_portal.requests where actor_id=$1 and request_key=$2),
+    'scoped',(select count(*) from bx1_portal.scoped_requests where actor_id=$1 and request_key=$2),
+    'events',(select count(*) from bx1_portal.events where actor_id=$1 and subject_id=$3 and kind='review_product'),
+    'decisions',(select count(*) from bx1_portal.offering_decisions where offering_revision_id=$4 and decision_kind='COMPLIANCE'))`,
+  [uid(2), complianceDecisionKey, appointedFund.id, appointedFund.offering_package.id]),
+  { native: 1, scoped: 1, events: 1, decisions: 1 },
+  'one exact Compliance decision has one native receipt, scoped receipt, event and immutable decision')
+  eq(await scalar(`select product_appointment_id from bx1_portal.offering_decisions
+    where offering_revision_id=$1 and decision_kind='COMPLIANCE'`, [appointedFund.offering_package.id]),
+  complianceAppointment.id, 'immutable Compliance decision records exact appointment identity')
+  eq(await scalar('select bx1_portal.offering_approved($1)', [appointedFund.id]), true,
+    'both appointed human decisions approve the package without opening funding')
   await db.query('savepoint appointment_main_seal')
   await admin(); await db.query(`update bx1_portal.entry_configuration
     set environment='MAINNET',manual_test_review=false where singleton`)
@@ -1772,9 +1867,52 @@ try {
       reason: 'Synthetic issuer scope revoked after exact-product decision proof.' })).product_appointments
     .find(value => value.id === issuerAppointment.id)
   eq(issuerAppointment.effective, false, 'revocation immediately removes product authority')
+  await admin()
+  eq(await scalar('select bx1_portal.offering_approved($1)', [appointedFund.id]), false,
+    'revoked issuer authority removes current offering approval')
   eq((await mandateScopedRead(13, issuerContext)).products.some(value => value.id === appointedFund.id), false,
     'revoked issuer cannot read appointed product through old native role')
   await db.query('commit'); begun = false
+  phase = 'stage3-product-appointment-product-first-lock-order'
+  await db.query('begin'); begun = true
+  await admin()
+  await db.query('select id from bx1_portal.products where id=$1 for update', [appointedFund.id])
+  const pendingAppointmentRevoke = (async () => {
+    await proofClients[0].query('begin')
+    try {
+      const result = await mandateScopedCommand(10, roleContext('SuperAdmin'),
+        'revoke_product_service_appointment', { appointment_id: complianceAppointment.id,
+          expected_revision: complianceAppointment.revision,
+          reason: 'Synthetic lock-order proof releases the remaining product appointment.' },
+        key(), proofClients[0])
+      await proofClients[0].query('commit')
+      return { result }
+    } catch (error) {
+      await proofClients[0].query('rollback')
+      return { code: error?.code }
+    }
+  })()
+  await waitForBlocked([pids[0]])
+  await proofClients[1].query('begin')
+  let appointmentUnlocked = false
+  try {
+    await proofClients[1].query('select id from bx1_portal.product_service_appointments where id=$1 for update nowait',
+      [complianceAppointment.id])
+    appointmentUnlocked = true
+  } catch (error) {
+    if (error?.code !== '55P03') throw error
+  } finally {
+    await proofClients[1].query('rollback')
+  }
+  await db.query('commit'); begun = false
+  const revokedAfterProductLock = await pendingAppointmentRevoke
+  eq(appointmentUnlocked, true,
+    'revocation waiting on product has not taken an inverse appointment lock')
+  eq(revokedAfterProductLock.code, undefined,
+    'waiting revocation completes after the product lock is released')
+  eq(revokedAfterProductLock.result.product_appointments.find(value =>
+    value.id === complianceAppointment.id).status, 'REVOKED',
+  'product-first revocation retains one successful authority transition')
   phase = 'fund-v2-cached-event-scope-revoked-during-read'
   // The optimized base reader calculates allowed organisations before it
   // projects events. Block only the events relation, so the reader is paused
