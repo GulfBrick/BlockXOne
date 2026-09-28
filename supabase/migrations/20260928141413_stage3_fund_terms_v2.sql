@@ -367,17 +367,39 @@ end $fund_v2_grants$;
 -- The inherited base workspace projection ran the full mandate/monitoring
 -- predicate once for every audit event. On a small synthetic customer history
 -- that made a normal manager read take 11-14 seconds. Build the event's
--- permitted-organisation set once within the same SQL statement instead.
+-- permitted-organisation set once per read instead. Recheck that cached
+-- authority at the end: a mandate can expire while this projection runs.
 -- Keep every other predicate and the existing context checks unchanged.
 do $fund_v2_read_efficiency$
-declare definition text; old_predicate text :=
+declare definition text;
+  old_declaration text := 'declare v_actor uuid:=auth.uid(); result jsonb;';
+  new_declaration text := 'declare v_actor uuid:=auth.uid(); result jsonb; v_operator_orgs uuid[];';
+  old_initial_check text :=
+    'if bx1_portal.valid_operating_context(c) is not true then raise exception ''portal_context_denied'' using errcode=''42501''; end if;';
+  new_initial_check text :=
+    old_initial_check || E'\n  v_operator_orgs := array(select permitted.id from bx1_portal.organisations permitted where bx1_portal.scoped_operator(c,permitted.id));';
+  old_predicate text :=
   'from bx1_portal.events e where bx1_portal.scoped_operator(c,e.organisation_id)';
   new_predicate text :=
-  'from bx1_portal.events e where e.organisation_id = any(array(select permitted.id from bx1_portal.organisations permitted where bx1_portal.scoped_operator(c,permitted.id)))';
+  'from bx1_portal.events e where e.organisation_id = any(v_operator_orgs)';
+  old_final_check text :=
+    'if bx1_portal.valid_operating_context(c) is not true then raise exception ''portal_context_changed'' using errcode=''42501''; end if;';
+  new_final_check text :=
+    E'if exists(select 1 from pg_catalog.unnest(v_operator_orgs) as org(id) where bx1_portal.scoped_operator(c,org.id) is not true) then\n    raise exception ''portal_context_changed'' using errcode=''42501''; end if;\n  ' || old_final_check;
 begin
   definition := pg_catalog.pg_get_functiondef('bx1_portal.read_scoped_pre_eligibility(jsonb)'::regprocedure);
-  if (pg_catalog.length(definition)-pg_catalog.length(pg_catalog.replace(definition,old_predicate,'')))
-       /pg_catalog.length(old_predicate) <> 1 then
+  if (pg_catalog.length(definition)-pg_catalog.length(pg_catalog.replace(definition,old_declaration,'')))
+       /pg_catalog.length(old_declaration) <> 1
+    or (pg_catalog.length(definition)-pg_catalog.length(pg_catalog.replace(definition,old_initial_check,'')))
+       /pg_catalog.length(old_initial_check) <> 1
+    or (pg_catalog.length(definition)-pg_catalog.length(pg_catalog.replace(definition,old_predicate,'')))
+       /pg_catalog.length(old_predicate) <> 1
+    or (pg_catalog.length(definition)-pg_catalog.length(pg_catalog.replace(definition,old_final_check,'')))
+       /pg_catalog.length(old_final_check) <> 1 then
     raise exception 'fund_v2_base_read_definition_changed' using errcode='55000'; end if;
-  execute pg_catalog.replace(definition,old_predicate,new_predicate);
+  definition := pg_catalog.replace(definition,old_declaration,new_declaration);
+  definition := pg_catalog.replace(definition,old_initial_check,new_initial_check);
+  definition := pg_catalog.replace(definition,old_predicate,new_predicate);
+  definition := pg_catalog.replace(definition,old_final_check,new_final_check);
+  execute definition;
 end $fund_v2_read_efficiency$;
