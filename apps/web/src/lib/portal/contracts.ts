@@ -57,7 +57,7 @@ export type PortalApplication = {
   review_checks: Record<string, boolean>; provider_mode: 'MANUAL_TEST_REVIEW'; approved_until: string | null;
   admission_purpose?: AdmissionPurpose; can_create_entity_account?: boolean;
 }
-export type PortalCapability = 'create_product' | 'save_product' | 'submit_product' | 'reopen_offering_review' | 'publish_product' | 'read_orders' | 'review_product' | 'review_offering_issuer'
+export type PortalCapability = 'create_product' | 'save_product' | 'submit_product' | 'reopen_offering_review' | 'begin_offering_amendment' | 'publish_product' | 'read_orders' | 'review_product' | 'review_offering_issuer'
   | 'propose_funding_route' | 'approve_funding_route' | 'revoke_funding_route' | 'open_funding_obligation' | 'propose_funding_acceptance' | 'reconcile_funding'
   | 'propose_funding_exception' | 'resolve_funding_exception' | 'propose_funding_reversal' | 'approve_funding_reversal'
 export type PortalOrganisation = {
@@ -389,6 +389,7 @@ export const portalCommandSchema = z.discriminatedUnion('command', [
   z.object({ command: z.literal('save_product'), key: id, payload: z.object({ product_id: id, expected_revision: z.number().int().positive(), terms: writableProductTermsSchema }).strict() }).strict(),
   z.object({ command: z.literal('submit_product'), key: id, payload: z.object({ product_id: id, expected_revision: z.number().int().positive() }).strict() }).strict(),
   z.object({ command: z.literal('reopen_offering_review'), key: id, payload: z.object({ product_id: id, expected_revision: z.number().int().positive(), reason: text(20, 1000) }).strict() }).strict(),
+  z.object({ command: z.literal('begin_offering_amendment'), key: id, payload: z.object({ product_id: id, expected_revision: z.number().int().positive(), reason: text(20, 1000) }).strict() }).strict(),
   z.object({ command: z.literal('review_product'), key: id, payload: z.object({ product_id: id, offering_revision_id: id, expected_revision: z.number().int().positive(), terms_hash: hash, decision: z.enum(['APPROVED', 'CHANGES_REQUIRED']), notes: text(20, 3000), checks: offeringChecks }).strict() }).strict(),
   z.object({ command: z.literal('review_offering_issuer'), key: id, payload: z.object({ product_id: id, offering_revision_id: id, expected_revision: z.number().int().positive(), terms_hash: hash, decision: z.enum(['APPROVED', 'CHANGES_REQUIRED']), notes: text(20, 3000), checks: z.object({ issuer_authority: z.boolean(), terms: z.boolean(), rights: z.boolean() }).strict() }).strict() }).strict(),
   z.object({ command: z.literal('publish_product'), key: id, payload: z.object({ product_id: id, expected_revision: z.number().int().positive() }).strict() }).strict(),

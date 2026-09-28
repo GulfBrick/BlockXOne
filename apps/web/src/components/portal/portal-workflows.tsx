@@ -275,6 +275,7 @@ export function ProductNarrative({ product }: { product: PortalProduct }) {
 export function ProductActions({ product, onSaved, availableCommands }: { product: PortalProduct; onSaved: (snapshot: PortalSnapshot) => void; availableCommands?: readonly string[] }) {
   const command = usePortalCommand(onSaved)
   const [reopenReason, setReopenReason] = useState('')
+  const [amendReason, setAmendReason] = useState('')
   const legacyFundDraft = product.terms.asset_type === 'FUND' && !isFundTermsV2(product.terms) && ['DRAFT', 'CHANGES_REQUIRED'].includes(product.status)
   const legacyPropertyDraft = product.terms.asset_type === 'REAL_ESTATE' && !isRealEstateTermsV2(product.terms) && ['DRAFT', 'CHANGES_REQUIRED'].includes(product.status)
   const canSubmit = !legacyFundDraft && !legacyPropertyDraft && ['DRAFT', 'CHANGES_REQUIRED'].includes(product.status) && (availableCommands === undefined || availableCommands.includes('submit_product'))
@@ -284,6 +285,9 @@ export function ProductActions({ product, onSaved, availableCommands }: { produc
   const canReopen = product.status === 'APPROVED'
     && availableCommands?.includes('reopen_offering_review') === true
     && product.allowed_actions?.includes('reopen_offering_review') === true
+  const canAmend = product.status === 'APPROVED'
+    && availableCommands?.includes('begin_offering_amendment') === true
+    && product.allowed_actions?.includes('begin_offering_amendment') === true
   return <Panel title="Offering hand-offs" description="Each action uses a server-checked organisation, actor and immutable package."><CommandFeedback command={command} />{product.review_notes ? <Notice title="Compliance notes" tone="warning">{product.review_notes}</Notice> : null}
     <ol className={`${styles.timeline} ${styles.sectionGap}`}>
       <li><strong>Manager submits the package</strong><p>Submission fixes the terms and in-form document digests under one package reference.</p></li>
@@ -298,6 +302,11 @@ export function ProductActions({ product, onSaved, availableCommands }: { produc
       if (reopenReason.trim().length < 20) return
       void command.submit('reopen_offering_review', { product_id: product.id, expected_revision: product.revision, reason: reopenReason.trim() })
     }}><h3>Reopen this package for independent review</h3><p className={styles.muted}>Creates a new immutable package revision with the same terms. Earlier decisions remain historical evidence and cannot approve the new revision. Use this when an appointment has ended or the package requires fresh issuer and Compliance decisions; it does not reopen funding.</p><Field label="Reason for re-review" hint="20 to 1,000 characters recorded with the new revision."><textarea required minLength={20} maxLength={1000} value={reopenReason} onChange={event => setReopenReason(event.target.value)} /></Field><button type="submit" className={styles.buttonSecondary} disabled={command.busy || command.unknown || reopenReason.trim().length < 20}>Create new review revision</button></form> : null}
+    {canAmend ? <form className={`${styles.form} ${styles.sectionGap}`} onSubmit={event => {
+      event.preventDefault()
+      if (amendReason.trim().length < 20) return
+      void command.submit('begin_offering_amendment', { product_id: product.id, expected_revision: product.revision, reason: amendReason.trim() })
+    }}><h3>Amend approved package terms</h3><p className={styles.muted}>Returns this unopened product to the draft editor. You must save genuinely changed terms and submit a new immutable package; old decisions never approve the amendment. Existing history is retained.</p><Field label="Reason for terms amendment" hint="20 to 1,000 characters recorded in the audit history."><textarea required minLength={20} maxLength={1000} value={amendReason} onChange={event => setAmendReason(event.target.value)} /></Field><button type="submit" className={styles.buttonSecondary} disabled={command.busy || command.unknown || amendReason.trim().length < 20}>Begin terms amendment</button></form> : null}
   </Panel>
 }
 

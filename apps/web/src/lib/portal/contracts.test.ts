@@ -228,6 +228,16 @@ describe('customer portal contracts', () => {
         payload: { ...payload, ...change } }).success).toBe(false)
     }
   })
+  it('requires an explicit reason and revision before amending approved terms', () => {
+    const payload = { product_id: id, expected_revision: 4,
+      reason: 'Rework fictional class rights and resubmit for fresh issuer and Compliance decisions.' }
+    expect(portalCommandSchema.safeParse({ command: 'begin_offering_amendment', key, payload }).success).toBe(true)
+    for (const change of [{ expected_revision: 0 }, { reason: 'Too short' },
+      { accepted_orders: true }, { actor_role: 'OfferingManager' }]) {
+      expect(portalCommandSchema.safeParse({ command: 'begin_offering_amendment', key,
+        payload: { ...payload, ...change } }).success).toBe(false)
+    }
+  })
   it('requires the exact case revision and a recorded reason for eligibility revocation', () => {
     const payload = { eligibility_case_id: id, expected_revision: 3, reason: 'Synthetic independent reviewer found the account is no longer eligible.' }
     expect(portalCommandSchema.safeParse({ command: 'revoke_product_eligibility', key, payload }).success).toBe(true)

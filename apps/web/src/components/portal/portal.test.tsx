@@ -235,6 +235,18 @@ describe('onboarding and subscription boundaries', () => {
       onSaved={vi.fn()} availableCommands={['reopen_offering_review']} />)
     expect(draft).not.toContain('Create new review revision')
   })
+  it('offers a terms amendment only for the exact approved product grant', () => {
+    const approved = product({ status: 'APPROVED', allowed_actions: ['begin_offering_amendment'] })
+    const manager = renderToStaticMarkup(<ProductActions product={approved} onSaved={vi.fn()}
+      availableCommands={['begin_offering_amendment']} />)
+    expect(manager).toContain('Amend approved package terms')
+    expect(manager).toContain('Begin terms amendment')
+    expect(manager).toContain('old decisions never approve the amendment')
+    expect(renderToStaticMarkup(<ProductActions product={approved} onSaved={vi.fn()}
+      availableCommands={[]} />)).not.toContain('Begin terms amendment')
+    expect(renderToStaticMarkup(<ProductActions product={product({ status: 'APPROVED' })}
+      onSaved={vi.fn()} availableCommands={['begin_offering_amendment']} />)).not.toContain('Begin terms amendment')
+  })
   it('shows an issuer decision only when the backend grants exact package review authority', () => {
     const submitted = product({ status: 'IN_REVIEW' })
     const noGrant = renderToStaticMarkup(<IssuerOfferingReview product={submitted} snapshot={snapshot()} onSaved={vi.fn()} />)
