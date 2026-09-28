@@ -99,6 +99,29 @@ begin
 exception when others then return false;
 end $$;
 
+-- The bucket is private, but its direct Storage API remains reachable by an
+-- authenticated browser. Ownership alone must not survive mandate revocation.
+create function bx1_portal.offering_file_owner_read_allowed(object_name text,object_owner text) returns boolean
+language plpgsql volatile security definer set search_path='' as $$
+declare v_revision uuid; v_org uuid;
+begin
+  if object_name !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    or auth.uid() is null or object_owner is distinct from auth.uid()::text
+    or pg_catalog.split_part(object_name,'/',2) is distinct from auth.uid()::text
+    or bx1_portal.fresh_session() is not true
+    or bx1_portal.entry_manual_review_enabled() is not true then return false; end if;
+  v_revision:=pg_catalog.split_part(object_name,'/',1)::uuid;
+  select p.organisation_id into v_org from bx1_portal.offering_revisions r
+    join bx1_portal.products p on p.id=r.product_id
+    where r.id=v_revision and r.origin='SUBMITTED';
+  if v_org is null then return false; end if;
+  if bx1_portal.scoped_operator('{"mode":"APPLICANT"}'::jsonb,v_org) then return true; end if;
+  return exists(select 1 from public.bx1_memberships m where m.user_id=auth.uid()
+    and m.role='OfferingManager' and bx1_portal.scoped_operator(
+      pg_catalog.jsonb_build_object('mode','ROLE','organisationId',m.organisation_id,'role','OfferingManager'),v_org));
+exception when others then return false;
+end $$;
+
 -- Restrictive policies contain any pre-existing broad Storage policies. An
 -- authenticated manager may stage, and only that actor may retrieve their
 -- quarantined bytes. Reviewers see metadata only, not unscanned file bytes.
@@ -109,11 +132,11 @@ create policy bx1_offering_file_stage_restrict on storage.objects as restrictive
   with check(bucket_id<>'bx1-offering-quarantine'
     or bx1_portal.offering_file_upload_allowed(name,owner_id));
 create policy bx1_offering_file_owner_read on storage.objects for select to authenticated
-  using(bucket_id='bx1-offering-quarantine' and owner_id=auth.uid()::text
-    and pg_catalog.split_part(name,'/',2)=auth.uid()::text);
+  using(bucket_id='bx1-offering-quarantine'
+    and bx1_portal.offering_file_owner_read_allowed(name,owner_id));
 create policy bx1_offering_file_read_restrict on storage.objects as restrictive for select to public
-  using(bucket_id<>'bx1-offering-quarantine' or (owner_id=auth.uid()::text
-    and pg_catalog.split_part(name,'/',2)=auth.uid()::text));
+  using(bucket_id<>'bx1-offering-quarantine'
+    or bx1_portal.offering_file_owner_read_allowed(name,owner_id));
 create policy bx1_offering_file_update_restrict on storage.objects as restrictive for update to public
   using(bucket_id<>'bx1-offering-quarantine') with check(bucket_id<>'bx1-offering-quarantine');
 create policy bx1_offering_file_delete_restrict on storage.objects as restrictive for delete to public
@@ -255,6 +278,7 @@ $$;
 revoke all on function bx1_portal.offering_file_manager(uuid),
   bx1_portal.lock_offering_product_before_decision(),
   bx1_portal.offering_file_upload_allowed(text,text),
+  bx1_portal.offering_file_owner_read_allowed(text,text),
   bx1_portal.guard_offering_quarantine_object(),
   bx1_portal.offering_file_visible(jsonb,uuid),
   bx1_portal.register_offering_file(jsonb,uuid,uuid,uuid,text,text,text,integer),
@@ -268,6 +292,7 @@ do $test_grants$ begin
   -- Policy evaluation also occurs on unrelated buckets in both environments.
   -- This helper grants no operation by itself and returns false outside TEST.
   grant execute on function bx1_portal.offering_file_upload_allowed(text,text) to anon,authenticated;
+  grant execute on function bx1_portal.offering_file_owner_read_allowed(text,text) to anon,authenticated;
   if exists(select 1 from bx1_portal.entry_configuration where singleton and environment='TESTNET' and manual_test_review) then
     grant execute on function bx1_portal.register_offering_file(jsonb,uuid,uuid,uuid,text,text,text,integer),
       bx1_portal.list_offering_files(jsonb,uuid),
