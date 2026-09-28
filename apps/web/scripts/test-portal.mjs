@@ -1297,14 +1297,21 @@ try {
     ['APPROVED', 'APPROVED', 'APPROVED'], 'v2 fund receives separate appointed issuer and independent Compliance decisions')
   await db.query('savepoint v2_public_rpc_publication')
   let v2PublicationError
+  const v2PublicationPayload = { product_id: v2Reviewed.id, expected_revision: v2Reviewed.revision }
   try {
-    await scopedCommand(1, manager, 'publish_product', {
-      product_id: v2Reviewed.id, expected_revision: v2Reviewed.revision,
-    })
+    await scopedCommand(1, manager, 'publish_product', v2PublicationPayload)
   } catch (error) { v2PublicationError = { code: error?.code, message: error?.message } }
   await db.query('rollback to savepoint v2_public_rpc_publication; release savepoint v2_public_rpc_publication')
+  await db.query('savepoint v2_direct_scoped_publication')
+  let v2DirectPublicationError
+  try {
+    await actor(1)
+    await scalar('select bx1_portal.execute_scoped($1::jsonb,$2,$3,$4::jsonb)',
+      [JSON.stringify(manager), 'publish_product', key(), JSON.stringify(v2PublicationPayload)])
+  } catch (error) { v2DirectPublicationError = { code: error?.code, message: error?.message } }
+  await db.query('rollback to savepoint v2_direct_scoped_publication; release savepoint v2_direct_scoped_publication')
   eq(v2PublicationError, { code: '23514', message: 'fund_v2_settlement_route_not_admitted' },
-    `observed v2 publish RPC ${JSON.stringify(v2PublicationError)}; expected the new settlement guard`)
+    `v2 public=${v2PublicationError?.code}/${v2PublicationError?.message} direct=${v2DirectPublicationError?.code}/${v2DirectPublicationError?.message}`)
   await admin()
   eq(await scalar('select status from bx1_portal.products where id=$1', [v2Reviewed.id]), 'APPROVED', 'denied v2 publication leaves package reviewed but closed')
   await denied('internal update cannot publish v2 fund into legacy settlement route', async () => {
