@@ -1684,7 +1684,10 @@ try {
   const complianceMembershipId = await scalar(`select id from public.bx1_memberships
     where user_id=$1 and organisation_id=$2 and role='ComplianceOfficer'`, [uid(2), nativeScope])
   truth(issuerMembershipId && complianceMembershipId, 'pre-existing staff roles are prerequisites only')
-  const legacyManagerDraft = (await scopedRead(5, manager)).products
+  phase = 'stage3-legacy-manager-draft-action-projection'
+  // Actor 5's synthetic session was raised to AAL2 earlier. AAL1 claims are
+  // stale and must not be used even for this read-only projection proof.
+  const legacyManagerDraft = (await mandateScopedRead(5, manager)).products
     .find(value => value.id === delegatedProduct.id)
   eq([legacyManagerDraft.allowed_actions.includes('save_product'),
     legacyManagerDraft.allowed_actions.includes('submit_product')], [true, false],
@@ -2208,7 +2211,7 @@ try {
   let lineageFund = (await scopedCommand(1, manager, 'create_product', {
     organisation_id: orgId, terms: fundV2Terms(lineageFundName),
   })).products.find(value => value.terms.name === lineageFundName)
-  lineageFund = (await scopedCommand(5, manager, 'submit_product', {
+  lineageFund = (await mandateScopedCommand(5, manager, 'submit_product', {
     product_id: lineageFund.id, expected_revision: lineageFund.revision,
   })).products.find(value => value.id === lineageFund.id)
   const lineageOriginalRevisionId = lineageFund.offering_package.id
