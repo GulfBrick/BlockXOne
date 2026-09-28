@@ -1,11 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { NextRequest } from 'next/server'
-import { offeringFileId, sha256Hex } from './offering-files-server'
+import { offeringFileId, sha256Hex, OfferingFileReceiptError } from './offering-files-server'
 
 vi.mock('server-only', () => ({}))
-const mocks = vi.hoisted(() => ({ read: vi.fn(), create: vi.fn() }))
+const mocks = vi.hoisted(() => ({ read: vi.fn(), create: vi.fn(), writer: vi.fn(),
+  session: vi.fn(), register: vi.fn() }))
 vi.mock('@/lib/supabase/server', async original => ({ ...await original<object>(), createRequestSupabaseClient: mocks.create }))
 vi.mock('./server', async original => ({ ...await original<object>(), readPortal: mocks.read }))
+vi.mock('./offering-files-server', async original => ({ ...await original<object>(),
+  requireOfferingFileReceiptWriter: mocks.writer,
+  verifiedOfferingFileSession: mocks.session,
+  registerOfferingFile: mocks.register }))
 import { GET, POST } from '@/app/api/portal/offering-documents/route'
 
 const origin = 'https://block-x-one-offering-file-test.vercel.app'
@@ -36,10 +41,22 @@ beforeEach(() => {
     NEXT_PUBLIC_BLOCKXONE_AUTH_MODE: 'supabase', BLOCKXONE_APP_ORIGIN: origin,
     SUPABASE_URL: 'https://fegnnnlseuejkrusbbkv.supabase.co' })) vi.stubEnv(key, value)
   mocks.read.mockResolvedValue({ user: { id: actor }, snapshot })
+  mocks.session.mockResolvedValue({ id: '55555555-5555-4555-8555-555555555555', aal: 'aal1' })
 })
 afterEach(() => vi.unstubAllEnvs())
 
 describe('offering-file API quarantine', () => {
+  it('does not create an unreceipted Storage object when the restricted writer is unavailable', async () => {
+    mocks.writer.mockImplementationOnce(() => { throw new OfferingFileReceiptError() })
+    const upload = vi.fn(), download = vi.fn(), rpc = vi.fn()
+    mocks.create.mockReturnValue({ storage: { from: () => ({ upload, download }) }, rpc })
+    const result = await POST(request())
+    expect(result.status).toBe(503)
+    expect(upload).not.toHaveBeenCalled()
+    expect(download).not.toHaveBeenCalled()
+    expect(mocks.register).not.toHaveBeenCalled()
+  })
+
   it('rehashes downloaded Storage bytes before making a database receipt', async () => {
     const upload = vi.fn().mockResolvedValue({ error: null })
     const download = vi.fn().mockResolvedValue({ error: null,
@@ -49,6 +66,7 @@ describe('offering-file API quarantine', () => {
     const result = await POST(request())
     expect(result.status).toBe(503)
     expect(rpc).not.toHaveBeenCalled()
+    expect(mocks.register).not.toHaveBeenCalled()
     expect(download).toHaveBeenCalledOnce()
   })
 
@@ -59,16 +77,31 @@ describe('offering-file API quarantine', () => {
     const download = vi.fn().mockResolvedValue({ error: null, data: new Blob([new Uint8Array(pdf)], { type: 'application/pdf' }) })
     const receipt = { id, revision_id: revisionId, kind: 'MEMORANDUM', title: 'Fictional memorandum',
       sha256, size: pdf.length, validation_state: 'QUARANTINED', uploaded_at: '2026-09-28T00:00:00Z' }
-    const rpc = vi.fn().mockReturnValue({ abortSignal: vi.fn().mockResolvedValue({ data: receipt, error: null }) })
+    const rpc = vi.fn()
+    mocks.register.mockResolvedValue(receipt)
     mocks.create.mockReturnValue({ storage: { from: () => ({ upload, download }) }, rpc })
     const result = await POST(request())
     expect(result.status).toBe(202)
     expect((await result.json()).document.validation_state).toBe('QUARANTINED')
-    expect(rpc).toHaveBeenCalledWith('bx1_offering_file_register', expect.objectContaining({
-      operating_context: context, target_product: productId, target_revision: revisionId,
-      file_id: id, file_sha256: sha256, file_size: pdf.length,
+    expect(rpc).not.toHaveBeenCalled()
+    expect(mocks.register).toHaveBeenCalledWith(expect.objectContaining({
+      context, productId, revisionId, fileId: id, sha256, size: pdf.length,
     }))
     expect(mocks.read).toHaveBeenCalledTimes(2)
+    expect(mocks.session).toHaveBeenCalledTimes(2)
+  })
+
+  it('keeps a staged object unreceipted if the Auth session changes during upload', async () => {
+    const upload = vi.fn().mockResolvedValue({ error: null })
+    const download = vi.fn().mockResolvedValue({ error: null,
+      data: new Blob([new Uint8Array(pdf)], { type: 'application/pdf' }) })
+    mocks.session.mockResolvedValueOnce({ id: '55555555-5555-4555-8555-555555555555', aal: 'aal1' })
+      .mockResolvedValueOnce({ id: '66666666-6666-4666-8666-666666666666', aal: 'aal1' })
+    mocks.create.mockReturnValue({ storage: { from: () => ({ upload, download }) }, rpc: vi.fn() })
+    const result = await POST(request())
+    expect(result.status).toBe(403)
+    expect(upload).toHaveBeenCalledOnce()
+    expect(mocks.register).not.toHaveBeenCalled()
   })
 
   it('does not look up or release files absent from the caller snapshot', async () => {
@@ -79,5 +112,22 @@ describe('offering-file API quarantine', () => {
     expect((await GET(new NextRequest(url))).status).toBe(404)
     expect(rpc).not.toHaveBeenCalled()
     expect(download).not.toHaveBeenCalled()
+  })
+
+  it('never returns downloaded bytes after authority disappears during the read', async () => {
+    const id = offeringFileId(revisionId, actor, 'MEMORANDUM', sha256Hex(pdf))
+    const lookup = { id, revision_id: revisionId, storage_path: `${revisionId}/${actor}/${id}`,
+      sha256: sha256Hex(pdf), size: pdf.length, mime_type: 'application/pdf', validation_state: 'QUARANTINED' }
+    const rpc = vi.fn().mockReturnValue({ abortSignal: vi.fn().mockResolvedValue({ data: lookup, error: null }) })
+    const download = vi.fn().mockResolvedValue({ error: null,
+      data: new Blob([new Uint8Array(pdf)], { type: 'application/pdf' }) })
+    mocks.create.mockReturnValue({ rpc, storage: { from: () => ({ download }) } })
+    mocks.read.mockResolvedValueOnce({ user: { id: actor }, snapshot })
+      .mockResolvedValueOnce({ user: { id: actor }, snapshot: { ...snapshot, products: [] } })
+    const url = `${origin}/api/portal/offering-documents?revision_id=${revisionId}&id=${id}&download=1&organisation=${organisationId}&role=OfferingManager`
+    const result = await GET(new NextRequest(url))
+    expect(result.status).toBe(403)
+    expect(download).toHaveBeenCalledOnce()
+    expect(await result.text()).not.toContain('%PDF')
   })
 })

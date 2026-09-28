@@ -7,7 +7,8 @@ import { createRequestSupabaseClient } from '@/lib/supabase/server'
 import { offeringFileBucket, offeringFileKindSchema,
   offeringFileLookupSchema, offeringFileMaxBytes, offeringFilePath, offeringFileReceiptSchema,
   offeringFileListItemSchema } from '@/lib/portal/offering-files'
-import { isPdfHeader, offeringFileId, sha256Hex } from '@/lib/portal/offering-files-server'
+import { isPdfHeader, offeringFileId, sha256Hex, registerOfferingFile,
+  requireOfferingFileReceiptWriter, verifiedOfferingFileSession, OfferingFileReceiptError } from '@/lib/portal/offering-files-server'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -44,6 +45,10 @@ export async function POST(request: NextRequest) {
     const client = createRequestSupabaseClient(jar.adapter)
     const { user, snapshot } = await readPortal(client, context)
     if (user.id !== expectedActor) throw new PortalError('The signed-in account changed. Reload before uploading.', 403)
+    // A missing restricted cloud writer fails before Storage can create an
+    // orphan. Neither a browser RPC nor client-selected digest can register it.
+    requireOfferingFileReceiptWriter()
+    const uploadSession = await verifiedOfferingFileSession(client, user.id)
     const raw = await readPortalBody(request, offeringFileMaxBytes + 16384)
     let form: FormData
     try { form = await new Response(Buffer.from(raw), { headers: { 'Content-Type': contentType } }).formData() }
@@ -90,14 +95,13 @@ export async function POST(request: NextRequest) {
     if (second.user.id !== user.id || second.snapshot.products.find(item => item.id === productId)?.offering_package?.id !== revisionId) {
       throw new PortalError('Authority changed during upload; the file remains quarantined.', 403)
     }
-    const { data, error } = await client.rpc('bx1_offering_file_register', {
-      operating_context: context, target_product: productId, target_revision: revisionId,
-      file_id: id, file_kind: kindResult.data, file_title: title.trim(), file_sha256: sha256,
-      file_size: bytes.length,
-    }).abortSignal(AbortSignal.timeout(12000))
-    if (error?.code === '42501') throw new PortalError('Authority changed during upload; the file remains quarantined.', 403)
-    if (error?.code === '23505' || error?.code === '23514') throw new PortalError('A different file is already recorded for this document kind and package.', 409)
-    if (error) throw new PortalError('The quarantine receipt could not be recorded. Do not rely on this file.', 503)
+    const currentSession = await verifiedOfferingFileSession(client, user.id)
+    if (currentSession.id !== uploadSession.id || currentSession.aal !== uploadSession.aal) {
+      throw new PortalError('The signed-in session changed during upload; the file remains quarantined.', 403)
+    }
+    const data = await registerOfferingFile({ actorId: user.id, sessionId: currentSession.id,
+      aal: currentSession.aal, context, productId, revisionId, fileId: id,
+      kind: kindResult.data, title: title.trim(), sha256, size: bytes.length })
     const receipt = offeringFileReceiptSchema.safeParse(data)
     if (!receipt.success || receipt.data.id !== id || receipt.data.revision_id !== revisionId
       || receipt.data.sha256 !== sha256 || receipt.data.size !== bytes.length
@@ -106,7 +110,8 @@ export async function POST(request: NextRequest) {
     }
     return jar.finish(privateResponse(NextResponse.json({ document: receipt.data,
       next: 'This file is quarantined and unscanned. It is not part of an approved or signed offering package.' }, { status: 202 })))
-  } catch (error) { return jar.finish(portalFailure(error)) }
+  } catch (error) { return jar.finish(portalFailure(error instanceof OfferingFileReceiptError
+    ? new PortalError(error.message, 503) : error)) }
 }
 
 export async function GET(request: NextRequest) {
