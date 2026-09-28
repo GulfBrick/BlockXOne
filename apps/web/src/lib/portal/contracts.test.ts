@@ -193,6 +193,31 @@ describe('customer portal contracts', () => {
       expect(portalCommandSchema.safeParse({ command: 'review_product_eligibility', key, payload: { ...payload, ...change } }).success).toBe(false)
     }
   })
+  it('requires product-scoped appointments without accepting client-granted authority', () => {
+    const request = { product_id: id, role: 'IssuerFundManager', appointee_user_id: id,
+      native_membership_id: id, expected_product_revision: 3,
+      evidence_reference: 'SYNTHETIC-ISSUER-APPOINTMENT-2026-09-28', requested_until: '2026-10-28T12:00:00Z' }
+    expect(portalCommandSchema.safeParse({ command: 'request_product_service_appointment', key, payload: request }).success).toBe(true)
+    expect(portalCommandSchema.safeParse({ command: 'request_product_service_appointment', key,
+      payload: { ...request, role: 'ComplianceOfficer' } }).success).toBe(true)
+    for (const change of [{ role: 'TokenisationAgent' }, { expected_product_revision: 0 },
+      { evidence_reference: 'short' }, { requested_until: 'not-a-date' },
+      { authority_binding_id: id }, { signer: true }]) {
+      expect(portalCommandSchema.safeParse({ command: 'request_product_service_appointment', key,
+        payload: { ...request, ...change } }).success).toBe(false)
+    }
+    const review = { appointment_id: id, expected_revision: 1, decision: 'APPROVED',
+      notes: 'Independent synthetic review of appointment scope and cited evidence.',
+      checks: { appointment: true, evidence: true, scope: true } }
+    expect(portalCommandSchema.safeParse({ command: 'review_product_service_appointment', key, payload: review }).success).toBe(true)
+    expect(portalCommandSchema.safeParse({ command: 'review_product_service_appointment', key,
+      payload: { ...review, reviewer_user_id: id } }).success).toBe(false)
+    expect(portalCommandSchema.safeParse({ command: 'apply_product_service_appointment', key,
+      payload: { appointment_id: id, expected_revision: 2 } }).success).toBe(true)
+    expect(portalCommandSchema.safeParse({ command: 'revoke_product_service_appointment', key,
+      payload: { appointment_id: id, expected_revision: 3,
+        reason: 'Synthetic appointment revoked after the controlled review.' } }).success).toBe(true)
+  })
   it('requires the exact case revision and a recorded reason for eligibility revocation', () => {
     const payload = { eligibility_case_id: id, expected_revision: 3, reason: 'Synthetic independent reviewer found the account is no longer eligible.' }
     expect(portalCommandSchema.safeParse({ command: 'revoke_product_eligibility', key, payload }).success).toBe(true)

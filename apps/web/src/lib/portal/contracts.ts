@@ -111,6 +111,26 @@ export type PortalOrganisationMandate = {
   admission_purpose: AdmissionPurpose; effective: boolean; next_owner: RepresentativeMandateNextOwner;
   can_request: boolean; can_review: boolean; can_apply: boolean; can_revoke: boolean;
 }
+/** Synthetic TEST service appointment for one product; never a wallet/signing mandate. */
+export type PortalProductServiceAppointment = {
+  id: string; product_id: string; product_organisation_id: string;
+  reviewer_scope_organisation_id: string; role: 'IssuerFundManager' | 'ComplianceOfficer';
+  appointee_user_id: string; native_membership_id: string;
+  requested_by_user_id: string; product_revision_at_request: number;
+  terms_hash_at_request: string; evidence_reference: string; requested_until: string;
+  status: 'SUBMITTED' | 'APPROVED' | 'CHANGES_REQUIRED' | 'REJECTED' | 'APPLIED' | 'REVOKED';
+  revision: number; requested_at: string; reviewed_at: string | null;
+  reviewed_by_user_id: string | null; review_notes: string | null;
+  approval_receipt_id: string | null; applied_at: string | null;
+  applied_by_user_id: string | null; revoked_at: string | null;
+  revoke_reason: string | null; effective: boolean;
+  next_owner: 'COMPLIANCE' | 'SUPER_ADMIN' | 'OFFERING_MANAGER' | 'NONE';
+  can_review: boolean; can_apply: boolean; can_revoke: boolean;
+}
+export type PortalProductAppointmentCandidate = {
+  product_id: string; role: 'IssuerFundManager' | 'ComplianceOfficer';
+  user_id: string; membership_id: string; display_name: string | null; email: string;
+}
 type ProductTermsBase = {
   name: string; issuer_name: string; summary: string;
   strategy: string; share_class: string; unit_price_minor: string;
@@ -226,6 +246,8 @@ export type PortalSnapshot = {
   requests?: { key: string; command: string }[];
   accounts?: PortalInvestmentAccount[]; entity_investment_accounts?: PortalEntityInvestmentAccount[];
   product_eligibility?: PortalProductEligibility[]; organisation_mandates?: PortalOrganisationMandate[];
+  product_appointments?: PortalProductServiceAppointment[];
+  product_appointment_candidates?: PortalProductAppointmentCandidate[];
   investing_representative_mandates?: PortalInvestingRepresentativeMandate[]; operating_context?: PortalOperatingContext;
   mandate_queue_available?: boolean; mandate_queue_blocked_reason?: 'MFA_REQUIRED' | 'NOT_ADMITTED' | null;
   entity_account_route_available?: boolean; entity_account_blocked_reason?: 'NOT_ADMITTED' | null;
@@ -340,6 +362,7 @@ export const offeringChecks = z.object({ issuer: z.boolean(), terms: z.boolean()
 export const productEligibilityChecks = z.object({ identity: z.boolean(), product_fit: z.boolean(), restrictions: z.boolean(), source_of_funds: z.boolean() }).strict()
 export const representativeMandateChecks = z.object({ appointment: z.boolean(), evidence: z.boolean(), scope: z.boolean() }).strict()
 export const investingRepresentativeChecks = z.object({ appointment: z.boolean(), legal_entity: z.boolean(), scope: z.boolean() }).strict()
+export const productServiceAppointmentChecks = z.object({ appointment: z.boolean(), evidence: z.boolean(), scope: z.boolean() }).strict()
 export const portalCommandSchema = z.discriminatedUnion('command', [
   z.object({ command: z.literal('submit_application'), key: id, payload: z.object({ persona: z.enum(['INVESTOR', 'WEALTH_MANAGER']), expected_revision: z.number().int().min(0), details: applicationDetailsSchema }).strict() }).strict(),
   z.object({ command: z.literal('review_application'), key: id, payload: z.object({ application_id: id, expected_revision: z.number().int().positive(), decision: z.enum(['APPROVED', 'CHANGES_REQUIRED', 'REJECTED']), notes: text(20, 3000), checks: reviewChecks }).strict() }).strict(),
@@ -355,6 +378,10 @@ export const portalCommandSchema = z.discriminatedUnion('command', [
   z.object({ command: z.literal('request_product_eligibility'), key: id, payload: z.object({ product_id: id, investment_account_id: id, expected_revision: z.number().int().min(0), investor_statement: text(20, 2000) }).strict() }).strict(),
   z.object({ command: z.literal('review_product_eligibility'), key: id, payload: z.object({ eligibility_case_id: id, expected_revision: z.number().int().positive(), decision: z.enum(['APPROVED', 'CHANGES_REQUIRED', 'REJECTED']), notes: text(20, 3000), checks: productEligibilityChecks }).strict() }).strict(),
   z.object({ command: z.literal('revoke_product_eligibility'), key: id, payload: z.object({ eligibility_case_id: id, expected_revision: z.number().int().positive(), reason: text(20, 2000) }).strict() }).strict(),
+  z.object({ command: z.literal('request_product_service_appointment'), key: id, payload: z.object({ product_id: id, role: z.enum(['IssuerFundManager', 'ComplianceOfficer']), appointee_user_id: id, native_membership_id: id, expected_product_revision: z.number().int().positive(), evidence_reference: text(20, 400), requested_until: z.string().datetime({ offset: false }).regex(/Z$/) }).strict() }).strict(),
+  z.object({ command: z.literal('review_product_service_appointment'), key: id, payload: z.object({ appointment_id: id, expected_revision: z.number().int().positive(), decision: z.enum(['APPROVED', 'CHANGES_REQUIRED', 'REJECTED']), notes: text(20, 3000), checks: productServiceAppointmentChecks }).strict() }).strict(),
+  z.object({ command: z.literal('apply_product_service_appointment'), key: id, payload: z.object({ appointment_id: id, expected_revision: z.number().int().positive() }).strict() }).strict(),
+  z.object({ command: z.literal('revoke_product_service_appointment'), key: id, payload: z.object({ appointment_id: id, expected_revision: z.number().int().positive(), reason: text(20, 1000) }).strict() }).strict(),
   z.object({ command: z.literal('review_representative_mandate'), key: id, payload: z.object({ mandate_id: id, expected_revision: z.number().int().positive(), decision: z.enum(['APPROVED', 'CHANGES_REQUIRED', 'REJECTED']), notes: text(20, 3000), checks: representativeMandateChecks }).strict() }).strict(),
   z.object({ command: z.literal('apply_representative_mandate'), key: id, payload: z.object({ mandate_id: id, expected_revision: z.number().int().positive() }).strict() }).strict(),
   z.object({ command: z.literal('revoke_representative_mandate'), key: id, payload: z.object({ mandate_id: id, expected_revision: z.number().int().positive(), reason: text(20, 1000) }).strict() }).strict(),

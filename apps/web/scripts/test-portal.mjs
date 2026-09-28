@@ -1634,6 +1634,126 @@ try {
   await admin()
   eq(await scalar('select status from bx1_portal.products where id=$1', [reviewedProperty.id]), 'APPROVED',
     'denied property publication leaves reviewed package closed')
+  phase = 'stage3-product-service-appointments'
+  await sqlFile('../../../supabase/migrations/20260928174847_stage3_product_service_appointments.sql')
+  for (const table of ['product_service_appointments', 'product_service_appointment_receipts',
+    'product_service_appointment_requests']) {
+    eq(await scalar(`select count(*)::int from bx1_portal.${table}`), 0,
+      `${table} migration seeds no authority`)
+    for (const role of ['anon', 'authenticated', 'service_role']) {
+      eq(await scalar('select has_table_privilege($1,$2,\'SELECT,INSERT,UPDATE,DELETE\')',
+        [role, `bx1_portal.${table}`]), false, `${role} cannot directly mutate ${table}`)
+    }
+  }
+  eq(await scalar('select bx1_portal.offering_approved($1)', [reviewedProperty.id]), false,
+    'historical review decisions do not silently acquire product appointments')
+  const issuerMembershipId = await scalar(`select id from public.bx1_memberships
+    where user_id=$1 and organisation_id=$2 and role='IssuerFundManager'`, [uid(13), nativeScope])
+  const complianceMembershipId = await scalar(`select id from public.bx1_memberships
+    where user_id=$1 and organisation_id=$2 and role='ComplianceOfficer'`, [uid(2), nativeScope])
+  truth(issuerMembershipId && complianceMembershipId, 'pre-existing staff roles are prerequisites only')
+  const appointedFundName = 'Synthetic exact-product appointment fund'
+  let appointedFund = (await scopedCommand(1, manager, 'create_product', {
+    organisation_id: orgId, terms: fundV2Terms(appointedFundName),
+  })).products.find(value => value.terms.name === appointedFundName)
+  const candidates = (await scopedRead(1, manager)).product_appointment_candidates
+  truth(candidates.some(value => value.product_id === appointedFund.id
+    && value.role === 'IssuerFundManager' && value.membership_id === issuerMembershipId),
+  'manager sees only role candidate for its own editable product')
+  eq((await mandateScopedRead(13, issuerContext)).product_appointment_candidates.length, 0,
+    'issuer cannot enumerate manager candidate directory')
+  const until = new Date(Date.now() + 14 * 86400000).toISOString()
+  const appointmentInput = (targetRole, appointee, membership) => ({
+    product_id: appointedFund.id, role: targetRole, appointee_user_id: uid(appointee),
+    native_membership_id: membership, expected_product_revision: appointedFund.revision,
+    evidence_reference: `SYNTHETIC-APPOINTMENT-${targetRole}-2026-09-28`, requested_until: until,
+  })
+  const issuerRequest = appointmentInput('IssuerFundManager', 13, issuerMembershipId)
+  await denied('issuer cannot appoint itself from role label', () => mandateScopedCommand(13, issuerContext,
+    'request_product_service_appointment', issuerRequest), '42501')
+  const issuerKey = key()
+  let issuerAppointment = (await scopedCommand(1, manager,
+    'request_product_service_appointment', issuerRequest, issuerKey)).product_appointments
+    .find(value => value.product_id === appointedFund.id && value.role === 'IssuerFundManager')
+  eq(issuerAppointment.status, 'SUBMITTED', 'manager request confers no issuer authority')
+  eq((await scopedCommand(1, manager, 'request_product_service_appointment', issuerRequest,
+    issuerKey)).product_appointments.find(value => value.id === issuerAppointment.id).revision, 1,
+  'exact appointment request replay is idempotent')
+  await denied('same request key cannot nominate a different person', () => scopedCommand(1, manager,
+    'request_product_service_appointment', { ...issuerRequest, appointee_user_id: uid(4) },
+    issuerKey), '23505')
+  const complianceRequest = appointmentInput('ComplianceOfficer', 2, complianceMembershipId)
+  let complianceAppointment = (await scopedCommand(1, manager,
+    'request_product_service_appointment', complianceRequest)).product_appointments
+    .find(value => value.product_id === appointedFund.id && value.role === 'ComplianceOfficer')
+  eq(complianceAppointment.status, 'SUBMITTED', 'separate Compliance appointment also starts pending')
+  const reviewAppointment = appointment => ({ appointment_id: appointment.id,
+    expected_revision: appointment.revision, decision: 'APPROVED',
+    notes: 'Independent synthetic review of exact product appointment and cited scope.',
+    checks: { appointment: true, evidence: true, scope: true } })
+  await denied('appointee cannot review own appointment', () => mandateScopedCommand(2, reviewer,
+    'review_product_service_appointment', reviewAppointment(complianceAppointment)), '42501')
+  issuerAppointment = (await mandateScopedCommand(11, reviewer,
+    'review_product_service_appointment', reviewAppointment(issuerAppointment))).product_appointments
+    .find(value => value.id === issuerAppointment.id)
+  complianceAppointment = (await mandateScopedCommand(11, reviewer,
+    'review_product_service_appointment', reviewAppointment(complianceAppointment))).product_appointments
+    .find(value => value.id === complianceAppointment.id)
+  eq([issuerAppointment.status, complianceAppointment.status], ['APPROVED', 'APPROVED'],
+    'independent review alone grants neither product decision')
+  await denied('reviewer cannot self-apply via second Super Admin role', () => mandateScopedCommand(2,
+    roleContext('SuperAdmin'), 'apply_product_service_appointment', {
+      appointment_id: issuerAppointment.id, expected_revision: issuerAppointment.revision,
+    }), '42501')
+  issuerAppointment = (await mandateScopedCommand(10, roleContext('SuperAdmin'),
+    'apply_product_service_appointment', { appointment_id: issuerAppointment.id,
+      expected_revision: issuerAppointment.revision })).product_appointments
+    .find(value => value.id === issuerAppointment.id)
+  complianceAppointment = (await mandateScopedCommand(10, roleContext('SuperAdmin'),
+    'apply_product_service_appointment', { appointment_id: complianceAppointment.id,
+      expected_revision: complianceAppointment.revision })).product_appointments
+    .find(value => value.id === complianceAppointment.id)
+  eq([issuerAppointment.effective, complianceAppointment.effective], [true, true],
+    'two exact-product appointments applied without organisation-wide binding creation')
+  await admin()
+  await db.query(`update bx1_portal.organisation_authority_bindings set status='REVOKED'
+    where product_organisation_id=$1 and role in ('IssuerFundManager','ComplianceOfficer')
+      and status='ACTIVE'`, [orgId])
+  eq(await scalar(`select count(*)::int from bx1_portal.organisation_authority_bindings
+    where product_organisation_id=$1 and role in ('IssuerFundManager','ComplianceOfficer')
+      and status='ACTIVE'`, [orgId]), 0,
+  'appointment authority does not depend on manually seeded org-wide issuer or Compliance bindings')
+  appointedFund = (await scopedCommand(1, manager, 'submit_product', {
+    product_id: appointedFund.id, expected_revision: appointedFund.revision,
+  })).products.find(value => value.id === appointedFund.id)
+  const issuerState = await mandateScopedRead(13, issuerContext)
+  truth(issuerState.products.some(value => value.id === appointedFund.id),
+    'issuer sees only the explicitly appointed product after old broad binding revocation')
+  appointedFund = (await mandateScopedCommand(13, issuerContext, 'review_offering_issuer',
+    issuerInput(appointedFund))).products.find(value => value.id === appointedFund.id)
+  eq(appointedFund.offering_package.issuer_status, 'APPROVED',
+    'issuer decision is bound to its exact active product appointment')
+  eq(await scalar(`select product_appointment_id from bx1_portal.offering_decisions
+    where offering_revision_id=$1 and decision_kind='ISSUER'`, [appointedFund.offering_package.id]),
+  issuerAppointment.id, 'immutable issuer decision records appointment identity')
+  await denied('Compliance appointment does not loosen inherited broader reviewer gate',
+    () => mandateScopedCommand(2, reviewer, 'review_product', complianceInput(appointedFund)), '42501')
+  eq(await scalar('select bx1_portal.offering_approved($1)', [appointedFund.id]), false,
+    'incomplete Compliance path cannot manufacture whole-package approval')
+  await db.query('savepoint appointment_main_seal')
+  await admin(); await db.query(`update bx1_portal.entry_configuration
+    set environment='MAINNET',manual_test_review=false where singleton`)
+  await denied('MAIN-equivalent admission seal rejects synthetic appointment writes',
+    () => scopedCommand(1, manager, 'request_product_service_appointment', issuerRequest), '42501')
+  await db.query('rollback to savepoint appointment_main_seal; release savepoint appointment_main_seal')
+  issuerAppointment = (await mandateScopedCommand(10, roleContext('SuperAdmin'),
+    'revoke_product_service_appointment', { appointment_id: issuerAppointment.id,
+      expected_revision: issuerAppointment.revision,
+      reason: 'Synthetic issuer scope revoked after exact-product decision proof.' })).product_appointments
+    .find(value => value.id === issuerAppointment.id)
+  eq(issuerAppointment.effective, false, 'revocation immediately removes product authority')
+  eq((await mandateScopedRead(13, issuerContext)).products.some(value => value.id === appointedFund.id), false,
+    'revoked issuer cannot read appointed product through old native role')
   await db.query('commit'); begun = false
   phase = 'fund-v2-cached-event-scope-revoked-during-read'
   // The optimized base reader calculates allowed organisations before it
