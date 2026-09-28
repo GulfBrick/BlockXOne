@@ -1332,9 +1332,9 @@ try {
   await admin()
   const ownDraftBefore = await scalar(`select jsonb_build_object(
     'revision',p.revision,'hash',p.terms_hash,'requests',(select count(*) from bx1_portal.requests r
-      where r.actor_id=$2 and r.command='save_product' and r.payload->>'product_id'=$1::text),
+      where r.actor_id=$2 and r.command='save_product' and r.payload->>'product_id'=($1::uuid)::text),
     'scoped',(select count(*) from bx1_portal.scoped_requests r
-      where r.actor_id=$2 and r.command='save_product' and r.payload->>'product_id'=$1::text),
+      where r.actor_id=$2 and r.command='save_product' and r.payload->>'product_id'=($1::uuid)::text),
     'events',(select count(*) from bx1_portal.events e
       where e.actor_id=$2 and e.kind='save_product' and e.subject_id=$1))
     from bx1_portal.products p where p.id=$1`, [v3Draft.id, uid(14)])
@@ -1364,9 +1364,9 @@ try {
   await admin()
   eq(await scalar(`select jsonb_build_object(
     'revision',p.revision,'hash',p.terms_hash,'requests',(select count(*) from bx1_portal.requests r
-      where r.actor_id=$2 and r.command='save_product' and r.payload->>'product_id'=$1::text),
+      where r.actor_id=$2 and r.command='save_product' and r.payload->>'product_id'=($1::uuid)::text),
     'scoped',(select count(*) from bx1_portal.scoped_requests r
-      where r.actor_id=$2 and r.command='save_product' and r.payload->>'product_id'=$1::text),
+      where r.actor_id=$2 and r.command='save_product' and r.payload->>'product_id'=($1::uuid)::text),
     'events',(select count(*) from bx1_portal.events e
       where e.actor_id=$2 and e.kind='save_product' and e.subject_id=$1))
     from bx1_portal.products p where p.id=$1`, [v3Draft.id, uid(14)]), ownDraftBefore,
