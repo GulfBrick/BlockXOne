@@ -1331,6 +1331,15 @@ try {
   const foreignManagerOwnDraft = (await scopedRead(14, v3RoleContext)).products.find(value => value.id === v3Draft.id)
   console.log(`BX1_FUND_V2_TIMING scopedReadMs=${Date.now() - ownReadStartedAt} actor=synthetic-other-organisation`)
   eq(foreignManagerOwnDraft?.status, 'DRAFT', 'other-organisation manager sees only their own existing draft')
+  await admin()
+  phase = 'fund-v2-read-projection-profile'
+  for (const layer of ['read_scoped_p2', 'read_scoped_pre_eligibility', 'read_scoped_pre_mandate',
+    'read_scoped_pre_entity', 'read_scoped_pre_offering']) {
+    const layerStartedAt = Date.now()
+    await scalar(`select pg_catalog.octet_length(bx1_portal.${layer}($1::jsonb)::text)`,
+      [JSON.stringify(v3RoleContext)])
+    console.log(`BX1_FUND_V2_TIMING layer=${layer} elapsedMs=${Date.now() - layerStartedAt}`)
+  }
   const contextStartedAt = Date.now()
   await scalar('select bx1_portal.valid_operating_context($1::jsonb)', [JSON.stringify(v3RoleContext)])
   console.log(`BX1_FUND_V2_TIMING validContextMs=${Date.now() - contextStartedAt} actor=synthetic-other-organisation`)
