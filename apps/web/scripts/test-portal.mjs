@@ -1533,6 +1533,7 @@ try {
   eq(freshProperty.terms.property_valuation_minor, '3000000000',
     'illustrative 3,000 TST property valuation stays distinct from the 2,000 TST offering capacity')
   phase = 'stage3-property-v2-save-and-authority'
+  await admin()
   const propertyBefore = await scalar(`select jsonb_build_object(
     'revision',p.revision,'hash',p.terms_hash,
     'requests',(select count(*) from bx1_portal.requests r where r.actor_id=$2 and r.command='save_product'
