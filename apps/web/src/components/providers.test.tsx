@@ -22,7 +22,9 @@ describe('provider Auth isolation during rendering', () => {
   beforeEach(() => { state.providerCalls = 0; state.authReads = 0 })
   afterEach(() => vi.unstubAllEnvs())
 
-  it.each(['/login', '/auth/confirm', '/auth/setup', '/workspace', '/workspace/access-denied', '/'])('never mounts or reads legacy Auth for native %s', (pathname) => {
+  // These are structural paths only. TEST environment and identity admission
+  // remain server-side and are exercised by portal/admission.test.ts.
+  it.each(['/login', '/auth/confirm', '/auth/setup', '/workspace', '/workspace/access-denied', '/register', '/portal', '/portal/onboarding', '/portal/products', '/portal/portfolio', '/'])('never mounts or reads legacy Auth for native %s', (pathname) => {
     vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_AUTH_MODE', 'supabase')
     state.pathname = pathname
     const markup = renderToStaticMarkup(<Providers><span>approved-child</span></Providers>)
@@ -30,7 +32,7 @@ describe('provider Auth isolation during rendering', () => {
     expect(state.providerCalls).toBe(0)
     expect(state.authReads).toBe(0)
   })
-  it.each(['/investor/portfolio', '/wm/funds/new', '/admin', '/register', '/auth/unknown', '/workspace/unknown'])('does not render unported protected children at %s', (pathname) => {
+  it.each(['/investor/portfolio', '/wm/funds/new', '/admin', '/register/extra', '/Register', '/register/', '/portal/unknown', '/portal%2fproducts', '/portal//products', '/Portal', '/auth/unknown', '/workspace/unknown'])('does not render unported protected children at %s', (pathname) => {
     vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_AUTH_MODE', 'supabase')
     state.pathname = pathname
     const markup = renderToStaticMarkup(<Providers><span>must-not-render</span></Providers>)
@@ -45,9 +47,9 @@ describe('provider Auth isolation during rendering', () => {
     expect(renderToStaticMarkup(<Providers><span>legacy-child</span></Providers>)).toContain('legacy-child')
     expect(state.providerCalls).toBe(1)
   })
-  it('unknown public Auth mode cannot restore the old provider or render workspace content', () => {
+  it.each(['/workspace', '/register', '/portal', '/portal/onboarding'])('unknown public Auth mode cannot restore the old provider or render %s content', (pathname) => {
     vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_AUTH_MODE', 'unknown')
-    state.pathname = '/workspace'
+    state.pathname = pathname
     expect(renderToStaticMarkup(<Providers><span>must-not-render</span></Providers>)).not.toContain('must-not-render')
     expect(state.providerCalls).toBe(0)
     expect(state.authReads).toBe(0)

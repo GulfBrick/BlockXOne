@@ -1,0 +1,11 @@
+{
+  "imports": {
+    "ethers": "npm:ethers@6.17.0",
+    "@supabase/supabase-js": "npm:@supabase/supabase-js@2.116.0",
+    "./funding-claim": "./funding-claim.ts"
+  },
+  "compilerOptions": { "strict": true },
+  "tasks": {
+    "check": "deno check index.ts funding-verifier.ts funding-claim.ts"
+  }
+}

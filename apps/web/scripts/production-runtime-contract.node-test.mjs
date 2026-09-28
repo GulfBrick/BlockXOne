@@ -13,6 +13,14 @@ const repositoryRoot = path.resolve(webRoot, '..', '..')
 const dockerfile = readFileSync(path.join(repositoryRoot, 'Dockerfile.web'), 'utf8')
 const navbar = readFileSync(path.join(webRoot, 'src', 'components', 'ui', 'navbar.tsx'), 'utf8')
 
+test('only the administration review branch suppresses Vercel Git deployments', () => {
+  const config = JSON.parse(readFileSync(path.join(webRoot, 'vercel.json'), 'utf8'))
+  assert.deepEqual(config.git, { deploymentEnabled: { 'codex/hosted-administration-20260919': false } })
+  assert.equal(config.framework, 'nextjs')
+  assert.equal(config.installCommand, 'npx --yes --package=node@22.23.1 --package=npm@10.9.8 -c "npm ci"')
+  assert.equal(config.buildCommand, 'npx --yes --package=node@22.23.1 --package=npm@10.9.8 -c "npm run build"')
+})
+
 test('standalone Docker builder and runtime retain the complete production build contract', () => {
   const runtimeMarker = 'FROM node:22.23.1-alpine AS runtime'
   const runtimeOffset = dockerfile.indexOf(runtimeMarker)
@@ -84,6 +92,31 @@ test('native production config has no legacy rewrite and private Auth/workspace 
     const expectedReferrerPolicy = source === '/auth/:path*' ? 'no-referrer' : 'strict-origin'
     assert.ok(headers.some(({ key, value }) => key === 'Referrer-Policy' && value === expectedReferrerPolicy))
   }
+})
+
+test('disabled demo requests do not allow their configured endpoint in the browser CSP', () => {
+  const endpoint = 'https://unused-demo-endpoint.example'
+  const result = loadNativeConfig({ NEXT_PUBLIC_DEMO_REQUEST_ENDPOINT: endpoint })
+  assert.equal(result.status, 0, result.stderr)
+  const configuration = JSON.parse(result.stdout)
+  const globalHeaders = configuration.headers.find((entry) => entry.source === '/:path*')?.headers
+  const csp = globalHeaders?.find(({ key }) => key === 'Content-Security-Policy')?.value
+  assert.ok(csp)
+  assert.ok(!csp.includes(endpoint), 'disabled demo endpoint must not be in connect-src')
+})
+
+test('enabled demo requests retain their reviewed endpoint in the browser CSP', () => {
+  const endpoint = 'https://demo-endpoint.example'
+  const result = loadNativeConfig({
+    NEXT_PUBLIC_DEMO_REQUEST_ENABLED: 'true',
+    NEXT_PUBLIC_DEMO_REQUEST_ENDPOINT: endpoint,
+    NEXT_PUBLIC_DEMO_PRIVACY_NOTICE_URL: 'https://bx1.co.za/privacy',
+  })
+  assert.equal(result.status, 0, result.stderr)
+  const configuration = JSON.parse(result.stdout)
+  const globalHeaders = configuration.headers.find((entry) => entry.source === '/:path*')?.headers
+  const csp = globalHeaders?.find(({ key }) => key === 'Content-Security-Policy')?.value
+  assert.ok(csp?.includes(endpoint), 'enabled demo endpoint must be in connect-src')
 })
 
 test('native production configuration rejects mismatches and server secret-key classes', () => {

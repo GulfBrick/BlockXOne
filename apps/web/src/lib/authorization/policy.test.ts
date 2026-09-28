@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 vi.mock('server-only', () => ({}))
 import { BX1_ROLES, type Bx1Role, type Bx1Workspace } from '@/lib/supabase/contracts'
-import { evaluateActionPermission, FUTURE_ACTIONS, SUPPORTED_ACTIONS, type PermissionTarget } from './policy'
+import { ADMINISTRATION_ACTIONS, evaluateAdministrationPermission, issueAdministrationContext, evaluateActionPermission, FUTURE_ACTIONS, SUPPORTED_ACTIONS, type PermissionTarget } from './policy'
 
 const targets = {
   'workspace.read': undefined,
@@ -12,6 +12,37 @@ const targets = {
   'wallet.ownership.challenge': { userId: 'user-a', organisationId: 'org-a' },
   'wallet.ownership.verify': { userId: 'user-a', organisationId: 'org-a' },
 } as const
+
+describe('separate opaque administration policy', () => {
+  const organisationId = '10000000-0000-4000-8000-000000000001'
+  const facts = () => ({ organisationId, principalId: '20000000-0000-4000-8000-000000000001', personId: '30000000-0000-4000-8000-000000000001',
+    scopeRevision: '1', trustRevision: '1', state: 'READY' as const, grantFrom: Date.now() - 1000, grantUntil: Date.now() + 60_000 })
+  it('keeps 5 separate names without enabling any of the 30 future names', () => {
+    expect(ADMINISTRATION_ACTIONS).toHaveLength(5)
+    expect(SUPPORTED_ACTIONS).toHaveLength(7)
+    expect(FUTURE_ACTIONS).toHaveLength(30)
+    const context = issueAdministrationContext(facts())!
+    for (const action of ADMINISTRATION_ACTIONS) expect(evaluateAdministrationPermission(context, action, { organisationId })).toEqual({ allowed: true })
+    for (const action of [...FUTURE_ACTIONS, '*', 'administration.grant', 'ADMINISTRATION.READ']) expect(evaluateAdministrationPermission(context, action, { organisationId }).allowed).toBe(false)
+  })
+  it('denies plain, cloned, role-only, foreign-scope and stale contexts', () => {
+    const context = issueAdministrationContext(facts())!
+    for (const fake of [{}, { ...context }, { roles: ['SuperAdmin'], enabled: true }, null]) expect(evaluateAdministrationPermission(fake as never, 'administration.read', { organisationId }).allowed).toBe(false)
+    expect(evaluateAdministrationPermission(context, 'administration.read', { organisationId: 'foreign' }).allowed).toBe(false)
+    expect(evaluateAdministrationPermission(context, 'administration.read', { organisationId, extra: true } as never).allowed).toBe(false)
+    expect(JSON.stringify(context)).toBe('{}')
+    const issuedAt = Date.now()
+    vi.spyOn(Date, 'now').mockReturnValue(issuedAt + 15_001)
+    expect(evaluateAdministrationPermission(context, 'administration.read', { organisationId }).allowed).toBe(false)
+  })
+  it('keeps HOLD read-only and rejects expired or malformed trusted factory input', () => {
+    const context = issueAdministrationContext({ ...facts(), state: 'HOLD' })!
+    expect(evaluateAdministrationPermission(context, 'administration.read', { organisationId }).allowed).toBe(true)
+    expect(evaluateAdministrationPermission(context, 'administration.cancel', { organisationId })).toEqual({ allowed: false, reason: 'governance_hold' })
+    expect(issueAdministrationContext({ ...facts(), grantUntil: Date.now() })).toBeNull()
+    expect(issueAdministrationContext({ ...facts(), scopeRevision: '9223372036854775808' })).toBeNull()
+  })
+})
 
 function workspace(roles: Bx1Role[] = ['Investor']): Bx1Workspace {
   return {

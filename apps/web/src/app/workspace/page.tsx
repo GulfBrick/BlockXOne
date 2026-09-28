@@ -3,6 +3,8 @@ import Link from 'next/link'
 import { PublicShell } from '@/components/public/public-shell'
 import { Button } from '@/components/ui/button'
 import { isSupabaseAuthMode } from '@/lib/auth-mode'
+import { isDemoEnvironment } from '@/lib/testnet-fund/contracts'
+import { platformRelease } from '@/lib/platform-release'
 import { authDocumentReferrerPolicy } from '@/lib/auth-referrer-policy'
 import { evaluateActionPermission } from '@/lib/authorization/policy'
 import { createPageSupabaseClient } from '@/lib/supabase/page'
@@ -75,12 +77,13 @@ export default async function WorkspacePage() {
   return (
     <PublicShell>
       <main id="main-content" className="mx-auto w-full max-w-5xl px-4 py-12 sm:px-6 sm:py-16 lg:px-8">
+        {platformRelease(process.env) ? <div className="mb-6 flex flex-wrap gap-3"><Link href="/portal" className="inline-flex min-h-11 rounded-lg bg-bxo-accent-primary px-5 py-3 font-semibold text-bxo-bg-primary">Open your role dashboard →</Link>{isDemoEnvironment(process.env) ? <Link href="/workspace/testnet-fund" className="inline-flex min-h-11 rounded-lg border border-bxo-accent-border px-5 py-3 text-bxo-accent-primary">Existing Amoy contract workspace</Link> : null}</div> : null}
         <div className="flex flex-wrap items-start justify-between gap-6 border-b border-bxo-border-subtle pb-8">
           <div>
             <p className="text-sm font-semibold uppercase tracking-[0.16em] text-bxo-accent-primary">BlockXOne access</p>
             <h1 className="mt-4 font-ui text-3xl font-medium tracking-tight text-bxo-text-primary sm:text-4xl">Your workspace</h1>
           </div>
-          <div className="flex flex-wrap items-center gap-4"><Link href="/workspace/security" className="inline-flex min-h-11 items-center text-sm text-bxo-accent-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bxo-accent-primary">Account security</Link><form method="post" action="/auth/logout"><Button type="submit" variant="outline" className="min-h-11 focus-visible:ring-bxo-accent-primary">Sign out</Button></form></div>
+          <div className="flex flex-wrap items-center gap-4"><Link href="/workspace/administration" className="inline-flex min-h-11 items-center text-sm text-bxo-accent-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bxo-accent-primary">Administration</Link><Link href="/workspace/security" className="inline-flex min-h-11 items-center text-sm text-bxo-accent-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bxo-accent-primary">Account security</Link><form method="post" action="/auth/logout"><Button type="submit" variant="outline" className="min-h-11 focus-visible:ring-bxo-accent-primary">Sign out</Button></form></div>
         </div>
         {unavailable || !workspace ? <p role="alert" className="mt-8 text-base text-bxo-text-secondary">Access is temporarily unavailable. Please try again.</p> : (
           <div className="mt-8 grid gap-8 md:grid-cols-2">

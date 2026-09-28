@@ -1,12 +1,13 @@
 import { describe, expect, it, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { createMfaCodeInputRef, createMfaFormController, registerMfaPageLifecycle, MfaForm, type MfaFormState } from './mfa-form'
-import type { MfaView } from '@/lib/supabase/mfa-contracts'
+import { createMfaCodeInputRef, createMfaFormController, registerMfaPageLifecycle, readMfaResponse, MfaForm, type MfaFormState } from './mfa-form'
+import { MFA_ENROLL_QR_MAX_CHARACTERS, MFA_ENROLL_RESPONSE_MAX_BYTES, MFA_RESPONSE_MAX_BYTES, type MfaView } from '@/lib/supabase/mfa-contracts'
 
 const factorId = '11111111-1111-4111-8111-111111111111'
 const secondId = '22222222-2222-4222-8222-222222222222'
 const empty: MfaView = { state: 'unenrolled', factors: [], hasPendingTotp: false }
 const enrolled: MfaView = { state: 'challenge_required', factors: [{ id: factorId, status: 'verified', factorType: 'totp' }], hasPendingTotp: false }
+const verified: MfaView = { ...enrolled, state: 'verified' }
 const pending: MfaView = { state: 'unenrolled', factors: [{ id: factorId, status: 'unverified', factorType: 'totp' }], hasPendingTotp: true }
 const setup = { ok: true, factorId, secret: 'JBSWY3DPEHPK3PXP', qrCode: 'data:image/svg+xml;utf-8,<svg xmlns="http://www.w3.org/2000/svg"/>' }
 function fixture(view = empty, continuation: 'workspace' | 'setup' | 'security' = 'security') {
@@ -23,6 +24,16 @@ function deferred() {
 }
 
 describe('MFA transient controller', () => {
+  it.each([MFA_ENROLL_QR_MAX_CHARACTERS, MFA_ENROLL_QR_MAX_CHARACTERS + 1])('enforces the shared enrollment QR bound: %s', async length => {
+    const f = fixture()
+    const prefix = 'data:image/svg+xml;utf-8,<svg>'
+    f.post.mockResolvedValue({ ...setup, qrCode: `${prefix}${'x'.repeat(length - prefix.length - 6)}</svg>` })
+    await f.controller.enroll()
+    expect(f.controller.getState().reloadRequired).toBe(length > MFA_ENROLL_QR_MAX_CHARACTERS)
+    expect(f.controller.getState().setup?.qrCode.length).toBe(length > MFA_ENROLL_QR_MAX_CHARACTERS ? undefined : length)
+    f.controller.dispose()
+    expect(f.controller.getState().setup).toBeUndefined()
+  })
   it('clears a code input that mounts only after enrollment when detached', () => {
     const input = createMfaCodeInputRef()
     input.clear()
@@ -99,6 +110,23 @@ describe('MFA transient controller', () => {
     await f.controller.enroll()
     expect(f.post).not.toHaveBeenCalled()
   })
+  it('offers explicit backup enrollment to a verified security session only', async () => {
+    const allowed = fixture(verified)
+    await allowed.controller.enroll()
+    expect(allowed.post.mock.calls[0][0]).toBe('/auth/mfa-enroll')
+    const denied = fixture(verified, 'workspace')
+    await denied.controller.enroll()
+    expect(denied.post).not.toHaveBeenCalled()
+  })
+  it('keeps the current-factor challenge usable after a backup step-up prompt', async () => {
+    const f = fixture(verified)
+    f.post.mockResolvedValue({ ok: false, error: 'step_up_required' })
+    await f.controller.enroll()
+    expect(f.controller.getState()).toMatchObject({ error: 'step_up_required', reloadRequired: false })
+    f.post.mockResolvedValue({ ok: true, next: '/workspace/security' })
+    await f.controller.verify(factorId, '123456')
+    expect(f.navigate).toHaveBeenCalledWith('/workspace/security')
+  })
   it('preserves leading zeros, exact field list and safe fixed continuation', async () => {
     const f = fixture(enrolled, 'setup')
     f.post.mockResolvedValue({ ok: true, next: '/login?setup=1' })
@@ -107,6 +135,15 @@ describe('MFA transient controller', () => {
     expect(f.post.mock.calls[0][1].toString()).toBe(`factorId=${factorId}&code=012345&continuation=setup`)
     expect(f.navigate).toHaveBeenCalledWith('/login?setup=1')
     expect(f.controller.getState().setup).toBeUndefined()
+  })
+  it('accepts the exact server-selected shared dashboard destination after verification', async () => {
+    const f = fixture(enrolled, 'workspace')
+    f.post.mockResolvedValue({ ok: true, next: '/portal' })
+    await f.controller.verify(factorId, '012345')
+    expect(f.post.mock.calls[0][1].get('continuation')).toBe('workspace')
+    expect(f.navigate).toHaveBeenCalledOnce()
+    expect(f.navigate).toHaveBeenCalledWith('/portal')
+    expect(f.controller.getState()).toMatchObject({ pending: false, reloadRequired: true })
   })
   it.each(['12345', '1234567', '123a56', '１２３４５６', ' 123456'])('rejects malformed code %s before POST', async code => {
     const f = fixture(enrolled)
@@ -126,6 +163,17 @@ describe('MFA transient controller', () => {
     expect(allowed.post).toHaveBeenCalledOnce()
     const denied = fixture(pending, 'workspace')
     await denied.controller.verify(factorId, '123456')
+    expect(denied.post).not.toHaveBeenCalled()
+  })
+  it('allows only security continuation to finish an unverified backup', async () => {
+    const withBackup: MfaView = { ...verified, factors: [...verified.factors,
+      { id: secondId, status: 'unverified', factorType: 'totp' }], hasPendingTotp: true }
+    const allowed = fixture(withBackup)
+    allowed.post.mockResolvedValue({ ok: true, next: '/workspace/security' })
+    await allowed.controller.verify(secondId, '123456')
+    expect(allowed.post.mock.calls[0][1].get('factorId')).toBe(secondId)
+    const denied = fixture(withBackup, 'workspace')
+    await denied.controller.verify(secondId, '123456')
     expect(denied.post).not.toHaveBeenCalled()
   })
   it('suppresses duplicate submissions and stale responses after pagehide', async () => {
@@ -154,7 +202,7 @@ describe('MFA transient controller', () => {
     await request
     expect(f.navigate).not.toHaveBeenCalled()
   })
-  it.each(['https://evil.test', '//evil.test', '/workspace?token=secret', '/admin', '/workspace/'])('rejects unknown next URL %s', async next => {
+  it.each(['https://evil.test', '//evil.test', '/workspace?token=secret', '/admin', '/workspace/', '/portal/', '/portal?next=https://evil.test', '/portal#token', '//portal', '/%70ortal'])('rejects unknown next URL %s', async next => {
     const f = fixture(enrolled)
     f.post.mockResolvedValue({ ok: true, next })
     await f.controller.verify(factorId, '123456')
@@ -188,6 +236,48 @@ describe('MFA transient controller', () => {
   })
 })
 
+describe('bounded MFA response transport', () => {
+  const response = (body: string | Uint8Array<ArrayBuffer>, status = 200) => new Response(body, { status, headers: { 'content-type': 'application/json' } })
+  const sized = (bytes: number) => {
+    const emptyBody = JSON.stringify({ ok: true, padding: '' })
+    return JSON.stringify({ ok: true, padding: 'x'.repeat(bytes - emptyBody.length) })
+  }
+  it.each([false, true])('accepts exactly the applicable byte bound, enrollment=%s', async enrollment => {
+    const bound = enrollment ? MFA_ENROLL_RESPONSE_MAX_BYTES : MFA_RESPONSE_MAX_BYTES
+    const result = await readMfaResponse(response(sized(bound)), enrollment) as { padding: string }
+    expect(result.padding.length).toBe(bound - JSON.stringify({ ok: true, padding: '' }).length)
+  })
+  it.each([false, true])('rejects overflow without returning response material, enrollment=%s', async enrollment => {
+    const bound = enrollment ? MFA_ENROLL_RESPONSE_MAX_BYTES : MFA_RESPONSE_MAX_BYTES
+    await expect(readMfaResponse(response(sized(bound + 1)), enrollment)).rejects.toThrow('unavailable')
+  })
+  it('never enlarges failed enrollment or verification response bounds', async () => {
+    await expect(readMfaResponse(response(sized(MFA_RESPONSE_MAX_BYTES + 1), 503), true)).rejects.toThrow('unavailable')
+    await expect(readMfaResponse(response(sized(MFA_RESPONSE_MAX_BYTES + 1)))).rejects.toThrow('unavailable')
+  })
+  it('decodes a multibyte value split across stream chunks', async () => {
+    const bytes = new TextEncoder().encode(JSON.stringify({ ok: false, error: 'unavailable', ignored: '中' }))
+    const boundary = bytes.indexOf(0xe4) + 1
+    const stream = new ReadableStream<Uint8Array>({ start(controller) {
+      controller.enqueue(bytes.slice(0, boundary)); controller.enqueue(bytes.slice(boundary)); controller.close()
+    } })
+    const result = await readMfaResponse(new Response(stream, { headers: { 'content-type': 'application/json' } })) as { error: string }
+    expect(result.error).toBe('unavailable')
+  })
+  it('cancels an overflowing stream', async () => {
+    const cancel = vi.fn()
+    const stream = new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(new Uint8Array(MFA_RESPONSE_MAX_BYTES + 1)) }, cancel })
+    await expect(readMfaResponse(new Response(stream, { headers: { 'content-type': 'application/json' } }))).rejects.toThrow('unavailable')
+    expect(cancel).toHaveBeenCalledOnce()
+  })
+  it('rejects invalid UTF8, incomplete JSON, HTML and success inside failed HTTP', async () => {
+    await expect(readMfaResponse(response(new Uint8Array([0xff])))).rejects.toThrow()
+    await expect(readMfaResponse(response('{"ok":'))).rejects.toThrow()
+    await expect(readMfaResponse(new Response('<html>private</html>'))).rejects.toThrow('unavailable')
+    await expect(readMfaResponse(response('{"ok":true}', 403))).rejects.toThrow('unavailable')
+  })
+})
+
 describe('MFA accessible markup', () => {
   it('offers opt-in without seed, automatic action or removal controls', () => {
     const html = renderToStaticMarkup(<MfaForm view={empty} continuation="security" />)
@@ -217,5 +307,12 @@ describe('MFA accessible markup', () => {
     const html = renderToStaticMarkup(<MfaForm view={{ ...enrolled, factors: [...enrolled.factors, { id: secondId, status: 'verified', factorType: 'totp' }] }} continuation="workspace" />)
     expect(html).toContain('<select')
     expect(html).toContain('Authenticator 2')
+  })
+  it('offers a separate-device backup without promising lost-all recovery or factor deletion', () => {
+    const html = renderToStaticMarkup(<MfaForm view={verified} continuation="security" />)
+    expect(html).toContain('Add backup authenticator')
+    expect(html).toContain('different device')
+    expect(html).toContain('Losing every verified factor still requires controlled support recovery')
+    expect(html).not.toMatch(/unenroll|Remove factor|Delete factor/)
   })
 })
