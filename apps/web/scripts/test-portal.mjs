@@ -1661,7 +1661,8 @@ try {
   phase = 'stage3-product-service-appointments'
   await sqlFile('../../../supabase/migrations/20260928174847_stage3_product_service_appointments.sql')
   for (const table of ['product_service_appointments', 'product_service_appointment_receipts',
-    'product_service_appointment_requests', 'offering_review_reopen_receipts']) {
+    'product_service_appointment_requests', 'offering_review_reopen_receipts',
+    'offering_amendment_begin_receipts']) {
     eq(await scalar(`select count(*)::int from bx1_portal.${table}`), 0,
       `${table} migration seeds no authority`)
     for (const role of ['anon', 'authenticated', 'service_role']) {
@@ -1683,6 +1684,11 @@ try {
   const complianceMembershipId = await scalar(`select id from public.bx1_memberships
     where user_id=$1 and organisation_id=$2 and role='ComplianceOfficer'`, [uid(2), nativeScope])
   truth(issuerMembershipId && complianceMembershipId, 'pre-existing staff roles are prerequisites only')
+  const legacyManagerDraft = (await scopedRead(5, manager)).products
+    .find(value => value.id === delegatedProduct.id)
+  eq([legacyManagerDraft.allowed_actions.includes('save_product'),
+    legacyManagerDraft.allowed_actions.includes('submit_product')], [true, false],
+  'historical v1 draft exposes manager upgrade editor but not v1 submission')
   const appointedFundName = 'Synthetic exact-product appointment fund'
   let appointedFund = (await scopedCommand(1, manager, 'create_product', {
     organisation_id: orgId, terms: fundV2Terms(appointedFundName),
@@ -1789,6 +1795,7 @@ try {
     .product_appointments.find(value => value.product_id === expiredIssuer.product.id && value.status === 'SUBMITTED')
   truth(replacementIssuer?.id && replacementIssuer.id !== expiredIssuer.oldId,
     'manager may replace an expired unreviewed nomination without resurrecting it')
+  await admin()
   eq(await scalar('select status from bx1_portal.product_service_appointments where id=$1',
     [expiredIssuer.oldId]), 'EXPIRED', 'old unreviewed nomination is terminally expired')
   eq(await scalar(`select jsonb_build_object(
@@ -1824,6 +1831,7 @@ try {
     .find(value => value.product_id === expiredCompliance.product.id && value.status === 'SUBMITTED')
   truth(replacementCompliance?.id && replacementCompliance.id !== expiredCompliance.oldId,
     'manager may replace an expired approved nomination')
+  await admin()
   eq(await scalar('select status from bx1_portal.product_service_appointments where id=$1',
     [expiredCompliance.oldId]), 'EXPIRED', 'old approved nomination cannot become effective later')
   await denied('expired appointment cannot be revived by an internal state update', async () => {
@@ -1902,6 +1910,9 @@ try {
   const issuerState = await mandateScopedRead(13, issuerContext)
   truth(issuerState.products.some(value => value.id === appointedFund.id),
     'issuer sees only the explicitly appointed product after old broad binding revocation')
+  eq(['save_product','submit_product'].some(action => issuerState.products
+    .find(value => value.id === appointedFund.id).allowed_actions.includes(action)), false,
+  'issuer appointment does not expose manager edit or submit actions')
   appointedFund = (await mandateScopedCommand(13, issuerContext, 'review_offering_issuer',
     issuerInput(appointedFund))).products.find(value => value.id === appointedFund.id)
   eq(appointedFund.offering_package.issuer_status, 'APPROVED',
@@ -1982,6 +1993,7 @@ try {
   await denied('MAIN-equivalent seal rejects approved-offering reopen',
     () => scopedCommand(1, manager, 'reopen_offering_review', reopenPayload), '42501')
   await db.query('rollback to savepoint reopen_main_seal; release savepoint reopen_main_seal')
+  await admin()
   const reopenBeforeAudit = await scalar(`select jsonb_build_object(
     'product',(select jsonb_build_object('status',status,'revision',revision,
       'offering',current_offering_revision_id) from bx1_portal.products where id=$1),
@@ -2059,6 +2071,227 @@ try {
     reopenedAfterLoss.offering_package.compliance_status], ['IN_REVIEW','PENDING','PENDING'],
   'manager can recover a never-published approved package after appointment authority loss')
   await db.query('rollback to savepoint reopen_after_authority_loss; release savepoint reopen_after_authority_loss')
+  phase = 'stage3-explicit-offering-terms-amendment'
+  const amendmentPayload = { product_id: appointedFund.id,
+    expected_revision: appointedFund.revision,
+    reason: 'Synthetic reviewed manager requests amended fund terms with complete fresh issuer and Compliance decisions.' }
+  const amendmentKey = key()
+  const amendmentView = await scopedRead(1, manager)
+  truth(amendmentView.products.find(value => value.id === appointedFund.id)
+    .allowed_actions.includes('begin_offering_amendment'),
+  'only the exact approved product exposes the begin-amendment action')
+  truth(amendmentView.organisations.find(value => value.id === orgId)
+    .capabilities.includes('begin_offering_amendment'),
+  'current manager organisation advertises a governed amendment for its eligible product')
+  await db.query('savepoint begin_amendment_proof')
+  await denied('wrong organisation cannot begin an offering amendment',
+    () => scopedCommand(1, roleContext('OfferingManager', otherScope),
+      'begin_offering_amendment', amendmentPayload), '42501')
+  await denied('stale approved product cannot begin an amendment',
+    () => scopedCommand(1, manager, 'begin_offering_amendment',
+      { ...amendmentPayload, expected_revision: appointedFund.revision - 1 }), '23514')
+  await db.query('savepoint amendment_file_intent_block')
+  await admin()
+  const blockedFileId = key()
+  await db.query(`insert into bx1_portal.offering_file_upload_intents
+    (id,offering_revision_id,product_id,actor_id,kind,title,storage_path,sha256,byte_size)
+    values($1,$2,$3,$4,'MEMORANDUM','Synthetic unresolved PDF intent',$5,$6,100)`,
+  [blockedFileId, originalOfferingId, appointedFund.id, uid(1),
+    `${originalOfferingId}/${uid(1)}/${blockedFileId}`, 'a'.repeat(64)])
+  await denied('unresolved offering-file intent blocks amendment',
+    () => scopedCommand(1, manager, 'begin_offering_amendment', amendmentPayload), '23514')
+  await db.query('rollback to savepoint amendment_file_intent_block; release savepoint amendment_file_intent_block')
+  await db.query('savepoint amendment_main_seal')
+  await admin(); await db.query(`update bx1_portal.entry_configuration
+    set environment='MAINNET',manual_test_review=false where singleton`)
+  await denied('MAIN-equivalent seal rejects synthetic amendment',
+    () => scopedCommand(1, manager, 'begin_offering_amendment', amendmentPayload), '42501')
+  await db.query('rollback to savepoint amendment_main_seal; release savepoint amendment_main_seal')
+  await admin()
+  const amendmentBaseline = await scalar(`select jsonb_build_object(
+    'product',(select jsonb_build_object('status',status,'revision',revision,
+      'offering',current_offering_revision_id) from bx1_portal.products where id=$1),
+    'receipts',(select count(*) from bx1_portal.offering_amendment_begin_receipts where product_id=$1),
+    'requests',(select count(*) from bx1_portal.scoped_requests where actor_id=$2 and request_key=$3))`,
+  [appointedFund.id, uid(1), amendmentKey])
+  await db.query('savepoint amendment_audit_failure')
+  await admin(); await db.query(`create function public.synthetic_amendment_audit_failure() returns trigger
+    language plpgsql as $$ begin if NEW.kind='begin_offering_amendment' then
+    raise exception 'synthetic_amendment_audit_failure' using errcode='23514'; end if;
+    return NEW; end $$;
+    create trigger synthetic_amendment_audit_failure before insert on bx1_portal.events
+    for each row execute function public.synthetic_amendment_audit_failure()`)
+  await denied('mandatory audit failure rolls back amendment and receipt',
+    () => scopedCommand(1, manager, 'begin_offering_amendment', amendmentPayload,
+      amendmentKey), '23514')
+  await db.query('rollback to savepoint amendment_audit_failure; release savepoint amendment_audit_failure')
+  await admin()
+  eq(await scalar(`select jsonb_build_object(
+    'product',(select jsonb_build_object('status',status,'revision',revision,
+      'offering',current_offering_revision_id) from bx1_portal.products where id=$1),
+    'receipts',(select count(*) from bx1_portal.offering_amendment_begin_receipts where product_id=$1),
+    'requests',(select count(*) from bx1_portal.scoped_requests where actor_id=$2 and request_key=$3))`,
+  [appointedFund.id, uid(1), amendmentKey]), amendmentBaseline,
+  'audit rejection preserves approved state, pointer and immutable receipt count')
+  let amendingFund = (await scopedCommand(1, manager, 'begin_offering_amendment',
+    amendmentPayload, amendmentKey)).products.find(value => value.id === appointedFund.id)
+  eq([amendingFund.status, amendingFund.revision, amendingFund.offering_package],
+    ['CHANGES_REQUIRED', appointedFund.revision + 1, null],
+  'amendment detaches the reviewed package without deleting its decision history')
+  eq([amendingFund.allowed_actions.includes('save_product'),
+    amendingFund.allowed_actions.includes('submit_product')], [true, false],
+  'amendment opens exact manager editor but not unchanged-terms submission')
+  eq((await scopedCommand(1, manager, 'begin_offering_amendment', amendmentPayload,
+    amendmentKey)).products.find(value => value.id === appointedFund.id).revision,
+  amendingFund.revision, 'exact amendment replay creates no second transition')
+  await denied('amendment key cannot be reused for different reason',
+    () => scopedCommand(1, manager, 'begin_offering_amendment',
+      { ...amendmentPayload, reason: `${amendmentPayload.reason} Different.` }, amendmentKey), '23505')
+  await denied('first amendment save cannot retain unchanged approved terms',
+    () => scopedCommand(1, manager, 'save_product', {
+      product_id: appointedFund.id, expected_revision: amendingFund.revision,
+      terms: fundV2Terms(appointedFundName),
+    }), '23514')
+  const amendedTerms = fundV2Terms(`${appointedFundName} governed amended class`)
+  amendingFund = (await scopedCommand(1, manager, 'save_product', {
+    product_id: appointedFund.id, expected_revision: amendingFund.revision,
+    terms: amendedTerms,
+  })).products.find(value => value.id === appointedFund.id)
+  eq([amendingFund.status, amendingFund.offering_package], ['DRAFT', null],
+  'changed terms remain a draft without inherited approval')
+  eq([amendingFund.allowed_actions.includes('save_product'),
+    amendingFund.allowed_actions.includes('submit_product')], [true, true],
+  'changed draft terms expose both exact manager editing and fresh submission')
+  const restoredTermsFund = (await scopedCommand(1, manager, 'save_product', {
+    product_id: appointedFund.id, expected_revision: amendingFund.revision,
+    terms: fundV2Terms(appointedFundName),
+  })).products.find(value => value.id === appointedFund.id)
+  eq(restoredTermsFund.allowed_actions.includes('submit_product'), false,
+    'changed-then-restored hash cannot advertise a forbidden resubmission')
+  await denied('changed-then-restored approved hash cannot reuse old decisions',
+    () => scopedCommand(1, manager, 'submit_product', {
+      product_id: appointedFund.id, expected_revision: restoredTermsFund.revision,
+    }), '23514')
+  amendingFund = (await scopedCommand(1, manager, 'save_product', {
+    product_id: appointedFund.id, expected_revision: restoredTermsFund.revision,
+    terms: amendedTerms,
+  })).products.find(value => value.id === appointedFund.id)
+  amendingFund = (await scopedCommand(1, manager, 'submit_product', {
+    product_id: appointedFund.id, expected_revision: amendingFund.revision,
+  })).products.find(value => value.id === appointedFund.id)
+  truth(amendingFund.offering_package.id !== originalOfferingId,
+    'genuinely amended terms produce a new immutable submitted package')
+  eq([amendingFund.allowed_actions.includes('save_product'),
+    amendingFund.allowed_actions.includes('submit_product')], [false, false],
+  'submitted immutable package no longer exposes edit or duplicate submit actions')
+  await admin()
+  eq(await scalar(`select jsonb_build_object(
+    'old_decisions',(select count(*) from bx1_portal.offering_decisions where offering_revision_id=$1),
+    'new_decisions',(select count(*) from bx1_portal.offering_decisions where offering_revision_id=$2),
+    'receipts',(select count(*) from bx1_portal.offering_amendment_begin_receipts where actor_id=$3 and request_key=$4),
+    'events',(select count(*) from bx1_portal.events where subject_id=$5 and kind='begin_offering_amendment'),
+    'orders',(select count(*) from bx1_portal.subscriptions where product_id=$5),
+    'reserved',(select reserved_units::text from bx1_portal.products where id=$5))`,
+  [originalOfferingId, amendingFund.offering_package.id, uid(1), amendmentKey, appointedFund.id]),
+  { old_decisions: 2, new_decisions: 0, receipts: 1, events: 1, orders: 0, reserved: '0' },
+  'old decisions stay historical and amended package starts without orders or inherited decisions')
+  eq(await scalar('select bx1_portal.offering_approved($1)', [appointedFund.id]), false,
+    'new amended package requires a new decision pair')
+  amendingFund = (await mandateScopedCommand(13, issuerContext,
+    'review_offering_issuer', issuerInput(amendingFund))).products.find(value => value.id === appointedFund.id)
+  amendingFund = (await mandateScopedCommand(2, reviewer,
+    'review_product', complianceInput(amendingFund))).products.find(value => value.id === appointedFund.id)
+  eq(amendingFund.status, 'APPROVED', 'independent issuer and Compliance review the amended package')
+  await db.query('rollback to savepoint begin_amendment_proof; release savepoint begin_amendment_proof')
+  phase = 'stage3-same-hash-offering-submitter-lineage'
+  const lineageFundName = 'Synthetic two-manager same-hash lineage fund'
+  let lineageFund = (await scopedCommand(1, manager, 'create_product', {
+    organisation_id: orgId, terms: fundV2Terms(lineageFundName),
+  })).products.find(value => value.terms.name === lineageFundName)
+  lineageFund = (await scopedCommand(5, manager, 'submit_product', {
+    product_id: lineageFund.id, expected_revision: lineageFund.revision,
+  })).products.find(value => value.id === lineageFund.id)
+  const lineageOriginalRevisionId = lineageFund.offering_package.id
+  const nominateForLineage = async (role, appointee, membership, evidence) => {
+    let appointment = (await scopedCommand(1, manager, 'request_product_service_appointment', {
+      product_id: lineageFund.id, role, appointee_user_id: uid(appointee),
+      native_membership_id: membership, expected_product_revision: lineageFund.revision,
+      evidence_reference: evidence, requested_until: until,
+    })).product_appointments.find(value => value.product_id === lineageFund.id
+      && value.role === role && value.status === 'SUBMITTED')
+    appointment = (await mandateScopedCommand(11, reviewer,
+      'review_product_service_appointment', reviewAppointment(appointment)))
+      .product_appointments.find(value => value.id === appointment.id)
+    return (await mandateScopedCommand(10, roleContext('SuperAdmin'),
+      'apply_product_service_appointment', {
+        appointment_id: appointment.id, expected_revision: appointment.revision,
+      })).product_appointments.find(value => value.id === appointment.id)
+  }
+  const lineageIssuerAppointment = await nominateForLineage('IssuerFundManager', 13,
+    issuerMembershipId, 'SYNTHETIC-LINEAGE-ISSUER-2026-09-28')
+  let lineageComplianceAppointment = await nominateForLineage('ComplianceOfficer', 2,
+    complianceMembershipId, 'SYNTHETIC-LINEAGE-COMPLIANCE-2026-09-28')
+  lineageFund = (await mandateScopedCommand(13, issuerContext,
+    'review_offering_issuer', issuerInput(lineageFund))).products.find(value => value.id === lineageFund.id)
+  lineageFund = (await mandateScopedCommand(2, reviewer,
+    'review_product', complianceInput(lineageFund))).products.find(value => value.id === lineageFund.id)
+  eq(lineageFund.status, 'APPROVED', 'two-manager lineage fixture starts from a genuinely reviewed package')
+  lineageFund = (await scopedCommand(1, manager, 'reopen_offering_review', {
+    product_id: lineageFund.id, expected_revision: lineageFund.revision,
+    reason: 'Manager A reopens Manager B original terms for new appointment review without erasing original authorship.',
+  })).products.find(value => value.id === lineageFund.id)
+  await admin()
+  eq(await scalar(`select jsonb_agg(jsonb_build_object('id',id,'submitted_by',submitted_by)
+    order by package_number) from bx1_portal.offering_revisions
+    where product_id=$1 and origin='SUBMITTED' and terms_hash=$2`,
+  [lineageFund.id, lineageFund.terms_hash]), [
+    { id: lineageOriginalRevisionId, submitted_by: uid(5) },
+    { id: lineageFund.offering_package.id, submitted_by: uid(1) },
+  ], 'same-hash lineage preserves B as original submitter and A as the actual reopener')
+  await db.query('savepoint lineage_original_submitter_appointed')
+  await admin()
+  const lineageBMembership = await scalar(`insert into public.bx1_memberships
+    (user_id,organisation_id,role,status) values($1,$2,'ComplianceOfficer','ACTIVE') returning id`,
+  [uid(5), nativeScope])
+  lineageComplianceAppointment = (await mandateScopedCommand(10, roleContext('SuperAdmin'),
+    'revoke_product_service_appointment', {
+      appointment_id: lineageComplianceAppointment.id,
+      expected_revision: lineageComplianceAppointment.revision,
+      reason: 'Synthetic replacement to prove the original author cannot review unchanged terms.',
+    })).product_appointments.find(value => value.id === lineageComplianceAppointment.id)
+  const lineageBAppointment = await nominateForLineage('ComplianceOfficer', 5,
+    lineageBMembership, 'SYNTHETIC-LINEAGE-ORIGINAL-AUTHOR-2026-09-28')
+  await actor(5, { aal: 'aal2' })
+  await admin()
+  eq(await scalar('select bx1_portal.product_appointment_authorised($1::jsonb,$2,$3)',
+    [JSON.stringify(reviewer), lineageFund.id, 'ComplianceOfficer']), true,
+  'B has a current exact-product Compliance appointment, so denial is lineage-specific')
+  const lineageBView = await mandateScopedRead(5, reviewer)
+  eq(lineageBView.products.find(value => value.id === lineageFund.id)
+    .offering_package.can_review_compliance, false,
+  'original submitter B cannot see a same-hash review action after A reopens')
+  eq(lineageBView.products.find(value => value.id === lineageFund.id)
+    .allowed_actions.includes('review_product'), false,
+  'exact product actions do not advertise a forbidden same-hash review')
+  const lineageDeniedKey = key()
+  await denied('original submitter cannot approve unchanged terms through later appointment',
+    () => mandateScopedCommand(5, reviewer, 'review_product',
+      complianceInput(lineageFund), lineageDeniedKey), '42501')
+  await admin()
+  eq(await scalar(`select jsonb_build_object(
+    'decisions',(select count(*) from bx1_portal.offering_decisions where offering_revision_id=$1),
+    'native_receipts',(select count(*) from bx1_portal.requests where actor_id=$2 and request_key=$3),
+    'scoped_receipts',(select count(*) from bx1_portal.scoped_requests where actor_id=$2 and request_key=$3),
+    'events',(select count(*) from bx1_portal.events where subject_id=$4
+      and actor_id=$2 and kind='review_product'))`,
+  [lineageFund.offering_package.id, uid(5), lineageDeniedKey, lineageFund.id]),
+  { decisions: 0, native_receipts: 0, scoped_receipts: 0, events: 0 },
+  'same-hash original author denial commits no decision, receipt or event')
+  eq(lineageBAppointment.effective, true,
+    'proof denies content self-review despite a valid synthetic appointment')
+  await db.query('rollback to savepoint lineage_original_submitter_appointed; release savepoint lineage_original_submitter_appointed')
+  eq(lineageIssuerAppointment.effective, true,
+    'issuer appointment remains available for the later two-connection lineage revocation proof')
   phase = 'stage3-appointment-main-seal'
   await db.query('savepoint appointment_main_seal')
   await admin(); await db.query(`update bx1_portal.entry_configuration
@@ -2293,6 +2526,56 @@ try {
       [race.product.id]), { status: 'IN_REVIEW', revision: race.product.revision },
     `${label} rejected decision does not advance the product`)
   }
+  phase = 'stage3-original-submitter-trust-revocation-two-connection-proof'
+  const lineageDecisionKey = key()
+  await admin()
+  const lineagePriorIssuerEvents = await scalar(`select count(*)::int from bx1_portal.events
+    where subject_id=$1 and actor_id=$2 and kind='review_offering_issuer'`,
+  [lineageFund.id, uid(13)])
+  await db.query('begin'); begun = true
+  await admin()
+  await db.query("update bx1_private.person_principals set status='REVOKED' where auth_user_id=$1 and status='TRUSTED'",
+    [uid(5)])
+  const waitingLineageDecision = (async () => {
+    await proofClients[0].query('begin')
+    try {
+      const result = await mandateScopedCommand(13, issuerContext,
+        'review_offering_issuer', issuerInput(lineageFund), lineageDecisionKey, proofClients[0])
+      await proofClients[0].query('commit')
+      return { result }
+    } catch (error) {
+      await proofClients[0].query('rollback')
+      return { code: error?.code }
+    }
+  })()
+  await waitForBlocked([pids[0]])
+  eq(await scalar('select $1::int=any(pg_blocking_pids($2::int))',
+    [await scalar('select pg_backend_pid()'), pids[0]]), true,
+  'issuer decision waits on the original submitter trust row held by the revoker')
+  eq(await scalar(`select exists(select 1 from pg_locks where pid=$1
+    and relation='bx1_private.person_principals'::regclass
+    and mode='RowShareLock' and granted)`, [pids[0]]), true,
+  'issuer decision locks every same-hash submitter before any decision write')
+  await db.query('commit'); begun = false
+  eq((await waitingLineageDecision).code, '42501',
+    'original submitter trust revocation during wait fails closed for fresh review')
+  await admin()
+  eq(await scalar('select bx1_portal.product_appointment_effective($1)',
+    [lineageIssuerAppointment.id]), true,
+  'denial is attributable to same-hash original submitter, not the issuer appointment')
+  eq(await scalar(`select jsonb_build_object(
+    'decisions',(select count(*) from bx1_portal.offering_decisions where offering_revision_id=$1),
+    'native_receipts',(select count(*) from bx1_portal.requests where actor_id=$2 and request_key=$3),
+    'scoped_receipts',(select count(*) from bx1_portal.scoped_requests where actor_id=$2 and request_key=$3),
+    'events',(select count(*) from bx1_portal.events where subject_id=$4
+      and actor_id=$2 and kind='review_offering_issuer'))`,
+  [lineageFund.offering_package.id, uid(13), lineageDecisionKey, lineageFund.id]),
+  { decisions: 0, native_receipts: 0, scoped_receipts: 0,
+    events: lineagePriorIssuerEvents },
+  'lineage revocation race commits no decision, receipt or audit event')
+  eq(await scalar('select jsonb_build_object(\'status\',status,\'revision\',revision) from bx1_portal.products where id=$1',
+    [lineageFund.id]), { status: 'IN_REVIEW', revision: lineageFund.revision },
+  'lineage revocation race cannot advance the offering')
   await proveDecisionRevocation('Compliance reviewer', complianceTrustRace, 11, 2,
     reviewer, 'review_product', complianceInput(complianceTrustRace.product))
   await proveDecisionRevocation('issuer appointment applier', issuerTrustRace, 10, 13,
