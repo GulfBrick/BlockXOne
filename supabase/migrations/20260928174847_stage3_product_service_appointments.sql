@@ -666,13 +666,152 @@ begin
   return bx1_portal.read_scoped(c);
 end $$;
 
+-- Reopening is an explicit manager command, not a side effect of replacing an
+-- issuer or Compliance appointment. It preserves the previous decisions.
+create table bx1_portal.offering_review_reopen_receipts (
+  actor_id uuid not null references auth.users(id) on delete restrict,
+  request_key uuid not null,
+  product_id uuid not null references bx1_portal.products(id) on delete restrict,
+  prior_offering_revision_id uuid not null,
+  reopened_offering_revision_id uuid not null unique,
+  product_revision_before integer not null check(product_revision_before>0),
+  product_revision_after integer not null check(product_revision_after=product_revision_before+1),
+  operating_context jsonb not null check(pg_catalog.jsonb_typeof(operating_context)='object'),
+  reason text not null check(char_length(reason) between 20 and 1000 and reason=pg_catalog.btrim(reason)),
+  recorded_at timestamptz not null default pg_catalog.clock_timestamp(),
+  primary key(actor_id,request_key),
+  foreign key(prior_offering_revision_id,product_id)
+    references bx1_portal.offering_revisions(id,product_id) on delete restrict,
+  foreign key(reopened_offering_revision_id,product_id)
+    references bx1_portal.offering_revisions(id,product_id) on delete restrict,
+  check(prior_offering_revision_id<>reopened_offering_revision_id)
+);
+alter table bx1_portal.offering_review_reopen_receipts enable row level security;
+revoke all on bx1_portal.offering_review_reopen_receipts from public,anon,authenticated,service_role;
+create trigger bx1_offering_review_reopen_receipt_immutable before update or delete
+  on bx1_portal.offering_review_reopen_receipts for each row
+  execute function bx1_portal.immutable_record();
+
+create function bx1_portal.offering_review_reopenable(target_product uuid) returns boolean
+language sql volatile security definer set search_path='' as $$
+  -- Every funding obligation and journal descends from a subscription FK.
+  -- Excluding all orders, including cancelled ones, excludes those effects.
+  select bx1_portal.entry_manual_review_enabled() and exists(select 1
+    from bx1_portal.products p
+    join bx1_portal.offering_revisions r on r.id=p.current_offering_revision_id
+      and r.product_id=p.id and r.origin='SUBMITTED'
+      and r.terms=p.terms and r.terms_hash=p.terms_hash
+    join bx1_portal.offering_decisions issuer on issuer.offering_revision_id=r.id
+      and issuer.decision_kind='ISSUER' and issuer.decision='APPROVED'
+      and issuer.terms_hash=r.terms_hash and issuer.document_hashes=r.document_hashes
+    join bx1_portal.product_service_appointments ia on ia.id=issuer.product_appointment_id
+      and ia.product_id=p.id and ia.role='IssuerFundManager'
+      and ia.appointee_user_id=issuer.actor_id
+    join bx1_portal.offering_decisions compliance on compliance.offering_revision_id=r.id
+      and compliance.decision_kind='COMPLIANCE' and compliance.decision='APPROVED'
+      and compliance.terms_hash=r.terms_hash and compliance.document_hashes=r.document_hashes
+    join bx1_portal.product_service_appointments ca on ca.id=compliance.product_appointment_id
+      and ca.product_id=p.id and ca.role='ComplianceOfficer'
+      and ca.appointee_user_id=compliance.actor_id
+    where p.id=target_product and p.status='APPROVED' and p.published_at is null
+      and issuer.actor_id<>compliance.actor_id and p.reserved_units=0
+      and ia.applied_at<=issuer.decided_at and issuer.decided_at<ia.requested_until
+      and (ia.revoked_at is null or ia.revoked_at>issuer.decided_at)
+      and ca.applied_at<=compliance.decided_at and compliance.decided_at<ca.requested_until
+      and (ca.revoked_at is null or ca.revoked_at>compliance.decided_at)
+      and not exists(select 1 from bx1_portal.events e
+        where e.subject_id=p.id and e.kind='publish_product')
+      and not exists(select 1 from bx1_portal.subscriptions s where s.product_id=p.id)
+      and not exists(select 1 from bx1_portal.product_eligibility_cases e where e.product_id=p.id));
+$$;
+
+create function bx1_portal.execute_reopen_offering_review(c jsonb,key uuid,body jsonb) returns jsonb
+language plpgsql volatile security definer set search_path='' as $$
+declare actor uuid:=auth.uid(); p bx1_portal.products;
+  prior bx1_portal.scoped_requests; old_revision bx1_portal.offering_revisions;
+  new_revision bx1_portal.offering_revisions; next_number integer;
+begin
+  if bx1_portal.entry_manual_review_enabled() is not true
+    or bx1_portal.valid_operating_context(c) is not true
+    or c->>'mode' is distinct from 'ROLE' or c->>'role' is distinct from 'OfferingManager'
+    or key is null or key='00000000-0000-0000-0000-000000000000'
+    or pg_catalog.jsonb_typeof(body) is distinct from 'object'
+    or pg_catalog.octet_length(body::text)>4096 then
+    raise exception 'offering_review_reopen_unavailable' using errcode='42501'; end if;
+  perform bx1_portal.require_keys(body,array['product_id','expected_revision','reason']);
+  perform bx1_portal.require_text(body,'reason',20,1000);
+  if pg_catalog.jsonb_typeof(body->'product_id') is distinct from 'string'
+    or body->>'product_id' !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    or pg_catalog.jsonb_typeof(body->'expected_revision') is distinct from 'number'
+    or body->>'expected_revision' !~ '^[1-9][0-9]{0,8}$' then
+    raise exception 'offering_review_reopen_invalid' using errcode='22023'; end if;
+  perform bx1_portal.entry_lock_actor();
+  perform bx1_portal.entry_require_context((c->>'organisationId')::uuid);
+  perform cfg.singleton from bx1_portal.entry_configuration cfg where cfg.singleton for share;
+  select * into prior from bx1_portal.scoped_requests
+    where actor_id=actor and request_key=key;
+  if prior.actor_id is not null then
+    if prior.command is distinct from 'reopen_offering_review'
+      or prior.operating_context is distinct from c or prior.payload is distinct from body then
+      raise exception 'offering_review_reopen_idempotency_conflict' using errcode='23505'; end if;
+    return bx1_portal.read_scoped(c);
+  end if;
+  if exists(select 1 from bx1_portal.requests where actor_id=actor and request_key=key)
+    or exists(select 1 from bx1_portal.entry_requests where actor_id=actor and request_key=key)
+    or exists(select 1 from bx1_portal.product_service_appointment_requests
+      where actor_id=actor and request_key=key) then
+    raise exception 'offering_review_reopen_prior_key_conflict' using errcode='23505'; end if;
+  select * into p from bx1_portal.products where id=(body->>'product_id')::uuid for update;
+  if p.id is null or bx1_portal.scoped_operator(c,p.organisation_id) is not true then
+    raise exception 'offering_review_reopen_scope_denied' using errcode='42501'; end if;
+  if p.revision<>(body->>'expected_revision')::integer then
+    raise exception 'offering_review_reopen_stale' using errcode='23514'; end if;
+  perform o.id from bx1_portal.organisations o where o.id=p.organisation_id for share;
+  perform b.id from bx1_portal.organisation_authority_bindings b
+    where b.product_organisation_id=p.organisation_id order by b.id for share;
+  perform m.id from bx1_portal.representative_mandates m
+    where m.product_organisation_id=p.organisation_id and m.applicant_user_id=actor
+    order by m.id for share;
+  perform bx1_portal.lock_entity_people(array[actor,p.created_by]);
+  if bx1_portal.offering_review_reopenable(p.id) is not true
+    or bx1_portal.scoped_operator(c,p.organisation_id) is not true then
+    raise exception 'offering_review_reopen_not_allowed' using errcode='23514'; end if;
+  select * into old_revision from bx1_portal.offering_revisions
+    where id=p.current_offering_revision_id and product_id=p.id;
+  select coalesce(max(package_number),0)+1 into next_number from bx1_portal.offering_revisions
+    where product_id=p.id;
+  insert into bx1_portal.offering_revisions(product_id,package_number,origin,
+    product_revision_at_submission,terms,terms_hash,document_hashes,submitted_by,submitted_at)
+    values(p.id,next_number,'SUBMITTED',p.revision+1,p.terms,p.terms_hash,
+      bx1_portal.offering_document_hashes(p.terms),actor,pg_catalog.clock_timestamp())
+    returning * into new_revision;
+  update bx1_portal.products set revision=revision+1,status='IN_REVIEW',
+    current_offering_revision_id=new_revision.id,
+    reviewer_id=null,review_notes=null,reviewed_at=null,review_checks='{}'::jsonb
+    where id=p.id;
+  insert into bx1_portal.offering_review_reopen_receipts(actor_id,request_key,product_id,
+    prior_offering_revision_id,reopened_offering_revision_id,
+    product_revision_before,product_revision_after,operating_context,reason)
+    values(actor,key,p.id,old_revision.id,new_revision.id,p.revision,p.revision+1,c,body->>'reason');
+  insert into bx1_portal.scoped_requests(actor_id,request_key,operating_context,command,payload)
+    values(actor,key,c,'reopen_offering_review',body);
+  insert into bx1_portal.events(subject_id,organisation_id,kind,actor_id,summary)
+    values(p.id,p.organisation_id,'reopen_offering_review',actor,
+      'Synthetic TEST approved offering reopened for fresh issuer and Compliance review. Prior decisions preserved; no publication, order or funding created.');
+  if bx1_portal.valid_operating_context(c) is not true
+    or bx1_portal.scoped_operator(c,p.organisation_id) is not true
+    or bx1_portal.entry_manual_review_enabled() is not true then
+    raise exception 'offering_review_reopen_authority_changed' using errcode='42501'; end if;
+  return bx1_portal.read_scoped(c);
+end $$;
+
 alter function bx1_portal.read_scoped(jsonb) rename to read_scoped_pre_product_appointment;
 alter function bx1_portal.execute_scoped(jsonb,text,uuid,jsonb) rename to execute_scoped_pre_product_appointment;
 
 create function bx1_portal.read_scoped(c jsonb) returns jsonb
 language plpgsql volatile security definer set search_path='' as $$
 declare result jsonb; appointments jsonb; candidates jsonb; item jsonb;
-  products jsonb:='[]'::jsonb; actions jsonb; package jsonb;
+  products jsonb:='[]'::jsonb; organisations jsonb; actions jsonb; package jsonb;
 begin
   result:=bx1_portal.read_scoped_pre_product_appointment(c);
   select coalesce(pg_catalog.jsonb_agg(projected.value order by a.requested_at,a.id),'[]'::jsonb)
@@ -724,10 +863,28 @@ begin
         into actions from pg_catalog.jsonb_array_elements_text(actions) with ordinality x(value,ordinality)
         where x.value<>'review_product';
     end if;
+    if c->>'mode'='ROLE' and c->>'role'='OfferingManager'
+      and bx1_portal.scoped_operator(c,(item->>'organisation_id')::uuid)
+      and bx1_portal.offering_review_reopenable((item->>'id')::uuid) then
+      actions:=actions||pg_catalog.jsonb_build_array('reopen_offering_review');
+    end if;
     products:=products||pg_catalog.jsonb_build_array(item||pg_catalog.jsonb_build_object(
       'offering_package',package,'allowed_actions',actions));
   end loop;
   result:=pg_catalog.jsonb_set(result,'{products}',products);
+  select coalesce(pg_catalog.jsonb_agg(case
+    when c->>'mode'='ROLE' and c->>'role'='OfferingManager'
+      and bx1_portal.scoped_operator(c,(org.value->>'id')::uuid)
+      and exists(select 1 from bx1_portal.products p
+        where p.organisation_id=(org.value->>'id')::uuid
+          and bx1_portal.offering_review_reopenable(p.id))
+    then org.value||pg_catalog.jsonb_build_object('capabilities',
+      coalesce(org.value->'capabilities','[]'::jsonb)||
+        pg_catalog.jsonb_build_array('reopen_offering_review'))
+    else org.value end order by org.ordinality),'[]'::jsonb) into organisations
+    from pg_catalog.jsonb_array_elements(coalesce(result->'organisations','[]'::jsonb))
+      with ordinality org(value,ordinality);
+  result:=pg_catalog.jsonb_set(result,'{organisations}',organisations);
   if c->>'mode'='ROLE' and c->>'role'='IssuerFundManager' then
     -- The older organisation-scoped reader may have projected private orders,
     -- investor cases or unrelated events through a historical broad binding.
@@ -761,6 +918,8 @@ begin
   if action in ('request_product_service_appointment','review_product_service_appointment',
     'apply_product_service_appointment','revoke_product_service_appointment') then
     return bx1_portal.execute_product_service_appointment(c,action,key,body); end if;
+  if action='reopen_offering_review' then
+    return bx1_portal.execute_reopen_offering_review(c,key,body); end if;
   -- The issuer's product appointment is review-only, never an operator or
   -- funding authority even where an older org binding still exists.
   if c->>'mode'='ROLE' and c->>'role'='IssuerFundManager'
@@ -809,6 +968,8 @@ revoke all on function bx1_portal.guard_product_service_appointment(),
   bx1_portal.product_appointment_projection(jsonb,uuid),
   bx1_portal.execute_product_service_appointment(jsonb,text,uuid,jsonb),
   bx1_portal.execute_appointed_compliance_decision(jsonb,uuid,jsonb),
+  bx1_portal.offering_review_reopenable(uuid),
+  bx1_portal.execute_reopen_offering_review(jsonb,uuid,jsonb),
   bx1_portal.offering_package_projection_pre_appointment(jsonb,uuid),
   bx1_portal.offering_package_projection(jsonb,uuid),
   bx1_portal.guard_offering_decision_appointment(),

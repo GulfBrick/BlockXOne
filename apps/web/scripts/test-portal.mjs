@@ -1661,7 +1661,7 @@ try {
   phase = 'stage3-product-service-appointments'
   await sqlFile('../../../supabase/migrations/20260928174847_stage3_product_service_appointments.sql')
   for (const table of ['product_service_appointments', 'product_service_appointment_receipts',
-    'product_service_appointment_requests']) {
+    'product_service_appointment_requests', 'offering_review_reopen_receipts']) {
     eq(await scalar(`select count(*)::int from bx1_portal.${table}`), 0,
       `${table} migration seeds no authority`)
     for (const role of ['anon', 'authenticated', 'service_role']) {
@@ -1732,10 +1732,20 @@ try {
     .find(value => value.id === complianceAppointment.id)
   eq([issuerAppointment.status, complianceAppointment.status], ['APPROVED', 'APPROVED'],
     'independent review alone grants neither product decision')
-  await denied('reviewer cannot self-apply via second Super Admin role', () => mandateScopedCommand(2,
+  await denied('appointee cannot self-apply via second Super Admin role', () => mandateScopedCommand(2,
     roleContext('SuperAdmin'), 'apply_product_service_appointment', {
-      appointment_id: issuerAppointment.id, expected_revision: issuerAppointment.revision,
+      appointment_id: complianceAppointment.id, expected_revision: complianceAppointment.revision,
     }), '42501')
+  await db.query('savepoint appointment_reviewer_second_role')
+  await admin()
+  await db.query("insert into public.bx1_memberships(user_id,organisation_id,role,status) values($1,$2,'SuperAdmin','ACTIVE')",
+    [uid(11), nativeScope])
+  await denied('actual appointment reviewer cannot self-apply through a second role',
+    () => mandateScopedCommand(11, roleContext('SuperAdmin'),
+      'apply_product_service_appointment', {
+        appointment_id: issuerAppointment.id, expected_revision: issuerAppointment.revision,
+      }), '42501')
+  await db.query('rollback to savepoint appointment_reviewer_second_role; release savepoint appointment_reviewer_second_role')
   issuerAppointment = (await mandateScopedCommand(10, roleContext('SuperAdmin'),
     'apply_product_service_appointment', { appointment_id: issuerAppointment.id,
       expected_revision: issuerAppointment.revision })).product_appointments
@@ -1930,6 +1940,126 @@ try {
   complianceAppointment.id, 'immutable Compliance decision records exact appointment identity')
   eq(await scalar('select bx1_portal.offering_approved($1)', [appointedFund.id]), true,
     'both appointed human decisions approve the package without opening funding')
+  phase = 'stage3-approved-offering-explicit-reopen'
+  const originalOfferingId = appointedFund.offering_package.id
+  const originalPackageNumber = appointedFund.offering_package.package_number
+  const reopenPayload = { product_id: appointedFund.id,
+    expected_revision: appointedFund.revision,
+    reason: 'Synthetic service-appointment change requires both reviewers to decide a fresh immutable offering revision.' }
+  const reopenKey = key()
+  const managerBeforeReopen = await scopedRead(1, manager)
+  truth(managerBeforeReopen.products.find(value => value.id === appointedFund.id)
+    .allowed_actions.includes('reopen_offering_review'),
+  'exact approved product offers explicit re-review to its current manager')
+  truth(managerBeforeReopen.organisations.find(value => value.id === orgId)
+    .capabilities.includes('reopen_offering_review'),
+  'manager organisation advertises recovery only while a relevant product is reopenable')
+  eq(managerBeforeReopen.products.find(value => value.id === reviewedProperty.id)
+    ?.allowed_actions.includes('reopen_offering_review') ?? false, false,
+  'unrelated property cannot inherit the fund reopen action')
+  await db.query('savepoint reopen_approved_offering')
+  await denied('wrong organisation cannot reopen an approved offering',
+    () => scopedCommand(1, roleContext('OfferingManager', otherScope),
+      'reopen_offering_review', reopenPayload), '42501')
+  await denied('stale approved product revision cannot be reopened',
+    () => scopedCommand(1, manager, 'reopen_offering_review',
+      { ...reopenPayload, expected_revision: appointedFund.revision - 1 }), '23514')
+  await db.query('savepoint reopen_never_published')
+  await admin(); await db.query('update bx1_portal.products set published_at=clock_timestamp() where id=$1',
+    [appointedFund.id])
+  await denied('a product with publication history cannot be reopened',
+    () => scopedCommand(1, manager, 'reopen_offering_review', reopenPayload), '23514')
+  await db.query('rollback to savepoint reopen_never_published; release savepoint reopen_never_published')
+  await db.query('savepoint reopen_no_reservations')
+  await admin(); await db.query('update bx1_portal.products set reserved_units=1 where id=$1',
+    [appointedFund.id])
+  await denied('a product with reserved units cannot be reopened',
+    () => scopedCommand(1, manager, 'reopen_offering_review', reopenPayload), '23514')
+  await db.query('rollback to savepoint reopen_no_reservations; release savepoint reopen_no_reservations')
+  await db.query('savepoint reopen_main_seal')
+  await admin(); await db.query(`update bx1_portal.entry_configuration
+    set environment='MAINNET',manual_test_review=false where singleton`)
+  await denied('MAIN-equivalent seal rejects approved-offering reopen',
+    () => scopedCommand(1, manager, 'reopen_offering_review', reopenPayload), '42501')
+  await db.query('rollback to savepoint reopen_main_seal; release savepoint reopen_main_seal')
+  const reopenBeforeAudit = await scalar(`select jsonb_build_object(
+    'product',(select jsonb_build_object('status',status,'revision',revision,
+      'offering',current_offering_revision_id) from bx1_portal.products where id=$1),
+    'packages',(select count(*) from bx1_portal.offering_revisions where product_id=$1),
+    'receipts',(select count(*) from bx1_portal.offering_review_reopen_receipts where product_id=$1),
+    'requests',(select count(*) from bx1_portal.scoped_requests where actor_id=$2 and request_key=$3))`,
+  [appointedFund.id, uid(1), reopenKey])
+  await db.query('savepoint reopen_audit_failure')
+  await admin(); await db.query(`create function public.synthetic_reopen_audit_failure() returns trigger
+    language plpgsql as $$ begin if NEW.kind='reopen_offering_review' then
+    raise exception 'synthetic_reopen_audit_failure' using errcode='23514'; end if;
+    return NEW; end $$;
+    create trigger synthetic_reopen_audit_failure before insert on bx1_portal.events
+    for each row execute function public.synthetic_reopen_audit_failure()`)
+  await denied('required audit failure rolls back reopened revision and receipt',
+    () => scopedCommand(1, manager, 'reopen_offering_review', reopenPayload, reopenKey), '23514')
+  await db.query('rollback to savepoint reopen_audit_failure; release savepoint reopen_audit_failure')
+  await admin()
+  eq(await scalar(`select jsonb_build_object(
+    'product',(select jsonb_build_object('status',status,'revision',revision,
+      'offering',current_offering_revision_id) from bx1_portal.products where id=$1),
+    'packages',(select count(*) from bx1_portal.offering_revisions where product_id=$1),
+    'receipts',(select count(*) from bx1_portal.offering_review_reopen_receipts where product_id=$1),
+    'requests',(select count(*) from bx1_portal.scoped_requests where actor_id=$2 and request_key=$3))`,
+  [appointedFund.id, uid(1), reopenKey]), reopenBeforeAudit,
+  'failed audit leaves product, immutable package history, receipt and idempotency unchanged')
+  let reopenedOffering = (await scopedCommand(1, manager, 'reopen_offering_review',
+    reopenPayload, reopenKey)).products.find(value => value.id === appointedFund.id)
+  eq([reopenedOffering.status, reopenedOffering.revision,
+    reopenedOffering.offering_package.package_number],
+    ['IN_REVIEW', appointedFund.revision + 1, originalPackageNumber + 1],
+  'explicit reopen increments enduring product and immutable package number')
+  truth(reopenedOffering.offering_package.id !== originalOfferingId,
+    'reopen creates a different immutable offering identity even with unchanged terms')
+  eq(reopenedOffering.terms_hash, appointedFund.terms_hash,
+    'reopen does not alter approved economic terms without a separate amendment command')
+  eq((await scopedCommand(1, manager, 'reopen_offering_review',
+    reopenPayload, reopenKey)).products.find(value => value.id === appointedFund.id)
+    .offering_package.id, reopenedOffering.offering_package.id,
+  'exact replay returns the same new revision without a second write')
+  await denied('reopen idempotency key cannot be reused with another reason',
+    () => scopedCommand(1, manager, 'reopen_offering_review',
+      { ...reopenPayload, reason: `${reopenPayload.reason} Changed.` }, reopenKey), '23505')
+  await admin()
+  eq(await scalar(`select jsonb_build_object(
+    'old_decisions',(select count(*) from bx1_portal.offering_decisions where offering_revision_id=$1),
+    'new_decisions',(select count(*) from bx1_portal.offering_decisions where offering_revision_id=$2),
+    'receipts',(select count(*) from bx1_portal.offering_review_reopen_receipts where actor_id=$3 and request_key=$4),
+    'requests',(select count(*) from bx1_portal.scoped_requests where actor_id=$3 and request_key=$4),
+    'events',(select count(*) from bx1_portal.events where subject_id=$5 and kind='reopen_offering_review'),
+    'orders',(select count(*) from bx1_portal.subscriptions where product_id=$5),
+    'reserved',(select reserved_units::text from bx1_portal.products where id=$5))`,
+  [originalOfferingId, reopenedOffering.offering_package.id, uid(1), reopenKey, appointedFund.id]),
+  { old_decisions: 2, new_decisions: 0, receipts: 1, requests: 1,
+    events: 1, orders: 0, reserved: '0' },
+  'old decisions remain immutable and the new revision has one receipt/event but no financial effects')
+  eq(await scalar('select bx1_portal.offering_approved($1)', [appointedFund.id]), false,
+    'still-effective old appointments and decisions do not approve the new revision')
+  reopenedOffering = (await mandateScopedCommand(13, issuerContext,
+    'review_offering_issuer', issuerInput(reopenedOffering))).products.find(value => value.id === appointedFund.id)
+  reopenedOffering = (await mandateScopedCommand(2, reviewer,
+    'review_product', complianceInput(reopenedOffering))).products.find(value => value.id === appointedFund.id)
+  eq([reopenedOffering.status, reopenedOffering.offering_package.issuer_status,
+    reopenedOffering.offering_package.compliance_status], ['APPROVED','APPROVED','APPROVED'],
+  'fresh issuer and Compliance decisions approve only the new immutable revision')
+  await db.query('rollback to savepoint reopen_approved_offering; release savepoint reopen_approved_offering')
+  await db.query('savepoint reopen_after_authority_loss')
+  await admin(); await db.query("update bx1_private.person_principals set status='REVOKED' where auth_user_id=$1 and status='TRUSTED'",
+    [uid(11)])
+  eq(await scalar('select bx1_portal.offering_approved($1)', [appointedFund.id]), false,
+    'a now-ineffective historical appointment does not count as current approval')
+  const reopenedAfterLoss = (await scopedCommand(1, manager, 'reopen_offering_review',
+    reopenPayload)).products.find(value => value.id === appointedFund.id)
+  eq([reopenedAfterLoss.status, reopenedAfterLoss.offering_package.issuer_status,
+    reopenedAfterLoss.offering_package.compliance_status], ['IN_REVIEW','PENDING','PENDING'],
+  'manager can recover a never-published approved package after appointment authority loss')
+  await db.query('rollback to savepoint reopen_after_authority_loss; release savepoint reopen_after_authority_loss')
+  phase = 'stage3-appointment-main-seal'
   await db.query('savepoint appointment_main_seal')
   await admin(); await db.query(`update bx1_portal.entry_configuration
     set environment='MAINNET',manual_test_review=false where singleton`)
