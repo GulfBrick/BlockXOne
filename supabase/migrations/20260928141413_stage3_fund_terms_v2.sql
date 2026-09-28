@@ -118,13 +118,61 @@ begin
   perform bx1_portal.require_text(redemption,'conditions',20,2400);
 end $$;
 
+-- Enforce the package version at the record transition itself as well as the
+-- command boundary. The hosted cloud proof caught a legacy draft entering
+-- review through a delegated writer despite the wrapper pre-read. This guard
+-- makes the invariant atomic regardless of SQL-function plan rebinding or
+-- which approved internal writer performs the transition.
+create function bx1_portal.guard_fund_v2_product() returns trigger
+language plpgsql volatile security definer set search_path='' as $$
+begin
+  -- The existing publication and funding adapter is ZAR_TEST-only. Keep v2
+  -- TST packages closed even if the technical-readiness flag changes later.
+  if new.terms->'terms_version'='2'::jsonb and new.status='PUBLISHED' then
+    raise exception 'fund_v2_settlement_route_not_admitted' using errcode='23514'; end if;
+  if TG_OP='INSERT' then
+    if new.terms->>'asset_type'='FUND' then
+      if new.terms->'terms_version' is distinct from '2'::jsonb then
+        raise exception 'fund_v2_terms_required' using errcode='23514'; end if;
+      perform bx1_portal.validate_terms(new.terms);
+    end if;
+    return new;
+  end if;
+  if new.terms->>'asset_type' is distinct from old.terms->>'asset_type' then
+    raise exception 'fund_v2_asset_class_immutable' using errcode='23514';
+  end if;
+  if new.terms->>'asset_type'='FUND'
+    and (new.terms is distinct from old.terms
+      or (old.status in ('DRAFT','CHANGES_REQUIRED') and new.status='IN_REVIEW')
+      or (old.status in ('DRAFT','CHANGES_REQUIRED') and new.status='DRAFT'
+        and new.revision>old.revision)) then
+    if new.terms->'terms_version' is distinct from '2'::jsonb then
+      raise exception 'fund_v2_terms_required' using errcode='23514'; end if;
+    perform bx1_portal.validate_terms(new.terms);
+  end if;
+  return new;
+end $$;
+create trigger bx1_fund_v2_product_guard before insert or update on bx1_portal.products
+for each row execute function bx1_portal.guard_fund_v2_product();
+
+create function bx1_portal.guard_fund_v2_subscription() returns trigger
+language plpgsql volatile security definer set search_path='' as $$
+begin
+  if exists(select 1 from bx1_portal.products p
+      where p.id=new.product_id and p.terms->'terms_version'='2'::jsonb) then
+    raise exception 'fund_v2_settlement_route_not_admitted' using errcode='23514'; end if;
+  return new;
+end $$;
+create trigger bx1_fund_v2_subscription_guard before insert on bx1_portal.subscriptions
+for each row execute function bx1_portal.guard_fund_v2_subscription();
+
 -- Keep the existing single guarded writer. Prevent v1 drafts from becoming new
 -- fund packages and prevent six-decimal TST reaching the ZAR_TEST-only funding
 -- and subscription code. Historical v1 reviews and records are preserved.
 alter function bx1_portal.execute_scoped(jsonb,text,uuid,jsonb) rename to execute_scoped_pre_fund_v2;
 create function bx1_portal.execute_scoped(c jsonb,action text,key uuid,body jsonb) returns jsonb
 language plpgsql volatile security definer set search_path='' as $$
-declare existing_terms jsonb; proposed_terms jsonb;
+declare existing_terms jsonb; proposed_terms jsonb; result jsonb;
 begin
   if action in ('create_product','save_product','submit_product','publish_product','subscribe') then
     if bx1_portal.valid_operating_context(c) is not true
@@ -187,13 +235,16 @@ begin
 end $$;
 
 create or replace function public.bx1_portal_command_scoped(command text,request_key uuid,payload jsonb,operating_context jsonb) returns jsonb
-language sql security invoker set search_path='' as $$
-  select bx1_portal.execute_scoped(operating_context,command,request_key,payload);
-$$;
+language plpgsql security invoker set search_path='' as $$
+begin
+  return bx1_portal.execute_scoped(operating_context,command,request_key,payload);
+end $$;
 
 revoke all on function bx1_portal.validate_terms_v1(jsonb),
   bx1_portal.fund_v2_bounded_integer(jsonb,integer,integer),
   bx1_portal.validate_terms(jsonb),
+  bx1_portal.guard_fund_v2_product(),
+  bx1_portal.guard_fund_v2_subscription(),
   bx1_portal.execute_scoped_pre_fund_v2(jsonb,text,uuid,jsonb),
   bx1_portal.execute_scoped(jsonb,text,uuid,jsonb),
   public.bx1_portal_command_scoped(text,uuid,jsonb,jsonb)

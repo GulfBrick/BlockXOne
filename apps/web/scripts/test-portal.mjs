@@ -1231,6 +1231,10 @@ try {
   await denied('new FUND cannot use v1 ZAR_TEST terms', () => scopedCommand(1, manager, 'create_product', {
     organisation_id: orgId, terms: { ...terms('FUND'), name: 'Prohibited new legacy fund' },
   }))
+  await denied('even an internal status update cannot submit a legacy fund draft', async () => {
+    await admin()
+    await db.query("update bx1_portal.products set status='IN_REVIEW',revision=revision+1 where id=$1", [v1FundDraft.id])
+  })
   await denied('legacy fund draft cannot submit without explicit v2 upgrade', () => scopedCommand(1, manager, 'submit_product', {
     product_id: v1FundDraft.id, expected_revision: v1FundDraft.revision,
   }))
@@ -1291,11 +1295,29 @@ try {
   v2Reviewed = (await mandateScopedCommand(2, reviewer, 'review_product', complianceInput(v2Reviewed))).products.find(value => value.id === v2Submitted.id)
   eq([v2Reviewed.status, v2Reviewed.offering_package.issuer_status, v2Reviewed.offering_package.compliance_status],
     ['APPROVED', 'APPROVED', 'APPROVED'], 'v2 fund receives separate appointed issuer and independent Compliance decisions')
-  await denied('approved v2 TST fund cannot reach ZAR_TEST publication route', () => scopedCommand(1, manager, 'publish_product', {
-    product_id: v2Reviewed.id, expected_revision: v2Reviewed.revision,
-  }))
+  await db.query('savepoint v2_public_rpc_publication')
+  let v2PublicationError
+  try {
+    await scopedCommand(1, manager, 'publish_product', {
+      product_id: v2Reviewed.id, expected_revision: v2Reviewed.revision,
+    })
+  } catch (error) { v2PublicationError = { code: error?.code, message: error?.message } }
+  await db.query('rollback to savepoint v2_public_rpc_publication; release savepoint v2_public_rpc_publication')
+  eq(v2PublicationError, { code: '23514', message: 'fund_v2_settlement_route_not_admitted' },
+    'public scoped RPC invokes the v2 settlement guard, not merely the old technical-readiness gate')
   await admin()
   eq(await scalar('select status from bx1_portal.products where id=$1', [v2Reviewed.id]), 'APPROVED', 'denied v2 publication leaves package reviewed but closed')
+  await denied('internal update cannot publish v2 fund into legacy settlement route', async () => {
+    await admin()
+    await db.query("update bx1_portal.products set status='PUBLISHED' where id=$1", [v2Reviewed.id])
+  })
+  await denied('internal insert cannot subscribe to v2 fund through legacy route', async () => {
+    await admin()
+    await db.query(`insert into bx1_portal.subscriptions
+      (product_id,investor_id,organisation_id,product_revision,terms_hash,accepted_terms,accepted_documents,accepted_risks,units,amount_minor)
+      values($1,$2,$3,$4,$5,$6::jsonb,true,true,1,10000000)`,
+    [v2Reviewed.id, uid(3), orgId, v2Reviewed.revision, v2Reviewed.terms_hash, JSON.stringify(v2Reviewed.terms)])
+  })
   const foreignManagerOwnDraft = (await scopedRead(14, v3RoleContext)).products.find(value => value.id === v3Draft.id)
   eq(foreignManagerOwnDraft?.allowed_actions.includes('save_product'), true, 'foreign manager can edit their own organisation draft')
   await denied('cross-org manager cannot probe v2 fund save', () => scopedCommand(14, v3RoleContext, 'save_product', {
