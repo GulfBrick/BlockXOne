@@ -1304,7 +1304,7 @@ try {
   } catch (error) { v2PublicationError = { code: error?.code, message: error?.message } }
   await db.query('rollback to savepoint v2_public_rpc_publication; release savepoint v2_public_rpc_publication')
   eq(v2PublicationError, { code: '23514', message: 'fund_v2_settlement_route_not_admitted' },
-    'public scoped RPC invokes the v2 settlement guard, not merely the old technical-readiness gate')
+    `observed v2 publish RPC ${JSON.stringify(v2PublicationError)}; expected the new settlement guard`)
   await admin()
   eq(await scalar('select status from bx1_portal.products where id=$1', [v2Reviewed.id]), 'APPROVED', 'denied v2 publication leaves package reviewed but closed')
   await denied('internal update cannot publish v2 fund into legacy settlement route', async () => {
