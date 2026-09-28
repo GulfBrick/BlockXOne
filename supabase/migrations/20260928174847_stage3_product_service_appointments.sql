@@ -506,6 +506,10 @@ begin
       continue; end if;
     package:=item->'offering_package';
     actions:=coalesce(item->'allowed_actions','[]'::jsonb);
+    if c->>'mode'='ROLE' and c->>'role'='IssuerFundManager' then
+      actions:=case when coalesce((package->>'can_review_issuer')::boolean,false)
+        then '["review_offering_issuer"]'::jsonb else '[]'::jsonb end;
+    end if;
     if c->>'mode'='ROLE' and c->>'role'='ComplianceOfficer'
       and bx1_portal.product_appointment_authorised(c,(item->>'id')::uuid,'ComplianceOfficer') is not true then
       if package is not null and package<>'null'::jsonb then
@@ -524,7 +528,9 @@ begin
     -- investor cases or unrelated events through a historical broad binding.
     -- Issuer appointments confer only exact-product review visibility.
     result:=pg_catalog.jsonb_set(result,'{organisations}',coalesce((
-      select pg_catalog.jsonb_agg(org.value order by org.ordinality)
+      select pg_catalog.jsonb_agg(org.value||pg_catalog.jsonb_build_object(
+        'roles','["IssuerFundManager"]'::jsonb,
+        'capabilities','["review_offering_issuer"]'::jsonb) order by org.ordinality)
       from pg_catalog.jsonb_array_elements(coalesce(result->'organisations','[]'::jsonb))
         with ordinality org(value,ordinality)
       where exists(select 1 from bx1_portal.products p
