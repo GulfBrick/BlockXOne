@@ -115,20 +115,41 @@ export async function proveOfferingFileQuarantine(db, productId) {
     })])
     await db.query("select set_config('request.jwt.claim.sub',$1,true)", [item.submitted_by])
     await db.query('set local role authenticated')
-    const allowed = await db.query(`select auth.uid() as actor,
+    const allowed = await db.query(`select
+      current_user='authenticated' as authenticated_role,
+      auth.uid() is not null as jwt_user_present,
+      $1::text ~ $4::text as path_format,
+      pg_catalog.split_part($1::text,'/',1)=$5::uuid::text as revision_segment,
+      pg_catalog.split_part($1::text,'/',2)=$2::text as actor_segment,
+      pg_catalog.split_part($1::text,'/',3)=$6::uuid::text as file_segment,
+      $2::text=auth.uid()::text as owner_matches_jwt,
+      pg_catalog.split_part($1::text,'/',2)=auth.uid()::text as path_actor_matches_jwt,
       bx1_portal.offering_file_upload_allowed($1,$2) as reserved,
-      bx1_portal.offering_file_upload_allowed($3,$2) as unreserved`,
-    [path, item.submitted_by, `${item.revision_id}/${item.submitted_by}/${randomUUID()}`])
+      bx1_portal.offering_file_upload_allowed($3,$2) as unreserved,
+      bx1_portal.offering_file_owner_read_allowed($1,$2) as owner_read,
+      bx1_portal.offering_file_owner_read_allowed($1,'00000000-0000-0000-0000-000000000000')
+        as wrong_owner_read`,
+    [path, item.submitted_by, `${item.revision_id}/${item.submitted_by}/${randomUUID()}`,
+      '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
+      item.revision_id, fileId])
     await db.query('reset role')
-    const preflightDiagnostics = await db.query(`select
+    const remainingClauses = await db.query(`select
       bx1_portal.fresh_session() as fresh_session,
-      bx1_portal.offering_file_manager($2::uuid) as manager,
+      bx1_portal.entry_manual_review_enabled() as manual_test_enabled,
+      bx1_portal.offering_file_manager($1::uuid) as manager,
       exists(select 1 from bx1_portal.offering_file_upload_intents i
-        where i.storage_path=$1) as reserved_intent`, [path, item.revision_id])
-    assert.deepEqual({ reserved: allowed.rows[0].reserved, unreserved: allowed.rows[0].unreserved },
-      { reserved: true, unreserved: false },
-      `Storage preflight intent scope failed: ${JSON.stringify({ ...allowed.rows[0],
-        ...preflightDiagnostics.rows[0] })}`)
+      where i.offering_revision_id=$1::uuid and i.actor_id=$2::uuid
+        and i.storage_path=$3::text) as reserved_intent`,
+    [item.revision_id, item.submitted_by, path])
+    const preflightDiagnostics = { ...allowed.rows[0], ...remainingClauses.rows[0] }
+    assert.deepEqual(preflightDiagnostics, {
+      authenticated_role: true, jwt_user_present: true, path_format: true,
+      revision_segment: true, actor_segment: true, file_segment: true,
+      owner_matches_jwt: true, path_actor_matches_jwt: true,
+      fresh_session: true, manual_test_enabled: true, manager: true,
+      reserved: true, unreserved: false, owner_read: true,
+      wrong_owner_read: false, reserved_intent: true,
+    }, `Storage preflight clause failed: ${JSON.stringify(preflightDiagnostics)}`)
     await db.query(`insert into storage.objects(bucket_id,name,owner_id,metadata)
       values('bx1-offering-quarantine',$1,$2,'{"size":100,"mimetype":"application/pdf"}'::jsonb)`,
     [path, item.submitted_by])

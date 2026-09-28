@@ -118,7 +118,7 @@ create function bx1_portal.offering_file_upload_allowed(object_name text,object_
 language plpgsql volatile security definer set search_path='' as $$
 declare v_revision uuid; v_actor uuid;
 begin
-  if object_name !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+  if object_name !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
     or auth.uid() is null or object_owner is distinct from auth.uid()::text then return false; end if;
   v_revision:=pg_catalog.split_part(object_name,'/',1)::uuid;
   v_actor:=pg_catalog.split_part(object_name,'/',2)::uuid;
@@ -135,7 +135,7 @@ create function bx1_portal.offering_file_owner_read_allowed(object_name text,obj
 language plpgsql volatile security definer set search_path='' as $$
 declare v_revision uuid; v_org uuid;
 begin
-  if object_name !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+  if object_name !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
     or auth.uid() is null or object_owner is distinct from auth.uid()::text
     or pg_catalog.split_part(object_name,'/',2) is distinct from auth.uid()::text
     or bx1_portal.fresh_session() is not true
