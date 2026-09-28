@@ -1327,8 +1327,17 @@ try {
     [v2Reviewed.id, uid(3), orgId, v2Reviewed.revision, v2Reviewed.terms_hash, JSON.stringify(v2Reviewed.terms)])
   })
   phase = 'fund-v2-other-organisation-own-draft-read'
+  const ownReadStartedAt = Date.now()
   const foreignManagerOwnDraft = (await scopedRead(14, v3RoleContext)).products.find(value => value.id === v3Draft.id)
+  console.log(`BX1_FUND_V2_TIMING scopedReadMs=${Date.now() - ownReadStartedAt} actor=synthetic-other-organisation`)
   eq(foreignManagerOwnDraft?.status, 'DRAFT', 'other-organisation manager sees only their own existing draft')
+  const contextStartedAt = Date.now()
+  await scalar('select bx1_portal.valid_operating_context($1::jsonb)', [JSON.stringify(v3RoleContext)])
+  console.log(`BX1_FUND_V2_TIMING validContextMs=${Date.now() - contextStartedAt} actor=synthetic-other-organisation`)
+  const operatorStartedAt = Date.now()
+  await scalar('select bx1_portal.scoped_operator($1::jsonb,$2::uuid)',
+    [JSON.stringify(v3RoleContext), v3Draft.organisation_id])
+  console.log(`BX1_FUND_V2_TIMING scopedOperatorMs=${Date.now() - operatorStartedAt} actor=synthetic-other-organisation`)
   await admin()
   const ownDraftBefore = await scalar(`select jsonb_build_object(
     'revision',p.revision,'hash',p.terms_hash,'requests',(select count(*) from bx1_portal.requests r
