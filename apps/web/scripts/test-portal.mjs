@@ -4,6 +4,7 @@ import pg from 'pg'
 import { proveProviderEvidence } from './provider-evidence-proof.mjs'
 import { proveCustomerMonitoring } from './customer-monitoring-proof.mjs'
 import { proveDocumentRetentionAuthority } from './document-retention-authority-proof.mjs'
+import { proveOfferingFileQuarantine } from './offering-file-quarantine-proof.mjs'
 
 // Exact disposable GitHub PostgreSQL17 service only. No local/project execution.
 if (process.argv.length !== 2 || process.env.GITHUB_ACTIONS !== 'true') throw new Error('Portal SQL proof requires cloud CI without arguments')
@@ -1634,6 +1635,25 @@ try {
   await admin()
   eq(await scalar('select status from bx1_portal.products where id=$1', [reviewedProperty.id]), 'APPROVED',
     'denied property publication leaves reviewed package closed')
+  phase = 'stage3-offering-file-quarantine'
+  await sqlFile('../../../supabase/migrations/20260928174348_stage3_offering_file_quarantine.sql')
+  await db.query('savepoint offering_file_quarantine_fixture')
+  try {
+    const fileDraftName = 'Synthetic file quarantine proof fund'
+    const fileDraft = (await scopedCommand(1, manager, 'create_product', {
+      organisation_id: orgId, terms: fundV2Terms(fileDraftName),
+    })).products.find(value => value.terms.name === fileDraftName)
+    truth(fileDraft?.id, 'isolated file proof has a typed fund draft')
+    const fileSubmitted = (await scopedCommand(1, manager, 'submit_product', {
+      product_id: fileDraft.id, expected_revision: fileDraft.revision,
+    })).products.find(value => value.id === fileDraft.id)
+    truth(fileSubmitted?.offering_package?.id, 'isolated file proof has a submitted revision')
+    await admin()
+    checks += await proveOfferingFileQuarantine(db, fileSubmitted.id)
+  } finally {
+    await admin()
+    await db.query('rollback to savepoint offering_file_quarantine_fixture; release savepoint offering_file_quarantine_fixture')
+  }
   phase = 'stage3-product-service-appointments'
   await sqlFile('../../../supabase/migrations/20260928174847_stage3_product_service_appointments.sql')
   for (const table of ['product_service_appointments', 'product_service_appointment_receipts',
