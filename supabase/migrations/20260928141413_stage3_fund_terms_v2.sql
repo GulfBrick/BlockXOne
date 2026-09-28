@@ -371,7 +371,7 @@ end $fund_v2_grants$;
 -- authority at the end: a mandate can expire while this projection runs.
 -- Keep every other predicate and the existing context checks unchanged.
 do $fund_v2_read_efficiency$
-declare definition text;
+declare definition text; candidates oid[];
   old_declaration text := 'declare v_actor uuid:=auth.uid(); result jsonb;';
   new_declaration text := 'declare v_actor uuid:=auth.uid(); result jsonb; v_operator_orgs uuid[];';
   old_initial_check text :=
@@ -387,7 +387,18 @@ declare definition text;
   new_final_check text :=
     E'if exists(select 1 from pg_catalog.unnest(v_operator_orgs) as org(id) where bx1_portal.scoped_operator(c,org.id) is not true) then\n    raise exception ''portal_context_changed'' using errcode=''42501''; end if;\n  ' || old_final_check;
 begin
-  definition := pg_catalog.pg_get_functiondef('bx1_portal.read_scoped_pre_eligibility(jsonb)'::regprocedure);
+  -- The two hosted projects preserve different historical function names:
+  -- TEST has read_scoped_p2, while MAIN and the source fixture have
+  -- read_scoped_pre_eligibility. Select by the exact old body, never by a
+  -- guessed name, and stop if the chain has zero or multiple candidates.
+  candidates := array(select p.oid from pg_catalog.pg_proc p
+    join pg_catalog.pg_namespace n on n.oid=p.pronamespace
+    where n.nspname='bx1_portal' and pg_catalog.left(p.proname::text,11)='read_scoped'
+      and p.pronargs=1 and p.proargtypes[0]='jsonb'::pg_catalog.regtype
+      and pg_catalog.strpos(pg_catalog.pg_get_functiondef(p.oid),old_predicate)>0);
+  if pg_catalog.cardinality(candidates)<>1 then
+    raise exception 'fund_v2_base_read_target_ambiguous' using errcode='55000'; end if;
+  definition := pg_catalog.pg_get_functiondef(candidates[1]);
   if (pg_catalog.length(definition)-pg_catalog.length(pg_catalog.replace(definition,old_declaration,'')))
        /pg_catalog.length(old_declaration) <> 1
     or (pg_catalog.length(definition)-pg_catalog.length(pg_catalog.replace(definition,old_initial_check,'')))
