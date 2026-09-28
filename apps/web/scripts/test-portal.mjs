@@ -1910,6 +1910,7 @@ try {
     otherRevisionId: reviewedProperty.offering_package.id,
     issuerContext, signInIssuer: () => actor(13, { aal: 'aal2' }),
   })
+  phase = 'stage3-exact-appointed-offering-decisions'
   const issuerState = await mandateScopedRead(13, issuerContext)
   truth(issuerState.products.some(value => value.id === appointedFund.id),
     'issuer sees only the explicitly appointed product after old broad binding revocation')
@@ -1920,6 +1921,7 @@ try {
     issuerInput(appointedFund))).products.find(value => value.id === appointedFund.id)
   eq(appointedFund.offering_package.issuer_status, 'APPROVED',
     'issuer decision is bound to its exact active product appointment')
+  await admin()
   eq(await scalar(`select product_appointment_id from bx1_portal.offering_decisions
     where offering_revision_id=$1 and decision_kind='ISSUER'`, [appointedFund.offering_package.id]),
   issuerAppointment.id, 'immutable issuer decision records appointment identity')
