@@ -1325,16 +1325,26 @@ try {
       values($1,$2,$3,$4,$5,$6::jsonb,true,true,1,10000000)`,
     [v2Reviewed.id, uid(3), orgId, v2Reviewed.revision, v2Reviewed.terms_hash, JSON.stringify(v2Reviewed.terms)])
   })
+  phase = 'fund-v2-other-organisation-own-draft-read'
   const foreignManagerOwnDraft = (await scopedRead(14, v3RoleContext)).products.find(value => value.id === v3Draft.id)
   eq(foreignManagerOwnDraft?.status, 'DRAFT', 'other-organisation manager sees only their own existing draft')
-  const foreignManagerOwnUpgrade = (await scopedCommand(14, v3RoleContext, 'save_product', {
-    product_id: v3Draft.id, expected_revision: v3Draft.revision,
-    terms: fundV2Terms('V3 own-organisation synthetic TST fund upgrade'),
-  })).products.find(value => value.id === v3Draft.id)
+  phase = 'fund-v2-other-organisation-own-draft-upgrade'
+  const upgradeStartedAt = Date.now()
+  let foreignManagerOwnUpgrade
+  try {
+    foreignManagerOwnUpgrade = (await scopedCommand(14, v3RoleContext, 'save_product', {
+      product_id: v3Draft.id, expected_revision: v3Draft.revision,
+      terms: fundV2Terms('V3 own-organisation synthetic TST fund upgrade'),
+    })).products.find(value => value.id === v3Draft.id)
+  } catch (error) {
+    error.message = `own-v3-upgrade elapsedMs=${Date.now() - upgradeStartedAt} ${error.message}`
+    throw error
+  }
   eq([foreignManagerOwnUpgrade?.id, foreignManagerOwnUpgrade?.revision,
     foreignManagerOwnUpgrade?.terms?.terms_version, foreignManagerOwnUpgrade?.terms?.currency],
   [v3Draft.id, v3Draft.revision + 1, 2, 'TST'],
   'other-organisation manager can upgrade only their own legacy draft under an effective mandate')
+  phase = 'fund-v2-cross-organisation-save-denial'
   await denied('cross-org manager cannot probe v2 fund save', () => scopedCommand(14, v3RoleContext, 'save_product', {
     product_id: v2Reviewed.id, expected_revision: v2Reviewed.revision,
     terms: fundV2Terms('Foreign attempted alteration'),
