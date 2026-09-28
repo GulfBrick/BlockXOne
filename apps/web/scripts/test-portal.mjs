@@ -2089,6 +2089,9 @@ try {
     .capabilities.includes('begin_offering_amendment'),
   'current manager organisation advertises a governed amendment for its eligible product')
   await db.query('savepoint begin_amendment_proof')
+  await denied('malformed product ID cannot begin an offering amendment',
+    () => scopedCommand(1, manager, 'begin_offering_amendment',
+      { ...amendmentPayload, product_id: 'not-a-uuid' }), '22023')
   await denied('wrong organisation cannot begin an offering amendment',
     () => scopedCommand(1, roleContext('OfferingManager', otherScope),
       'begin_offering_amendment', amendmentPayload), '42501')

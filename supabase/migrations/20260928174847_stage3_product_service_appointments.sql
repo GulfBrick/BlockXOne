@@ -824,7 +824,7 @@ begin
   perform bx1_portal.require_keys(body,array['product_id','expected_revision','reason']);
   perform bx1_portal.require_text(body,'reason',20,1000);
   if pg_catalog.jsonb_typeof(body->'product_id') is distinct from 'string'
-    or body->>'product_id' !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    or body->>'product_id' !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
     or pg_catalog.jsonb_typeof(body->'expected_revision') is distinct from 'number'
     or body->>'expected_revision' !~ '^[1-9][0-9]{0,8}$' then
     raise exception 'offering_amendment_invalid' using errcode='22023'; end if;
