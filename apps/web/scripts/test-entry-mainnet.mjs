@@ -154,6 +154,7 @@ try {
     'public.bx1_portal_command_scoped(text,uuid,jsonb,jsonb)',
     'bx1_portal.read_scoped(jsonb)',
     'bx1_portal.execute_scoped(jsonb,text,uuid,jsonb)',
+    'bx1_portal.save_fund_v2_scoped(jsonb,uuid,jsonb)',
   ]) eq(await scalar("select has_function_privilege('authenticated',$1,'EXECUTE')", [signature]), false,
     `MAIN retains sealed ${signature} after the v2 fund terms installation`)
   eq(await scalar('select count(*)::int from bx1_portal.customer_monitoring_cases'), 0,

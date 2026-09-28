@@ -166,6 +166,110 @@ end $$;
 create trigger bx1_fund_v2_subscription_guard before insert on bx1_portal.subscriptions
 for each row execute function bx1_portal.guard_fund_v2_subscription();
 
+-- One authoritative v2 FUND draft writer. The inherited save path builds a
+-- legacy read, a scoped read and an offering read before returning. For a
+-- customer mandate that repeats expensive authority projections and can time
+-- out. This cutover preserves its guarded write/receipt semantics and returns
+-- only the final, current scoped snapshot. Every other action still delegates.
+create function bx1_portal.save_fund_v2_scoped(c jsonb,key uuid,body jsonb) returns jsonb
+language plpgsql volatile security definer set search_path='' as $$
+declare actor uuid:=auth.uid(); prior bx1_portal.scoped_requests;
+  p bx1_portal.products; source_application uuid; locked_application uuid; target_org uuid;
+  proposed jsonb:=body->'terms'; expected integer;
+begin
+  if bx1_portal.valid_operating_context(c) is not true or
+    key is null or key='00000000-0000-0000-0000-000000000000' or
+    pg_catalog.jsonb_typeof(body) is distinct from 'object' or
+    pg_catalog.octet_length(body::text)>65536 then
+    raise exception 'fund_v2_save_denied' using errcode='42501'; end if;
+  perform bx1_portal.entry_lock_actor();
+  perform singleton from bx1_portal.entry_configuration
+    where singleton and environment='TESTNET' for share;
+  if not found then raise exception 'fund_v2_save_denied' using errcode='42501'; end if;
+  select * into prior from bx1_portal.scoped_requests
+    where actor_id=actor and request_key=key;
+  if found then
+    if prior.operating_context is distinct from c or prior.command is distinct from 'save_product'
+      or prior.payload is distinct from body then
+      raise exception 'offering_idempotency_conflict' using errcode='23505'; end if;
+    if bx1_portal.valid_operating_context(c) is not true then
+      raise exception 'fund_v2_save_denied' using errcode='42501'; end if;
+    return bx1_portal.read_scoped(c);
+  end if;
+  if exists(select 1 from bx1_portal.requests r where r.actor_id=actor and r.request_key=key)
+    or exists(select 1 from bx1_portal.entry_requests r where r.actor_id=actor and r.request_key=key) then
+    raise exception 'offering_prior_key_conflict' using errcode='23505'; end if;
+  perform bx1_portal.require_keys(body,array['product_id','expected_revision','terms']);
+  if pg_catalog.jsonb_typeof(body->'product_id') is distinct from 'string'
+    or body->>'product_id' !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then
+    raise exception 'fund_v2_save_denied' using errcode='42501'; end if;
+  if pg_catalog.jsonb_typeof(body->'expected_revision') is distinct from 'number'
+    or body->>'expected_revision' !~ '^[1-9][0-9]{0,8}$' then
+    raise exception 'portal_stale_product' using errcode='23514'; end if;
+  expected:=(body->>'expected_revision')::integer;
+  -- Existing product writers take product before organisation. Revoke/hold
+  -- writers do not take product, then lock source app before org/mandate.
+  select * into p from bx1_portal.products
+    where id=(body->>'product_id')::uuid for update;
+  if p.id is null then raise exception 'fund_v2_save_denied' using errcode='42501'; end if;
+  target_org:=p.organisation_id;
+  if bx1_portal.scoped_operator(c,target_org) is not true then
+    raise exception 'fund_v2_save_denied' using errcode='42501'; end if;
+  select o.application_id into source_application from bx1_portal.organisations o
+    where o.id=target_org;
+  perform id from bx1_portal.applications where id=source_application for share;
+  if not found then raise exception 'fund_v2_save_denied' using errcode='42501'; end if;
+  select application_id into locked_application from bx1_portal.organisations
+    where id=target_org for share;
+  if not found or locked_application is distinct from source_application then
+    raise exception 'fund_v2_save_denied' using errcode='42501'; end if;
+  if c->>'mode'='ROLE' then
+    perform id from bx1_portal.representative_mandates
+      where product_organisation_id=target_org and applicant_user_id=actor
+        and native_organisation_id=(c->>'organisationId')::uuid order by id for share;
+  end if;
+  perform id from bx1_portal.organisation_authority_bindings
+    where product_organisation_id=target_org order by id for share;
+  if c->>'mode'='ROLE' then
+    perform id from public.bx1_organisations where id=(c->>'organisationId')::uuid for share;
+    perform id from public.bx1_memberships
+      where user_id=actor and organisation_id=(c->>'organisationId')::uuid
+        and role=c->>'role' order by id for share;
+  end if;
+  if bx1_portal.valid_operating_context(c) is not true
+    or bx1_portal.scoped_operator(c,target_org) is not true then
+    raise exception 'fund_v2_save_denied' using errcode='42501'; end if;
+  if p.terms->>'asset_type' is distinct from 'FUND' or p.organisation_id is distinct from target_org then
+    raise exception 'fund_v2_save_denied' using errcode='42501'; end if;
+  if p.status not in ('DRAFT','CHANGES_REQUIRED') then
+    raise exception 'portal_terms_locked' using errcode='23514'; end if;
+  if p.revision<>expected then raise exception 'portal_stale_product' using errcode='23514'; end if;
+  if proposed->'terms_version' is distinct from '2'::jsonb
+    or proposed->>'asset_type' is distinct from 'FUND' then
+    raise exception 'fund_v2_terms_required' using errcode='23514'; end if;
+  perform bx1_portal.validate_terms(proposed);
+  update bx1_portal.products set
+    terms=proposed,
+    terms_hash=pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(proposed::text,'UTF8')),'hex'),
+    cap_units=(proposed->>'cap_units')::numeric,
+    unit_price_minor=(proposed->>'unit_price_minor')::numeric,
+    minimum_units=(proposed->>'minimum_units')::numeric,
+    revision=revision+1,status='DRAFT',reviewer_id=null,review_notes=null,
+    reviewed_at=null,review_checks='{}'::jsonb,current_offering_revision_id=null
+    where id=p.id;
+  insert into bx1_portal.requests(actor_id,request_key,command,payload)
+    values(actor,key,'save_product',body);
+  insert into bx1_portal.events(subject_id,organisation_id,kind,actor_id,summary)
+    values(p.id,target_org,'save_product',actor,
+      'Test product draft terms revised; earlier review no longer applies.');
+  insert into bx1_portal.scoped_requests(actor_id,request_key,operating_context,command,payload)
+    values(actor,key,c,'save_product',body);
+  if bx1_portal.valid_operating_context(c) is not true
+    or bx1_portal.scoped_operator(c,target_org) is not true then
+    raise exception 'fund_v2_save_denied' using errcode='42501'; end if;
+  return bx1_portal.read_scoped(c);
+end $$;
+
 -- Keep the existing single guarded writer. Prevent v1 drafts from becoming new
 -- fund packages and prevent six-decimal TST reaching the ZAR_TEST-only funding
 -- and subscription code. Historical v1 reviews and records are preserved.
@@ -188,6 +292,8 @@ begin
   -- Delegate so the existing command compares context/action/payload and
   -- rechecks the current session before returning a scoped projection.
   if action in ('create_product','save_product','submit_product','publish_product','subscribe')
+    and (action='save_product' and body->'terms'->'terms_version'='2'::jsonb
+      and body->'terms'->>'asset_type'='FUND') is not true
     and exists(select 1 from bx1_portal.scoped_requests prior
       where prior.actor_id=auth.uid() and prior.request_key=key) then
     return bx1_portal.execute_scoped_pre_fund_v2(c,action,key,body);
@@ -211,6 +317,7 @@ begin
       if proposed_terms->'terms_version' is distinct from '2'::jsonb then
         raise exception 'fund_v2_terms_required' using errcode='23514'; end if;
       perform bx1_portal.validate_terms(proposed_terms);
+      return bx1_portal.save_fund_v2_scoped(c,key,body);
     end if;
   elsif action='submit_product' then
     select p.terms into existing_terms from bx1_portal.products p
@@ -245,6 +352,7 @@ revoke all on function bx1_portal.validate_terms_v1(jsonb),
   bx1_portal.validate_terms(jsonb),
   bx1_portal.guard_fund_v2_product(),
   bx1_portal.guard_fund_v2_subscription(),
+  bx1_portal.save_fund_v2_scoped(jsonb,uuid,jsonb),
   bx1_portal.execute_scoped_pre_fund_v2(jsonb,text,uuid,jsonb),
   bx1_portal.execute_scoped(jsonb,text,uuid,jsonb),
   public.bx1_portal_command_scoped(text,uuid,jsonb,jsonb)

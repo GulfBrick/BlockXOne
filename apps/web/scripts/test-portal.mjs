@@ -1225,6 +1225,7 @@ try {
   eq(await scalar("select count(*)::int from bx1_portal.offering_revisions where origin like 'LEGACY_%'"), legacySnapshots, 'v2 migration preserves immutable legacy snapshots')
   eq(await scalar("select has_function_privilege('authenticated','public.bx1_portal_command(text,uuid,jsonb)','EXECUTE')"), false, 'legacy public command remains sealed')
   eq(await scalar("select has_function_privilege('authenticated','bx1_portal.execute_scoped_pre_fund_v2(jsonb,text,uuid,jsonb)','EXECUTE')"), false, 'previous scoped writer remains private')
+  eq(await scalar("select has_function_privilege('authenticated','bx1_portal.save_fund_v2_scoped(jsonb,uuid,jsonb)','EXECUTE')"), false, 'v2 fund save helper remains private')
   eq(await scalar("select bx1_portal.offering_technical_ready($1)", [fundPackage.offering_package.id]), false, 'fund technical-readiness gate remains false')
   const replayedLegacyDraft = (await scopedCommand(1, manager, 'create_product', legacyFundCreateBody, legacyFundCreateKey)).products.find(value => value.id === v1FundDraft.id)
   eq(replayedLegacyDraft.id, v1FundDraft.id, 'pre-migration v1 idempotent replay remains a read, not a duplicate fund')
@@ -1328,22 +1329,86 @@ try {
   phase = 'fund-v2-other-organisation-own-draft-read'
   const foreignManagerOwnDraft = (await scopedRead(14, v3RoleContext)).products.find(value => value.id === v3Draft.id)
   eq(foreignManagerOwnDraft?.status, 'DRAFT', 'other-organisation manager sees only their own existing draft')
+  await admin()
+  const ownDraftBefore = await scalar(`select jsonb_build_object(
+    'revision',p.revision,'hash',p.terms_hash,'requests',(select count(*) from bx1_portal.requests r
+      where r.actor_id=$2 and r.command='save_product' and r.payload->>'product_id'=$1::text),
+    'scoped',(select count(*) from bx1_portal.scoped_requests r
+      where r.actor_id=$2 and r.command='save_product' and r.payload->>'product_id'=$1::text),
+    'events',(select count(*) from bx1_portal.events e
+      where e.actor_id=$2 and e.kind='save_product' and e.subject_id=$1))
+    from bx1_portal.products p where p.id=$1`, [v3Draft.id, uid(14)])
+  phase = 'fund-v2-own-save-stale-revision'
+  await denied('v2 fund save rejects stale revision before changing a draft', () => scopedCommand(14,
+    v3RoleContext, 'save_product', {
+      product_id: v3Draft.id, expected_revision: v3Draft.revision + 1,
+      terms: fundV2Terms('Rejected synthetic TST fund with stale revision'),
+    }), '23514')
+  await admin()
+  eq(await scalar('select revision from bx1_portal.products where id=$1', [v3Draft.id]),
+    v3Draft.revision, 'stale save preserves the product revision')
+  phase = 'fund-v2-own-save-audit-rollback'
+  await denied('v2 fund save audit failure rolls back terms, revision and both receipts', async () => {
+    await admin()
+    await db.query(`create function public.synthetic_fund_v2_save_audit_failure() returns trigger
+      language plpgsql as $$ begin if new.kind='save_product' then
+        raise exception 'synthetic_fund_v2_save_audit_failure' using errcode='23514'; end if;
+        return new; end $$;
+      create trigger synthetic_fund_v2_save_audit_failure before insert on bx1_portal.events
+      for each row execute function public.synthetic_fund_v2_save_audit_failure()`)
+    await scopedCommand(14, v3RoleContext, 'save_product', {
+      product_id: v3Draft.id, expected_revision: v3Draft.revision,
+      terms: fundV2Terms('Rejected synthetic TST fund after audit failure'),
+    })
+  })
+  await admin()
+  eq(await scalar(`select jsonb_build_object(
+    'revision',p.revision,'hash',p.terms_hash,'requests',(select count(*) from bx1_portal.requests r
+      where r.actor_id=$2 and r.command='save_product' and r.payload->>'product_id'=$1::text),
+    'scoped',(select count(*) from bx1_portal.scoped_requests r
+      where r.actor_id=$2 and r.command='save_product' and r.payload->>'product_id'=$1::text),
+    'events',(select count(*) from bx1_portal.events e
+      where e.actor_id=$2 and e.kind='save_product' and e.subject_id=$1))
+    from bx1_portal.products p where p.id=$1`, [v3Draft.id, uid(14)]), ownDraftBefore,
+  'failed v2 save left no product, receipt or event change')
   phase = 'fund-v2-other-organisation-own-draft-upgrade'
   const upgradeStartedAt = Date.now()
+  const ownUpgradeKey = key()
+  const ownUpgradeBody = {
+    product_id: v3Draft.id, expected_revision: v3Draft.revision,
+    terms: fundV2Terms('V3 own-organisation synthetic TST fund upgrade'),
+  }
   let foreignManagerOwnUpgrade
   try {
-    foreignManagerOwnUpgrade = (await scopedCommand(14, v3RoleContext, 'save_product', {
-      product_id: v3Draft.id, expected_revision: v3Draft.revision,
-      terms: fundV2Terms('V3 own-organisation synthetic TST fund upgrade'),
-    })).products.find(value => value.id === v3Draft.id)
+    foreignManagerOwnUpgrade = (await scopedCommand(14, v3RoleContext, 'save_product', ownUpgradeBody,
+      ownUpgradeKey)).products.find(value => value.id === v3Draft.id)
   } catch (error) {
     error.message = `own-v3-upgrade elapsedMs=${Date.now() - upgradeStartedAt} ${error.message}`
     throw error
   }
+  console.log(`BX1_FUND_V2_SAVE_PROOF elapsedMs=${Date.now() - upgradeStartedAt} actor=synthetic-other-organisation result=success`)
   eq([foreignManagerOwnUpgrade?.id, foreignManagerOwnUpgrade?.revision,
     foreignManagerOwnUpgrade?.terms?.terms_version, foreignManagerOwnUpgrade?.terms?.currency],
   [v3Draft.id, v3Draft.revision + 1, 2, 'TST'],
   'other-organisation manager can upgrade only their own legacy draft under an effective mandate')
+  await admin()
+  eq(await scalar(`select jsonb_build_object(
+    'requests',(select count(*) from bx1_portal.requests where actor_id=$1 and request_key=$2),
+    'scoped',(select count(*) from bx1_portal.scoped_requests where actor_id=$1 and request_key=$2),
+    'events',(select count(*) from bx1_portal.events where actor_id=$1 and subject_id=$3 and kind='save_product'))`,
+  [uid(14), ownUpgradeKey, v3Draft.id]), { requests: 1, scoped: 1, events: 1 },
+  'one fund save creates both idempotency receipts and one audit event')
+  phase = 'fund-v2-own-save-replay-and-conflict'
+  const replayedOwnUpgrade = (await scopedCommand(14, v3RoleContext, 'save_product', ownUpgradeBody,
+    ownUpgradeKey)).products.find(value => value.id === v3Draft.id)
+  eq(replayedOwnUpgrade.revision, foreignManagerOwnUpgrade.revision,
+    'exact fund save replay returns current scoped state without a second revision')
+  await denied('fund save key cannot be reused with different terms', () => scopedCommand(14,
+    v3RoleContext, 'save_product', { ...ownUpgradeBody,
+      terms: fundV2Terms('Conflicting terms on the same save key') }, ownUpgradeKey), '23505')
+  await admin()
+  eq(await scalar("select count(*)::int from bx1_portal.events where actor_id=$1 and subject_id=$2 and kind='save_product'",
+    [uid(14), v3Draft.id]), 1, 'replay and conflict create no second fund-save audit event')
   phase = 'fund-v2-cross-organisation-save-denial'
   await denied('cross-org manager cannot probe v2 fund save', () => scopedCommand(14, v3RoleContext, 'save_product', {
     product_id: v2Reviewed.id, expected_revision: v2Reviewed.revision,
