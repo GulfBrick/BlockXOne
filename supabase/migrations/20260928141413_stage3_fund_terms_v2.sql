@@ -363,3 +363,21 @@ do $fund_v2_grants$ begin
       public.bx1_portal_command_scoped(text,uuid,jsonb,jsonb) to authenticated;
   end if;
 end $fund_v2_grants$;
+
+-- The inherited base workspace projection ran the full mandate/monitoring
+-- predicate once for every audit event. On a small synthetic customer history
+-- that made a normal manager read take 11-14 seconds. Build the event's
+-- permitted-organisation set once within the same SQL statement instead.
+-- Keep every other predicate and the existing context checks unchanged.
+do $fund_v2_read_efficiency$
+declare definition text; old_predicate text :=
+  'from bx1_portal.events e where bx1_portal.scoped_operator(c,e.organisation_id)';
+  new_predicate text :=
+  'from bx1_portal.events e where e.organisation_id = any(array(select permitted.id from bx1_portal.organisations permitted where bx1_portal.scoped_operator(c,permitted.id)))';
+begin
+  definition := pg_catalog.pg_get_functiondef('bx1_portal.read_scoped_pre_eligibility(jsonb)'::regprocedure);
+  if (pg_catalog.length(definition)-pg_catalog.length(pg_catalog.replace(definition,old_predicate,'')))
+       /pg_catalog.length(old_predicate) <> 1 then
+    raise exception 'fund_v2_base_read_definition_changed' using errcode='55000'; end if;
+  execute pg_catalog.replace(definition,old_predicate,new_predicate);
+end $fund_v2_read_efficiency$;
