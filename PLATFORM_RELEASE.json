@@ -1,8 +1,8 @@
 {
   "product": "BlockXOne",
-  "version": "1.1.0-rc.23",
+  "version": "1.1.0-rc.24",
   "status": "release-candidate",
-  "baseSource": "38d30af19ea8425e3bccf459cd4972aec9db15b5",
+  "baseSource": "104f420650a3c2f54e05f8b1594b6a5703a73227",
   "sourceIdentity": "VERCEL_GIT_COMMIT_SHA",
   "environmentSource": "validated deployment target, canonical origin and Supabase project",
   "sharedEntry": "/login",
@@ -12,7 +12,7 @@
   "schemaChanges": ["20260923134152_stage2_product_eligibility", "20260923143713_stage2_customer_mandates", "20260923144216_stage2_document_receipts", "20260923161500_stage2_application_document_history", "20260923171126_stage2_entity_investment_accounts", "20260923175822_stage2_superadmin_shell_mfa_boundary", "20260923205519_stage3_immutable_offering_packages", "20260924110608_stage2_provider_evidence", "20260924110911_stage1_staff_invitation_intents", "20260924110922_stage2_beneficial_ownership_control", "20260924112832_stage2_document_quarantine_lifecycle", "20260924125627_stage2_customer_monitoring", "20260924125811_stage2_document_retention_authority", "20260928141413_stage3_fund_terms_v2", "20260928161233_stage3_real_estate_terms_v2", "20260928174348_stage3_offering_file_quarantine", "20260928174847_stage3_product_service_appointments"],
   "mainnetMissingPrerequisites": ["Live identity-provider evidence, operational malware scanning and disposal, lost-authenticator recovery, required MFA for every admission reviewer, trusted distinct-person mappings, and real customer admission are not approved", "Linked legal issuer and product appointments, uploaded offering documents and actual e-signature evidence, reviewed contract package, TST settlement/accounting integration and independently verified technical readiness are not admitted"],
   "contractChanges": [],
-  "authChanges": ["Explicit fresh-first-authenticator setup under a live AAL1 context without deleting existing factors", "Unique authenticator names prevent provider name conflicts", "Authenticator-app code and setup guidance; no automatic enrollment or MFA bypass"],
+  "authChanges": ["Carry forward the safe first-authenticator setup and unique factor names without factor deletion or MFA bypass", "Opaque registration failure references linked to allowlisted server diagnostics, without credentials or personal input", "Preserve registration decisions, confirmation requirements, session-cookie protection and non-enumerating outcomes"],
   "productionFinancialAdmission": false,
   "scope": "Carry forward the existing Stage 1/2 evidence paths and unresolved provider, scanner, recovery and distinct-person acceptance gates without changing login or authority. Keep the versioned FUND and REAL_ESTATE six-decimal TST draft packages and immutable submission in the same guarded portal, preserving historical ZAR_TEST records. Add TEST product-specific Issuer and Compliance service appointments with separate review/application, expiry and revocation; offer a new immutable re-review revision after authority loss, and a separate guarded amendment path for changed terms that invalidates prior approvals. Add private offering-file quarantine infrastructure but keep PDF POST/UI intake closed until independent scanning, disposition, immutable file-manifest approval and hosted acceptance are connected. In-form text digests and synthetic decisions are not uploaded signed documents or legal approval. No v2 package can publish, subscribe, fund or issue until governed settlement/accounting/chain readiness is admitted. MAIN business and financial actions remain sealed; productionFinancialAdmission remains false."
 }

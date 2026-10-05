@@ -49,6 +49,30 @@ describe('Auth document referrer policy', () => {
     expect(authDocumentReferrerPolicy('/register', { intent })).toBe('strict-origin')
     expect(authDocumentReferrerPolicy('/register', new URLSearchParams({ intent }))).toBe('strict-origin')
   })
+  it('retains native retry origin for only a canonical generic-error support reference', () => {
+    const ref = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+    const queries: Record<string, string>[] = [{ error: 'unavailable', ref }, { ref, error: 'unavailable', intent: 'wealth-manager' }]
+    for (const query of queries) {
+      expect(authDocumentReferrerPolicy('/register', query)).toBe('strict-origin')
+      expect(authDocumentReferrerPolicy('/register', new URLSearchParams(query))).toBe('strict-origin')
+    }
+  })
+  it('keeps malformed, repeated, stale or secret-bearing support-reference queries private', () => {
+    const ref = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+    const queries: Record<string, string | string[]>[] = [
+      { ref }, { error: 'email_invalid', ref }, { error: 'unavailable', ref: '<script>' },
+      { error: 'unavailable', ref: ref.toUpperCase() }, { error: 'unavailable', ref: `${ref}\n` },
+      { error: 'unavailable', ref: [ref] }, { error: ['unavailable'], ref },
+      { error: 'unavailable', ref, token_hash: 'synthetic-secret' }, { error: 'unavailable', ref, unknown: 'value' },
+    ]
+    for (const query of queries) expect(authDocumentReferrerPolicy('/register', query)).toBe('no-referrer')
+    for (const query of [
+      `ref=${ref}`, `error=email_invalid&ref=${ref}`, `error=unavailable&ref=arbitrary-message`,
+      `error=unavailable&ref=${ref}&ref=${ref}`, `error=unavailable&error=unavailable&ref=${ref}`,
+      `error=unavailable&ref=${ref}&intent=investor&intent=investor`, `error=unavailable&ref=${ref}&access_token=synthetic-secret`,
+    ]) expect(authDocumentReferrerPolicy('/register', new URLSearchParams(query))).toBe('no-referrer')
+    expect(authDocumentReferrerPolicy('/login', { error: 'unavailable', ref })).toBe('no-referrer')
+  })
   it.each([
     'intent=investor&intent=investor', 'error=email_invalid&error=email_invalid',
     'intent=SuperAdmin', 'intent=', 'error=raw-provider-detail', 'error=constructor',

@@ -54,3 +54,44 @@ export function registrationProviderOutcome(error: { code?: string; status?: num
   if (error.code === 'weak_password') return 'password_rejected'
   return 'unavailable'
 }
+
+/** A support reference is opaque, not a provider error or user-controlled message. */
+export function registrationFailureReference(error: unknown, value: unknown): string | undefined {
+  return error === 'unavailable' && typeof value === 'string'
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value)
+    ? value : undefined
+}
+
+const providerDiagnosticCategories = {
+  signup_disabled: 'signup_disabled',
+  email_provider_disabled: 'email_provider_disabled',
+  email_address_not_authorized: 'email_delivery_restricted',
+  email_address_invalid: 'email_address_invalid',
+  captcha_failed: 'captcha_failed',
+  unexpected_failure: 'provider_unexpected_failure',
+  request_timeout: 'provider_request_timeout',
+  hook_timeout: 'provider_hook_failure',
+  hook_timeout_after_retry: 'provider_hook_failure',
+  hook_payload_over_size_limit: 'provider_hook_failure',
+  hook_payload_invalid_content_type: 'provider_hook_failure',
+} as const
+export type RegistrationProviderCategory = (typeof providerDiagnosticCategories)[keyof typeof providerDiagnosticCategories]
+  | 'provider_auth_rejected' | 'provider_unavailable' | 'unknown_provider_failure'
+
+/** Extract only bounded status and fixed categories; never copy provider text. */
+export function registrationProviderDiagnostic(error: unknown): { status: number | null; category: RegistrationProviderCategory } {
+  let status: number | null = null
+  let code: unknown
+  try {
+    if (error && typeof error === 'object') {
+      const candidate = error as { status?: unknown; code?: unknown }
+      const upstreamStatus = candidate.status
+      if (typeof upstreamStatus === 'number' && Number.isInteger(upstreamStatus) && upstreamStatus >= 100 && upstreamStatus <= 599) status = upstreamStatus
+      code = candidate.code
+    }
+  } catch { /* Hostile accessors or unknown SDK shapes never become log content. */ }
+  if (typeof code === 'string' && Object.hasOwn(providerDiagnosticCategories, code)) {
+    return { status, category: providerDiagnosticCategories[code as keyof typeof providerDiagnosticCategories] }
+  }
+  return { status, category: status === 401 || status === 403 ? 'provider_auth_rejected' : status !== null && status >= 500 ? 'provider_unavailable' : 'unknown_provider_failure' }
+}
