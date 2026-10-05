@@ -99,6 +99,12 @@ export function createMfaFormController(options: ControllerOptions) {
       if (!/^[0-9]{6}$/.test(code)) { emit({ ...state, error: 'invalid_code' }); return }
       await submit('/auth/mfa-verify', new URLSearchParams({ factorId, code, continuation: options.continuation }), false)
     },
+    restartUnfinishedSetup: async () => {
+      if (!active || state.pending || state.reloadRequired || state.setup || !options.view.canRestartPendingSetup
+        || options.view.state !== 'unenrolled' || !['security','staff'].includes(options.continuation)
+        || !options.view.factors.some(factor => factor.status === 'unverified' && factor.factorType === 'totp')) return
+      await submit('/auth/mfa-restart-setup', new URLSearchParams(), true)
+    },
     clear: () => {
       ++generation; abort?.abort()
       emit({ pending: false, reloadRequired: true })
@@ -112,7 +118,7 @@ export function createMfaFormController(options: ControllerOptions) {
 async function post(path: string, body: URLSearchParams, signal: AbortSignal): Promise<unknown> {
   const response = await fetch(path, { method: 'POST', credentials: 'same-origin', cache: 'no-store', redirect: 'error',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' }, body, signal })
-  return readMfaResponse(response, path === '/auth/mfa-enroll')
+  return readMfaResponse(response, path === '/auth/mfa-enroll' || path === '/auth/mfa-restart-setup')
 }
 
 export async function readMfaResponse(response: Response, enrollment = false): Promise<unknown> {
@@ -190,6 +196,8 @@ export function MfaForm({ view, continuation }: { view: MfaView; continuation: M
   const backupEnrollment = continuation === 'security' && view.state === 'verified' && view.factors.some(factor => factor.status === 'verified' && factor.factorType === 'totp')
   const canEnroll = (firstEnrollment || backupEnrollment) && !view.hasPendingTotp && view.factors.length < 10 && !state.setup
   const unsupported = view.state === 'unsupported_factor' || (view.state === 'verified' && !factors.length)
+  const canRestart = view.canRestartPendingSetup && view.state === 'unenrolled' && !state.setup
+    && ['security','staff'].includes(continuation)
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const values = new FormData(event.currentTarget)
@@ -201,7 +209,8 @@ export function MfaForm({ view, continuation }: { view: MfaView; continuation: M
   return <section className="mt-8 space-y-6" aria-label="Authenticator verification">
     {view.state === 'verified' ? <p className="text-base text-bxo-text-primary">Authenticator enabled. Additional verification may be required for sensitive actions.</p> : null}
     {unsupported ? <p role="alert" className="text-base text-bxo-text-secondary">{errors.unsupported_factor}</p> : null}
-    {view.hasPendingTotp && !state.setup && ['unenrolled','verified'].includes(view.state) ? <div className="text-base leading-7 text-bxo-text-secondary"><p>Authenticator setup is unfinished.</p><p className="mt-2">If you no longer have this setup in your authenticator, contact support before starting again.</p></div> : null}
+    <p className="text-base leading-7 text-bxo-text-secondary">Your six-digit code comes from the authenticator app on your phone, such as Google Authenticator or Microsoft Authenticator. BlockXOne does not email this code. During setup, scan the QR code in that app to start generating codes.</p>
+    {view.hasPendingTotp && !state.setup && ['unenrolled','verified'].includes(view.state) ? <div className="space-y-4 text-base leading-7 text-bxo-text-secondary"><p>Authenticator setup is unfinished.</p><p>{canRestart ? 'If you never scanned the QR code or no longer have this unfinished setup in your app, start a fresh setup below. Scan the new QR code and verify the code from your phone.' : 'Use the code from the device where you started this setup. If it is unavailable, contact support.'}</p>{canRestart ? <Button type="button" variant="outline" className="min-h-11" disabled={state.pending || state.reloadRequired} onClick={() => void controller.current?.restartUnfinishedSetup()}>Start fresh authenticator setup</Button> : null}</div> : null}
     {state.error ? <p ref={alert} tabIndex={-1} role="alert" className="rounded-lg border border-bxo-danger-border bg-bxo-danger-soft p-4 text-base text-bxo-text-primary outline-none focus-visible:ring-2 focus-visible:ring-bxo-accent-primary">{errors[state.error]}</p> : null}
     {canEnroll && !unsupported ? <div className="space-y-4"><p className="text-base leading-7 text-bxo-text-secondary">{backupEnrollment ? 'Add a backup authenticator on a different device. Verify your current authenticator first if you have not done so recently.' : 'Add an authenticator app to protect your sign-in.'}</p><p className="text-sm leading-6 text-bxo-text-secondary">{backupEnrollment ? 'Keep both authenticators until the backup has been verified. Losing every verified factor still requires controlled support recovery.' : 'After setup is verified, future sign-ins require your authenticator code. This does not enable financial or token operations.'}</p><Button type="button" disabled={state.pending || state.reloadRequired} onClick={() => void controller.current?.enroll()} className="min-h-11">{state.pending ? 'Setting up...' : backupEnrollment ? 'Add backup authenticator' : 'Set up authenticator'}</Button></div> : null}
     {state.setup ? <div className="space-y-4 rounded-lg border border-bxo-border-default p-4">

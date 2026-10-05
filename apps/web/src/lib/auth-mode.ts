@@ -27,7 +27,7 @@ export const SUPABASE_ALLOWED_PATHS = [
   '/login', '/auth/confirm', '/auth/login', '/auth/setup', '/auth/logout',
   '/workspace', '/workspace/access-denied',
   '/api/wallet/challenge', '/api/wallet/verify',
-  '/login/mfa', '/workspace/security', '/auth/mfa-enroll', '/auth/mfa-verify',
+  '/login/mfa', '/workspace/security', '/auth/mfa-enroll', '/auth/mfa-verify', '/auth/mfa-restart-setup',
   '/workspace/administration', '/workspace/administration/staff-invitations', '/auth/admin-command', '/auth/staff-invite', '/workspace/staff-invite',
   '/workspace/testnet-fund', '/api/testnet-fund/command',
   '/register', '/auth/register', '/portal', '/portal/onboarding',

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 vi.mock('server-only', () => ({}))
-import { hasCurrentTotp, hasRequiredMfa, isMfaContextCurrent, readMfaContext, requireRecentTotp, toMfaView } from './mfa'
+import { canRestartPendingTotpSetup, hasCurrentTotp, hasRequiredMfa, isMfaContextCurrent, readMfaContext, requireRecentTotp, toMfaView } from './mfa'
 
 const now = 1_800_000_000
 const uid = '10000000-0000-4000-8000-000000000001'
@@ -39,8 +39,12 @@ describe('exact-token live MFA context', () => {
   })
   it('retains a pending TOTP without making ordinary login require MFA', async () => {
     const context = (await readMfaContext(fixture({}, [factor('unverified')]).client))!
-    expect(toMfaView(context)).toEqual({ state: 'unenrolled', factors: [{ id: fid, status: 'unverified', factorType: 'totp' }], hasPendingTotp: true })
+    expect(toMfaView(context)).toEqual({ state: 'unenrolled', factors: [{ id: fid, status: 'unverified', factorType: 'totp' }], hasPendingTotp: true, canRestartPendingSetup: true })
     expect(hasRequiredMfa(context)).toBe(true)
+    expect(canRestartPendingTotpSetup(context)).toBe(true)
+    expect(canRestartPendingTotpSetup({} as never)).toBe(false)
+    vi.spyOn(Date, 'now').mockReturnValue((now + 600) * 1000)
+    expect(canRestartPendingTotpSetup(context)).toBe(false)
   })
   it('requires challenge for enrolled AAL1, including after the live session upgrades', async () => {
     const context = (await readMfaContext(enrolled({ aal: 'aal1' }).client))!

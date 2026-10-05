@@ -11,6 +11,7 @@ export type MfaView = {
   state: 'unenrolled' | 'challenge_required' | 'verified' | 'unsupported_factor'
   factors: MfaFactor[]
   hasPendingTotp: boolean
+  canRestartPendingSetup?: true
 }
 export type MfaErrorCode = 'invalid_request' | 'unauthorised' | 'invalid_code'
   | 'rate_limited' | 'unavailable' | 'pending_setup_exists' | 'already_enrolled' | 'unsupported_factor' | 'step_up_required'
@@ -18,6 +19,7 @@ export type MfaContinuation = 'workspace' | 'setup' | 'security' | 'staff'
 export type MfaNextPath = '/portal' | '/workspace' | '/login?setup=1' | '/workspace/security' | '/workspace/staff-invite'
 export type MfaEnrollResponse = { ok: true; factorId: string; qrCode: string; secret: string } | { ok: false; error: MfaErrorCode }
 export type MfaVerifyResponse = { ok: true; next: MfaNextPath } | { ok: false; error: MfaErrorCode }
+export type MfaRestartSetupResponse = MfaEnrollResponse
 
 export const MFA_CONTINUATIONS: Readonly<Record<MfaContinuation, MfaNextPath>> = Object.freeze({
   workspace: '/workspace', setup: '/login?setup=1', security: '/workspace/security', staff: '/workspace/staff-invite',

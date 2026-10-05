@@ -131,6 +131,28 @@ export function hasRequiredMfa(context: VerifiedMfaContext): boolean {
     && (!data.status.requires_mfa || (data.aal === 'aal2' && data.status.session_is_mfa)))
 }
 
+// First-factor setup may be restarted without deleting any factor. Never
+// expose the token or infer permission from the serializable page view.
+function hasFirstFactorSetupContext(context: VerifiedMfaContext): boolean {
+  const data = contexts.get(context)
+  return Boolean(data && data.expiresAt > Math.floor(Date.now() / 1000)
+    && data.aal === 'aal1' && data.status.active && data.status.session_aal === 'aal1'
+    && !data.status.requires_mfa && !data.status.session_is_mfa && !data.status.session_is_totp
+    && !data.factors.some((factor) => factor.status === 'verified'))
+}
+
+export function canRestartPendingTotpSetup(context: VerifiedMfaContext): boolean {
+  const data = contexts.get(context)
+  return Boolean(data && hasFirstFactorSetupContext(context) && data.factors.length < 10
+    && data.factors.some((factor) => factor.factorType === 'totp' && factor.status === 'unverified'))
+}
+
+export function isFreshPendingTotpSetup(context: VerifiedMfaContext, factorId: string): boolean {
+  const data = contexts.get(context)
+  return Boolean(data && uuid(factorId) && hasFirstFactorSetupContext(context) && data.factors.length <= 10
+    && data.factors.some((factor) => factor.id === factorId && factor.factorType === 'totp' && factor.status === 'unverified'))
+}
+
 export function toMfaView(context: VerifiedMfaContext): MfaView {
   const data = contexts.get(context)
   if (!data) throw new AuthUnavailableError()
@@ -139,7 +161,8 @@ export function toMfaView(context: VerifiedMfaContext): MfaView {
   const state = !data.status.requires_mfa ? 'unenrolled'
     : hasRequiredMfa(context) ? 'verified'
       : factors.some((factor) => factor.status === 'verified') ? 'challenge_required' : 'unsupported_factor'
-  return { state, factors, hasPendingTotp: factors.some((factor) => factor.status === 'unverified') }
+  return { state, factors, hasPendingTotp: factors.some((factor) => factor.status === 'unverified'),
+    ...(canRestartPendingTotpSetup(context) ? { canRestartPendingSetup: true } : {}) }
 }
 
 // Privileged reads require a live, verified OWN TOTP binding, even when

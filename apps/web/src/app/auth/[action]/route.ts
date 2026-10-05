@@ -17,7 +17,7 @@ export const dynamic = 'force-dynamic'
 export const revalidate = 0
 type Context = { params: Promise<{ action: string }> }
 type PendingInvite = { tokenHash: string; type: 'invite' | 'recovery' | 'signup'; expiresAt: number }
-const actions = new Set(['confirm', 'login', 'setup', 'logout', 'mfa-enroll', 'mfa-verify', 'admin-command'])
+const actions = new Set(['confirm', 'login', 'setup', 'logout', 'mfa-enroll', 'mfa-verify', 'mfa-restart-setup', 'admin-command'])
 const tokenPattern = /^[A-Za-z0-9_-]{32,512}$/
 function confirmationType(value: unknown): value is PendingInvite['type'] {
   return value === 'invite' || value === 'recovery' || (value === 'signup' && identityEnvironmentEnabled(process.env))
@@ -57,7 +57,7 @@ function readPending(value: string | undefined): PendingInvite | null {
 
 async function dispatch(request: NextRequest, context: Context): Promise<NextResponse> {
   const { action } = await context.params
-  const mfaAction = action === 'mfa-enroll' || action === 'mfa-verify'
+  const mfaAction = action === 'mfa-enroll' || action === 'mfa-verify' || action === 'mfa-restart-setup'
   const adminAction = action === 'admin-command'
   const mode = resolveAuthMode()
   if (adminAction && mode !== 'supabase') return administrationErrorResponse(mode === 'invalid' ? 'unavailable' : 'unauthorised', mode === 'invalid' ? 503 : 404)
