@@ -27,7 +27,10 @@ const user = { id: 'd22789ee-7f73-4acf-a414-3de0b62ea801', email: 'applicant@exa
 const organisation = '33333333-3333-4333-8333-333333333333'
 const roleContext = { mode: 'ROLE' as const, organisationId: organisation, role: 'Investor' as const }
 const snapshot = { actor: { id: user.id, email: user.email, display_name: null, can_review: false }, operating_context: APPLICANT_CONTEXT, applications: [], organisations: [], products: [], subscriptions: [], events: [], requests: [] }
-const entrySnapshot = { entry_version: 1, actor: { id: user.id, email: user.email }, applications: [], contexts: [], admission: { manual_test_review: true } }
+const entrySnapshot = {
+  entry_version: 1, actor: { id: user.id, email: user.email }, applications: [], contexts: [], admission: { manual_test_review: true },
+  workflow: { version: 1, environment: 'TESTNET' as const, actor_id: user.id, scoped_read_available: true },
+}
 const refusedConfigurations: [string, string][] = [
   ['VERCEL_ENV', 'production'], ['VERCEL_ENV', 'development'], ['VERCEL_ENV', ''],
   ['SUPABASE_URL', 'https://oqkevkjbkpugjotihtda.supabase.co'],
@@ -139,9 +142,23 @@ describe('actual customer page admission', () => {
     expect(html).toContain('server-admitted entry')
     expect(mocks.user).toHaveBeenCalledTimes(3)
     expect(mocks.rpc).toHaveBeenCalledTimes(2)
-    expect(mocks.rpc).toHaveBeenCalledWith('bx1_entry_read')
-    expect(mocks.rpc).toHaveBeenCalledWith('bx1_portal_read_scoped', { operating_context: APPLICANT_CONTEXT })
+    expect(mocks.rpc).toHaveBeenNthCalledWith(1, 'bx1_entry_read')
+    expect(mocks.rpc).toHaveBeenNthCalledWith(2, 'bx1_portal_read_scoped', { operating_context: APPLICANT_CONTEXT })
     expect(mocks.workspace).not.toHaveBeenCalled()
+  })
+  it.each([
+    undefined,
+    { ...entrySnapshot.workflow, actor_id: '55555555-5555-4555-8555-555555555555' },
+    { ...entrySnapshot.workflow, environment: 'MAINNET', scoped_read_available: false },
+  ])('rejects absent, other-actor or other-environment workflow before a scoped business read %#', async workflow => {
+    mocks.rpc.mockImplementation((name: string) => ({ abortSignal: vi.fn().mockResolvedValue({ data: name === 'bx1_entry_read' ? { ...entrySnapshot, workflow } : snapshot, error: null }) }))
+    const html = renderToStaticMarkup(await PortalPage({ view: '/portal/onboarding', query: { mode: 'applicant' } }))
+    expect(html).toContain('Saved portal state is unavailable')
+    expect(html).not.toContain('server-admitted entry')
+    expect(html).not.toContain('server-admitted portal')
+    expect(mocks.rpc).toHaveBeenCalledTimes(1)
+    expect(mocks.rpc).toHaveBeenCalledWith('bx1_entry_read')
+    expect(mocks.rpc).not.toHaveBeenCalledWith('bx1_portal_read_scoped', expect.anything())
   })
   it('does not let TEST configuration replace authentication', async () => {
     mocks.user.mockResolvedValueOnce(null)
@@ -159,13 +176,20 @@ describe('actual customer page admission', () => {
   it('admits native business access only through the selected assignment and exact scoped response', async () => {
     mocks.mfa.mockResolvedValue({ userId: user.id })
     mocks.workspace.mockResolvedValue({ user: { id: user.id, email: user.email, platformUserId: 'person', displayName: null }, organisations: [{ id: organisation, name: 'Synthetic issuer', roles: ['Investor'] }] })
-    mocks.rpc.mockReturnValue({ abortSignal: vi.fn().mockResolvedValue({ data: { ...snapshot, operating_context: roleContext }, error: null }) })
+    mocks.rpc.mockImplementation((name: string) => ({ abortSignal: vi.fn().mockResolvedValue({
+      data: name === 'bx1_entry_read'
+        ? { ...entrySnapshot, contexts: [{ context_key: organisation, organisation_id: organisation, name: 'Synthetic issuer', roles: ['Investor'] }] }
+        : { ...snapshot, operating_context: roleContext },
+      error: null,
+    }) }))
     const html = renderToStaticMarkup(await PortalPage({ view: '/portal/portfolio', query: { organisation, role: 'Investor' } }))
     expect(html).toContain('server-admitted portal')
     expect(mocks.workspace).toHaveBeenCalledTimes(1)
-    expect(mocks.rpc).toHaveBeenCalledTimes(1)
-    expect(mocks.rpc).toHaveBeenCalledWith('bx1_portal_read_scoped', { operating_context: roleContext })
-    expect(mocks.current).toHaveBeenCalledTimes(1)
+    expect(mocks.user).toHaveBeenCalledTimes(3)
+    expect(mocks.rpc).toHaveBeenCalledTimes(2)
+    expect(mocks.rpc).toHaveBeenNthCalledWith(1, 'bx1_entry_read')
+    expect(mocks.rpc).toHaveBeenNthCalledWith(2, 'bx1_portal_read_scoped', { operating_context: roleContext })
+    expect(mocks.current).toHaveBeenCalledTimes(2)
   })
   it.each([undefined, APPLICANT_CONTEXT, { ...roleContext, organisationId: '44444444-4444-4444-8444-444444444444' }, { ...roleContext, role: 'OfferingManager' }, { ...roleContext, extra: true }])('rejects a same-actor snapshot with missing, different or extra operating context %#', async actualContext => {
     mocks.rpc.mockReturnValue({ abortSignal: vi.fn().mockResolvedValue({ data: { ...snapshot, operating_context: actualContext }, error: null }) })

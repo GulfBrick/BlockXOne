@@ -320,7 +320,10 @@ try {
   eq((await ownApplication(9, investor.id)).handoff.blocker, 'MONITORING_RENEWAL_REQUIRED', 'renewal requirement is distinct from a hold')
   await assured(2, 'set_customer_monitoring', { application_id: investor.id, expected_revision: 2, state: 'CURRENT', evidence_reference: 'synthetic-independent-current-evidence', reason: 'Synthetic renewal evidence restores only current underlying admission.', checks: { identity: true, ownership: true, screening: true, suitability: true } })
   await admin(); await db.query('savepoint handoff_expired_admission')
-  await db.query("update bx1_portal.applications set approved_until=clock_timestamp()-interval '1 second',reviewed_at=clock_timestamp()-interval '2 seconds' where id=$1", [investor.id])
+  // The retained admission constraint requires exactly 30 days after review,
+  // not merely review before expiry. Use one timestamp for a valid old review.
+  await db.query("with expiry as (select clock_timestamp()-interval '1 second' as at) update bx1_portal.applications a set approved_until=expiry.at,reviewed_at=expiry.at-interval '30 days' from expiry where a.id=$1", [investor.id])
+  eq(await scalar("select status='APPROVED' and approved_until=reviewed_at+interval '30 days' and approved_until<clock_timestamp() from bx1_portal.applications where id=$1", [investor.id]), true, 'expired fixture retains the exact historical admission interval')
   eq([(await ownApplication(9, investor.id)).handoff.blocker, (await ownApplication(9, investor.id)).handoff.allowed_actions], ['ADMISSION_EXPIRED', []], 'current monitoring cannot extend expired admission')
   await admin(); await db.query('rollback to savepoint handoff_expired_admission; release savepoint handoff_expired_admission')
 
