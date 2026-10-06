@@ -147,6 +147,7 @@ try {
   await sqlFile('../../../supabase/migrations/20260928141413_stage3_fund_terms_v2.sql')
   await sqlFile('../../../supabase/migrations/20260928161233_stage3_real_estate_terms_v2.sql')
   await sqlFile('../../../supabase/tests/stage3_real_estate_v2_acl.sql'); checks++
+  await sqlFile('../../../supabase/features/bx1_customer_handoff.sql')
   eq(await scalar("select has_table_privilege(current_user,'bx1_private.person_principals','REFERENCES')"), false,
     'retention migration leaves MAIN migrator without direct identity-table REFERENCES')
   eq(await scalar("select count(*)::int from pg_auth_members m join pg_roles r on r.oid=m.roleid where r.rolname='bx1_authority_owner' and m.member=(select oid from pg_roles where rolname=current_user) and (m.inherit_option or m.set_option)"), 0,
@@ -278,6 +279,10 @@ try {
   let manager = await command(3, 'start_application', { persona: 'WEALTH_MANAGER' })
   eq([investor.applications[0].persona, manager.applications[0].persona], ['INVESTOR', 'WEALTH_MANAGER'], 'MAIN supports distinct pending capacities using same RPC contract')
   eq(investor.admission.manual_test_review, false, 'MAIN does not invent provider admission')
+  eq(investor.workflow, { version: 1, environment: 'MAINNET', actor_id: id(2), scoped_read_available: false }, 'MAIN shares the handoff contract without admitting scoped business reads')
+  eq(manager.applications[0].handoff.blocker, 'INTAKE_NOT_ADMITTED', 'MAIN pending manager identifies the missing admission gate')
+  eq(manager.applications[0].handoff.allowed_actions, [], 'MAIN pending manager has no synthetic or live business action')
+  eq(manager.applications[0].handoff.next_owner, 'PROVIDER_OWNER', 'MAIN gives an accountable prerequisite owner instead of applicant retry')
   investor = await command(2, 'start_application', { persona: 'WEALTH_MANAGER' })
   eq(investor.applications.length, 2, 'MAIN supports multiple capacities without investor fallback')
   await denied('MAIN evidence submission remains unadmitted', () => command(3, 'submit_application', { application_id: manager.applications[0].id, expected_revision: 1, details: {} }), '55000')
@@ -287,6 +292,21 @@ try {
   eq(await scalar('select count(*)::int from bx1_portal.investment_accounts'), 0, 'entry creates no investment account')
   await denied('MAIN config cannot enable synthetic review', () => db.query("update bx1_portal.entry_configuration set manual_test_review=true"), '23514')
   await denied('nonempty baseline cannot be resealed as an empty install', () => db.query('select bx1_portal.seal_entry_only_baseline()'), '55000')
+  const mainHandoffRecords = await scalar(`select jsonb_build_object(
+    'applications',(select jsonb_agg(to_jsonb(a) order by id) from bx1_portal.applications a),
+    'accounts',(select jsonb_agg(to_jsonb(i) order by id) from bx1_portal.investment_accounts i),
+    'configuration',(select to_jsonb(c) from bx1_portal.entry_configuration c),
+    'memberships',(select jsonb_agg(to_jsonb(m) order by id) from public.bx1_memberships m))`)
+  await actor(2)
+  const pureMainRead = await scalar('select public.bx1_entry_read()')
+  eq(pureMainRead.applications.every(a => a.handoff.actor_id === id(2) && a.handoff.environment === 'MAINNET' && a.handoff.allowed_actions.length === 0), true, 'MAIN read remains person-bound and closed for every capacity')
+  await admin()
+  eq(await scalar(`select jsonb_build_object(
+    'applications',(select jsonb_agg(to_jsonb(a) order by id) from bx1_portal.applications a),
+    'accounts',(select jsonb_agg(to_jsonb(i) order by id) from bx1_portal.investment_accounts i),
+    'configuration',(select to_jsonb(c) from bx1_portal.entry_configuration c),
+    'memberships',(select jsonb_agg(to_jsonb(m) order by id) from public.bx1_memberships m))`), mainHandoffRecords, 'MAIN projection reads do not alter admission, accounts, applications or roles')
+  await denied('TEST issuer cannot read a MAIN handoff', async () => { await actor(2, { iss: 'https://fegnnnlseuejkrusbbkv.supabase.co/auth/v1' }); await scalar('select public.bx1_entry_read()') })
   await db.query('rollback'); begun = false
   console.log(JSON.stringify({ ok: true, suite: 'stage1-main-entry-cloud-sql', checks, native_history_preserved: true, native_function_manifest_preserved: true, funding_installed: false, boundary: 'Synthetic cloud non-superuser database only; exact hosted prerequisite/DDL/advisor/UI acceptance still required. Canonical dependency adds NOLOGIN owner/schema/policies and three owner helper grants, but no people or customer roles.' }))
 } catch (error) {

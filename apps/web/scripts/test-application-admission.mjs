@@ -17,9 +17,9 @@ const eq = (a, b, label) => { assert.deepEqual(a, b, label); checks++ }
 const truth = (value, label) => { assert.ok(value, label); checks++ }
 async function scalar(sql, values = [], client = db) { return Object.values((await client.query(sql, values)).rows[0])[0] }
 async function admin(client = db) { await client.query('reset role') }
-async function actor(n, client = db) {
+async function actor(n, client = db, extra = {}) {
   await admin(client)
-  await client.query("select set_config('request.jwt.claims',$1,true)", [JSON.stringify({ sub: uid(n), session_id: sid(n), role: 'authenticated', aal: 'aal1', iss: 'https://fegnnnlseuejkrusbbkv.supabase.co/auth/v1', exp: Math.floor(Date.now() / 1000) + 3600 })])
+  await client.query("select set_config('request.jwt.claims',$1,true)", [JSON.stringify({ sub: uid(n), session_id: sid(n), role: 'authenticated', aal: 'aal1', iss: 'https://fegnnnlseuejkrusbbkv.supabase.co/auth/v1', exp: Math.floor(Date.now() / 1000) + 3600, ...extra })])
   await client.query('set local role authenticated')
 }
 async function sqlFile(path) {
@@ -223,7 +223,160 @@ try {
   truth(results.every(result => result.result?.applications[0]?.status === 'SUBMITTED'), 'duplicate concurrent commands both reconcile the same submission')
   eq(await scalar('select count(*)::int from bx1_portal.application_detail_versions where application_id=$1', [investor.id]), 1, 'one immutable evidence revision for duplicate requests')
   eq(await scalar('select count(*)::int from bx1_portal.entry_requests where actor_id=$1 and request_key=$2', [uid(9), requestKey]), 1, 'one exact durable receipt')
-  console.log(JSON.stringify({ ok: true, suite: 'application-admission-cloud-sql', checks, proof_boundary: 'Synthetic cloud PostgreSQL17 only; not hosted participant evidence, real MFA, reviewer appointment or operational admission.' }))
+  phase = 'shared-handoff-current-stage2-chain'
+  await db.query('begin'); begun = true
+  await admin()
+  for (const file of ['20260923134152_stage2_product_eligibility.sql',
+    '20260923143713_stage2_customer_mandates.sql', '20260923144216_stage2_document_receipts.sql',
+    '20260923161500_stage2_application_document_history.sql', '20260923171126_stage2_entity_investment_accounts.sql',
+    '20260923175822_stage2_superadmin_shell_mfa_boundary.sql', '20260924110608_stage2_provider_evidence.sql',
+    '20260924110922_stage2_beneficial_ownership_control.sql', '20260924112832_stage2_document_quarantine_lifecycle.sql',
+    '20260924125627_stage2_customer_monitoring.sql', '20260924125811_stage2_document_retention_authority.sql']) {
+    await sqlFile(`../../../supabase/migrations/${file}`)
+  }
+  const handoffRecords = async () => {
+    await admin()
+    return scalar(`select jsonb_build_object(
+      'applications',(select jsonb_agg(to_jsonb(a) order by id) from bx1_portal.applications a),
+      'accounts',(select jsonb_agg(to_jsonb(i) order by id) from bx1_portal.investment_accounts i),
+      'mandates',(select jsonb_agg(to_jsonb(m) order by id) from bx1_portal.representative_mandates m),
+      'investing_mandates',(select jsonb_agg(to_jsonb(m) order by id) from bx1_portal.investing_representative_mandates m),
+      'memberships',(select jsonb_agg(to_jsonb(m) order by id) from public.bx1_memberships m),
+      'configuration',(select to_jsonb(c) from bx1_portal.entry_configuration c),
+      'events',(select count(*) from bx1_portal.events),'entry_requests',(select count(*) from bx1_portal.entry_requests),
+      'scoped_requests',(select count(*) from bx1_portal.scoped_requests))`)
+  }
+  const beforeHandoffInstall = await handoffRecords()
+  const commandDefinition = await scalar("select md5(pg_get_functiondef('bx1_portal.execute_scoped(jsonb,text,uuid,jsonb)'::regprocedure))")
+  await sqlFile('../../../supabase/features/bx1_customer_handoff.sql')
+  eq(await handoffRecords(), beforeHandoffInstall, 'handoff definition neither seeds nor changes saved business history')
+  eq(await scalar("select md5(pg_get_functiondef('bx1_portal.execute_scoped(jsonb,text,uuid,jsonb)'::regprocedure))"), commandDefinition, 'handoff leaves canonical writer definition unchanged')
+  const projectedInvestor = (await read(9)).applications.find(a => a.id === investor.id)
+  eq([projectedInvestor.handoff.state, projectedInvestor.handoff.next_owner, projectedInvestor.handoff.allowed_actions], ['REVIEW_PENDING', 'COMPLIANCE', []], 'saved submission hands off to Compliance without ownership')
+  eq(await handoffRecords(), beforeHandoffInstall, 'handoff reads leave applications, roles, accounts, mandates, admission and receipts unchanged')
+  for (const role of ['anon', 'authenticated', 'service_role']) {
+    eq(await scalar("select has_function_privilege($1,'bx1_portal.customer_application_handoff(jsonb,uuid)','EXECUTE')", [role]), false, `${role} cannot invoke the private handoff helper`)
+  }
+  phase = 'shared-handoff-synthetic-participant-assurance'
+  for (const n of [10, 11]) {
+    await db.query('insert into auth.users(id,email,email_confirmed_at,is_anonymous) values($1,$2,clock_timestamp(),false)', [uid(n), `handoff-${n}@example.invalid`])
+    await db.query("insert into auth.sessions(id,user_id,not_after,created_at) values($1,$2,clock_timestamp()+interval '1 hour',clock_timestamp()-interval '1 hour')", [sid(n), uid(n)])
+  }
+  for (const n of [9, 10, 11]) {
+    const person = `e6100000-0000-4000-8000-${String(n).padStart(12, '0')}`
+    await db.query("insert into bx1_private.persons(id,label,status,evidence_reference,bootstrap_receipt_id) values($1,$2,'TRUSTED',$3,$4)", [person, `Synthetic handoff human ${n}`, `synthetic-handoff-human-${n}`, key()])
+    await db.query("insert into bx1_private.person_principals(auth_user_id,person_id,status,evidence_reference,bootstrap_receipt_id) values($1,$2,'TRUSTED',$3,$4)", [uid(n), person, `synthetic-handoff-principal-${n}`, key()])
+  }
+  await db.query("insert into public.bx1_profiles(id,display_name) values($1,'Synthetic independent handoff applier')", [uid(10)])
+  await db.query("insert into public.bx1_memberships(user_id,organisation_id,role,status) values($1,$2,'SuperAdmin','ACTIVE')", [uid(10), scope])
+  for (const n of [2, 10]) {
+    await db.query("insert into auth.mfa_factors(id,user_id,status,factor_type) values($1,$2,'verified','totp')", [sid(100 + n), uid(n)])
+    await db.query("update auth.sessions set aal='aal2',factor_id=$1 where user_id=$2", [sid(100 + n), uid(n)])
+  }
+  const assured = async (n, action, payload, context = reviewer) => {
+    await actor(n, db, { aal: 'aal2' })
+    return scalar('select public.bx1_portal_command_scoped($1,$2,$3::jsonb,$4::jsonb)', [action, key(), JSON.stringify(payload), JSON.stringify(context)])
+  }
+  const ownApplication = async (n, applicationId) => (await read(n)).applications.find(a => a.id === applicationId)
+  phase = 'shared-handoff-investor-information-and-reapplication'
+  let currentInvestor = await ownApplication(9, investor.id)
+  await assured(2, 'review_application', reviewBody(currentInvestor, 'CHANGES_REQUIRED'))
+  currentInvestor = await ownApplication(9, investor.id)
+  eq([currentInvestor.handoff.state, currentInvestor.handoff.next_owner], ['INFORMATION_REQUIRED', 'APPLICANT'], 'information request returns the same case to applicant')
+  currentInvestor = (await entry(9, 'submit_application', { application_id: currentInvestor.id, expected_revision: currentInvestor.revision, details: v1(9) })).applications.find(a => a.id === investor.id)
+  await assured(2, 'review_application', reviewBody(currentInvestor, 'REJECTED'))
+  currentInvestor = await ownApplication(9, investor.id)
+  eq([currentInvestor.handoff.state, currentInvestor.handoff.allowed_actions], ['REAPPLICATION_REQUIRED', ['PREPARE_APPLICATION', 'SUBMIT_APPLICATION']], 'rejected case permits explicit guarded reapplication, not approval')
+  const rejectedRevision = currentInvestor.revision
+  currentInvestor = (await entry(9, 'submit_application', { application_id: currentInvestor.id, expected_revision: currentInvestor.revision, details: v1(9) })).applications.find(a => a.id === investor.id)
+  eq([currentInvestor.id, currentInvestor.revision, currentInvestor.handoff.state], [investor.id, rejectedRevision + 1, 'REVIEW_PENDING'], 'reapplication preserves identity and advances only the submission revision')
+  await denied('handoff does not bypass stale reapplication revision', () => entry(9, 'submit_application', { application_id: investor.id, expected_revision: rejectedRevision, details: v1(9) }), '23514')
+  await assured(2, 'review_application', reviewBody(currentInvestor))
+  currentInvestor = await ownApplication(9, investor.id)
+  eq([currentInvestor.handoff.state, currentInvestor.handoff.allowed_actions, currentInvestor.handoff.accounts], ['OPEN_ACCOUNT', ['OPEN_INVESTMENT_ACCOUNT'], []], 'independent admission offers account creation without a holding')
+  await scoped(9, 'create_investment_account', { application_id: investor.id })
+  currentInvestor = await ownApplication(9, investor.id)
+  eq([currentInvestor.handoff.state, currentInvestor.handoff.destination, currentInvestor.handoff.allowed_actions], ['ACCOUNT_AVAILABLE', 'INVESTMENT_ACCOUNT', ['VIEW_INVESTMENT_ACCOUNT']], 'guarded account command connects the same admitted investor to its account')
+  eq(currentInvestor.handoff.accounts.length, 1, 'exact one linked account is projected')
+  await admin()
+  await db.query('savepoint handoff_suspended_account')
+  await db.query("update bx1_portal.investment_accounts set status='SUSPENDED' where application_id=$1", [investor.id])
+  eq((await ownApplication(9, investor.id)).handoff.blocker, 'ACCOUNT_SUSPENDED', 'suspended account cannot disappear into a new-account action')
+  eq((await ownApplication(9, investor.id)).handoff.allowed_actions, [], 'suspended account exposes no enabled business action')
+  await admin(); await db.query('rollback to savepoint handoff_suspended_account; release savepoint handoff_suspended_account')
+  phase = 'shared-handoff-current-monitoring-precedence'
+  await assured(2, 'set_customer_monitoring', { application_id: investor.id, expected_revision: 0, state: 'ON_HOLD', evidence_reference: 'synthetic-independent-monitoring-evidence', reason: 'Synthetic held admission must prevent new account or operating actions.', checks: {} })
+  currentInvestor = await ownApplication(9, investor.id)
+  eq([currentInvestor.handoff.state, currentInvestor.handoff.blocker, currentInvestor.handoff.next_owner, currentInvestor.handoff.allowed_actions], ['UNAVAILABLE', 'MONITORING_ON_HOLD', 'COMPLIANCE', []], 'monitoring hold overrides otherwise approved active account')
+  await assured(2, 'set_customer_monitoring', { application_id: investor.id, expected_revision: 1, state: 'RENEWAL_REQUIRED', evidence_reference: 'synthetic-independent-renewal-evidence', reason: 'Synthetic renewal requirement must prevent stale approved affordances.', checks: {} })
+  eq((await ownApplication(9, investor.id)).handoff.blocker, 'MONITORING_RENEWAL_REQUIRED', 'renewal requirement is distinct from a hold')
+  await assured(2, 'set_customer_monitoring', { application_id: investor.id, expected_revision: 2, state: 'CURRENT', evidence_reference: 'synthetic-independent-current-evidence', reason: 'Synthetic renewal evidence restores only current underlying admission.', checks: { identity: true, ownership: true, screening: true, suitability: true } })
+  await admin(); await db.query('savepoint handoff_expired_admission')
+  await db.query("update bx1_portal.applications set approved_until=clock_timestamp()-interval '1 second',reviewed_at=clock_timestamp()-interval '2 seconds' where id=$1", [investor.id])
+  eq([(await ownApplication(9, investor.id)).handoff.blocker, (await ownApplication(9, investor.id)).handoff.allowed_actions], ['ADMISSION_EXPIRED', []], 'current monitoring cannot extend expired admission')
+  await admin(); await db.query('rollback to savepoint handoff_expired_admission; release savepoint handoff_expired_admission')
+
+  phase = 'shared-handoff-wealth-manager-connected-customer-submission'
+  const wmDocuments = ['IDENTITY', 'COMPANY', 'BENEFICIAL_OWNERS'].map((kind, i) => doc(11, kind, i))
+  for (const document of wmDocuments) await db.query("insert into storage.objects(bucket_id,name,owner_id,metadata,user_metadata) values('bx1-portal-documents',$1,$2,'{\"size\":100,\"mimetype\":\"application/pdf\"}',jsonb_build_object('sha256',repeat('a',64)))", [document.storage_path, uid(11)])
+  const wmEvidence = { ...v2(11), details_version: 3, documents: wmDocuments,
+    ownership_change_reason: 'Initial fictional owner declaration for cloud handoff acceptance.',
+    ownership_control: [{ id: 'e6200000-0000-4000-8000-000000000011', party_type: 'PERSON', legal_name: 'Synthetic Handoff Owner', registration_reference: '', country: 'ZA', relationship: 'DIRECT_OWNER', ownership_basis_points: 10000, control_basis: 'Fictional sole ownership of the synthetic customer organisation.', effective_on: '2026-09-01', change_reason: 'Initial fictional owner relationship for this synthetic application.', evidence_document_id: wmDocuments[2].id }] }
+  let currentManager = (await entry(11, 'start_application', { persona: 'WEALTH_MANAGER' })).applications[0]
+  const wmId = currentManager.id
+  eq(currentManager.handoff.state, 'PREPARE_APPLICATION', 'fresh manager starts in distinct customer-admission preparation')
+  await admin(); await db.query('savepoint handoff_reviewer_unavailable')
+  await db.query("update public.bx1_memberships set status='SUSPENDED' where role='ComplianceOfficer' and organisation_id=$1", [scope])
+  const missingReviewer = await ownApplication(11, wmId)
+  eq([missingReviewer.handoff.blocker, missingReviewer.handoff.allowed_actions], ['REVIEWER_UNAVAILABLE', ['PREPARE_APPLICATION']], 'missing reviewer preserves preparation but disables submission')
+  await admin(); await db.query('rollback to savepoint handoff_reviewer_unavailable; release savepoint handoff_reviewer_unavailable')
+  await admin(); await db.query('savepoint handoff_unsupported_provider')
+  await db.query('alter table bx1_portal.applications drop constraint applications_provider_mode_check')
+  await db.query("update bx1_portal.applications set provider_mode='UNADMITTED_PROVIDER' where id=$1", [wmId])
+  const unsupportedProvider = await ownApplication(11, wmId)
+  eq([unsupportedProvider.handoff.blocker, unsupportedProvider.handoff.allowed_actions], ['PROVIDER_UNSUPPORTED', []], 'unexpected provider mode cannot manufacture available actions')
+  await admin(); await db.query('rollback to savepoint handoff_unsupported_provider; release savepoint handoff_unsupported_provider')
+  const beforeConnectedAudit = await handoffRecords()
+  await denied('connected submission still requires atomic audit', async () => {
+    await admin()
+    await db.query("create function public.synthetic_handoff_audit_failure() returns trigger language plpgsql as $$ begin if new.kind='submit_application' then raise exception 'synthetic_handoff_required_audit'; end if; return new; end $$; create trigger synthetic_handoff_audit_failure before insert on bx1_portal.events for each row execute function public.synthetic_handoff_audit_failure()")
+    await entry(11, 'submit_application', { application_id: wmId, expected_revision: currentManager.revision, details: wmEvidence })
+  }, 'P0001')
+  eq(await handoffRecords(), beforeConnectedAudit, 'failed connected submission preserves draft, evidence, authority and receipts')
+  currentManager = (await entry(11, 'submit_application', { application_id: wmId, expected_revision: currentManager.revision, details: wmEvidence })).applications[0]
+  await assured(2, 'review_application', reviewBody(currentManager, 'CHANGES_REQUIRED'))
+  currentManager = await ownApplication(11, wmId)
+  eq(currentManager.handoff.state, 'INFORMATION_REQUIRED', 'manager information request returns the actual case to the applicant')
+  currentManager = (await entry(11, 'submit_application', { application_id: wmId, expected_revision: currentManager.revision, details: wmEvidence })).applications[0]
+  await assured(2, 'review_application', reviewBody(currentManager))
+  currentManager = await ownApplication(11, wmId)
+  eq([currentManager.handoff.state, currentManager.handoff.next_owner, currentManager.handoff.allowed_actions], ['REQUEST_MANDATE', 'APPLICANT', ['REQUEST_REPRESENTATIVE_MANDATE']], 'customer admission awaits applicant mandate request, not a fictitious granted role')
+  const mandatePayload = expected_revision => ({ application_id: wmId, expected_revision, evidence_reference: 'synthetic-independent-handoff-appointment', requested_until: new Date(Date.now() + 86400000).toISOString() })
+  let wmMandate = (await entry(11, 'request_representative_mandate', mandatePayload(0))).organisation_mandates[0]
+  eq([(await ownApplication(11, wmId)).handoff.state, (await ownApplication(11, wmId)).handoff.next_owner], ['MANDATE_REVIEW_PENDING', 'COMPLIANCE'], 'requested mandate hands off to scoped Compliance')
+  const mandateReview = decision => ({ mandate_id: wmMandate.id, expected_revision: wmMandate.revision, decision, notes: 'Independent synthetic appointment and exact scope reviewed for handoff.', checks: { appointment: true, evidence: true, scope: true } })
+  wmMandate = (await assured(2, 'review_representative_mandate', mandateReview('APPROVED'))).organisation_mandates.find(m => m.id === wmMandate.id)
+  eq([(await ownApplication(11, wmId)).handoff.state, (await ownApplication(11, wmId)).handoff.next_owner], ['MANDATE_APPLY_PENDING', 'SUPER_ADMIN'], 'approved mandate is pending independent application, not yet a workspace')
+  wmMandate = (await assured(10, 'apply_representative_mandate', { mandate_id: wmMandate.id, expected_revision: wmMandate.revision }, { mode: 'ROLE', organisationId: scope, role: 'SuperAdmin' })).organisation_mandates.find(m => m.id === wmMandate.id)
+  currentManager = await ownApplication(11, wmId)
+  eq([currentManager.handoff.state, currentManager.handoff.destination, currentManager.handoff.native_context], ['WORKSPACE_AVAILABLE', 'OPERATING_WORKSPACE', { organisation_id: wmMandate.native_organisation_id, role: 'OfferingManager' }], 'only applied effective mandate provides the exact native operating context')
+  const beforeRepeatedReads = await handoffRecords()
+  await ownApplication(11, wmId); await ownApplication(9, investor.id)
+  eq(await handoffRecords(), beforeRepeatedReads, 'completed handoff reads alter no business, authority or admission records')
+  wmMandate = (await assured(2, 'revoke_representative_mandate', { mandate_id: wmMandate.id, expected_revision: wmMandate.revision, reason: 'Synthetic exact operating mandate withdrawn after handoff proof.' })).organisation_mandates.find(m => m.id === wmMandate.id)
+  currentManager = await ownApplication(11, wmId)
+  eq([currentManager.handoff.blocker, currentManager.handoff.allowed_actions, currentManager.handoff.native_context], ['MANDATE_NOT_EFFECTIVE', [], null], 'revocation removes the workspace affordance without deleting history')
+  eq((await read(9)).applications.some(a => a.id === wmId), false, 'applicant projection never leaks another participant application')
+  await actor(9); await admin()
+  eq(await scalar('select bx1_portal.customer_application_handoff($1::jsonb,$2)', [JSON.stringify(applicant), wmId]), null, 'private helper independently rejects another applicant record even when executed by fixture owner')
+  await denied('foreign actor cannot get a handoff through the private helper', async () => { await actor(9); await scalar('select bx1_portal.customer_application_handoff($1::jsonb,$2)', [JSON.stringify(applicant), wmId]) }, '42501')
+  await denied('wrong token environment cannot read the TEST handoff', async () => { await actor(9, db, { iss: 'https://oqkevkjbkpugjotihtda.supabase.co/auth/v1' }); await scalar('select public.bx1_entry_read()') }, '42501')
+  await admin(); await db.query('savepoint handoff_missing_configuration')
+  await db.query('delete from bx1_portal.entry_configuration')
+  await denied('missing configuration fails the entire handoff read', () => read(9), '55000')
+  await admin(); await db.query('rollback to savepoint handoff_missing_configuration; release savepoint handoff_missing_configuration')
+  await admin(); await db.query('rollback'); begun = false
+  console.log(JSON.stringify({ ok: true, suite: 'application-admission-cloud-sql', checks, handoff: 'investor-and-wealth-manager-connected-pure-read', proof_boundary: 'Synthetic cloud PostgreSQL17 only; not hosted participant evidence, real MFA, reviewer appointment or operational admission.' }))
 } catch (error) {
   console.error(JSON.stringify({ ok: false, suite: 'application-admission-cloud-sql', phase, checks, code: error?.code ?? null, fixtureLine: error?.fixtureLine ?? null, message: error instanceof Error ? error.message : String(error) }))
   process.exitCode = 1

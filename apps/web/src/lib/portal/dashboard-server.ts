@@ -3,13 +3,13 @@ import { platformRelease } from '@/lib/platform-release'
 import { createPageSupabaseClient } from '@/lib/supabase/page'
 import { readVerifiedUser, readWorkspace } from '@/lib/supabase/server'
 import { hasRequiredMfa, isMfaContextCurrent, readMfaContext } from '@/lib/supabase/mfa'
-import { isDemoEnvironment } from '@/lib/testnet-fund/contracts'
 import { dashboardProjection, dashboardScopes, selectDashboardScope, type DashboardQuery } from './dashboard'
 import { PortalError, readPortal } from './server'
 import type { PortalPageData } from './contracts'
 import { APPLICANT_CONTEXT, type PortalOperatingContext } from './operating-context'
 import { readEntry } from './entry-server'
 import { selectEntryApplication } from './entry-contracts'
+import { customerScopedReadAvailable } from './customer-handoff'
 
 export async function loadRoleDashboard(query: DashboardQuery) {
   const release = platformRelease(process.env)
@@ -29,10 +29,12 @@ export async function loadRoleDashboard(query: DashboardQuery) {
   const scope = !applicant && workspace ? selectDashboardScope(workspace, query) : null
   if (!applicant && !scope) throw new PortalError('This role or organisation is not assigned to you.', 403)
   const operatingContext: PortalOperatingContext = scope ? { mode: 'ROLE', organisationId: scope.organisationId, role: scope.role } : APPLICANT_CONTEXT
-  const entry = applicant ? await readEntry(client) : undefined
-  if (query.application !== undefined && (!entry || !selectEntryApplication(entry, query.application))) throw new PortalError('This application is not available to your signed-in account.', 403)
+  // The guarded shared entry reader supplies environment capability. A selected
+  // staff role does not bypass live suspension/recovery or the MAIN admission seal.
+  const entry = await readEntry(client)
+  if (query.application !== undefined && (!applicant || !selectEntryApplication(entry, query.application))) throw new PortalError('This application is not available to your signed-in account.', 403)
   let portal: PortalPageData | undefined
-  if (release.environment === 'TESTNET' && isDemoEnvironment(process.env)) {
+  if (customerScopedReadAvailable(entry, release.environment)) {
     try {
       portal = await readPortal(client, operatingContext)
       if (portal.user.id !== user.id) throw new PortalError('The signed-in account changed.', 403)

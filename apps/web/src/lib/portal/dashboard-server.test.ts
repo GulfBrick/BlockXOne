@@ -23,7 +23,7 @@ beforeEach(() => {
   mocks.user.mockResolvedValue(actor); mocks.context.mockResolvedValue({}); mocks.sufficient.mockReturnValue(true); mocks.current.mockResolvedValue(true)
   mocks.workspace.mockResolvedValue({ user: { ...actor, platformUserId: 'person', displayName: null }, organisations: [{ id: organisation, name: 'A', roles: ['Investor'] }] })
   mocks.portal.mockImplementation(async (_client, context) => portalFor(context))
-  mocks.entry.mockResolvedValue({ entry_version: 1, actor, applications: [], contexts: [], admission: { manual_test_review: true } })
+  mocks.entry.mockResolvedValue({ entry_version: 1, actor, applications: [], contexts: [], admission: { manual_test_review: true }, workflow: { version: 1, environment: 'TESTNET', actor_id: actor.id, scoped_read_available: true } })
 })
 afterEach(() => vi.unstubAllEnvs())
 
@@ -131,8 +131,24 @@ describe('fresh dashboard authority and environment admission', () => {
   })
   it('does not call a TEST business RPC from the real MAINNET configuration', async () => {
     vi.stubEnv('SUPABASE_URL', 'https://oqkevkjbkpugjotihtda.supabase.co'); vi.stubEnv('VERCEL_ENV', 'production'); vi.stubEnv('BLOCKXONE_APP_ORIGIN', 'https://bx1.co.za')
+    mocks.entry.mockResolvedValue({ entry_version: 1, actor, applications: [], contexts: [], admission: { manual_test_review: false }, workflow: { version: 1, environment: 'MAINNET', actor_id: actor.id, scoped_read_available: false } })
     const result = await loadRoleDashboard({})
     expect(result.release.environment).toBe('MAINNET'); expect(mocks.portal).not.toHaveBeenCalled()
+  })
+  it('uses a configured unavailable scoped route without calling the business reader', async () => {
+    mocks.entry.mockResolvedValue({ entry_version: 1, actor, applications: [], contexts: [], admission: { manual_test_review: true }, workflow: { version: 1, environment: 'TESTNET', actor_id: actor.id, scoped_read_available: false } })
+    const result = await loadRoleDashboard({ organisation, role: 'Investor' })
+    expect(result.kind).toBe('role'); expect(result.portal).toBeUndefined(); expect(mocks.portal).not.toHaveBeenCalled()
+  })
+  it('does not downgrade a denied entry session into role dashboard access', async () => {
+    mocks.entry.mockRejectedValue(new PortalError('Denied current session', 403))
+    await expect(loadRoleDashboard({ organisation, role: 'Investor' })).rejects.toMatchObject({ status: 403 })
+    expect(mocks.portal).not.toHaveBeenCalled()
+  })
+  it('does not read staff queues when the shared workflow reader fails', async () => {
+    mocks.entry.mockRejectedValue(new PortalError('Unavailable projection', 503))
+    await expect(loadRoleDashboard({ organisation, role: 'Investor' })).rejects.toMatchObject({ status: 503 })
+    expect(mocks.portal).not.toHaveBeenCalled()
   })
   it('rejects a refreshed different native identity before reading business data', async () => {
     mocks.workspace.mockResolvedValue({ user: { ...actor, id: 'other' }, organisations: [] })

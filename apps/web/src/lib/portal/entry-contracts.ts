@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { BX1_ROLES } from '@/lib/supabase/contracts'
 import { applicationDetailsSchema, applicationDraftDetailsSchema, applicationStatuses } from './contracts'
+import { customerHandoffSchema, customerWorkflowSchema } from './customer-handoff'
 
 const id = z.string().uuid()
 export const entryApplicationSchema = z.object({
@@ -15,6 +16,7 @@ export const entryApplicationSchema = z.object({
   admission_purpose: z.enum(['INVESTOR_ADMISSION', 'CUSTOMER_ORGANISATION_ADMISSION', 'LEGACY_REHEARSAL']),
   review_route: z.enum(['NOT_ADMITTED', 'REVIEWER_UNAVAILABLE', 'AVAILABLE']),
   can_request_mandate: z.boolean().optional(),
+  handoff: customerHandoffSchema.nullable().optional(),
 })
 export const entryMandateSchema = z.object({
   id, application_id: id, product_organisation_id: id, native_organisation_id: id.nullable(),
@@ -34,6 +36,7 @@ export const entrySnapshotSchema = z.object({
   applications: z.array(entryApplicationSchema),
   contexts: z.array(z.object({ context_key: id, organisation_id: id, name: z.string(), roles: z.array(z.enum(BX1_ROLES)) })),
   admission: z.object({ manual_test_review: z.boolean() }),
+  workflow: customerWorkflowSchema.optional(),
   organisation_mandates: z.array(entryMandateSchema).optional(),
   requests: z.array(z.object({ key: id, command: z.enum(['start_application', 'submit_application', 'request_representative_mandate']), application_id: id })).optional(),
 })

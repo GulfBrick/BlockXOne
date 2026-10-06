@@ -5,12 +5,14 @@ import { FileCheck2, Upload } from 'lucide-react'
 import { z } from 'zod'
 import { applicationDocumentVersionsSchema, evidenceSchema, isWealthManagerDetailsV2, ownershipControlRelationshipSchema, type ApplicationDetails, type ApplicationDocumentVersions, type EvidenceDocument, type LegacyApplicationDetails, type OwnershipControlRelationship, type Persona, type WealthManagerApplicationDetailsV2 } from '@/lib/portal/contracts'
 import type { EntryApplication, EntrySnapshot } from '@/lib/portal/entry-contracts'
+import { customerHandoffHasAction, type CustomerHandoff } from '@/lib/portal/customer-handoff'
 import type { PlatformEnvironment } from '@/lib/platform-release'
 import { CommandFeedback, usePortalActorId, usePortalOperatingContext } from './portal-client'
 import { useEntryCommand } from './entry-client'
 import { portalScopeHref } from '@/lib/portal/operating-context'
 import { DetailList, Field, FormProgress, Notice, Panel, StatusBadge, dateLabel } from './portal-primitives'
 import { KycVerification } from './kyc-verification'
+import { customerHandoffPresentation } from './customer-handoff'
 import styles from './portal.module.css'
 
 type FormDetails = Omit<LegacyApplicationDetails, 'details_version' | 'business_activities' | 'representative_position' | 'authority_basis'> & Pick<WealthManagerApplicationDetailsV2, 'business_activities' | 'representative_position' | 'authority_basis'> & {
@@ -73,7 +75,9 @@ export function requiredApplicationEvidence(persona: Persona, investorType: Lega
     : [{ kind: 'IDENTITY', label: 'Identity evidence' }]
 }
 
-export function applicationSubmitLabel(application: EntryApplication): string {
+export function applicationSubmitLabel(application: EntryApplication, handoff?: CustomerHandoff): string {
+  if (handoff?.state === 'REAPPLICATION_REQUIRED') return 'Reapply for independent review'
+  if (handoff && !customerHandoffHasAction(handoff, 'SUBMIT_APPLICATION')) return 'Submission unavailable; review route required'
   return application.review_route !== 'AVAILABLE' ? 'Check review route and submit' : application.status === 'CHANGES_REQUIRED' ? 'Resubmit for review' : 'Submit for review'
 }
 
@@ -193,7 +197,7 @@ export function ApplicationDocumentHistory({ applicationId }: { applicationId: s
   </Panel>
 }
 
-export function OnboardingForm({ application, environment, onSaved, receipts }: { application: EntryApplication; environment: PlatformEnvironment; onSaved: (snapshot: EntrySnapshot) => void; receipts?: EntrySnapshot['requests'] }) {
+export function OnboardingForm({ application, environment, onSaved, receipts, handoff, onActivityChange }: { application: EntryApplication; environment: PlatformEnvironment; onSaved: (snapshot: EntrySnapshot) => void; receipts?: EntrySnapshot['requests']; handoff?: CustomerHandoff; onActivityChange?: (active: boolean) => void }) {
   const operatingContext = usePortalOperatingContext()
   const expectedActor = usePortalActorId()
   const persona = application.persona
@@ -216,12 +220,16 @@ export function OnboardingForm({ application, environment, onSaved, receipts }: 
     setScanQueue(null); setScanMessage(''); setScanBusy(false); setAttachingScan(''); setPendingForApplication([])
   }, [scanScope])
   const command = useEntryCommand(expectedActor, environment, onSaved, receipts)
-  const editable = ['DRAFT', 'CHANGES_REQUIRED'].includes(application.status)
+  useEffect(() => {
+    onActivityChange?.(command.busy || command.unknown || uploadBusy || Boolean(attachingScan))
+    return () => onActivityChange?.(false)
+  }, [command.busy, command.unknown, uploadBusy, attachingScan, onActivityChange])
+  const editable = handoff ? customerHandoffHasAction(handoff, 'PREPARE_APPLICATION') : ['DRAFT', 'CHANGES_REQUIRED'].includes(application.status)
   const locked = !editable || command.busy || command.unknown || uploadBusy || Boolean(attachingScan)
-  const reviewAvailable = application.review_route === 'AVAILABLE'
+  const reviewAvailable = handoff ? handoff.gates.reviewer_available : application.review_route === 'AVAILABLE'
   const requiredEvidence = requiredApplicationEvidence(persona, details.investor_type)
-  const submitReady = applicationSubmissionReady(persona, details, acknowledged, locked) && pendingForApplication.length === 0
-  const next = applicationNextStep(application)
+  const submitReady = (!handoff || customerHandoffHasAction(handoff, 'SUBMIT_APPLICATION')) && applicationSubmissionReady(persona, details, acknowledged, locked) && pendingForApplication.length === 0
+  const next = handoff ? customerHandoffPresentation(handoff) : applicationNextStep(application)
   const legacyManager = persona === 'WEALTH_MANAGER' && !isWealthManagerDetailsV2(application.details) && Object.keys(application.details).length > 0
   function change<K extends keyof FormDetails>(key: K, value: FormDetails[K]) { setDetails(current => ({ ...current, [key]: value })) }
   function changeRelationship(id: string, patch: Partial<OwnershipControlRelationship>) {
@@ -296,13 +304,13 @@ export function OnboardingForm({ application, environment, onSaved, receipts }: 
       <Notice title="Use fictional test evidence only">Customer admission remains an independent BlockXOne decision. TEST uses fictional documents and can collect sandbox provider evidence; neither a provider event nor a test approval establishes production KYC clearance.</Notice>
       <Panel title={persona === 'INVESTOR' ? 'Investor application' : 'Organisation / representative application'} description="This application never changes your assigned roles. Your status and next responsible owner are shown alongside its evidence." action={<StatusBadge status={application.status} />}>
         <p className={styles.muted}>Application reference: <span className={styles.mono}>{application.id}</span></p>
-        <div className={styles.sectionGap}><FormProgress stages={['Prepare application', 'Submit evidence', 'Independent review', 'Recorded decision']} current={editable ? 0 : application.status === 'SUBMITTED' ? 2 : 3} /></div>
-        <div className={styles.applicationState} aria-live="polite"><h3>{application.status === 'DRAFT' ? 'Draft: not submitted' : next.title}</h3><p>{application.status === 'DRAFT' ? 'Your application reference is saved. These fields and evidence links are not yet submitted. There is no automatic draft save.' : next.description}</p></div>
+        {!handoff || handoff.state !== 'UNAVAILABLE' ? <div className={styles.sectionGap}><FormProgress stages={['Prepare application', 'Submit evidence', 'Independent review', 'Recorded decision']} current={editable ? 0 : application.status === 'SUBMITTED' ? 2 : 3} /></div> : null}
+        <div className={styles.applicationState} aria-live="polite"><h3>{!handoff && application.status === 'DRAFT' ? 'Draft: not submitted' : next.title}</h3><p>{!handoff && application.status === 'DRAFT' ? 'Your application reference is saved. These fields and evidence links are not yet submitted. There is no automatic draft save.' : next.description}</p></div>
         {application.review_notes ? <Notice title={application.status === 'CHANGES_REQUIRED' ? 'Changes requested by your reviewer' : 'Recorded review rationale'} tone="warning">{application.review_notes}</Notice> : null}
         <CommandFeedback command={command} />
         {editable ? <>
         {legacyManager ? <details className={`${styles.applicationHistory} ${styles.sectionGap}`}><summary>View original legacy answers</summary><div className={styles.sectionGap}><ApplicationDetailsSummary persona={persona} details={application.details} /></div></details> : null}
-        {!reviewAvailable ? <div className={styles.sectionGap}><Notice title={next.title} tone="warning">{next.description}<p>After the review route is ready, select Check review route and submit. The server rechecks its current assignment without reloading or discarding these fields.</p></Notice></div> : null}
+        {!reviewAvailable ? <div className={styles.sectionGap}><Notice title={next.title} tone="warning">{next.description}<p>{handoff ? 'Submission remains disabled until the saved workflow confirms an eligible review route. Use Refresh review availability above to recheck without discarding these unsaved answers; do not create a replacement application.' : 'After the review route is ready, select Check review route and submit. The server rechecks its current assignment without reloading or discarding these fields.'}</p></Notice></div> : null}
         <form className={`${styles.form} ${styles.sectionGap}`} onSubmit={event => { event.preventDefault(); if (submitReady) void command.submit('submit_application', { application_id: application.id, expected_revision: application.revision, details: applicationSubmissionDetails(persona, details) }) }}>
           <fieldset className={styles.fieldset} disabled={locked}><legend>01 · {persona === 'INVESTOR' ? 'Investor details' : 'Organisation and representative'}</legend>
             <div className={styles.formRow}><Field label={persona === 'INVESTOR' ? 'Full name' : 'Representative full name'} hint="Use a fictional identity for this environment."><input value={details.full_name} onChange={event => change('full_name', event.target.value)} required minLength={2} maxLength={120} autoComplete="off" placeholder="e.g. Alex Example (test)" /></Field><Field label="Country of residence" hint="Two-letter country code, for example ZA."><input value={details.country} onChange={event => change('country', event.target.value.toUpperCase())} required pattern="[A-Z]{2}" maxLength={2} /></Field></div>
@@ -339,11 +347,11 @@ export function OnboardingForm({ application, environment, onSaved, receipts }: 
             {scanQueue ? scanQueue.length ? <ul className={styles.applicationChecklist} aria-label="Private scan queue">{scanQueue.map(item => <li key={item.id} data-ready={item.state === 'SCANNED_CLEAN'}><strong>{item.title}</strong><span>{item.state === 'QUARANTINED' ? 'Awaiting independent scan' : item.state === 'REJECTED' ? 'Rejected by scan; upload a different file' : 'Clean receipt available; select for this application if relevant'}</span>{item.state === 'SCANNED_CLEAN' ? <button type="button" className={styles.buttonSecondary} disabled={Boolean(attachingScan) || details.documents.some(document => document.id === item.id) || details.documents.length >= 8} onClick={() => void attachScannedDocument(item)}>{details.documents.some(document => document.id === item.id) ? 'Selected in this draft' : attachingScan === item.id ? 'Checking receipt...' : 'Include clean file'}</button> : null}{pendingForApplication.includes(item.id) ? <button type="button" className={styles.textLink} onClick={() => setPendingForApplication(current => current.filter(id => id !== item.id))}>Exclude pending file from this application</button> : null}</li>)}</ul> : <p className={styles.muted}>No scanned or pending files are available for this account.</p> : null}
           </div>
           <p className={styles.muted}>Excluding a file removes it from this unsaved submission only. Earlier versions and stored objects are not deleted; the separate upload quota still applies.</p>
-          <label className={styles.check}><input type="checkbox" required checked={acknowledged} disabled={locked} onChange={event => setAcknowledged(event.target.checked)} /><span>I confirm this application and all evidence are fictional test data. I understand a manual test approval does not establish legal identity, investment eligibility or production authority.</span></label><div className={styles.formFoot}><p>Saved record: revision {application.revision}. The fields above are submitted only after a confirmed response. An independent reviewer must make the decision.</p><button type="submit" className={styles.button} disabled={!submitReady}>{command.busy ? 'Submitting…' : applicationSubmitLabel(application)}</button></div>
+          <label className={styles.check}><input type="checkbox" required checked={acknowledged} disabled={locked} onChange={event => setAcknowledged(event.target.checked)} /><span>I confirm this application and all evidence are fictional test data. I understand a manual test approval does not establish legal identity, investment eligibility or production authority.</span></label><div className={styles.formFoot}><p>Saved record: revision {application.revision}. The fields above are submitted only after a confirmed response. An independent reviewer must make the decision.</p><button type="submit" className={styles.button} disabled={!submitReady}>{command.busy ? 'Submitting…' : applicationSubmitLabel(application, handoff)}</button></div>
         </form>
         </> : <div className={`${styles.stack} ${styles.sectionGap}`}><p className={styles.muted}>Read-only saved application, revision {application.revision}. {application.status === 'SUBMITTED' ? 'A request for changes will reopen editing.' : 'The recorded decision does not alter these submitted answers.'}</p><ApplicationDetailsSummary persona={persona} details={application.details} /><section><h3>Submitted private evidence</h3>{application.details.documents?.length ? application.details.documents.map(document => <PrivateDocument key={document.id} document={document} />) : <p className={styles.muted}>No evidence is recorded.</p>}</section></div>}
       </Panel>
-      <KycVerification key={`${environment}:${expectedActor}:${application.id}:${application.revision}`} application={application} environment={environment} actorId={expectedActor} />
+      {!handoff || ['NONE', 'REVIEWER_UNAVAILABLE'].includes(handoff.blocker) ? <KycVerification key={`${environment}:${expectedActor}:${application.id}:${application.revision}`} application={application} environment={environment} actorId={expectedActor} /> : null}
       {application.status !== 'DRAFT' || application.submitted_at ? <ApplicationDocumentHistory key={application.id} applicationId={application.id} /> : null}
     </div>
     <aside className={styles.stack} aria-label="Application progress and responsibility"><Panel title="Application status"><DetailList rows={[{ label: 'Relationship', value: persona === 'INVESTOR' ? 'Investor' : 'Wealth manager / representative' }, { label: 'Status', value: <StatusBadge status={application.status} /> }, { label: 'Saved revision', value: application.revision }, { label: 'Submitted', value: dateLabel(application.submitted_at) }, { label: 'Decision recorded', value: dateLabel(application.reviewed_at) }, { label: 'Review provider', value: application.provider_mode === 'MANUAL_TEST_REVIEW' ? 'Manual test review' : 'Not assigned to this application yet' }, { label: editable ? 'Evidence selected in this browser' : 'Saved evidence files', value: details.documents.length }]} /></Panel><Panel title="Next responsible owner"><p className={styles.applicationOwner}>{next.owner}</p><h3>{next.title}</h3><p className={styles.copy}>{next.description}</p><p className={styles.muted}>Review availability is checked again when you submit. It does not prove a reviewer is currently signed in.</p></Panel><Panel title={editable ? 'Submission checklist' : 'Connected handoff'}><ol className={styles.timeline}><li><strong>{persona === 'INVESTOR' ? 'Investor facts and supporting evidence' : 'Organisation facts and representative evidence'}</strong><p>{editable ? 'Complete each required field and attach fictional evidence. Unsaved browser edits are not in the review queue.' : 'The saved package is displayed read-only at its recorded revision.'}</p></li><li><strong>Independent BlockXOne review</strong><p>{persona === 'INVESTOR' ? 'A permitted reviewer assesses the submitted investor evidence. A product still has its own eligibility rules.' : 'A permitted reviewer assesses the customer organisation, representative and requested services. The customer cannot self-approve.'}</p></li><li><strong>{persona === 'INVESTOR' ? 'Account and product eligibility' : 'Separate operating assignment'}</strong><p>{persona === 'INVESTOR' ? 'An admission decision is not a funded investment or token holding.' : 'Organisation, role, mandate and signing permissions require their own authority. Customer admission does not create them.'}</p></li></ol></Panel></aside>

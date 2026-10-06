@@ -1,5 +1,13 @@
 # BlockXOne platform releases
 
+## 1.1.0-rc.25 — Connected customer-admission handoff candidate
+
+- Extend rc.24 `fe877a6c06180453d3dd568ddec2d51c40c5f0d7` in the same application and existing TEST/MAIN projects. No login, role, wallet, contract or money change.
+- Add a pure-read, revision/person/environment/context-bound application handoff: actual next owner, monitoring/expiry blockers, account/mandate links and effective native-context destination. Missing or mismatched projections do not infer authority from approval.
+- Preserve rejected same-application resubmission with its recorded history; manager admission remains separate from Compliance mandate review and Super Admin application. Entity account existence remains separate from an investing representative's authority.
+- Require additive `supabase/features/bx1_customer_handoff.sql` on the current canonical migration chain before the dependent web release. Preserve function ownership, restricted helper grants and MAIN scoped RPC denial. Reads must leave business records unchanged.
+- Tests/builds execute only in the existing GitHub cloud acceptance workflow for both environments at the exact candidate commit. Independent source review, cloud evidence and branded hosted verification are required before release. Provider, document scanning/disposal and independent-human acceptance are separate outstanding gates; this increment does not close Stage 2 or either full lifecycle.
+
 ## 1.1.0-rc.10 — Application handoff correction candidate
 
 - Based on released rc.9 `0a77d8c1cef6fb206bfd268a8b3f31bbc3e4e5f4`. Preserve existing identities, application references, private evidence and financial history.

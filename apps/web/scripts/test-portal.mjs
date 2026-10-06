@@ -2588,6 +2588,41 @@ try {
     reviewer, 'review_product', complianceInput(complianceTrustRace.product))
   await proveDecisionRevocation('issuer appointment applier', issuerTrustRace, 10, 13,
     issuerContext, 'review_offering_issuer', issuerInput(issuerTrustRace.product))
+  phase = 'shared-handoff-final-reader-chain'
+  await db.query('begin'); begun = true
+  await admin()
+  const handoffRecords = async () => {
+    await admin()
+    return scalar(`select jsonb_build_object(
+      'applications',(select jsonb_agg(to_jsonb(a) order by id) from bx1_portal.applications a),
+      'accounts',(select jsonb_agg(to_jsonb(i) order by id) from bx1_portal.investment_accounts i),
+      'mandates',(select jsonb_agg(to_jsonb(m) order by id) from bx1_portal.representative_mandates m),
+      'investing_mandates',(select jsonb_agg(to_jsonb(m) order by id) from bx1_portal.investing_representative_mandates m),
+      'memberships',(select jsonb_agg(to_jsonb(m) order by id) from public.bx1_memberships m),
+      'configuration',(select to_jsonb(c) from bx1_portal.entry_configuration c),
+      'events',(select count(*) from bx1_portal.events),'requests',(select count(*) from bx1_portal.scoped_requests))`)
+  }
+  const beforeHandoff = await handoffRecords()
+  const finalWriterBefore = await scalar("select md5(pg_get_functiondef('bx1_portal.execute_scoped(jsonb,text,uuid,jsonb)'::regprocedure))")
+  await sqlFile('../../../supabase/features/bx1_customer_handoff.sql')
+  eq(await handoffRecords(), beforeHandoff, 'shared handoff installation preserves final-chain business records')
+  eq(await scalar("select md5(pg_get_functiondef('bx1_portal.execute_scoped(jsonb,text,uuid,jsonb)'::regprocedure))"), finalWriterBefore, 'shared handoff preserves the latest appointed-product command chain')
+  const currentHandoffEntry = await entryRead(14)
+  eq(currentHandoffEntry.workflow, { version: 1, environment: 'TESTNET', actor_id: uid(14), scoped_read_available: true }, 'full current reader chain exposes the shared configured workflow')
+  truth(currentHandoffEntry.applications.every(a => a.handoff.application_id === a.id && a.handoff.actor_id === uid(14) && a.handoff.application_revision === a.revision), 'current-chain handoffs remain actor/application/revision bound')
+  const ownerHandoffEntry = await entryRead(9)
+  const revokedCustomerHandoff = ownerHandoffEntry.applications.find(a => a.id === managerApp.id).handoff
+  eq([revokedCustomerHandoff.blocker, revokedCustomerHandoff.allowed_actions, revokedCustomerHandoff.native_context], ['MANDATE_NOT_EFFECTIVE', [], null], 'historically revoked mandate stays unusable after all later reader migrations')
+  const entityHandoff = ownerHandoffEntry.applications.find(a => a.id === entityApp.id).handoff
+  eq([entityHandoff.state, entityHandoff.next_owner, entityHandoff.blocker, entityHandoff.allowed_actions, entityHandoff.mandate?.id], ['MANDATE_REVIEW_PENDING', 'COMPLIANCE', 'NONE', [], renewed.id], 'entity account waits for the exact current investing-representative mandate without claiming access')
+  eq(await handoffRecords(), beforeHandoff, 'full current handoff reads remain non-mutating')
+  for (const signature of ['bx1_portal.customer_application_handoff(jsonb,uuid)', 'bx1_portal.entry_read_pre_handoff()', 'bx1_portal.read_scoped_pre_handoff(jsonb)']) {
+    for (const role of ['anon', 'authenticated', 'service_role']) {
+      eq(await scalar("select has_function_privilege($1,$2,'EXECUTE')", [role, signature]), false, `${role} cannot bypass the handoff reader through ${signature}`)
+    }
+  }
+  await db.query('rollback'); begun = false
+  console.log('BX1_CUSTOMER_HANDOFF_PASS chain=current-stage2-stage3 pureRead=proven scopedWriters=unchanged hostedProvider=not-proven')
   phase = 'cleanup-committed-disposable-fixture'
   await db.query('drop schema bx1_portal,bx1_private,storage,auth,public cascade; create schema public')
   committedFixture = false

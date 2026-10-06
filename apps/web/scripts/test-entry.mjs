@@ -226,7 +226,33 @@ try {
     await db.query('commit'); begun = false
     eq((await waiting).code, '42501', `${mode} changed during wait fails closed`)
   }
-  console.log(JSON.stringify({ ok: true, suite: 'stage1-entry-cloud-sql', checks, historical_application_id: legacyApplication.id, proof_boundary: 'Synthetic cloud PostgreSQL17 only; not hosted UI, genuine MFA enrollment, or production admission.' }))
+  phase = 'shared-handoff-current-stage2-upgrade'
+  await db.query('begin'); begun = true
+  await admin()
+  await sqlFile('../../../supabase/features/bx1_application_admission.sql')
+  for (const file of ['20260923134152_stage2_product_eligibility.sql',
+    '20260923143713_stage2_customer_mandates.sql', '20260923144216_stage2_document_receipts.sql',
+    '20260923161500_stage2_application_document_history.sql', '20260923171126_stage2_entity_investment_accounts.sql',
+    '20260923175822_stage2_superadmin_shell_mfa_boundary.sql', '20260924110608_stage2_provider_evidence.sql',
+    '20260924110922_stage2_beneficial_ownership_control.sql', '20260924112832_stage2_document_quarantine_lifecycle.sql',
+    '20260924125627_stage2_customer_monitoring.sql', '20260924125811_stage2_document_retention_authority.sql']) {
+    await sqlFile(`../../../supabase/migrations/${file}`)
+  }
+  const handoffBaseline = await snapshot()
+  const writerBeforeHandoff = await scalar("select md5(pg_get_functiondef('bx1_portal.execute_scoped(jsonb,text,uuid,jsonb)'::regprocedure))")
+  await sqlFile('../../../supabase/features/bx1_customer_handoff.sql')
+  eq(await snapshot(), handoffBaseline, 'handoff installation changes no historical entry/business records')
+  eq(await scalar("select md5(pg_get_functiondef('bx1_portal.execute_scoped(jsonb,text,uuid,jsonb)'::regprocedure))"), writerBeforeHandoff, 'handoff leaves the canonical command chain unchanged')
+  const handoffEntry = await read(11)
+  eq(handoffEntry.workflow, { version: 1, environment: 'TESTNET', actor_id: uid(11), scoped_read_available: true }, 'same entry reader emits configured caller-bound workflow')
+  eq(handoffEntry.applications.map(a => a.id).sort(), [investor.id, second.id].sort(), 'handoff preserves separate saved capacities')
+  truth(handoffEntry.applications.every(a => a.handoff.application_id === a.id && a.handoff.application_revision === a.revision && a.handoff.actor_id === uid(11)), 'handoffs bind exact own applications and revisions')
+  eq(await snapshot(), handoffBaseline, 'repeated handoff reads create no records or audit events')
+  for (const name of ['customer_application_handoff(jsonb,uuid)', 'entry_read_pre_handoff()', 'read_scoped_pre_handoff(jsonb)']) {
+    eq(await scalar("select has_function_privilege('authenticated',$1,'EXECUTE')", [`bx1_portal.${name}`]), false, `handoff preserves owner-only ${name}`)
+  }
+  await db.query('rollback'); begun = false
+  console.log(JSON.stringify({ ok: true, suite: 'stage1-entry-cloud-sql', checks, historical_application_id: legacyApplication.id, handoff_pure_read: true, proof_boundary: 'Synthetic cloud PostgreSQL17 only; not hosted UI, genuine MFA enrollment, or production admission.' }))
 } catch (error) {
   console.error(JSON.stringify({ ok: false, suite: 'stage1-entry-cloud-sql', phase, checks, code: error?.code ?? null, fixtureLine: error?.fixtureLine ?? null, message: error instanceof Error ? error.message : String(error) }))
   process.exitCode = 1

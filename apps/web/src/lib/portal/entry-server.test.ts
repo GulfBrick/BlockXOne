@@ -5,7 +5,7 @@ const mocks = vi.hoisted(() => ({ user: vi.fn(), mfa: vi.fn(), sufficient: vi.fn
 vi.mock('@/lib/supabase/server', () => ({ readVerifiedUser: mocks.user }))
 vi.mock('@/lib/supabase/mfa', () => ({ readMfaContext: mocks.mfa, hasRequiredMfa: mocks.sufficient, isMfaContextCurrent: mocks.current }))
 import { readEntry } from './entry-server'
-import { entryActorId, entryApplication, entryFixture } from './entry-test-fixtures'
+import { entryActorId, entryApplication, entryFixture, entryHandoff } from './entry-test-fixtures'
 const client = { rpc: mocks.rpc } as unknown as SupabaseClient
 beforeEach(() => {
   vi.resetAllMocks()
@@ -24,7 +24,29 @@ describe('verified shared identity entry', () => {
   })
   it('uses the same entry contract on MAINNET without a test provider gate', async () => {
     vi.stubEnv('SUPABASE_URL', 'https://oqkevkjbkpugjotihtda.supabase.co'); vi.stubEnv('VERCEL_ENV', 'production'); vi.stubEnv('BLOCKXONE_APP_ORIGIN', 'https://bx1.co.za')
+    mocks.rpc.mockReturnValue({ abortSignal: vi.fn().mockResolvedValue({ data: entryFixture([], 'MAINNET'), error: null }) })
     expect((await readEntry(client)).admission.manual_test_review).toBe(false)
+  })
+  it.each([
+    { environment: 'MAINNET' }, { actor_id: '55555555-5555-4555-8555-555555555555' }, { version: 2 },
+  ])('rejects mismatched environment/configuration envelope %j', change => {
+    const data = entryFixture(); Object.assign(data.workflow!, change)
+    mocks.rpc.mockReturnValue({ abortSignal: vi.fn().mockResolvedValue({ data, error: null }) })
+    return expect(readEntry(client)).rejects.toMatchObject({ status: 503 })
+  })
+  it('rejects absent configuration instead of selecting a business environment fallback', async () => {
+    const data = entryFixture(); delete data.workflow
+    mocks.rpc.mockReturnValue({ abortSignal: vi.fn().mockResolvedValue({ data, error: null }) })
+    await expect(readEntry(client)).rejects.toMatchObject({ status: 503 })
+  })
+  it('rejects a stale same-person application handoff before presenting actions', async () => {
+    const application = entryApplication({ review_route: 'AVAILABLE' })
+    application.handoff = entryHandoff(application, { application_revision: application.revision + 1 })
+    mocks.rpc.mockReturnValue({ abortSignal: vi.fn().mockResolvedValue({ data: entryFixture([application]), error: null }) })
+    await expect(readEntry(client)).rejects.toMatchObject({ status: 503 })
+  })
+  it('retains an unprojected historical application as unavailable rather than inferring permission', async () => {
+    expect((await readEntry(client)).applications[0].handoff).toBeUndefined()
   })
   it.each([null, { id: entryActorId, email: 'x@example.invalid' }, { id: entryActorId, email: 'x@example.invalid', email_confirmed_at: 'yes', is_anonymous: true }])('does not substitute configuration for verified identity %#', async user => {
     mocks.user.mockResolvedValue(user)

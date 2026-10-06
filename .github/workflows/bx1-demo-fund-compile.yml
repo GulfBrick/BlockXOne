@@ -32,6 +32,7 @@ on:
       - apps/web/scripts/test-entry-mainnet.mjs
       - apps/web/scripts/test-application-admission.mjs
       - supabase/features/bx1_application_admission.sql
+      - supabase/features/bx1_customer_handoff.sql
       - supabase/features/bx1_entry.sql
       - supabase/features/bx1_entry_admission.sql
       - PLATFORM_RELEASE.json
@@ -86,6 +87,7 @@ on:
       - apps/web/scripts/test-entry-mainnet.mjs
       - apps/web/scripts/test-application-admission.mjs
       - supabase/features/bx1_application_admission.sql
+      - supabase/features/bx1_customer_handoff.sql
       - supabase/features/bx1_entry.sql
       - supabase/features/bx1_entry_admission.sql
       - PLATFORM_RELEASE.json

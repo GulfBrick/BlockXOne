@@ -2,7 +2,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import type { EntryApplication } from '@/lib/portal/entry-contracts'
-import { entryApplication, entryActorId } from '@/lib/portal/entry-test-fixtures'
+import { entryApplication, entryActorId, entryHandoff } from '@/lib/portal/entry-test-fixtures'
 import { applicationDetailsSchema, type LegacyApplicationDetails, type OwnershipControlRelationship, type PortalApplication, type PortalSnapshot, type WealthManagerApplicationDetailsV2 } from '@/lib/portal/contracts'
 import { ApplicationDetailsSummary, ApplicationHistoryFailureNotice, OnboardingForm, applicationFormDetails, applicationHistoryFailure, applicationNextStep, applicationSubmissionDetails, applicationSubmissionReady, applicationSubmitLabel, classifyDocumentUpload, requiredApplicationEvidence, withoutDraftEvidence } from './onboarding-form'
 import { ApplicationReview } from './portal-workflows'
@@ -184,6 +184,38 @@ describe('truthful application state and handoff', () => {
   it('does not infer approved or submitted state from route availability', () => {
     expect(applicationNextStep(entryApplication({ review_route: 'AVAILABLE' })).title).toBe('Draft: not submitted')
     expect(applicationNextStep(entryApplication({ status: 'SUBMITTED', review_route: 'REVIEWER_UNAVAILABLE' })).description).toContain('submitted case is preserved')
+  })
+  it('uses projected rejected reapplication while preserving the decision and same saved reference', () => {
+    const application = entryApplication({ status: 'REJECTED', review_route: 'AVAILABLE', details: investor, revision: 4, submitted_at: '2026-09-22T09:30:00Z', review_notes: 'Clarify the source of these fictional funds.' })
+    const handoff = entryHandoff(application)
+    const html = renderToStaticMarkup(createElement(OnboardingForm, { application, handoff, environment: 'TESTNET', onSaved: save }))
+    expect(html).toContain('Reapply for independent review')
+    expect(html).toContain('Reapplication does not reverse rejection into approval')
+    expect(html).toContain('Clarify the source of these fictional funds.')
+    expect(html).toContain(application.id)
+    expect(html).toContain('Saved record: revision 4')
+    expect(html).toContain('View submitted versions')
+    expect(html).toContain('<textarea')
+  })
+  it('keeps projected missing-reviewer preparation unsaved and submission disabled', () => {
+    const application = entryApplication({ review_route: 'REVIEWER_UNAVAILABLE', details: investor })
+    const handoff = entryHandoff(application)
+    const html = renderToStaticMarkup(createElement(OnboardingForm, { application, handoff, environment: 'TESTNET', onSaved: save }))
+    expect(html).toContain('Independent reviewer not assigned')
+    expect(html).toContain('Submission remains disabled')
+    expect(html).toContain('Submission unavailable; review route required')
+    expect(html).toContain('<textarea')
+    expect(html).not.toContain('Check review route and submit')
+  })
+  it('does not allow editing or provider-start actions for a projected monitoring hold', () => {
+    const application = entryApplication({ review_route: 'AVAILABLE', details: investor })
+    const handoff = entryHandoff(application, { state: 'UNAVAILABLE', blocker: 'MONITORING_ON_HOLD', next_owner: 'COMPLIANCE', allowed_actions: [], gates: { intake_admitted: true, reviewer_available: true, monitoring_allows_new_actions: false } })
+    const html = renderToStaticMarkup(createElement(OnboardingForm, { application, handoff, environment: 'TESTNET', onSaved: save }))
+    expect(html).toContain('Customer relationship on hold')
+    expect(html).toContain('Read-only saved application')
+    expect(html).not.toContain('<form')
+    expect(html).not.toContain('type="file"')
+    expect(html).not.toContain('Sumsub sandbox')
   })
 })
 
