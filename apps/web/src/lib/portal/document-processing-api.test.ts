@@ -155,8 +155,14 @@ describe('processing POST using the actual command module and mocked external bo
     const response = await POST(serviceRequest({ ...byteCommand, sha256: digest }))
     expect(response.status).toBe(200)
     expect(response.headers.get('content-length')).toBe('4194304')
-    expect(Buffer.from(await response.arrayBuffer())).toEqual(maximum)
+    expect(response.headers.get('content-type')).toBe('application/octet-stream')
+    const delivered = Buffer.from(await response.arrayBuffer())
+    expect(delivered.byteLength).toBe(4_194_304)
+    expect(createHash('sha256').update(delivered).digest('hex')).toBe(digest)
+    expect(delivered.equals(maximum)).toBe(true)
     expectPrivate(response)
+    expect(boundary.query).toHaveBeenCalledTimes(2)
+    expect(boundary.download).toHaveBeenCalledOnce()
   })
   it('fails closed when authority changes during actual Storage I/O', async () => {
     boundary.download.mockImplementationOnce(async () => {

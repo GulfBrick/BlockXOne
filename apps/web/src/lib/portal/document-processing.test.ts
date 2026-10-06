@@ -180,7 +180,14 @@ describe('actual processing module with database and Storage boundaries mocked',
     boundary.download.mockResolvedValue({ data: new Blob([maximum]), error: null })
     const result = await executeDocumentProcessing({ ...byteCommand, sha256: digest }, documentProcessingConfig())
     expect(result.command).toBe('BYTES')
-    if (result.command === 'BYTES') expect(Buffer.from(result.bytes)).toEqual(maximum)
+    if (result.command === 'BYTES') {
+      const delivered = Buffer.from(result.bytes)
+      expect(delivered.byteLength).toBe(4_194_304)
+      expect(createHash('sha256').update(delivered).digest('hex')).toBe(digest)
+      expect(delivered.equals(maximum)).toBe(true)
+    }
+    expect(boundary.query).toHaveBeenCalledTimes(2)
+    expect(boundary.download).toHaveBeenCalledOnce()
   })
   it.each([
     { ...byteCommand, document_id: requestId }, { ...byteCommand, attempt_id: requestId },

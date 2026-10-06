@@ -161,9 +161,9 @@ export async function proveDocumentProcessing(db, clients, featureSql) {
     const doc = id(n), path = `${actor}/${doc}`
     await db.query(`insert into bx1_private.document_quarantine_items
       (id,actor_id,session_id,storage_path,kind,title,sha256,byte_size,mime_type,state,scanner_id,scanner_reference,scanned_at,promoted_at)
-      values($1,$2,$3,$4,'IDENTITY','Synthetic processing evidence',$5,25,'application/pdf',$6,
+      values($1::uuid,$2,$3,$4,'IDENTITY','Synthetic processing evidence',$5,25,'application/pdf',$6,
         case when $6='QUARANTINED' then null else 'legacy-fixture-scanner' end,
-        case when $6='QUARANTINED' then null else 'legacy:'||$1::text end,
+        case when $6='QUARANTINED' then null else 'legacy:'||($1::uuid)::text end,
         case when $6='QUARANTINED' then null else clock_timestamp() end,
         case when $6='PROMOTED' then clock_timestamp() else null end)`, [doc, actor, session, path, hash, state])
     if (matchingScan) await db.query(`insert into bx1_private.document_scan_events
