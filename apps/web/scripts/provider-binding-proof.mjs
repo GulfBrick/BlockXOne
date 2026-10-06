@@ -77,7 +77,8 @@ export async function proveProviderBinding(db, clients, featureSql) {
   }
   const bindSql = 'select bx1_private.bind_provider_application($1,$2,$3,$4,$5,$6,$7)'
   const eventSql = 'select bx1_private.record_provider_evidence($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)'
-  const bind = (n, revision = 1, levels = [individualLevel, companyLevel, clientId]) =>
+  const fixtureRevisions = new Map()
+  const bind = (n, revision = fixtureRevisions.get(n), levels = [individualLevel, companyLevel, clientId]) =>
     asWriter(bindSql, [id(n), id(100 + n), id(200 + n), revision, ...levels])
   const claims = async (actor, session, extra = {}, client = db) => {
     await admin(client)
@@ -160,6 +161,16 @@ export async function proveProviderBinding(db, clients, featureSql) {
       await admin()
       await db.query('insert into auth.users(id,email,email_confirmed_at,is_anonymous) values($1,$2,clock_timestamp(),false)', [id(n), `synthetic-qualified-${n}@example.invalid`])
       await db.query("insert into auth.sessions(id,user_id,not_after,created_at) values($1,$2,clock_timestamp()+interval '1 hour',clock_timestamp()-interval '1 hour')", [id(100 + n), id(n)])
+      // The guarded receipt-binding BEFORE UPDATE trigger needs its parent
+      // application to exist. Create only a DRAFT, before any document work.
+      const draftRevision = await scalar(`insert into bx1_portal.applications
+        (id,user_id,persona,status,details,reviewer_scope,provider_mode,origin)
+        values($1,$2,$3,'DRAFT','{}'::jsonb,$4,'UNASSIGNED','SELF_SERVICE') returning revision`,
+      [id(200 + n), id(n), n === 3 ? 'WEALTH_MANAGER' : 'INVESTOR', scope])
+      fixtureRevisions.set(n, draftRevision)
+      eq(draftRevision, 1, `subject ${n}: empty DRAFT parent starts at revision 1`)
+      eq(await scalar('select count(*)::int from bx1_portal.application_detail_versions where application_id=$1', [id(200 + n)]), 0,
+        `subject ${n}: parent creation fabricates no immutable submission`)
       const documents = []
       for (const [i, kind] of (n === 2 || n === 3 ? ['IDENTITY', 'COMPANY', 'BENEFICIAL_OWNERS'] : ['IDENTITY']).entries()) {
         const documentId = id(500 + n * 10 + i), path = `${id(n)}/${documentId}`, digest = 'd'.repeat(64)
@@ -194,10 +205,56 @@ export async function proveProviderBinding(db, clients, featureSql) {
           experience: 'Fictional investing experience for provider qualification checks.',
           ...(n === 2 ? { ...company, ...ownership } : {}) }
       if (n === 8) delete details.investor_type
-      await claims(id(n), id(100 + n)); await admin()
-      await db.query(`insert into bx1_portal.applications(id,user_id,persona,status,details,reviewer_scope,provider_mode,origin,submitted_at)
-        values($1,$2,$3,$4,$5::jsonb,$6,'UNASSIGNED','SELF_SERVICE',case when $4='SUBMITTED' then clock_timestamp() else null end)`,
-      [id(200 + n), id(n), n === 3 ? 'WEALTH_MANAGER' : 'INVESTOR', n === 5 || n === 7 || n === 9 ? 'DRAFT' : 'SUBMITTED', JSON.stringify(details), scope])
+      const submit = async () => {
+        await claims(id(n), id(100 + n))
+        return scalar('select public.bx1_entry_command($1,$2::uuid,$3::jsonb)',
+          ['submit_application', id(800 + n), JSON.stringify({ application_id: id(200 + n), expected_revision: draftRevision, details })])
+      }
+      if ([1, 2, 3, 4, 6].includes(n)) {
+        const submitted = (await submit()).applications.find(a => a.id === id(200 + n))
+        eq([submitted?.status, submitted?.revision], ['SUBMITTED', draftRevision + 1],
+          `subject ${n}: typed guarded entry command submits DRAFT revision 1 as revision 2`)
+        fixtureRevisions.set(n, submitted.revision)
+        await admin()
+        eq(await scalar(`select count(*)::int from bx1_portal.application_detail_versions v
+          join bx1_portal.applications a on a.id=v.application_id
+          where a.id=$1 and v.application_revision=a.revision and v.capture_kind='SUBMISSION'
+            and v.details=a.details and v.submitted_at=a.submitted_at`, [id(200 + n)]), 1,
+        `subject ${n}: unchanged capture trigger records one exact immutable SUBMISSION`)
+        eq(await scalar('select count(*)::int from bx1_private.document_application_bindings where application_id=$1 and application_revision=$2',
+          [id(200 + n), submitted.revision]), documents.length,
+        `subject ${n}: scanned receipts bind only after the DRAFT parent exists`)
+        eq(await scalar('select count(*)::int from bx1_portal.entry_requests where actor_id=$1 and request_key=$2', [id(n), id(800 + n)]), 1,
+          `subject ${n}: guarded submission owns one typed command receipt`)
+        if (n === 2 || n === 3) {
+          eq(submitted.details.details_version, 3, `subject ${n}: ENTITY/wealth-manager submission retains valid v3 evidence`)
+          eq(await scalar('select count(*)::int from bx1_portal.application_ownership_control_versions where application_id=$1 and application_revision=$2',
+            [id(200 + n), submitted.revision]), 1, `subject ${n}: unchanged ownership capture records the exact v3 submitted revision`)
+        }
+      } else if (n === 8) {
+        await denied('malformed subject cannot pass the typed entry submission command', submit, '22023')
+        // Expressly malformed owner-only NEGATIVE fixture. Neither the typed
+        // command nor any provider writer can create this state. The unchanged
+        // capture trigger, not a manual version INSERT, freezes these details.
+        await claims(id(n), id(100 + n)); await admin()
+        await db.query(`update bx1_portal.applications set details=$2::jsonb,status='SUBMITTED',
+          revision=revision+1,submitted_at=clock_timestamp() where id=$1`, [id(200 + n), JSON.stringify(details)])
+        fixtureRevisions.set(n, await scalar('select revision from bx1_portal.applications where id=$1', [id(200 + n)]))
+        eq(fixtureRevisions.get(n), 2, 'malformed owner-only negative fixture freezes revision 2 without bypassing capture guards')
+        eq(await scalar(`select count(*)::int from bx1_portal.application_detail_versions v
+          join bx1_portal.applications a on a.id=v.application_id where a.id=$1
+          and v.application_revision=a.revision and v.capture_kind='SUBMISSION'
+          and v.details=a.details and v.submitted_at=a.submitted_at`, [id(200 + n)]), 1,
+          'malformed negative source version comes only from unchanged submission capture trigger')
+        eq(await scalar('select count(*)::int from bx1_portal.entry_requests where actor_id=$1 and request_key=$2', [id(n), id(800 + n)]), 0,
+          'malformed owner-only negative fixture is not represented as an accepted typed entry command')
+      } else {
+        await claims(id(n), id(100 + n)); await admin()
+        await scalar('select bx1_portal.validate_application($1::jsonb,\'INVESTOR\')', [JSON.stringify(details)])
+        await db.query('update bx1_portal.applications set details=$2::jsonb where id=$1', [id(200 + n), JSON.stringify(details)])
+        eq(await scalar('select count(*)::int from bx1_portal.application_detail_versions where application_id=$1', [id(200 + n)]), 0,
+          `subject ${n}: valid editable DRAFT details are not an immutable submission`)
+      }
     }
     // A synthetic current-scope organisation binding enables an explicit
     // revoked/expired appointment check, not production customer admission.
@@ -212,31 +269,38 @@ export async function proveProviderBinding(db, clients, featureSql) {
     const bindings = []
     for (const n of [1, 2, 3, 4]) bindings.push(await bind(n))
     eq(bindings.map(b => [b.expected_applicant_type, b.expected_level_name, b.expected_client_id, b.source_version_revision]),
-      [['individual', individualLevel, clientId, 1], ['company', companyLevel, clientId, 1], ['company', companyLevel, clientId, 1], ['individual', individualLevel, clientId, 1]],
+      [['individual', individualLevel, clientId, 2], ['company', companyLevel, clientId, 2], ['company', companyLevel, clientId, 2], ['individual', individualLevel, clientId, 2]],
     'three subject variants derive immutable type and configured exact level/client')
     eq((await bind(1)).binding_id, bindings[0].binding_id, 'exact qualified binding retry is idempotent')
     await admin()
     eq(await scalar('select count(*)::int from bx1_private.provider_boundary_receipts where source_kind=\'SERVER_BINDING\''), 4, 'one machine binding receipt per binding including retry')
-    await denied('individual config drift cannot rewrite binding', () => bind(1, 1, ['Changed-Level', companyLevel, clientId]))
-    await denied('case-sensitive level drift is denied', () => bind(1, 1, [individualLevel.toLowerCase(), companyLevel, clientId]))
-    await denied('client drift cannot rewrite binding', () => bind(1, 1, [individualLevel, companyLevel, 'other-client']))
-    await denied('wrong actor cannot bind another subject', () => asWriter(bindSql, [id(2), id(102), id(201), 1, individualLevel, companyLevel, clientId]), '42501')
-    await denied('wrong revision is denied', () => bind(1, 2), '42501')
+    await denied('individual config drift cannot rewrite binding', () => bind(1, fixtureRevisions.get(1), ['Changed-Level', companyLevel, clientId]))
+    await denied('case-sensitive level drift is denied', () => bind(1, fixtureRevisions.get(1), [individualLevel.toLowerCase(), companyLevel, clientId]))
+    await denied('client drift cannot rewrite binding', () => bind(1, fixtureRevisions.get(1), [individualLevel, companyLevel, 'other-client']))
+    await denied('wrong actor cannot bind another subject', () => asWriter(bindSql, [id(2), id(102), id(201), fixtureRevisions.get(1), individualLevel, companyLevel, clientId]), '42501')
+    await denied('wrong revision is denied', () => bind(1, fixtureRevisions.get(1) + 1), '42501')
     await denied('draft must submit first', () => bind(5), '42501')
     await probe(async () => { await db.query("update bx1_portal.applications set status='CHANGES_REQUIRED' where id=$1", [id(205)]); await denied('changes-required must resubmit first', () => bind(5), '42501') })
     await denied('unsupported immutable subject fails closed', () => bind(8))
     await probe(async () => {
       await claims(id(7), id(107)); await admin()
       await db.query("update bx1_portal.applications set status='SUBMITTED' where id=$1", [id(207)])
+      eq(await scalar('select count(*)::int from bx1_portal.application_detail_versions where application_id=$1', [id(207)]), 0,
+        'status-only owner negative fixture does not fabricate immutable source history')
       await denied('submitted label without snapshot is denied', () => bind(7))
     })
-    await probe(async () => {
-      await claims(id(9), id(109)); await admin()
-      await db.query(`insert into bx1_portal.application_detail_versions(application_id,application_revision,details,submitted_at,capture_kind)
-        select id,revision,details,clock_timestamp(),'MIGRATION_SNAPSHOT' from bx1_portal.applications where id=$1`, [id(209)])
-      await db.query("update bx1_portal.applications set status='SUBMITTED' where id=$1", [id(209)])
-      await denied('migration snapshot is not immutable submission evidence', () => bind(9))
-    })
+    await admin()
+    const migrationSnapshot = (await db.query(`select a.id,a.user_id,a.revision,a.status,a.admission_purpose,
+      v.capture_kind,v.application_revision as source_revision,s.id as session_id
+      from bx1_portal.application_detail_versions v join bx1_portal.applications a on a.id=v.application_id
+      join auth.sessions s on s.user_id=a.user_id where v.capture_kind='MIGRATION_SNAPSHOT' and a.status<>'SUBMITTED'
+        and bx1_private.provider_session_current(a.user_id,s.id)
+      order by a.id,v.application_revision,s.id limit 1`)).rows[0]
+    truth(migrationSnapshot, 'prior application-admission feature supplies an actual migration-generated historical snapshot')
+    eq(migrationSnapshot.capture_kind, 'MIGRATION_SNAPSHOT', 'historical migration source is read as captured, never manually inserted or relabelled')
+    await denied('actual migration-captured historical application is not admitted as current SUBMITTED evidence; capture-kind denial alone is not isolated',
+      () => asWriter(bindSql, [migrationSnapshot.user_id, migrationSnapshot.session_id, migrationSnapshot.id,
+        migrationSnapshot.revision, individualLevel, companyLevel, clientId]), '42501')
     const countsBefore = await providerCounts(), snapshotBeforeAuditFailure = await providerSnapshot()
     await probe(async () => {
       await db.query(`create function public.synthetic_provider_audit_failure() returns trigger language plpgsql as $$
@@ -344,7 +408,9 @@ export async function proveProviderBinding(db, clients, featureSql) {
     })
     await probe(async () => {
       await claims(id(1), id(101)); await admin()
-      await db.query('update bx1_portal.applications set revision=2 where id=$1', [id(201)])
+      await db.query('update bx1_portal.applications set revision=revision+1 where id=$1', [id(201)])
+      eq(await scalar('select revision from bx1_portal.applications where id=$1', [id(201)]), 3,
+        'old-revision negative fixture advances the guarded submission revision 2 to application revision 3')
       const late = await send(event(b, 10, { type: 'applicantPending', status: 'pending', answer: null }))
       eq([late.ordering_state, late.projection_state], ['STALE', 'REVISION_STALE'], 'old-revision signed delivery remains historical')
       eq((await read(1)).filter(e => e.ordering_state === 'CURRENT').length, 0, 'old revision cannot provide effective completion')

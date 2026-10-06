@@ -3,7 +3,7 @@
 import { createElement, type ReactNode } from 'react'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { PortalSnapshot } from '@/lib/portal/contracts'
+import { entityInvestorApplicationDetailsV3Schema, type PortalSnapshot } from '@/lib/portal/contracts'
 import type { EntryApplication } from '@/lib/portal/entry-contracts'
 import { entryActorId, entryApplication, entryApplicationId, entryOrganisationId } from '@/lib/portal/entry-test-fixtures'
 import { APPLICANT_CONTEXT, type PortalOperatingContext } from '@/lib/portal/operating-context'
@@ -18,6 +18,23 @@ import { KycVerification, ProviderEvidenceReview } from './kyc-verification'
 
 const submitted = () => entryApplication({ status: 'SUBMITTED', revision: 3, submitted_at: '2026-10-07T10:00:00Z',
   details: { full_name: 'Synthetic Applicant', country: 'ZA', investor_type: 'INDIVIDUAL' }, review_route: 'AVAILABLE' })
+const submittedEntity = () => entryApplication({ ...submitted(), details: entityInvestorApplicationDetailsV3Schema.parse({
+  details_version: 3, investor_type: 'ENTITY', full_name: 'Synthetic Applicant', country: 'ZA',
+  company_name: 'Synthetic Entity', registration_reference: 'SYNTHETIC-ENTITY',
+  source_of_funds: 'Fictional retained earnings for a synthetic entity.',
+  beneficial_owners: 'The fictional direct owner holds the whole synthetic entity.',
+  experience: 'Fictional long-term entity investment objectives.', test_data_acknowledged: true,
+  documents: (['IDENTITY', 'COMPANY', 'BENEFICIAL_OWNERS'] as const).map((kind, index) => ({
+    id: `${index + 4}4444444-4444-4444-8444-444444444444`, kind, title: `Synthetic ${kind} evidence`,
+    storage_path: `${entryActorId}/synthetic-entity-${index}.pdf`, sha256: 'a'.repeat(64), size: 100, mime_type: 'application/pdf',
+  })),
+  ownership_control: [{ id: 'f4444444-4444-4444-8444-444444444444', party_type: 'PERSON',
+    legal_name: 'Synthetic Owner', registration_reference: '', country: 'ZA', relationship: 'DIRECT_OWNER',
+    ownership_basis_points: 10_000, control_basis: 'Fictional direct ownership in the synthetic register.',
+    effective_on: '2026-09-01', change_reason: 'Initial fictional entity ownership disclosure.',
+    evidence_document_id: '64444444-4444-4444-8444-444444444444' }],
+  ownership_change_reason: 'Initial fictional entity ownership disclosure.',
+}) })
 const otherActor = '55555555-5555-4555-8555-555555555555'
 const reviewerContext: PortalOperatingContext = { mode: 'ROLE', organisationId: entryOrganisationId, role: 'ComplianceOfficer' }
 function Scope({ children, actor = entryActorId, context = APPLICANT_CONTEXT }: {
@@ -184,7 +201,8 @@ describe('mounted revision-bound provider evidence', () => {
     const changedApplication = change === 'application' ? { ...submitted(), id: entryOrganisationId }
       : change === 'revision' ? { ...submitted(), revision: 4 }
         : change === 'state' ? { ...submitted(), status: 'CHANGES_REQUIRED' as const }
-          : change === 'subject' ? { ...submitted(), details: { ...submitted().details, investor_type: 'ENTITY' as const } } : submitted()
+          : change === 'subject' ? submittedEntity() : submitted()
+    if (change === 'subject') expect(changedApplication.details).toMatchObject({ details_version: 3, investor_type: 'ENTITY' })
     mounted.rerender(applicant(changedApplication, change === 'actor' ? otherActor : entryActorId,
       change === 'context' ? reviewerContext : APPLICANT_CONTEXT))
     await act(async () => { pending.resolve(token()); await pending.promise })
