@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import pg from 'pg'
+import { proveDocumentProcessingDefaultAcl } from './document-processing-proof.mjs'
 
 if (process.argv.length !== 2 || process.env.GITHUB_ACTIONS !== 'true') throw new Error('Application handoff proof requires cloud CI without arguments')
 const expected = 'postgresql://postgres:bx1-synthetic-ci-only@127.0.0.1:5432/bx1_demo_ci'
@@ -249,6 +250,8 @@ try {
   const beforeHandoffInstall = await handoffRecords()
   const commandDefinition = await scalar("select md5(pg_get_functiondef('bx1_portal.execute_scoped(jsonb,text,uuid,jsonb)'::regprocedure))")
   await sqlFile('../../../supabase/features/bx1_customer_handoff.sql')
+  await sqlFile('../../../supabase/features/bx1_document_processing.sql')
+  checks += await proveDocumentProcessingDefaultAcl(db)
   eq(await handoffRecords(), beforeHandoffInstall, 'handoff definition neither seeds nor changes saved business history')
   eq(await scalar("select md5(pg_get_functiondef('bx1_portal.execute_scoped(jsonb,text,uuid,jsonb)'::regprocedure))"), commandDefinition, 'handoff leaves canonical writer definition unchanged')
   const projectedInvestor = (await read(9)).applications.find(a => a.id === investor.id)

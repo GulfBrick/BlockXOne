@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import pg from 'pg'
+import { proveDocumentProcessingDefaultAcl } from './document-processing-proof.mjs'
 
 // Fresh synthetic GitHub service only. NEVER run against either Supabase project.
 if (process.argv.length !== 2 || process.env.GITHUB_ACTIONS !== 'true') throw new Error('MAIN entry proof requires cloud CI without arguments')
@@ -148,6 +149,10 @@ try {
   await sqlFile('../../../supabase/migrations/20260928161233_stage3_real_estate_terms_v2.sql')
   await sqlFile('../../../supabase/tests/stage3_real_estate_v2_acl.sql'); checks++
   await sqlFile('../../../supabase/features/bx1_customer_handoff.sql')
+  await sqlFile('../../../supabase/features/bx1_document_processing.sql')
+  checks += await proveDocumentProcessingDefaultAcl(db)
+  eq(await scalar("select state='NOT_ADMITTED' from bx1_private.document_processing_policy where singleton"), true,
+    'final MAIN chain retains explicit processing non-admission')
   eq(await scalar("select has_table_privilege(current_user,'bx1_private.person_principals','REFERENCES')"), false,
     'retention migration leaves MAIN migrator without direct identity-table REFERENCES')
   eq(await scalar("select count(*)::int from pg_auth_members m join pg_roles r on r.oid=m.roleid where r.rolname='bx1_authority_owner' and m.member=(select oid from pg_roles where rolname=current_user) and (m.inherit_option or m.set_option)"), 0,

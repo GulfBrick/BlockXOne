@@ -18,6 +18,7 @@ on:
       - apps/web/src/middleware*
       - apps/web/src/lib/supabase/middleware*
       - apps/web/src/lib/branded-entry*
+      - apps/web/src/lib/auth-mode*
       - apps/web/src/lib/auth-referrer-policy*
       - apps/web/src/lib/platform-release*
       - apps/web/src/lib/runtime-scope*
@@ -33,6 +34,8 @@ on:
       - apps/web/scripts/test-application-admission.mjs
       - supabase/features/bx1_application_admission.sql
       - supabase/features/bx1_customer_handoff.sql
+      - supabase/features/bx1_document_processing.sql
+      - apps/web/scripts/document-processing-proof.mjs
       - supabase/features/bx1_entry.sql
       - supabase/features/bx1_entry_admission.sql
       - PLATFORM_RELEASE.json
@@ -73,6 +76,7 @@ on:
       - apps/web/src/middleware*
       - apps/web/src/lib/supabase/middleware*
       - apps/web/src/lib/branded-entry*
+      - apps/web/src/lib/auth-mode*
       - apps/web/src/lib/auth-referrer-policy*
       - apps/web/src/lib/platform-release*
       - apps/web/src/lib/runtime-scope*
@@ -88,6 +92,8 @@ on:
       - apps/web/scripts/test-application-admission.mjs
       - supabase/features/bx1_application_admission.sql
       - supabase/features/bx1_customer_handoff.sql
+      - supabase/features/bx1_document_processing.sql
+      - apps/web/scripts/document-processing-proof.mjs
       - supabase/features/bx1_entry.sql
       - supabase/features/bx1_entry_admission.sql
       - PLATFORM_RELEASE.json

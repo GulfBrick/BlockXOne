@@ -2,6 +2,8 @@
 
 This increment adds a Sumsub sandbox adapter to the existing BlockXOne portal. Its provider-evidence schema is shared by TEST and MAIN, but the current writer functions and web routes admit **TEST sandbox operations only**. MAIN remains fail-closed until a separately reviewed live provider adapter, credentials and operating admission are delivered. It does not approve customers, product eligibility, mandates, roles, or accounts. No provider credentials or hosted settings are committed here.
 
+Current owner checkpoint (2026-10-07): Daniel confirmed there is no Sumsub account yet. Provider account/terms and exact sandbox individual/company levels are prerequisite setup tasks, not a login defect or a reason to fabricate a provider result. Engineering can continue source delivery, but genuine provider acceptance cannot pass until access is supplied and an actual authenticated event is shown against the correct case. Private file dispatch is separately described in [the document-processing adapter contract](stage2-document-processing.md); it does not substitute for Sumsub or approve a customer.
+
 ## TEST environment configuration (names only)
 
 Set these **server-only** variables on the existing Vercel `block-x-one` Preview deployment for `testnet.bx1.co.za`, after the migration and restricted database LOGIN have been reviewed and provisioned. Never use `NEXT_PUBLIC_` for these values.

@@ -97,6 +97,23 @@ async function verifiedDownload(client: SupabaseClient, bucket: string, path: st
   return bytes
 }
 
+/** Server-only processing handoff; never exposes a signed Storage URL. */
+export async function downloadQuarantinedDocument(config: ReturnType<typeof documentScannerConfig>,
+  expected: { storage_path: string; sha256: string; size: number }): Promise<Uint8Array> {
+  if (!Number.isSafeInteger(expected.size) || expected.size < 1 || expected.size > 4_194_304
+    || !/^[0-9a-f]{64}$/.test(expected.sha256)
+    || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(expected.storage_path)) {
+    throw new DocumentLifecycleError('Invalid private document manifest.', 409)
+  }
+  return verifiedDownload(storageAdmin(config), quarantineBucket, expected.storage_path, expected)
+}
+
+/** Reject invalid byte sequences rather than replacing them before JSON parsing. */
+export function strictDocumentUtf8(rawBody: Uint8Array): string {
+  try { return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(rawBody) }
+  catch { throw new DocumentLifecycleError('Malformed document service message.', 400) }
+}
+
 /** Stages exact bytes only. Neither this response nor its receipt is a clean verdict. */
 export async function quarantineDocument(actorId: string, sessionId: string, document: EvidenceDocument,
   bytes: Uint8Array): Promise<void> {
@@ -127,7 +144,7 @@ const scannerMessage = z.object({
   document_id: z.string().uuid(),
   sha256: z.string().regex(/^[0-9a-f]{64}$/),
   verdict: z.enum(['CLEAN', 'MALICIOUS']),
-  reference: z.string().min(8).max(200),
+  reference: z.string().regex(/^bx1-scan:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/),
   observed_at: z.string().datetime({ offset: true }),
 }).strict()
 
@@ -144,7 +161,7 @@ export function verifyScannerMessage(rawBody: Uint8Array, timestamp: string | nu
     throw new DocumentLifecycleError('Scanner message authentication failed.', 403)
   }
   let parsed: unknown
-  try { parsed = JSON.parse(Buffer.from(rawBody).toString('utf8')) } catch {
+  try { parsed = JSON.parse(strictDocumentUtf8(rawBody)) } catch {
     throw new DocumentLifecycleError('Malformed scanner message.', 400)
   }
   const result = scannerMessage.safeParse(parsed)

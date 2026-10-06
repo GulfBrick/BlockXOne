@@ -36,6 +36,7 @@ export const SUPABASE_ALLOWED_PATHS = [
   '/portal/opportunities/detail', '/portal/portfolio', '/portal/orders/detail',
   '/api/portal/command', '/api/portal/documents', '/api/portal/funding/verify', '/api/portal/entry',
   '/api/portal/kyc/session', '/api/portal/kyc/webhook', '/api/portal/kyc/evidence',
+  '/api/portal/documents/processing',
 ] as const
 
 export function isSupabaseWebPathAllowed(pathname: string): boolean {

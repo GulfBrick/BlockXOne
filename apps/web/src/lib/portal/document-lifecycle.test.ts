@@ -2,7 +2,7 @@ import { createHmac } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
 vi.mock('server-only', () => ({}))
 import { DocumentLifecycleError, documentScannerConfig, documentScannerDatabaseConfig,
-  verifyScannerMessage } from './document-lifecycle'
+  strictDocumentUtf8, verifyScannerMessage } from './document-lifecycle'
 
 const env = {
   BLOCKXONE_AUTH_MODE: 'supabase', NEXT_PUBLIC_BLOCKXONE_AUTH_MODE: 'supabase',
@@ -30,7 +30,7 @@ describe('independent document scanner boundary', () => {
     const now = 1_800_000_000_000
     const timestamp = String(Math.floor(now / 1000))
     const body = Buffer.from(JSON.stringify({ document_id: '11111111-1111-4111-8111-111111111111',
-      sha256: 'a'.repeat(64), verdict: 'CLEAN', reference: 'synthetic-ref-1',
+      sha256: 'a'.repeat(64), verdict: 'CLEAN', reference: 'bx1-scan:22222222-2222-4222-8222-222222222222',
       observed_at: '2026-09-24T11:00:00Z' }))
     const signature = `sha256=${createHmac('sha256', config.signingKey).update(timestamp).update('.').update(body).digest('hex')}`
     expect(verifyScannerMessage(body, timestamp, signature, config, now).verdict).toBe('CLEAN')
@@ -40,5 +40,19 @@ describe('independent document scanner boundary', () => {
     const extra = Buffer.from(body.toString().replace('"CLEAN"', '"UNKNOWN"'))
     const extraSignature = `sha256=${createHmac('sha256', config.signingKey).update(timestamp).update('.').update(extra).digest('hex')}`
     expect(() => verifyScannerMessage(extra, timestamp, extraSignature, config, now)).toThrow(DocumentLifecycleError)
+  })
+  it('rejects unfenced references and invalid UTF-8 without changing the callback HMAC domain', () => {
+    const config = documentScannerConfig(env)
+    const now = 1_800_000_000_000
+    const timestamp = String(now / 1000)
+    for (const reference of ['synthetic-ref-1', 'bx1-scan:not-a-uuid', 'bx1-scan:22222222-2222-4222-8222-222222222222:extra']) {
+      const raw = Buffer.from(JSON.stringify({ document_id: '11111111-1111-4111-8111-111111111111',
+        sha256: 'a'.repeat(64), verdict: 'CLEAN', reference, observed_at: '2026-09-24T11:00:00Z' }))
+      const signature = `sha256=${createHmac('sha256', config.signingKey).update(timestamp).update('.').update(raw).digest('hex')}`
+      expect(() => verifyScannerMessage(raw, timestamp, signature, config, now)).toThrow(DocumentLifecycleError)
+    }
+    expect(() => strictDocumentUtf8(Buffer.from([0xc0, 0xaf]))).toThrow(DocumentLifecycleError)
+    expect(() => strictDocumentUtf8(Buffer.from([0xed, 0xa0, 0x80]))).toThrow(DocumentLifecycleError)
+    expect(strictDocumentUtf8(Buffer.from('valid \uFFFD text'))).toBe('valid \uFFFD text')
   })
 })

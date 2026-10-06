@@ -4,6 +4,7 @@ import pg from 'pg'
 import { proveProviderEvidence } from './provider-evidence-proof.mjs'
 import { proveCustomerMonitoring } from './customer-monitoring-proof.mjs'
 import { proveDocumentRetentionAuthority } from './document-retention-authority-proof.mjs'
+import { proveDocumentProcessing } from './document-processing-proof.mjs'
 import { proveOfferingFileQuarantine, proveOfferingFileProductIsolation } from './offering-file-quarantine-proof.mjs'
 
 // Exact disposable GitHub PostgreSQL17 service only. No local/project execution.
@@ -2627,6 +2628,9 @@ try {
   }
   await db.query('rollback'); begun = false
   console.log('BX1_CUSTOMER_HANDOFF_PASS chain=current-stage2-stage3 pureRead=proven scopedWriters=unchanged hostedProvider=not-proven')
+  phase = 'document-processing-final-chain-proof'
+  checks += await proveDocumentProcessing(db, proofClients,
+    await source('../../../supabase/features/bx1_document_processing.sql'))
   phase = 'cleanup-committed-disposable-fixture'
   await db.query('drop schema bx1_portal,bx1_private,storage,auth,public cascade; create schema public')
   committedFixture = false

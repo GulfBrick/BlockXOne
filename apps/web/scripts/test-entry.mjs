@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import pg from 'pg'
+import { proveDocumentProcessingDefaultAcl } from './document-processing-proof.mjs'
 
 // Source editing is local; every runtime and database proof is cloud-only.
 if (process.argv.length !== 2 || process.env.GITHUB_ACTIONS !== 'true') throw new Error('Entry SQL proof requires cloud CI without arguments')
@@ -241,6 +242,8 @@ try {
   const handoffBaseline = await snapshot()
   const writerBeforeHandoff = await scalar("select md5(pg_get_functiondef('bx1_portal.execute_scoped(jsonb,text,uuid,jsonb)'::regprocedure))")
   await sqlFile('../../../supabase/features/bx1_customer_handoff.sql')
+  await sqlFile('../../../supabase/features/bx1_document_processing.sql')
+  checks += await proveDocumentProcessingDefaultAcl(db)
   eq(await snapshot(), handoffBaseline, 'handoff installation changes no historical entry/business records')
   eq(await scalar("select md5(pg_get_functiondef('bx1_portal.execute_scoped(jsonb,text,uuid,jsonb)'::regprocedure))"), writerBeforeHandoff, 'handoff leaves the canonical command chain unchanged')
   const handoffEntry = await read(11)
