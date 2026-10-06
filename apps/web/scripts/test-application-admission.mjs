@@ -262,12 +262,20 @@ try {
     await db.query('insert into auth.users(id,email,email_confirmed_at,is_anonymous) values($1,$2,clock_timestamp(),false)', [uid(n), `handoff-${n}@example.invalid`])
     await db.query("insert into auth.sessions(id,user_id,not_after,created_at) values($1,$2,clock_timestamp()+interval '1 hour',clock_timestamp()-interval '1 hour')", [sid(n), uid(n)])
   }
+  // The canonical person-principal FK targets native profiles, not Auth users.
+  // Supply this synthetic identity dependency before inserting its mappings;
+  // a profile alone does not create a membership or an operating role.
+  for (const n of [9, 10, 11]) {
+    await db.query('insert into public.bx1_profiles(id,display_name) values($1,$2)',
+      [uid(n), n === 10 ? 'Synthetic independent handoff applier' : `Synthetic handoff applicant ${n}`])
+  }
+  eq(await scalar('select count(*)::int from public.bx1_profiles where id=any($1::uuid[])', [[uid(9), uid(10), uid(11)]]), 3, 'synthetic native profile dependencies precede principal mappings')
+  eq(await scalar('select count(*)::int from public.bx1_memberships where user_id=any($1::uuid[])', [[uid(9), uid(11)]]), 0, 'synthetic applicant profiles grant no operating assignments')
   for (const n of [9, 10, 11]) {
     const person = `e6100000-0000-4000-8000-${String(n).padStart(12, '0')}`
     await db.query("insert into bx1_private.persons(id,label,status,evidence_reference,bootstrap_receipt_id) values($1,$2,'TRUSTED',$3,$4)", [person, `Synthetic handoff human ${n}`, `synthetic-handoff-human-${n}`, key()])
     await db.query("insert into bx1_private.person_principals(auth_user_id,person_id,status,evidence_reference,bootstrap_receipt_id) values($1,$2,'TRUSTED',$3,$4)", [uid(n), person, `synthetic-handoff-principal-${n}`, key()])
   }
-  await db.query("insert into public.bx1_profiles(id,display_name) values($1,'Synthetic independent handoff applier')", [uid(10)])
   await db.query("insert into public.bx1_memberships(user_id,organisation_id,role,status) values($1,$2,'SuperAdmin','ACTIVE')", [uid(10), scope])
   for (const n of [2, 10]) {
     await db.query("insert into auth.mfa_factors(id,user_id,status,factor_type) values($1,$2,'verified','totp')", [sid(100 + n), uid(n)])

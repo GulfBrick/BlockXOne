@@ -3,8 +3,7 @@
 import { createElement } from 'react'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { LegacyApplicationDetails } from '@/lib/portal/contracts'
-import { entrySnapshotSchema, type EntrySnapshot } from '@/lib/portal/entry-contracts'
+import { entrySnapshotSchema, type EntryApplication, type EntrySnapshot } from '@/lib/portal/entry-contracts'
 import { entryActorId, entryApplication, entryFixture, entryHandoff } from '@/lib/portal/entry-test-fixtures'
 
 vi.mock('next/image', () => ({ default: (props: { src: string; alt: string }) => createElement('img', { src: props.src, alt: props.alt }) }))
@@ -14,14 +13,14 @@ vi.mock('./kyc-verification', () => ({ KycVerification: () => null }))
 import { EntryScreen } from './entry-screen'
 
 const release = { version: 'interaction-fixture', environment: 'TESTNET' as const, source: 'synthetic-fixture' }
-const details: LegacyApplicationDetails = {
+const details = {
   full_name: 'Alex Saved Example', country: 'ZA', investor_type: 'INDIVIDUAL', company_name: '', registration_reference: '',
   source_of_funds: 'Fictional savings from synthetic employment income.', beneficial_owners: '',
   experience: 'Fictional long-term investment experience and objectives.',
   documents: [{ id: '44444444-4444-4444-8444-444444444444', kind: 'IDENTITY', title: 'Fictional identity evidence',
     storage_path: `${entryActorId}/synthetic-identity.pdf`, sha256: 'a'.repeat(64), size: 100, mime_type: 'application/pdf' }],
   test_data_acknowledged: true,
-}
+} satisfies EntryApplication['details']
 const markerStorageKey = `bx1-entry:TESTNET:${entryActorId}:pending-request`
 const pendingMarker = JSON.stringify({ key: '99999999-9999-4999-8999-999999999999', command: 'submit_application', hash: 'b'.repeat(64) })
 

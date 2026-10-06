@@ -36,7 +36,7 @@ async function scalar(sql, params = [], client = db) { return Object.values((awa
 async function admin() { await db.query('reset role') }
 async function actor(n, extra = {}, client = db) {
   await client.query('reset role')
-  await client.query("select set_config('request.jwt.claims',$1,true)", [JSON.stringify({ sub: uid(n), session_id: sid(n), role: 'authenticated', aal: 'aal1', exp: Math.floor(Date.now() / 1000) + 3600, ...extra })])
+  await client.query("select set_config('request.jwt.claims',$1,true)", [JSON.stringify({ sub: uid(n), session_id: sid(n), role: 'authenticated', aal: 'aal1', iss: 'https://fegnnnlseuejkrusbbkv.supabase.co/auth/v1', exp: Math.floor(Date.now() / 1000) + 3600, ...extra })])
   await client.query('set local role authenticated')
 }
 async function read(n) { await actor(n); return scalar('select public.bx1_portal_read()') }
@@ -2615,6 +2615,10 @@ try {
   eq([revokedCustomerHandoff.blocker, revokedCustomerHandoff.allowed_actions, revokedCustomerHandoff.native_context], ['MANDATE_NOT_EFFECTIVE', [], null], 'historically revoked mandate stays unusable after all later reader migrations')
   const entityHandoff = ownerHandoffEntry.applications.find(a => a.id === entityApp.id).handoff
   eq([entityHandoff.state, entityHandoff.next_owner, entityHandoff.blocker, entityHandoff.allowed_actions, entityHandoff.mandate?.id], ['MANDATE_REVIEW_PENDING', 'COMPLIANCE', 'NONE', [], renewed.id], 'entity account waits for the exact current investing-representative mandate without claiming access')
+  await denied('final reader chain rejects a MAIN issuer in the TEST fixture', async () => {
+    await actor(14, { iss: 'https://oqkevkjbkpugjotihtda.supabase.co/auth/v1' })
+    await scalar('select public.bx1_entry_read()')
+  }, '42501')
   eq(await handoffRecords(), beforeHandoff, 'full current handoff reads remain non-mutating')
   for (const signature of ['bx1_portal.customer_application_handoff(jsonb,uuid)', 'bx1_portal.entry_read_pre_handoff()', 'bx1_portal.read_scoped_pre_handoff(jsonb)']) {
     for (const role of ['anon', 'authenticated', 'service_role']) {

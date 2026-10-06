@@ -46,8 +46,8 @@ describe('entry application identities and capacities', () => {
     expect(entrySnapshotSchema.safeParse(entryFixture([application])).success).toBe(true)
     const snapshot = entryFixture([], 'MAINNET'); snapshot.workflow!.scoped_read_available = true
     expect(entrySnapshotSchema.safeParse(snapshot).success).toBe(false)
-    application.handoff = { ...application.handoff, next_owner: 'AUTOMATIC_APPROVAL' } as typeof application.handoff
-    expect(entrySnapshotSchema.safeParse(entryFixture([application])).success).toBe(false)
+    const malformedSnapshot = { ...entryFixture([application]), applications: [{ ...application, handoff: { ...application.handoff, next_owner: 'AUTOMATIC_APPROVAL' } }] }
+    expect(entrySnapshotSchema.safeParse(malformedSnapshot).success).toBe(false)
   })
   it('requires explicit purpose and privacy-safe review status in saved entry records', () => {
     expect(entrySnapshotSchema.parse(entryFixture([entryApplication({ persona: 'WEALTH_MANAGER', review_route: 'REVIEWER_UNAVAILABLE' })])).applications[0].admission_purpose).toBe('CUSTOMER_ORGANISATION_ADMISSION')
