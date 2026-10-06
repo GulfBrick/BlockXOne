@@ -5,6 +5,7 @@ import { z } from 'zod'
 import supabaseCa from '@/lib/wallets/supabase-ca.json'
 import { platformRelease } from '@/lib/platform-release'
 import { PortalError } from './server'
+import type { EntryApplication } from './entry-contracts'
 
 type Environment = Record<string, string | undefined>
 const PROJECT = 'fegnnnlseuejkrusbbkv'
@@ -13,20 +14,22 @@ const TOKEN_PATH = '/resources/accessTokens/sdk'
 
 export type ProviderBinding = {
   binding_id: string; application_id: string; application_revision: number;
-  actor_id: string; environment: 'TESTNET'; external_user_id: string
+  actor_id: string; environment: 'TESTNET'; external_user_id: string;
+  expected_applicant_type: 'individual' | 'company'; expected_level_name: string;
+  expected_client_id: string; source_version_revision: number
 }
 export type ProviderEvidence = {
   id: string; application_id: string; application_revision: number;
   ordering_state: 'CURRENT' | 'STALE' | 'MANUAL_TEST'; duplicate: boolean
 }
 export type SumsubWebhook = {
-  externalUserId: string; applicantId: string; type: string; createdAtMs: string;
+  externalUserId: string; applicantId: string; applicantType: 'individual' | 'company'; levelName: string; type: string; createdAtMs: string;
   sandboxMode: true; testMode?: true; clientId: string; correlationId?: string;
   reviewStatus?: string; reviewResult?: { reviewAnswer?: string; reviewRejectType?: string }
 }
 
 function required(value: string | undefined, min = 1): string {
-  if (!value || value.length < min || value !== value.trim()) throw new PortalError('The identity provider is not configured for this environment.', 503)
+  if (!value || value.length < min || value !== value.trim() || /[\u0000-\u001f\u007f]/.test(value)) throw new PortalError('The identity provider is not configured for this environment.', 503)
   return value
 }
 function requireTestnet(env: Environment) {
@@ -35,9 +38,11 @@ function requireTestnet(env: Environment) {
 
 export function sumsubWebhookConfig(env: Environment = process.env) {
   requireTestnet(env)
+  const clientId = required(env.BLOCKXONE_SUMSUB_SANDBOX_CLIENT_ID)
+  if (clientId.length > 150) throw new PortalError('The identity provider client is invalid.', 503)
   return {
     secret: required(env.BLOCKXONE_SUMSUB_SANDBOX_WEBHOOK_SECRET, 20),
-    clientId: required(env.BLOCKXONE_SUMSUB_SANDBOX_CLIENT_ID),
+    clientId,
   }
 }
 export function sumsubSessionConfig(env: Environment = process.env) {
@@ -83,16 +88,40 @@ function database(): Pool {
   }
   return pool
 }
-export async function bindProviderApplication(actorId: string, sessionId: string, applicationId: string, revision: number): Promise<ProviderBinding> {
+/** Read-only server expectation; the database independently proves its immutable SUBMISSION source. */
+export function expectedProviderApplicantType(application: EntryApplication): 'individual' | 'company' {
+  if (application.status !== 'SUBMITTED' || application.context_kind !== 'PERSONAL' || !application.submitted_at)
+    throw new PortalError('Submit or resubmit this application before starting identity verification.', 409)
+  const details = application.details
+  const person = z.object({ full_name: z.string().trim().min(2).max(120), country: z.string().regex(/^[A-Z]{2}$/) }).safeParse(details)
+  if (!person.success) throw new PortalError('The submitted applicant subject is incomplete.', 409)
+  const unversioned = !Object.prototype.hasOwnProperty.call(details, 'details_version')
+  const company = z.object({ company_name: z.string().trim().min(3).max(160),
+    registration_reference: z.string().trim().min(3).max(100) }).safeParse(details).success
+  if (application.persona === 'INVESTOR' && application.admission_purpose === 'INVESTOR_ADMISSION') {
+    if (details.investor_type === 'INDIVIDUAL' && unversioned) return 'individual'
+    if (details.investor_type === 'ENTITY' && company && (unversioned || details.details_version === 3)) return 'company'
+  }
+  if (application.persona === 'WEALTH_MANAGER' && application.admission_purpose === 'CUSTOMER_ORGANISATION_ADMISSION'
+    && company && (details.details_version === 2 || details.details_version === 3)) return 'company'
+  throw new PortalError('The submitted applicant subject is not available for identity verification.', 409)
+}
+
+export async function bindProviderApplication(actorId: string, sessionId: string, applicationId: string, revision: number,
+  config: Pick<ReturnType<typeof sumsubSessionConfig>, 'individualLevel' | 'companyLevel' | 'clientId'>,
+  expectedApplicantType: 'individual' | 'company'): Promise<ProviderBinding> {
   try {
     const { rows } = await database().query<{ result: ProviderBinding }>(
-      'select bx1_private.bind_provider_application($1,$2,$3,$4) as result',
-      [actorId, sessionId, applicationId, revision],
+      'select bx1_private.bind_provider_application($1,$2,$3,$4,$5,$6,$7) as result',
+      [actorId, sessionId, applicationId, revision, config.individualLevel, config.companyLevel, config.clientId],
     )
     const result = rows.length === 1 ? rows[0].result : null
     const expectedExternal = `bx1:testnet:${applicationId}:r${revision}`
     if (!result || result.actor_id !== actorId || result.application_id !== applicationId
       || result.application_revision !== revision || result.environment !== 'TESTNET'
+      || result.source_version_revision !== revision || result.expected_applicant_type !== expectedApplicantType
+      || result.expected_level_name !== (expectedApplicantType === 'individual' ? config.individualLevel : config.companyLevel)
+      || result.expected_client_id !== config.clientId
       || result.external_user_id !== expectedExternal || !z.string().uuid().safeParse(result.binding_id).success) throw new Error()
     return result
   } catch { throw new PortalError('The identity evidence binding is unavailable. No provider session was issued.', 503) }
@@ -107,16 +136,26 @@ export function verifySumsubWebhookDigest(raw: Uint8Array, algorithm: string | n
   return supplied.length === expected.length && timingSafeEqual(supplied, expected)
 }
 
+const eventTypes = ['applicantReviewed', 'applicantCreated', 'applicantPending', 'applicantOnHold',
+  'applicantPersonalInfoChanged', 'applicantReset', 'applicantLevelChanged', 'applicantActivated',
+  'applicantPrechecked', 'applicantAwaitingUser', 'applicantDeactivated', 'applicantDeleted'] as const
+const boundedText = (max: number, min = 1) => z.string().min(min).max(max)
+  .refine(value => value === value.trim() && !/[\u0000-\u001f\u007f]/.test(value))
 const webhookSchema = z.object({
   externalUserId: z.string().regex(/^bx1:testnet:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}:r[1-9][0-9]*$/i).max(100),
-  applicantId: z.string().min(8).max(100),
-  type: z.string().regex(/^applicant[A-Za-z]{3,60}$/),
+  applicantId: boundedText(100, 8), applicantType: z.enum(['individual', 'company']), levelName: boundedText(120),
+  type: z.enum(eventTypes),
   createdAtMs: z.string().regex(/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\.\d{3}$/),
   sandboxMode: z.literal(true), testMode: z.literal(true).optional(),
-  clientId: z.string().min(1).max(150), correlationId: z.string().min(1).max(150).optional(),
-  reviewStatus: z.string().min(1).max(60).optional(),
-  reviewResult: z.object({ reviewAnswer: z.string().min(1).max(60).optional(), reviewRejectType: z.string().min(1).max(60).optional() }).passthrough().optional(),
-}).passthrough()
+  clientId: boundedText(150), correlationId: boundedText(150).optional(),
+  reviewStatus: boundedText(60).optional(),
+  reviewResult: z.object({ reviewAnswer: boundedText(60).optional(), reviewRejectType: boundedText(60).optional() }).passthrough().optional(),
+}).passthrough().superRefine((event, context) => {
+  if (event.type !== 'applicantReviewed' || event.reviewStatus !== 'completed') return
+  const answer = event.reviewResult?.reviewAnswer, reject = event.reviewResult?.reviewRejectType
+  if (!((answer === 'GREEN' && reject === undefined) || (answer === 'RED' && (reject === 'RETRY' || reject === 'FINAL'))))
+    context.addIssue({ code: z.ZodIssueCode.custom, message: 'A completed review requires an admitted provider outcome.' })
+})
 
 function canonicalJson(value: unknown, depth = 0): string {
   if (depth > 32) throw new PortalError('The provider event is invalid.', 400)
@@ -126,6 +165,7 @@ function canonicalJson(value: unknown, depth = 0): string {
   return `{${Object.keys(object).sort().map(key => `${JSON.stringify(key)}:${canonicalJson(object[key], depth + 1)}`).join(',')}}`
 }
 export function parseSumsubWebhook(raw: Uint8Array, expectedClientId: string) {
+  if (!raw.length || raw.length > 65536) throw new PortalError('The provider event is invalid.', 400)
   let parsed: unknown
   try { parsed = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(raw)) } catch { throw new PortalError('The provider event is invalid.', 400) }
   const event = webhookSchema.safeParse(parsed)
@@ -168,15 +208,16 @@ export async function recordProviderEvidence(input: ReturnType<typeof parseSumsu
   const { event, eventAt, payloadHash, semanticHash } = input
   try {
     const { rows } = await database().query<{ result: ProviderEvidence }>(
-      'select bx1_private.record_provider_evidence($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) as result',
+      'select bx1_private.record_provider_evidence($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) as result',
       [event.externalUserId,event.applicantId,event.type,event.correlationId ?? null,event.clientId,
         eventAt,payloadHash,semanticHash,event.reviewStatus ?? null,event.reviewResult?.reviewAnswer ?? null,
-        event.reviewResult?.reviewRejectType ?? null,event.testMode === true,true],
+        event.reviewResult?.reviewRejectType ?? null,event.testMode === true,true,event.applicantType,event.levelName],
     )
     const result = rows.length === 1 ? rows[0].result : null
     if (!result || !z.string().uuid().safeParse(result.id).success
       || !z.string().uuid().safeParse(result.application_id).success
       || !Number.isInteger(result.application_revision) || result.application_revision < 1
+      || event.externalUserId !== `bx1:testnet:${result.application_id}:r${result.application_revision}`
       || !['CURRENT','STALE','MANUAL_TEST'].includes(result.ordering_state)
       || typeof result.duplicate !== 'boolean') throw new Error()
     return result

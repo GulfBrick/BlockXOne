@@ -5,7 +5,7 @@ import { createRequestSupabaseClient } from '@/lib/supabase/server'
 import { readEntry } from '@/lib/portal/entry-server'
 import { PortalError } from '@/lib/portal/server'
 import { portalFailure, readPortalBody } from '@/lib/portal/http'
-import { bindProviderApplication, issueSumsubSandboxToken, providerEvidenceDatabaseConfig, sumsubSessionConfig } from '@/lib/portal/provider-evidence'
+import { bindProviderApplication, expectedProviderApplicantType, issueSumsubSandboxToken, providerEvidenceDatabaseConfig, sumsubSessionConfig } from '@/lib/portal/provider-evidence'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -44,21 +44,28 @@ export async function POST(request: NextRequest) {
     const application = before.applications.find(item => item.id === instruction.data.application_id && item.user_id === before.actor.id)
     if (before.actor.id !== actorId) throw new PortalError('The signed-in account changed. Reload before continuing.', 403)
     if (!application || application.revision !== instruction.data.expected_revision
-      || application.context_kind !== 'PERSONAL' || !['DRAFT','SUBMITTED','CHANGES_REQUIRED'].includes(application.status)
+      || application.context_kind !== 'PERSONAL' || application.status !== 'SUBMITTED'
       || !['INVESTOR_ADMISSION','CUSTOMER_ORGANISATION_ADMISSION'].includes(application.admission_purpose))
-      throw new PortalError('The application changed or is not available for identity verification.', 409)
-    const levelName = application.persona === 'WEALTH_MANAGER' || application.details.investor_type === 'ENTITY'
-      ? config.companyLevel : config.individualLevel
+      throw new PortalError('Submit or resubmit the current application before starting identity verification.', 409)
+    const applicantType = expectedProviderApplicantType(application)
     const sessionId = await currentSessionId(client, actorId)
-    const binding = await bindProviderApplication(actorId, sessionId, application.id, application.revision)
+    const binding = await bindProviderApplication(actorId, sessionId, application.id, application.revision, config, applicantType)
+    const levelName = applicantType === 'individual' ? config.individualLevel : config.companyLevel
+    if (binding.expected_applicant_type !== applicantType || binding.expected_level_name !== levelName
+      || binding.expected_client_id !== config.clientId || binding.source_version_revision !== application.revision)
+      throw new PortalError('The persisted identity context did not match this submitted application.', 503)
     const current = await readEntry(client)
     if (current.actor.id !== actorId || !current.applications.some(item => item.id === application.id
-      && item.revision === application.revision && item.status === application.status))
+      && item.revision === application.revision && item.status === 'SUBMITTED'
+      && item.submitted_at === application.submitted_at && JSON.stringify(item.details) === JSON.stringify(application.details)
+      && expectedProviderApplicantType(item) === applicantType))
       throw new PortalError('The application changed while preparing verification. Refresh and retry.', 409)
-    const token = await issueSumsubSandboxToken(binding.external_user_id, levelName, config)
+    const token = await issueSumsubSandboxToken(binding.external_user_id, binding.expected_level_name, config)
     const after = await readEntry(client)
     if (after.actor.id !== actorId || !after.applications.some(item => item.id === application.id
-      && item.revision === application.revision && item.status === application.status))
+      && item.revision === application.revision && item.status === 'SUBMITTED'
+      && item.submitted_at === application.submitted_at && JSON.stringify(item.details) === JSON.stringify(application.details)
+      && expectedProviderApplicantType(item) === applicantType))
       throw new PortalError('The application changed while preparing verification. Refresh and retry.', 409)
     return jar.finish(privateResponse(NextResponse.json({ token, expires_in_seconds: 600, level_name: levelName,
       application_id: application.id, application_revision: application.revision, environment: 'TESTNET' })))

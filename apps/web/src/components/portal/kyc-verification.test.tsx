@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { entryApplication, entryActorId, entryApplicationId } from '@/lib/portal/entry-test-fixtures'
 import { KycVerification, ProviderEvidenceReview, parseKycSession, providerEvidenceLabel } from './kyc-verification'
+import { PortalIdentityProvider } from './portal-client'
 
 const session = {
   token: 'opaque-one-application-token', expires_in_seconds: 600, level_name: 'test-individual',
@@ -13,6 +14,12 @@ const event = {
   application_revision: 3, environment: 'TESTNET' as const, event_type: 'applicantReviewed',
   event_at: '2026-09-24T10:00:00Z', received_at: '2026-09-24T10:00:01Z',
   ordering_state: 'CURRENT' as const, manual_webhook_test: false,
+  applicant_type: 'individual' as const, level_name: 'test-individual',
+  evidence_kind: 'LIFECYCLE' as const, projection_state: 'EFFECTIVE' as const,
+}
+function renderKyc(props: Parameters<typeof KycVerification>[0]) {
+  return renderToStaticMarkup(createElement(PortalIdentityProvider, { actorId: props.actorId, environment: props.environment,
+    children: createElement(KycVerification, props) }))
 }
 
 describe('application-scoped sandbox identity verification', () => {
@@ -27,8 +34,8 @@ describe('application-scoped sandbox identity verification', () => {
   it('distinguishes current signed events, sandbox simulations and stale history without approval', () => {
     expect(providerEvidenceLabel([], 3)).toBe('No provider evidence received yet')
     expect(providerEvidenceLabel([{ ...event, application_revision: 2 }], 3)).toBe('Only historical provider evidence is recorded')
-    expect(providerEvidenceLabel([{ ...event, ordering_state: 'MANUAL_TEST', manual_webhook_test: true }], 3)).toBe('Sandbox simulation received for this application revision')
-    expect(providerEvidenceLabel([event], 3)).toBe('Provider evidence received for this application revision')
+    expect(providerEvidenceLabel([{ ...event, projection_state: 'MANUAL_TEST', ordering_state: 'MANUAL_TEST', manual_webhook_test: true }], 3)).toBe('Sandbox simulation received for this application revision')
+    expect(providerEvidenceLabel([event], 3)).toBe('Provider verification in progress - no completed review')
     for (const label of [providerEvidenceLabel([event], 3), providerEvidenceLabel([{ ...event, manual_webhook_test: true }], 3)]) {
       expect(label.toLowerCase()).not.toContain('approved')
       expect(label.toLowerCase()).not.toContain('eligible')
@@ -36,16 +43,16 @@ describe('application-scoped sandbox identity verification', () => {
   })
 
   it('offers only the TEST applicant a provider session and keeps MAIN closed', () => {
-    const application = entryApplication({ revision: 3, review_route: 'AVAILABLE' })
-    const test = renderToStaticMarkup(createElement(KycVerification, { application, actorId: entryActorId, environment: 'TESTNET', sandboxEnabled: true }))
+    const application = entryApplication({ revision: 3, review_route: 'AVAILABLE', status: 'SUBMITTED', submitted_at: '2026-10-07T10:00:00Z' })
+    const test = renderKyc({ application, actorId: entryActorId, environment: 'TESTNET', sandboxEnabled: true })
     expect(test).toContain('Start sandbox identity check')
     expect(test).toContain('Refresh recorded evidence')
     expect(test).toContain('never grants account, role, product eligibility or signing authority')
     expect(test).not.toContain(session.token)
-    const unconfigured = renderToStaticMarkup(createElement(KycVerification, { application, actorId: entryActorId, environment: 'TESTNET', sandboxEnabled: false }))
+    const unconfigured = renderKyc({ application, actorId: entryActorId, environment: 'TESTNET', sandboxEnabled: false })
     expect(unconfigured).toContain('Sandbox identity check not connected')
     expect(unconfigured).not.toContain('Start sandbox identity check')
-    const main = renderToStaticMarkup(createElement(KycVerification, { application, actorId: entryActorId, environment: 'MAINNET' }))
+    const main = renderKyc({ application, actorId: entryActorId, environment: 'MAINNET' })
     expect(main).toContain('Production identity provider not admitted')
     expect(main).not.toContain('Start sandbox identity check')
     expect(main).not.toContain('Refresh recorded evidence')
@@ -58,9 +65,16 @@ describe('application-scoped sandbox identity verification', () => {
       entryApplication({ admission_purpose: 'LEGACY_REHEARSAL' }),
       entryApplication({ context_kind: 'ORGANISATION' }),
     ]) {
-      const html = renderToStaticMarkup(createElement(KycVerification, { application, actorId: entryActorId, environment: 'TESTNET' }))
+      const html = renderKyc({ application, actorId: entryActorId, environment: 'TESTNET' })
       expect(html).not.toContain('Start sandbox identity check')
       expect(html).toContain('Refresh recorded evidence')
+    }
+  })
+  it('requires submitting or resubmitting before a provider session can be offered', () => {
+    for (const status of ['DRAFT', 'CHANGES_REQUIRED'] as const) {
+      const html = renderKyc({ application: entryApplication({ status }), actorId: entryActorId, environment: 'TESTNET', sandboxEnabled: true })
+      expect(html).not.toContain('Start sandbox identity check')
+      expect(html).toContain(status === 'DRAFT' ? 'Submit the application for review first' : 'Update and resubmit the application first')
     }
   })
 

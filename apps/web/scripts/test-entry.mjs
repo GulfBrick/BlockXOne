@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import pg from 'pg'
 import { proveDocumentProcessingDefaultAcl } from './document-processing-proof.mjs'
+import { proveProviderBindingDefaultAcl } from './provider-binding-proof.mjs'
 
 // Source editing is local; every runtime and database proof is cloud-only.
 if (process.argv.length !== 2 || process.env.GITHUB_ACTIONS !== 'true') throw new Error('Entry SQL proof requires cloud CI without arguments')
@@ -239,6 +240,8 @@ try {
     '20260924125627_stage2_customer_monitoring.sql', '20260924125811_stage2_document_retention_authority.sql']) {
     await sqlFile(`../../../supabase/migrations/${file}`)
   }
+  await sqlFile('../../../supabase/features/bx1_provider_binding.sql')
+  checks += await proveProviderBindingDefaultAcl(db)
   const handoffBaseline = await snapshot()
   const writerBeforeHandoff = await scalar("select md5(pg_get_functiondef('bx1_portal.execute_scoped(jsonb,text,uuid,jsonb)'::regprocedure))")
   await sqlFile('../../../supabase/features/bx1_customer_handoff.sql')

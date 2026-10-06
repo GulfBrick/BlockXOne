@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import pg from 'pg'
 import { proveProviderEvidence } from './provider-evidence-proof.mjs'
+import { proveProviderBinding } from './provider-binding-proof.mjs'
 import { proveCustomerMonitoring } from './customer-monitoring-proof.mjs'
 import { proveDocumentRetentionAuthority } from './document-retention-authority-proof.mjs'
 import { proveDocumentProcessing } from './document-processing-proof.mjs'
@@ -2589,6 +2590,9 @@ try {
     reviewer, 'review_product', complianceInput(complianceTrustRace.product))
   await proveDecisionRevocation('issuer appointment applier', issuerTrustRace, 10, 13,
     issuerContext, 'review_offering_issuer', issuerInput(issuerTrustRace.product))
+  phase = 'provider-binding-final-chain-proof'
+  checks += await proveProviderBinding(db, proofClients,
+    await source('../../../supabase/features/bx1_provider_binding.sql'))
   phase = 'shared-handoff-final-reader-chain'
   await db.query('begin'); begun = true
   await admin()

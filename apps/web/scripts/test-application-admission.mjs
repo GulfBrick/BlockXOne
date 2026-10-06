@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import pg from 'pg'
 import { proveDocumentProcessingDefaultAcl } from './document-processing-proof.mjs'
+import { proveProviderBindingDefaultAcl } from './provider-binding-proof.mjs'
 
 if (process.argv.length !== 2 || process.env.GITHUB_ACTIONS !== 'true') throw new Error('Application handoff proof requires cloud CI without arguments')
 const expected = 'postgresql://postgres:bx1-synthetic-ci-only@127.0.0.1:5432/bx1_demo_ci'
@@ -235,6 +236,8 @@ try {
     '20260924125627_stage2_customer_monitoring.sql', '20260924125811_stage2_document_retention_authority.sql']) {
     await sqlFile(`../../../supabase/migrations/${file}`)
   }
+  await sqlFile('../../../supabase/features/bx1_provider_binding.sql')
+  checks += await proveProviderBindingDefaultAcl(db)
   const handoffRecords = async () => {
     await admin()
     return scalar(`select jsonb_build_object(

@@ -1,12 +1,15 @@
 import { createHmac } from 'node:crypto'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 vi.mock('server-only', () => ({}))
-import { issueSumsubSandboxToken, parseSumsubWebhook, providerEvidenceDatabaseConfig,
+const databaseMock = vi.hoisted(() => ({ query: vi.fn() }))
+vi.mock('pg', () => ({ Pool: class { query = databaseMock.query; on() {} } }))
+import { bindProviderApplication, issueSumsubSandboxToken, parseSumsubWebhook, providerEvidenceDatabaseConfig, recordProviderEvidence,
   sumsubRequestSignature, sumsubSessionConfig, verifySumsubWebhookDigest } from './provider-evidence'
 
 const applicationId = '44444444-4444-4444-8444-444444444444'
 const externalUserId = `bx1:testnet:${applicationId}:r2`
 const base = { externalUserId, applicantId: 'sandbox-applicant-123', type: 'applicantReviewed',
+  applicantType: 'individual', levelName: 'individual-sandbox',
   createdAtMs: '2026-09-24 11:30:00.123', sandboxMode: true, clientId: 'synthetic-client',
   reviewStatus: 'completed', reviewResult: { reviewAnswer: 'GREEN' } }
 const config = { appToken: 'synthetic-app-token', appSecret: 'synthetic-app-secret-long-enough',
@@ -14,6 +17,7 @@ const config = { appToken: 'synthetic-app-token', appSecret: 'synthetic-app-secr
   individualLevel: 'individual-sandbox', companyLevel: 'company-sandbox' }
 
 beforeEach(() => {
+  databaseMock.query.mockReset()
   vi.stubEnv('BLOCKXONE_AUTH_MODE', 'supabase')
   vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_AUTH_MODE', 'supabase')
   vi.stubEnv('SUPABASE_URL', 'https://fegnnnlseuejkrusbbkv.supabase.co')
@@ -25,6 +29,7 @@ beforeEach(() => {
   vi.stubEnv('BLOCKXONE_SUMSUB_SANDBOX_CLIENT_ID', config.clientId)
   vi.stubEnv('BLOCKXONE_SUMSUB_SANDBOX_INDIVIDUAL_LEVEL', config.individualLevel)
   vi.stubEnv('BLOCKXONE_SUMSUB_SANDBOX_COMPANY_LEVEL', config.companyLevel)
+  vi.stubEnv('BLOCKXONE_PROVIDER_EVIDENCE_DATABASE_URL', 'postgresql://bx1_provider_evidence_writer:synthetic@db.fegnnnlseuejkrusbbkv.supabase.co:5432/postgres?sslmode=verify-full')
 })
 afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals() })
 
@@ -54,7 +59,55 @@ describe('Sumsub sandbox evidence boundary', () => {
       { sandboxMode: false }, { externalUserId: `bx1:mainnet:${applicationId}:r2` },
       { externalUserId: `bx1:testnet:${applicationId}:r0` }, { clientId: 'different-client' },
       { createdAtMs: '2026-02-30 11:30:00.123' }, { testMode: false },
+      { applicantType: 'INDIVIDUAL' }, { applicantType: null }, { levelName: null }, { levelName: '' },
+      { levelName: ' individual-sandbox' }, { applicantId: null }, { correlationId: null },
+      { reviewStatus: null }, { reviewResult: null }, { reviewResult: { reviewAnswer: null } },
+      { type: 'applicantActionReviewed' }, { type: 'applicantWorkflowCompleted' }, { type: 'applicantUnknown' },
     ]) expect(() => parseSumsubWebhook(Buffer.from(JSON.stringify({ ...base, ...mutation })), config.clientId)).toThrow()
+  })
+  it('admits only genuine completed review combinations, not lifecycle GREEN snapshots as completed reviews', () => {
+    for (const reviewResult of [{ reviewAnswer: 'GREEN', reviewRejectType: 'RETRY' }, { reviewAnswer: 'RED' },
+      { reviewAnswer: 'RED', reviewRejectType: 'UNKNOWN' }, { reviewAnswer: 'YELLOW' }, {}])
+      expect(() => parseSumsubWebhook(Buffer.from(JSON.stringify({ ...base, reviewResult })), config.clientId)).toThrow()
+    for (const reviewRejectType of ['RETRY', 'FINAL'])
+      expect(parseSumsubWebhook(Buffer.from(JSON.stringify({ ...base, reviewResult: { reviewAnswer: 'RED', reviewRejectType } })), config.clientId).event.reviewResult?.reviewRejectType).toBe(reviewRejectType)
+    for (const type of ['applicantCreated', 'applicantPending', 'applicantOnHold', 'applicantPersonalInfoChanged',
+      'applicantReset', 'applicantLevelChanged', 'applicantActivated', 'applicantPrechecked', 'applicantAwaitingUser',
+      'applicantDeactivated', 'applicantDeleted'])
+      expect(parseSumsubWebhook(Buffer.from(JSON.stringify({ ...base, type })), config.clientId).event.type).toBe(type)
+    expect(() => parseSumsubWebhook(new Uint8Array([0xff]), config.clientId)).toThrow()
+    expect(() => parseSumsubWebhook(new Uint8Array(65537), config.clientId)).toThrow()
+  })
+  it('validates immutable binding qualification against the server subject/config before allowing a token', async () => {
+    const actor = '11111111-1111-4111-8111-111111111111', session = '22222222-2222-4222-8222-222222222222'
+    const binding = { binding_id: session, application_id: applicationId, application_revision: 2, actor_id: actor,
+      environment: 'TESTNET', external_user_id: externalUserId, expected_applicant_type: 'individual',
+      expected_level_name: config.individualLevel, expected_client_id: config.clientId, source_version_revision: 2 }
+    databaseMock.query.mockResolvedValue({ rows: [{ result: binding }] })
+    expect(await bindProviderApplication(actor, session, applicationId, 2, config, 'individual')).toEqual(binding)
+    expect(databaseMock.query).toHaveBeenLastCalledWith(expect.stringContaining('($1,$2,$3,$4,$5,$6,$7)'),
+      [actor, session, applicationId, 2, config.individualLevel, config.companyLevel, config.clientId])
+    for (const changes of [{ expected_applicant_type: 'company' }, { expected_level_name: 'Individual-sandbox' },
+      { expected_client_id: 'wrong-client' }, { source_version_revision: 1 }, { expected_applicant_type: null },
+      { actor_id: session }, { external_user_id: 'other' }]) {
+      databaseMock.query.mockResolvedValueOnce({ rows: [{ result: { ...binding, ...changes } }] })
+      await expect(bindProviderApplication(actor, session, applicationId, 2, config, 'individual')).rejects.toThrow('No provider session was issued')
+    }
+  })
+  it('records qualified scalars and refuses a durable receipt for another external application or revision', async () => {
+    const input = parseSumsubWebhook(Buffer.from(JSON.stringify(base)), config.clientId)
+    const receipt = { id: '33333333-3333-4333-8333-333333333333', application_id: applicationId,
+      application_revision: 2, ordering_state: 'CURRENT', duplicate: false }
+    databaseMock.query.mockResolvedValue({ rows: [{ result: receipt }] })
+    expect(await recordProviderEvidence(input)).toEqual(receipt)
+    expect(databaseMock.query).toHaveBeenLastCalledWith(expect.stringContaining('$14,$15'), [externalUserId,
+      base.applicantId, base.type, null, config.clientId, input.eventAt, input.payloadHash, input.semanticHash,
+      'completed', 'GREEN', null, false, true, 'individual', config.individualLevel])
+    for (const changes of [{ application_revision: 3 }, { application_id: '11111111-1111-4111-8111-111111111111' },
+      { ordering_state: 'CONFLICT' }, { duplicate: null }]) {
+      databaseMock.query.mockResolvedValueOnce({ rows: [{ result: { ...receipt, ...changes } }] })
+      await expect(recordProviderEvidence(input)).rejects.toThrow('could not be durably recorded')
+    }
   })
   it('signs token request exactly as documented and returns only a token bound to the server user ID', async () => {
     const timestamp = '1607551635'

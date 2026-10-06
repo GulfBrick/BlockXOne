@@ -5,6 +5,8 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { z } from 'zod'
 import type { EntryApplication } from '@/lib/portal/entry-contracts'
 import type { PlatformEnvironment } from '@/lib/platform-release'
+import { portalContextKey } from '@/lib/portal/operating-context'
+import { usePortalActorId, usePortalOperatingContext } from './portal-client'
 import { DetailList, Notice, Panel, dateLabel } from './portal-primitives'
 import styles from './portal.module.css'
 
@@ -32,7 +34,21 @@ const eventSchema = z.object({
   manual_webhook_test: z.boolean(),
   review_status: z.string().max(60).nullish(),
   review_answer: z.string().max(60).nullish(),
-}).passthrough()
+  review_reject_type: z.string().max(60).nullish(),
+  applicant_type: z.enum(['individual', 'company']).nullable(),
+  level_name: z.string().min(1).max(120).nullable(),
+  evidence_kind: z.enum(['LIFECYCLE', 'COMPLETED_REVIEW', 'LEGACY_UNQUALIFIED']),
+  projection_state: z.enum(['EFFECTIVE', 'SUPERSEDED', 'MANUAL_TEST', 'LEGACY_UNQUALIFIED', 'REVISION_STALE', 'CONFLICT']),
+}).passthrough().superRefine((event, context) => {
+  const qualified = event.applicant_type !== null && event.level_name !== null
+  if ((event.evidence_kind === 'LEGACY_UNQUALIFIED') === qualified
+    || (event.projection_state === 'EFFECTIVE' && (event.ordering_state !== 'CURRENT' || event.manual_webhook_test || !qualified))
+    || (event.manual_webhook_test && event.projection_state !== 'MANUAL_TEST' && event.projection_state !== 'LEGACY_UNQUALIFIED')
+    || (event.evidence_kind === 'COMPLETED_REVIEW' && (event.event_type !== 'applicantReviewed' || event.review_status !== 'completed'
+      || !((event.review_answer === 'GREEN' && !event.review_reject_type)
+        || (event.review_answer === 'RED' && ['RETRY', 'FINAL'].includes(event.review_reject_type ?? ''))))))
+    context.addIssue({ code: z.ZodIssueCode.custom, message: 'The provider evidence projection is not qualified.' })
+})
 const evidenceSchema = z.object({ application_id: id, events: z.array(eventSchema) }).strict()
 type ProviderEvent = z.infer<typeof eventSchema>
 
@@ -42,13 +58,74 @@ export function parseKycSession(value: unknown, applicationId: string, revision:
     ? result.data.token : null
 }
 
+function effectiveEvent(events: ProviderEvent[], revision: number): ProviderEvent | null {
+  if (events.some(event => event.application_revision === revision && event.projection_state === 'CONFLICT')) return null
+  const current = events.filter(event => event.application_revision === revision && event.projection_state === 'EFFECTIVE')
+  return current.length === 1 ? current[0] : null
+}
 export function providerEvidenceLabel(events: ProviderEvent[], revision: number): string {
-  if (events.some(event => event.application_revision === revision && event.ordering_state === 'CURRENT' && !event.manual_webhook_test))
-    return 'Provider evidence received for this application revision'
-  if (events.some(event => event.application_revision === revision && (event.manual_webhook_test || event.ordering_state === 'MANUAL_TEST')))
+  if (events.some(event => event.application_revision === revision && event.projection_state === 'CONFLICT'))
+    return 'Provider evidence conflict - no effective completed review'
+  const latest = effectiveEvent(events, revision)
+  if (latest?.evidence_kind === 'COMPLETED_REVIEW')
+    return latest.review_answer === 'GREEN' ? 'Provider review completed: GREEN - independent BlockXOne review required'
+      : latest.review_reject_type === 'RETRY' ? 'Provider review completed: RED RETRY - provider evidence changes required'
+        : 'Provider review completed: RED FINAL - contact the provider/reviewer'
+  if (latest) {
+    const labels: Record<string, string> = {
+      applicantPending: 'Provider review pending', applicantOnHold: 'Provider review on hold',
+      applicantAwaitingUser: 'Provider is awaiting your evidence', applicantReset: 'Provider verification reset',
+      applicantDeactivated: 'Provider verification inactive', applicantDeleted: 'Provider verification deleted',
+    }
+    return labels[latest.event_type] ?? 'Provider verification in progress - no completed review'
+  }
+  if (events.some(event => event.application_revision === revision && event.projection_state === 'MANUAL_TEST'))
     return 'Sandbox simulation received for this application revision'
   if (events.length) return 'Only historical provider evidence is recorded'
   return 'No provider evidence received yet'
+}
+
+function ProviderEvidenceDetails({ events, revision }: { events: ProviderEvent[]; revision: number }) {
+  const latest = effectiveEvent(events, revision)
+  const conflict = events.some(event => event.application_revision === revision && event.projection_state === 'CONFLICT')
+  const next = conflict ? 'Contact the provider/reviewer to resolve conflicting events. A later unambiguous signed event is required; no completed clearance can be inferred.'
+    : !latest ? 'Simulations, unqualified legacy records and previous revisions are historical only; no current provider completion is established.'
+      : ['applicantDeactivated', 'applicantDeleted'].includes(latest.event_type) ? 'Contact the provider/reviewer. This genuine lifecycle event invalidates any earlier apparent provider completion.'
+        : latest.event_type === 'applicantOnHold' ? 'The provider must review this case. Contact the provider/reviewer if further information is needed.'
+          : latest.event_type === 'applicantPending' ? 'Await the provider review; BlockXOne has not made an admission decision.'
+            : latest.event_type === 'applicantAwaitingUser' || latest.event_type === 'applicantReset'
+              || (latest.evidence_kind === 'COMPLETED_REVIEW' && latest.review_reject_type === 'RETRY')
+              ? 'Complete or resubmit the requested provider evidence. The BlockXOne application review remains separate.'
+              : latest.evidence_kind === 'COMPLETED_REVIEW' && latest.review_reject_type === 'FINAL'
+                ? 'Contact the provider/reviewer about the final provider result. No BlockXOne decision was made by this event.'
+                : latest.evidence_kind === 'COMPLETED_REVIEW' ? 'Await independent BlockXOne review of this submitted application; the provider result grants no admission or authority.'
+                  : 'Continue the provider check or await provider progress. No completed review is recorded.'
+  return <>
+    <p className={styles.muted}>{next}</p>
+    {latest ? <DetailList rows={[
+      { label: 'Provider event', value: latest.event_type },
+      { label: 'Qualified applicant type', value: latest.applicant_type ?? 'Legacy: not qualified' },
+      { label: 'Exact verification level', value: latest.level_name ?? 'Legacy: not qualified' },
+      { label: 'Evidence kind', value: latest.evidence_kind },
+      { label: 'Evidence projection', value: latest.projection_state },
+      { label: 'Event received', value: dateLabel(latest.received_at) },
+      ...(latest.evidence_kind === 'COMPLETED_REVIEW' ? [
+        { label: 'Provider answer only', value: latest.review_answer || 'Not recorded' },
+        { label: 'Provider rejection type only', value: latest.review_reject_type || 'None' },
+      ] : []),
+    ]} /> : null}
+    {events.length ? <details className={styles.sectionGap}><summary>Provider evidence history ({events.length})</summary>
+      {events.map(event => <section key={event.id} className={styles.sectionGap} aria-label="Historical provider event"><DetailList rows={[
+        { label: 'Application revision', value: String(event.application_revision) },
+        { label: 'Provider event', value: event.event_type },
+        { label: 'Qualified applicant type', value: event.applicant_type ?? 'Legacy: not qualified' },
+        { label: 'Exact verification level', value: event.level_name ?? 'Legacy: not qualified' },
+        { label: 'Evidence kind', value: event.evidence_kind },
+        { label: 'Evidence projection', value: event.projection_state },
+        { label: 'Authority', value: event.projection_state === 'MANUAL_TEST' ? 'Sandbox simulation only' : event.projection_state === 'EFFECTIVE' ? 'Current provider evidence only' : 'Not effective; historical/conflicting evidence only' },
+      ]} /></section>)}
+    </details> : null}
+  </>
 }
 
 async function loadProviderEvidence(applicationId: string): Promise<ProviderEvent[]> {
@@ -68,7 +145,9 @@ type Evidence = { scope: string; events: ProviderEvent[] }
 
 export function KycVerification({ application, environment, actorId,
   sandboxEnabled = process.env.NEXT_PUBLIC_BLOCKXONE_SUMSUB_SANDBOX_ENABLED === 'true' }: Props) {
-  const scope = `${environment}:${actorId}:${application.id}:${application.revision}`
+  const operatingContext = usePortalOperatingContext(), liveActor = usePortalActorId()
+  const applicantContext = operatingContext.mode === 'APPLICANT' && liveActor === actorId
+  const scope = `${environment}:${actorId}:${liveActor}:${portalContextKey(operatingContext)}:${application.id}:${application.revision}:${application.status}:${application.context_kind}:${application.admission_purpose}:${application.persona}:${application.submitted_at}:${application.details.investor_type ?? ''}:${application.details.details_version ?? ''}`
   const activeScope = useRef(scope)
   activeScope.current = scope
   const evidenceRequest = useRef(0)
@@ -82,14 +161,16 @@ export function KycVerification({ application, environment, actorId,
   const [evidenceBusy, setEvidenceBusy] = useState(false)
   const [evidenceMessage, setEvidenceMessage] = useState('')
   const testnet = environment === 'TESTNET'
-  const mayStart = testnet && sandboxEnabled && Boolean(actorId) && application.context_kind === 'PERSONAL'
-    && ['DRAFT', 'SUBMITTED', 'CHANGES_REQUIRED'].includes(application.status)
+  const mayRead = testnet && applicantContext && Boolean(actorId)
+  const mayStart = mayRead && sandboxEnabled && application.context_kind === 'PERSONAL'
+    && application.status === 'SUBMITTED' && Boolean(application.submitted_at)
     && ['INVESTOR_ADMISSION', 'CUSTOMER_ORGANISATION_ADMISSION'].includes(application.admission_purpose)
 
   const refreshEvidence = useCallback(async () => {
-    if (!testnet) return
+    if (!mayRead) return
     const attempt = ++evidenceRequest.current
     setEvidenceBusy(true)
+    setEvidence(null)
     setEvidenceMessage('')
     try {
       const events = await loadProviderEvidence(application.id)
@@ -100,7 +181,7 @@ export function KycVerification({ application, environment, actorId,
     } finally {
       if (activeScope.current === scope && evidenceRequest.current === attempt) setEvidenceBusy(false)
     }
-  }, [application.id, scope, testnet])
+  }, [application.id, scope, mayRead])
 
   useEffect(() => {
     evidenceRequest.current += 1
@@ -112,9 +193,9 @@ export function KycVerification({ application, environment, actorId,
     setEvidence(null)
     setEvidenceMessage('')
     setEvidenceBusy(false)
-    if (testnet) void refreshEvidence()
+    if (mayRead) void refreshEvidence()
     return () => { evidenceRequest.current += 1; sessionRequest.current += 1 }
-  }, [scope, testnet, refreshEvidence])
+  }, [scope, mayRead, refreshEvidence])
 
   // The SDK's iframe does not provide its own title. Add one for assistive technology.
   useEffect(() => {
@@ -181,25 +262,25 @@ export function KycVerification({ application, environment, actorId,
     }
   }
 
-  const currentSession = session?.scope === scope ? session : null
+  const currentSession = mayStart && session?.scope === scope ? session : null
   const currentEvidence = evidence?.scope === scope ? evidence.events : null
-  const currentEvents = currentEvidence?.filter(event => event.application_revision === application.revision
-    && event.ordering_state === 'CURRENT' && !event.manual_webhook_test) ?? []
-  const latest = currentEvents.at(-1)
   return <Panel title="Identity verification evidence" description="A sandbox provider check and the BlockXOne admission decision are separate records.">
     {testnet ? <>
       <Notice title="Sandbox: fictional identity information only">When enabled, the Sumsub check opens inside your application. Do not submit a real identity document here. A provider result is evidence for an independent reviewer; it never grants account, role, product eligibility or signing authority.</Notice>
       {!sandboxEnabled ? <Notice title="Sandbox identity check not connected">The provider session is unavailable until the TEST sandbox credentials, webhook and evidence writer are verified. Your application and its recorded review state remain available.</Notice> : null}
       <div className={styles.sectionGap} role="status" aria-live="polite">
         <strong>{currentEvidence ? providerEvidenceLabel(currentEvidence, application.revision) : evidenceBusy ? 'Checking provider evidence...' : 'Provider evidence has not been checked'}</strong>
-        {latest ? <p className={styles.muted}>Latest recorded event: {dateLabel(latest.received_at)}. The compliance reviewer must still make a separate decision.</p> : null}
+        {currentEvidence ? <ProviderEvidenceDetails events={currentEvidence} revision={application.revision} /> : null}
         {evidenceMessage ? <p className={styles.fieldError}>{evidenceMessage}</p> : null}
       </div>
       <div className={`${styles.actions} ${styles.sectionGap}`}>
         {mayStart ? <button type="button" className={styles.button} disabled={starting} onClick={() => void start()}>{starting ? 'Starting sandbox verification...' : currentSession ? 'Restart sandbox identity check' : 'Start sandbox identity check'}</button> : null}
-        <button type="button" className={styles.buttonSecondary} disabled={evidenceBusy} onClick={() => void refreshEvidence()}>{evidenceBusy ? 'Checking evidence...' : 'Refresh recorded evidence'}</button>
+        <button type="button" className={styles.buttonSecondary} disabled={evidenceBusy || !mayRead} onClick={() => void refreshEvidence()}>{evidenceBusy ? 'Checking evidence...' : 'Refresh recorded evidence'}</button>
       </div>
-      {!mayStart ? <p className={`${styles.muted} ${styles.sectionGap}`}>A new provider session is not available for this application state. Historical evidence remains visible to authorised readers.</p> : null}
+      {!mayStart ? <p className={`${styles.muted} ${styles.sectionGap}`}>{['DRAFT', 'CHANGES_REQUIRED'].includes(application.status)
+        ? application.status === 'DRAFT' ? 'Submit the application for review first. Identity verification must use its immutable submitted revision.' : 'Update and resubmit the application first. Identity verification cannot use an editable changes-required revision.'
+        : !applicantContext ? 'Return to this signed-in applicant context before starting verification. No result from another account or capacity is retained.'
+          : 'A new provider session is not available for this application state or configuration. Historical evidence remains visible to authorised readers.'}</p> : null}
       {sessionMessage ? <p className={`${styles.muted} ${styles.sectionGap}`} role="status">{sessionMessage}</p> : null}
       {currentSession ? <div ref={sdkContainer} className={`${styles.kycWidget} ${styles.sectionGap}`} role="region" aria-label="Sumsub sandbox identity verification">
         <SumsubWebSdk accessToken={currentSession.token} expirationHandler={renewToken}
@@ -212,7 +293,8 @@ export function KycVerification({ application, environment, actorId,
 
 /** Read-only provider material for the independently authorised Compliance reviewer. */
 export function ProviderEvidenceReview({ applicationId, revision, environment }: { applicationId: string; revision: number; environment?: PlatformEnvironment }) {
-  const scope = `${environment ?? 'UNAVAILABLE'}:${applicationId}:${revision}`
+  const operatingContext = usePortalOperatingContext(), actorId = usePortalActorId()
+  const scope = `${environment ?? 'UNAVAILABLE'}:${actorId}:${portalContextKey(operatingContext)}:${applicationId}:${revision}`
   const activeScope = useRef(scope)
   activeScope.current = scope
   const request = useRef(0)
@@ -223,7 +305,7 @@ export function ProviderEvidenceReview({ applicationId, revision, environment }:
   const refresh = useCallback(async () => {
     if (!testnet) return
     const attempt = ++request.current
-    setBusy(true); setMessage('')
+    setBusy(true); setMessage(''); setEvidence(null)
     try {
       const events = await loadProviderEvidence(applicationId)
       if (activeScope.current === scope && request.current === attempt) setEvidence({ scope, events })
@@ -240,21 +322,12 @@ export function ProviderEvidenceReview({ applicationId, revision, environment }:
   }, [scope, testnet, refresh])
 
   const events = evidence?.scope === scope ? evidence.events : null
-  const current = events?.filter(event => event.application_revision === revision
-    && event.ordering_state === 'CURRENT' && !event.manual_webhook_test) ?? []
-  const latest = current.at(-1)
   return <Panel title="Provider identity evidence" description="Signed provider events are evidence for this exact customer case, not the BlockXOne admission decision.">
     {testnet ? <>
       <Notice title="Independent reviewer decision required">A Sumsub sandbox event, including a positive provider answer, does not tick the review checks, admit the customer, grant a role or establish product eligibility. Record your own decision and rationale against the submitted application revision.</Notice>
       <div className={styles.sectionGap} role="status" aria-live="polite">
         <strong>{events ? providerEvidenceLabel(events, revision) : busy ? 'Checking provider evidence...' : 'Provider evidence has not been checked'}</strong>
-        {latest ? <DetailList rows={[
-          { label: 'Provider event', value: latest.event_type },
-          { label: 'Event received', value: dateLabel(latest.received_at) },
-          { label: 'Provider review status only', value: latest.review_status || 'No provider review status recorded' },
-          { label: 'Provider answer only', value: latest.review_answer || 'No provider answer recorded' },
-        ]} /> : null}
-        {events && !latest ? <p className={styles.muted}>No current, non-simulated provider outcome is recorded for revision {revision}. Treat simulations and previous revisions as historical context only.</p> : null}
+        {events ? <ProviderEvidenceDetails events={events} revision={revision} /> : null}
         {message ? <p className={styles.fieldError}>{message} Do not infer a clear result while evidence is unavailable.</p> : null}
       </div>
       <button type="button" className={`${styles.buttonSecondary} ${styles.sectionGap}`} disabled={busy} onClick={() => void refresh()}>{busy ? 'Checking signed evidence...' : 'Refresh signed provider evidence'}</button>

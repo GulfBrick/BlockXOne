@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import pg from 'pg'
 import { proveDocumentProcessingDefaultAcl } from './document-processing-proof.mjs'
+import { proveProviderBindingDefaultAcl } from './provider-binding-proof.mjs'
 
 // Fresh synthetic GitHub service only. NEVER run against either Supabase project.
 if (process.argv.length !== 2 || process.env.GITHUB_ACTIONS !== 'true') throw new Error('MAIN entry proof requires cloud CI without arguments')
@@ -135,6 +136,8 @@ try {
   await sqlFile('../../../supabase/migrations/20260923175822_stage2_superadmin_shell_mfa_boundary.sql')
   await sqlFile('../../../supabase/migrations/20260923205519_stage3_immutable_offering_packages.sql')
   await sqlFile('../../../supabase/migrations/20260924110608_stage2_provider_evidence.sql')
+  await sqlFile('../../../supabase/features/bx1_provider_binding.sql')
+  checks += await proveProviderBindingDefaultAcl(db)
   await sqlFile('../../../supabase/migrations/20260924110911_stage1_staff_invitation_intents.sql')
   eq(await scalar("select has_table_privilege(current_user,'bx1_private.authority_scopes','REFERENCES')"), false,
     'staff migration leaves MAIN migrator without authority-table REFERENCES')
@@ -204,7 +207,7 @@ try {
   for (const table of ['product_eligibility_cases', 'product_eligibility_receipts']) eq(await scalar(`select count(*)::int from bx1_portal.${table}`), 0, `Stage 2 definition does not seed ${table} in MAIN`)
   for (const table of ['legal_entity_parties', 'investing_representative_mandates', 'investing_representative_receipts']) eq(await scalar(`select count(*)::int from bx1_portal.${table}`), 0, `entity definition does not seed ${table} in MAIN`)
   for (const table of ['offering_revisions', 'offering_decisions']) eq(await scalar(`select count(*)::int from bx1_portal.${table}`), 0, `Stage 3 definition does not seed ${table} in MAIN`)
-  for (const table of ['provider_application_bindings', 'provider_evidence_events'])
+  for (const table of ['provider_application_bindings', 'provider_evidence_events', 'provider_applicant_pins', 'provider_boundary_receipts'])
     eq(await scalar(`select count(*)::int from bx1_private.${table}`), 0, `new Stage 1/2 definition does not seed ${table} in MAIN`)
   // The staff owner and tables are uncommitted in this fixture, so the separate
   // maintenance connection cannot see them. The existing MFA helper owner

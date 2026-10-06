@@ -36,6 +36,8 @@ on:
       - supabase/features/bx1_customer_handoff.sql
       - supabase/features/bx1_document_processing.sql
       - apps/web/scripts/document-processing-proof.mjs
+      - supabase/features/bx1_provider_binding.sql
+      - apps/web/scripts/provider-binding-proof.mjs
       - supabase/features/bx1_entry.sql
       - supabase/features/bx1_entry_admission.sql
       - PLATFORM_RELEASE.json
@@ -94,6 +96,8 @@ on:
       - supabase/features/bx1_customer_handoff.sql
       - supabase/features/bx1_document_processing.sql
       - apps/web/scripts/document-processing-proof.mjs
+      - supabase/features/bx1_provider_binding.sql
+      - apps/web/scripts/provider-binding-proof.mjs
       - supabase/features/bx1_entry.sql
       - supabase/features/bx1_entry_admission.sql
       - PLATFORM_RELEASE.json
