@@ -18,8 +18,11 @@ const event = {
   evidence_kind: 'LIFECYCLE' as const, projection_state: 'EFFECTIVE' as const,
 }
 function renderKyc(props: Parameters<typeof KycVerification>[0]) {
-  return renderToStaticMarkup(createElement(PortalIdentityProvider, { actorId: props.actorId, environment: props.environment,
-    children: createElement(KycVerification, props) }))
+  return renderToStaticMarkup(
+    <PortalIdentityProvider actorId={props.actorId} environment={props.environment}>
+      <KycVerification {...props} />
+    </PortalIdentityProvider>
+  )
 }
 
 describe('application-scoped sandbox identity verification', () => {
