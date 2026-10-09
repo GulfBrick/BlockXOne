@@ -623,7 +623,7 @@ export async function proveEntityEligibility(db, clients, featureSql, preparedFi
     await denied('approved but closed modern v2 cannot obtain entity eligibility', () => command(1, applicant, 'request_product_eligibility', modernRequest))
     await denied('approved but closed modern v2 cannot subscribe', () => command(1, applicant, 'subscribe', {
       product_id: id(308), investment_account_id: accountByActor.get(1), expected_revision: modernProduct.revision,
-      terms_hash: modernProduct.terms_hash, units: '1', accepted_documents: true, accepted_risks: true }))
+      terms_hash: modernProduct.terms_hash, offering_revision_id: id(309), units: '1', accepted_documents: true, accepted_risks: true }))
     eq(await snapshot(negativeRelations), beforeModernDenials, 'modern denials preserve exact product/package/appointment/case/audit/request/order/funding fingerprints')
     eq(await scalar('select bx1_portal.offering_operational($1)', [id(308)]), false, 'modern approval is not modern operational acceptance')
     // EXACT isolated revision, all other revisions stay hard false. The
@@ -787,7 +787,7 @@ export async function proveEntityEligibility(db, clients, featureSql, preparedFi
     eq(await scalar('select bx1_portal.account_usable($1::jsonb,$2)', [JSON.stringify(applicant), accountByActor.get(1)]), false, 'entity approval cannot unlock individual account execution')
     await denied('approved entity remains unable to subscribe', () => command(1, applicant, 'subscribe', { product_id: productId,
       investment_account_id: accountByActor.get(1), expected_revision: product.revision, terms_hash: product.terms_hash,
-      units: '1', accepted_documents: true, accepted_risks: true }))
+      offering_revision_id: offeringId, units: '1', accepted_documents: true, accepted_risks: true }))
     await probe(async () => {
       await revokeAppointment(); await createAppointment(id(306), 4, memberships.get(4), 'ComplianceOfficer')
       eq(await scalar('select bx1_portal.entity_product_eligibility_current($1)', [row.id]), false, 'new appointment for same reviewer cannot revive old exact approval')
