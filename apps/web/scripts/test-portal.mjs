@@ -6,6 +6,7 @@ import { proveProviderBinding } from './provider-binding-proof.mjs'
 import { proveCustomerMonitoring } from './customer-monitoring-proof.mjs'
 import { proveDocumentRetentionAuthority } from './document-retention-authority-proof.mjs'
 import { proveDocumentProcessing } from './document-processing-proof.mjs'
+import { proveEntityEligibility } from './entity-eligibility-proof.mjs'
 import { proveOfferingFileQuarantine, proveOfferingFileProductIsolation } from './offering-file-quarantine-proof.mjs'
 
 // Exact disposable GitHub PostgreSQL17 service only. No local/project execution.
@@ -2630,11 +2631,16 @@ try {
       eq(await scalar("select has_function_privilege($1,$2,'EXECUTE')", [role, signature]), false, `${role} cannot bypass the handoff reader through ${signature}`)
     }
   }
-  await db.query('rollback'); begun = false
+  // Retain the exact non-mutating feature that was just proved: the following
+  // helpers must exercise the deployed handoff/document/entity reader chain.
+  await db.query('commit'); begun = false
   console.log('BX1_CUSTOMER_HANDOFF_PASS chain=current-stage2-stage3 pureRead=proven scopedWriters=unchanged hostedProvider=not-proven')
   phase = 'document-processing-final-chain-proof'
   checks += await proveDocumentProcessing(db, proofClients,
     await source('../../../supabase/features/bx1_document_processing.sql'))
+  phase = 'entity-eligibility-final-chain-proof'
+  checks += await proveEntityEligibility(db, proofClients,
+    await source('../../../supabase/features/bx1_entity_eligibility.sql'))
   phase = 'cleanup-committed-disposable-fixture'
   await db.query('drop schema bx1_portal,bx1_private,storage,auth,public cascade; create schema public')
   committedFixture = false

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { FUND_V2_CANONICAL_REFERENCES, REAL_ESTATE_V2_CANONICAL_REFERENCES, PORTAL_PATHS, applicationDetailsSchema, applicationDocumentLookupSchema, applicationDocumentVersionsSchema, applicationDraftDetailsSchema, customerMonitoringSnapshotSchema, isRealEstateTermsV2, isWealthManagerDetailsV2, evidenceSchema, formatTestMoney, portalCommandSchema, productTermsSchema, subscriptionQuote, type FundTermsV2, type RealEstateTermsV2, type PortalProduct, type ProductTerms } from './contracts'
+import { FUND_V2_CANONICAL_REFERENCES, REAL_ESTATE_V2_CANONICAL_REFERENCES, PORTAL_PATHS, applicationDetailsSchema, applicationDocumentLookupSchema, applicationDocumentVersionsSchema, applicationDraftDetailsSchema, customerMonitoringSnapshotSchema, entityProductEligibilitySchema, validatedEntityProductEligibility, isRealEstateTermsV2, isWealthManagerDetailsV2, evidenceSchema, formatTestMoney, portalCommandSchema, productTermsSchema, subscriptionQuote, type FundTermsV2, type RealEstateTermsV2, type PortalProduct, type ProductTerms } from './contracts'
 import { isSupabaseWebPathAllowed } from '@/lib/auth-mode'
 import { isProductionWebPathBlocked } from '@/lib/release-policy'
 
@@ -192,6 +192,64 @@ describe('customer portal contracts', () => {
     for (const change of [{ expected_revision: 0 }, { notes: 'Too short' }, { reviewer_id: id }, { checks: { ...payload.checks, screening: true } }]) {
       expect(portalCommandSchema.safeParse({ command: 'review_product_eligibility', key, payload: { ...payload, ...change } }).success).toBe(false)
     }
+  })
+  it('requires all entity mandate and exact offering bindings without changing individual requests', () => {
+    const payload = { product_id: id, investment_account_id: key, expected_revision: 0, investor_statement: 'Synthetic entity objectives and source of funds for the specific offering.' }
+    const binding = { representative_mandate_id: id, expected_mandate_revision: 4, expected_mandate_cycle: 2,
+      expected_product_revision: 7, offering_revision_id: key, terms_hash: 'a'.repeat(64) }
+    expect(portalCommandSchema.safeParse({ command: 'request_product_eligibility', key, payload }).success).toBe(true)
+    expect(portalCommandSchema.safeParse({ command: 'request_product_eligibility', key, payload: { ...payload, ...binding } }).success).toBe(true)
+    for (const field of Object.keys(binding) as (keyof typeof binding)[]) {
+      const partial = { ...binding }
+      delete (partial as Partial<typeof binding>)[field]
+      expect(portalCommandSchema.safeParse({ command: 'request_product_eligibility', key, payload: { ...payload, ...partial } }).success).toBe(false)
+    }
+    for (const change of [{ expected_mandate_cycle: 0 }, { expected_mandate_revision: 0 }, { expected_product_revision: -1 },
+      { offering_revision_id: 'unknown' }, { terms_hash: 'wrong' }, { role: 'ComplianceOfficer' }, { account_kind: 'ENTITY' }]) {
+      expect(portalCommandSchema.safeParse({ command: 'request_product_eligibility', key, payload: { ...payload, ...binding, ...change } }).success).toBe(false)
+    }
+  })
+  it('keeps the strict entity projection distinct from individual holders and missing evidence', () => {
+    const row = {
+      id, investment_account_id: key, product_id: id, organisation_id: key, account_kind: 'ENTITY', offering_revision_id: key,
+      application_revision: 3, product_revision: 7, terms_hash: 'a'.repeat(64), revision: 1, status: 'SUBMITTED',
+      investor_statement: 'Synthetic entity statement for the exact approved investment capacity.', submitted_at: '2026-10-09T12:00:00Z',
+      reviewed_at: null, reviewer_id: null, review_notes: null, review_checks: {}, approved_until: null,
+      effective: false, can_decide: false, can_approve: false, can_revoke: false,
+      entity_party_id: key, entity_name: 'Synthetic Entity', representative_user_id: id,
+      representative_mandate_id: key, mandate_cycle: 1, mandate_revision: 4,
+      decision_appointment_id: null, decision_appointment_revision: null, provider_mode: 'MANUAL_TEST_REVIEW',
+      next_owner: 'COMPLIANCE', can_request: false, blocked_reason: null, investor_application: null,
+    }
+    const parsed = entityProductEligibilitySchema.parse(row)
+    expect(validatedEntityProductEligibility({ entity_product_eligibility: [parsed] })).toEqual([parsed])
+    expect(validatedEntityProductEligibility({ entity_product_eligibility: [] })).toEqual([])
+    expect(validatedEntityProductEligibility({})).toBeUndefined()
+    expect(validatedEntityProductEligibility({ entity_product_eligibility: [parsed, parsed] })).toBeUndefined()
+    expect(validatedEntityProductEligibility({ entity_product_eligibility: [parsed, { ...parsed, id: '99999999-9999-4999-8999-999999999999' }] })).toBeUndefined()
+    for (const change of [{ account_kind: 'INDIVIDUAL' }, { holder_user_id: id }, { representative_mandate_id: undefined },
+      { decision_appointment_id: key }, { mandate_cycle: 0 }, { effective: true }, { provider_mode: 'LIVE_APPROVED' },
+      { next_owner: 'SUPER_ADMIN' }, { can_approve: undefined }, { status: 'APPROVED' }]) {
+      expect(entityProductEligibilitySchema.safeParse({ ...row, ...change }).success).toBe(false)
+    }
+    const reviewed = { ...row, reviewed_at: '2026-10-09T13:00:00Z', reviewer_id: key,
+      review_notes: 'Independently reviewed synthetic entity product qualification.',
+      decision_appointment_id: key, decision_appointment_revision: 4,
+      review_checks: { identity: true, product_fit: true, restrictions: true, source_of_funds: true } }
+    for (const status of ['CHANGES_REQUIRED', 'APPROVED', 'REJECTED', 'REVOKED']) {
+      const decision = { ...reviewed, status, approved_until: status === 'APPROVED' ? '2026-11-01T12:00:00Z' : null }
+      expect(entityProductEligibilitySchema.safeParse(decision).success).toBe(true)
+      for (const field of ['decision_appointment_id', 'decision_appointment_revision', 'reviewer_id', 'reviewed_at', 'review_notes']) {
+        expect(entityProductEligibilitySchema.safeParse({ ...decision, [field]: null }).success).toBe(false)
+      }
+    }
+    for (const field of ['decision_appointment_id', 'decision_appointment_revision', 'reviewer_id', 'reviewed_at', 'review_notes', 'review_checks']) {
+      expect(entityProductEligibilitySchema.safeParse({ ...row, [field]: reviewed[field as keyof typeof reviewed] }).success).toBe(false)
+    }
+    expect(entityProductEligibilitySchema.safeParse({ ...row, status: 'APPROVED', effective: true, approved_until: '2026-11-01T12:00:00Z',
+      reviewed_at: '2026-10-09T13:00:00Z', reviewer_id: key, review_notes: 'Independently reviewed synthetic entity product qualification.',
+      decision_appointment_id: key, decision_appointment_revision: 4,
+      review_checks: { identity: true, product_fit: true, restrictions: true, source_of_funds: true }, next_owner: 'NONE' }).success).toBe(true)
   })
   it('requires product-scoped appointments without accepting client-granted authority', () => {
     const request = { product_id: id, role: 'IssuerFundManager', appointee_user_id: id,

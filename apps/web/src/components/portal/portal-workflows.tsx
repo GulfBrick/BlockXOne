@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import type { PlatformEnvironment } from '@/lib/platform-release'
-import { isFundTermsV2, isRealEstateTermsV2, isOfferingSubscribable, isWealthManagerDetailsV2, subscriptionQuote, type LegacyApplicationDetails, type PortalApplication, type PortalEntityInvestmentAccount, type PortalInvestmentAccount, type PortalInvestingRepresentativeMandate, type PortalProduct, type PortalProductEligibility, type PortalSnapshot } from '@/lib/portal/contracts'
+import { applicationDetailsSchema, isFundTermsV2, isRealEstateTermsV2, isOfferingSubscribable, isWealthManagerDetailsV2, subscriptionQuote, validatedEntityProductEligibility, type LegacyApplicationDetails, type PortalApplication, type PortalEntityInvestmentAccount, type PortalEntityProductEligibility, type PortalInvestmentAccount, type PortalInvestingRepresentativeMandate, type PortalProduct, type PortalProductEligibility, type PortalSnapshot } from '@/lib/portal/contracts'
 import { portalScopeHref, type PortalOperatingContext } from '@/lib/portal/operating-context'
 import { CommandFeedback, usePortalCommand } from './portal-client'
 import { ApplicationDetailsSummary, ApplicationDocumentHistory, PrivateDocument } from './onboarding-form'
@@ -93,7 +93,7 @@ function EntityInvestmentAccountPanel({ snapshot, onSaved, operatingContext }: {
           </div>
           : <EmptyState title="Current entity investor admission required" description="Submit or renew an entity investor application and obtain independent approval before opening an entity account. A personal or wealth-manager application is not a substitute." href={portalScopeHref('/portal/onboarding', operatingContext)} action="Open my onboarding" />}
     </Panel>
-    <Notice title="No entity subscription authority yet">Account opening and a representative appointment do not approve any offering, accept terms, reserve units, authorise payment, move a wallet or create a holding. Entity product eligibility and transaction commands remain separate work.</Notice>
+    <Notice title="No entity subscription authority yet">Account opening and a representative appointment do not approve any offering, accept terms, reserve units, authorise payment, move a wallet or create a holding. Product eligibility requires a separate decision; entity transaction commands remain unavailable.</Notice>
   </div>
 }
 
@@ -118,9 +118,9 @@ function EntityAccountCase({ account, mandates, actorId, application, onSaved }:
   return <section className={styles.stack} aria-label={`${account.entity_name} investment account`}>
     <CommandFeedback command={command} />
     <DetailList rows={[{ label: 'Legal holder', value: account.entity_name }, { label: 'Registration reference', value: account.registration_reference }, { label: 'Entity account', value: <span className={styles.mono}>{account.id}</span> }, { label: 'Account state', value: <StatusBadge status={account.status} /> }, { label: 'Investor admission expiry', value: dateLabel(account.admission_approved_until) }, { label: 'Account view authority', value: account.can_view ? 'Active representative mandate' : 'Not yet appointed' }]} />
-    {mandate ? <div className={styles.sectionGap}><DetailList rows={[{ label: 'Investing-representative case', value: <span className={styles.mono}>{mandate.id}</span> }, { label: 'Appointment cycle', value: mandate.cycle }, { label: 'Decision state', value: <StatusBadge status={mandate.status} /> }, { label: 'Next responsible owner', value: entityMandateNextOwner(mandate) }, { label: 'Requested expiry', value: dateLabel(mandate.requested_until) }, { label: 'Current scope', value: 'Account view only; eligibility-request scope is reserved for a later workflow' }, { label: 'Transaction limit', value: 'Zero; no subscription, funding or signing authority' }]} />{mandate.review_notes ? <Notice title="Reviewer decision">{mandate.review_notes}</Notice> : null}{mandate.revoke_reason ? <Notice title="Revocation reason" tone="warning">{mandate.revoke_reason}</Notice> : null}</div> : null}
+    {mandate ? <div className={styles.sectionGap}><DetailList rows={[{ label: 'Investing-representative case', value: <span className={styles.mono}>{mandate.id}</span> }, { label: 'Appointment cycle', value: mandate.cycle }, { label: 'Mandate revision', value: mandate.revision }, { label: 'Decision state', value: <StatusBadge status={mandate.status} /> }, { label: 'Next responsible owner', value: entityMandateNextOwner(mandate) }, { label: 'Requested expiry', value: dateLabel(mandate.requested_until) }, { label: 'Current scope', value: 'Account view and guarded product-eligibility requests only' }, { label: 'Transaction limit', value: 'Zero; no subscription, funding or signing authority' }]} />{mandate.review_notes ? <Notice title="Reviewer decision">{mandate.review_notes}</Notice> : null}{mandate.revoke_reason ? <Notice title="Revocation reason" tone="warning">{mandate.revoke_reason}</Notice> : null}</div> : null}
     {account.status === 'SUSPENDED' ? <Notice title="Entity account suspended" tone="warning">A new appointment cannot override this suspension. Contact the appointed reviewer.</Notice>
-      : account.can_view && mandate?.effective ? <Notice title="Limited representative access active">You can view this entity account. Eligibility-request scope is reserved for a later guarded workflow; no eligibility, order, funding or signing action is enabled here.</Notice>
+      : account.can_view && mandate?.effective ? <Notice title="Limited representative access active">You can view this entity account. A guarded eligibility request requires the current mandate and exact published offering; it does not authorise an order, funding or signing action.</Notice>
         : mandate && !mayRequest ? <Notice title={mandate.status === 'SUBMITTED' ? 'Independent mandate review pending' : mandate.status === 'APPROVED' ? 'Authorised application pending' : 'Mandate action unavailable'}>{mandate.status === 'APPROVED' ? 'Compliance approved the case; a distinct Super Admin must apply it before account access is effective.' : 'This case is not active account authority. Follow the next responsible owner above or refresh the saved state.'}</Notice>
           : null}
     {!application && !account.can_view ? <Notice title="Current entity admission required" tone="warning">This account does not have a current approved investor application in your capacity. Renew the admission before requesting an appointment.</Notice> : null}
@@ -136,6 +136,101 @@ function EntityAccountCase({ account, mandates, actorId, application, onSaved }:
       </fieldset>
     </form> : null}
   </section>
+}
+
+export function entityEligibilityNextOwner(item: PortalEntityProductEligibility): string {
+  return { APPLICANT: 'Investing representative', COMPLIANCE: 'Appointed product Compliance reviewer', NONE: 'No pending eligibility action' }[item.next_owner]
+}
+
+function entityEligibilityRequestContext(snapshot: PortalSnapshot, account?: PortalEntityInvestmentAccount) {
+  if (!account || account.kind !== 'ENTITY' || account.status !== 'ACTIVE' || account.can_request_eligibility !== true
+    || !Array.isArray(snapshot.investing_representative_mandates) || !Array.isArray(snapshot.entity_investment_accounts)
+    || snapshot.entity_investment_accounts.filter(item => item.id === account.id).length !== 1
+    || ![account.id, account.entity_party_id, account.application_id, snapshot.actor.id].every(value => typeof value === 'string'
+      && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value))) return undefined
+  const applications = snapshot.applications.filter(item => item.id === account.application_id && item.persona === 'INVESTOR'
+    && !isWealthManagerDetailsV2(item.details) && item.details.investor_type === 'ENTITY')
+  if (applications.length !== 1) return undefined
+  const application = applications[0]
+  if (!applicationDetailsSchema.safeParse(application.details).success || application.status !== 'APPROVED'
+    || !Number.isInteger(application.revision) || application.revision < 1 || application.revision !== account.admission_revision
+    || !application.approved_until || Date.parse(application.approved_until) <= Date.now()
+    || !account.admission_approved_until || Date.parse(account.admission_approved_until) !== Date.parse(application.approved_until)) return undefined
+  const mandates = snapshot.investing_representative_mandates.filter(item => item.investment_account_id === account.id
+    && item.representative_user_id === snapshot.actor.id)
+  if (new Set(mandates.map(item => item.id)).size !== mandates.length
+    || new Set(mandates.map(item => item.cycle)).size !== mandates.length) return undefined
+  const effective = mandates.filter(item => item.effective === true)
+  if (effective.length !== 1) return undefined
+  const mandate = effective[0]
+  if (typeof mandate.id !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(mandate.id)
+    || mandate.status !== 'APPLIED' || mandate.entity_party_id !== account.entity_party_id || mandate.application_id !== application.id
+    || mandate.admission_revision !== application.revision || mandate.admission_current_revision !== application.revision
+    || !Number.isInteger(mandate.revision) || mandate.revision < 1 || !Number.isInteger(mandate.cycle) || mandate.cycle < 1
+    || !Array.isArray(mandate.scope) || !mandate.scope.includes('REQUEST_ELIGIBILITY') || mandate.transaction_limit_minor !== '0'
+    || !mandate.admission_approved_until || Date.parse(mandate.admission_approved_until) !== Date.parse(application.approved_until)
+    || !Number.isFinite(Date.parse(mandate.requested_until)) || Date.parse(mandate.requested_until) <= Date.now()) return undefined
+  return { application, mandate }
+}
+
+export function EntityProductEligibilityPanel({ product, snapshot, onSaved, operatingContext }: {
+  product: PortalProduct; snapshot: PortalSnapshot; onSaved: (snapshot: PortalSnapshot) => void; operatingContext?: PortalOperatingContext;
+}) {
+  const [accountId, setAccountId] = useState(() => Array.isArray(snapshot.entity_investment_accounts)
+    ? snapshot.entity_investment_accounts.find(item => item?.kind === 'ENTITY' && (item.can_view === true || item.can_request_eligibility === true
+      || snapshot.applications.some(application => application.id === item.application_id && application.user_id === snapshot.actor.id
+        && application.persona === 'INVESTOR' && !isWealthManagerDetailsV2(application.details) && application.details.investor_type === 'ENTITY')))?.id ?? '' : '')
+  const [statement, setStatement] = useState('')
+  const command = usePortalCommand(onSaved)
+  const records = validatedEntityProductEligibility(snapshot)
+  const ownApplicationIds = new Set(snapshot.applications.filter(item => item.user_id === snapshot.actor.id && item.persona === 'INVESTOR'
+    && !isWealthManagerDetailsV2(item.details) && item.details.investor_type === 'ENTITY').map(item => item.id))
+  const accountRecordsAvailable = Array.isArray(snapshot.entity_investment_accounts) && snapshot.entity_investment_accounts.every(item => item
+    && item.kind === 'ENTITY' && typeof item.id === 'string' && typeof item.application_id === 'string' && typeof item.entity_party_id === 'string'
+    && typeof item.entity_name === 'string' && typeof item.can_view === 'boolean' && typeof item.can_request_eligibility === 'boolean')
+    && new Set(snapshot.entity_investment_accounts.map(item => item.id)).size === snapshot.entity_investment_accounts.length
+  const mandateRecordsAvailable = Array.isArray(snapshot.investing_representative_mandates) && snapshot.investing_representative_mandates.every(item => item
+    && typeof item.id === 'string' && typeof item.investment_account_id === 'string' && typeof item.representative_user_id === 'string'
+    && typeof item.effective === 'boolean' && Array.isArray(item.scope))
+  const accounts = accountRecordsAvailable ? snapshot.entity_investment_accounts!.filter(item => item.kind === 'ENTITY'
+    && (item.can_view === true || item.can_request_eligibility === true || ownApplicationIds.has(item.application_id))) : []
+  const selectedAccount = accounts.find(item => item.id === accountId)
+  const context = accountRecordsAvailable && mandateRecordsAvailable ? entityEligibilityRequestContext(snapshot, selectedAccount) : undefined
+  const eligibility = records?.find(item => item.product_id === product.id && item.investment_account_id === selectedAccount?.id)
+  const boundCase = !eligibility || eligibility.entity_party_id === selectedAccount?.entity_party_id
+    && eligibility.representative_user_id === snapshot.actor.id && eligibility.organisation_id === product.organisation_id
+  const currentContext = Boolean(context && eligibility && boundCase && eligibility.application_revision === context.application.revision
+    && eligibility.representative_mandate_id === context.mandate.id && eligibility.mandate_cycle === context.mandate.cycle
+    && eligibility.mandate_revision === context.mandate.revision && eligibility.product_revision === product.revision
+    && eligibility.offering_revision_id === product.offering_package?.id && eligibility.terms_hash === product.terms_hash)
+  const effective = Boolean(currentContext && eligibility?.status === 'APPROVED' && eligibility.effective
+    && eligibility.approved_until && Date.parse(eligibility.approved_until) > Date.now())
+  const stale = Boolean(eligibility && (!currentContext || eligibility.status === 'APPROVED' && !effective))
+  const canRequest = records !== undefined && Boolean(context) && boundCase && isOfferingSubscribable(product)
+    && product.terms.eligible_investor_types.includes('ENTITY')
+    && (!eligibility || eligibility.can_request === true && eligibility.status !== 'REVOKED')
+  return <Panel title="Entity product eligibility" description="The entity is the legal holder. Its representative requests an independent decision for one exact published offering.">
+    <CommandFeedback command={command} />
+    <Notice title="Decision only; no entity transaction authority">An entity eligibility approval does not authorise a subscription, payment, wallet instruction or token issuance. No entity subscription form is enabled.</Notice>
+    {records !== undefined && accountRecordsAvailable && mandateRecordsAvailable && (accounts.length > 1 || accounts.length && !selectedAccount)
+      ? <Field label="Entity legal-holder account"><select value={selectedAccount?.id ?? ''} onChange={event => { setAccountId(event.target.value); setStatement('') }}><option value="">Choose entity legal-holder account</option>{accounts.map(item => <option key={item.id} value={item.id}>{item.entity_name} · {item.id}</option>)}</select></Field> : null}
+    {records === undefined || !accountRecordsAvailable || !mandateRecordsAvailable
+      ? <Notice title="Entity eligibility records unavailable" tone="warning">Refresh saved state. Missing, invalid or ambiguous records cannot be treated as permission or as absence of a case.</Notice>
+      : !selectedAccount ? <EmptyState title="Entity account and applied mandate required" description="Complete entity investor admission, account opening and independent representative appointment before requesting eligibility. Individual or manager capacity is not a substitute." href={portalScopeHref('/portal', operatingContext)} action="Open entity account records" />
+        : <div className={styles.stack}>
+          <DetailList rows={[{ label: 'Legal holder', value: selectedAccount.entity_name }, { label: 'Entity party', value: <span className={styles.mono}>{selectedAccount.entity_party_id}</span> }, { label: 'Entity investment account', value: <span className={styles.mono}>{selectedAccount.id}</span> }, { label: 'Acting representative', value: <span className={styles.mono}>{snapshot.actor.id}</span> }, { label: 'Current mandate', value: <span className={styles.mono}>{context?.mandate.id ?? 'No exact effective eligibility mandate'}</span> }, { label: 'Mandate cycle / revision', value: context ? `${context.mandate.cycle} / ${context.mandate.revision}` : 'Unavailable' }, { label: 'Published offering reference', value: <span className={styles.mono}>{product.offering_package?.id ?? 'Unavailable'}</span> }, { label: 'Product workflow revision', value: product.revision }, { label: 'Published terms fingerprint', value: <span className={styles.mono}>{product.terms_hash}</span> }]} />
+          {eligibility ? <div className={styles.stack}><DetailList rows={[{ label: 'Case reference', value: <span className={styles.mono}>{eligibility.id}</span> }, { label: 'Case revision', value: eligibility.revision }, { label: 'Review state', value: <StatusBadge status={eligibility.status} /> }, { label: 'Next responsible owner', value: entityEligibilityNextOwner(eligibility) }, { label: 'Submitted mandate / cycle / revision', value: <span className={styles.mono}>{eligibility.representative_mandate_id} · {eligibility.mandate_cycle} / {eligibility.mandate_revision}</span> }, { label: 'Submitted offering reference', value: <span className={styles.mono}>{eligibility.offering_revision_id}</span> }, { label: 'Submitted terms fingerprint', value: <span className={styles.mono}>{eligibility.terms_hash}</span> }, { label: 'Review valid until', value: dateLabel(eligibility.approved_until) }]} />{eligibility.review_notes ? <Notice title="Reviewer notes">{eligibility.review_notes}</Notice> : null}{eligibility.blocked_reason ? <Notice title="Saved eligibility gate" tone="warning">{eligibility.blocked_reason}</Notice> : null}</div> : null}
+          {!boundCase ? <Notice title="Entity eligibility binding unavailable" tone="warning">The saved case does not match this legal holder, representative and issuer. No request is available.</Notice>
+            : eligibility?.status === 'REVOKED' ? <Notice title="Entity eligibility revoked" tone="warning">This case is closed. Mandate renewal or resubmission cannot revive it. Next owner: the appointed product Compliance reviewer for guidance; no transaction is enabled.</Notice>
+              : effective ? <Notice title="Entity eligibility decision current">The independent decision is current for this entity, representative mandate and exact offering. It is not transaction authority.</Notice>
+                : !context ? <Notice title={stale ? 'Entity eligibility context stale' : 'Entity eligibility request denied'} tone="warning">A current approved entity admission, active account and one effective applied REQUEST_ELIGIBILITY mandate with zero transaction limit are required. Account visibility or raw mandate approval is insufficient. The investing representative must resolve the admission or mandate gate before another request can be authorised.</Notice>
+                  : !isOfferingSubscribable(product) || !product.terms.eligible_investor_types.includes('ENTITY') ? <Notice title="Offering unavailable for entity review" tone="warning">The exact published package must be current and admit entity investors. No fallback to personal capacity is available.</Notice>
+                    : canRequest ? <form className={styles.form} onSubmit={event => { event.preventDefault(); if (!context || !selectedAccount || !product.offering_package || !canRequest || command.busy || command.unknown || statement.trim().length < 20) return; void command.submit('request_product_eligibility', { product_id: product.id, investment_account_id: selectedAccount.id, expected_revision: eligibility?.revision ?? 0, investor_statement: statement.trim(), representative_mandate_id: context.mandate.id, expected_mandate_revision: context.mandate.revision, expected_mandate_cycle: context.mandate.cycle, expected_product_revision: product.revision, offering_revision_id: product.offering_package.id, terms_hash: product.terms_hash }) }}>
+                      {stale ? <Notice title="Entity eligibility context stale" tone="warning">The saved decision or request no longer matches current admission, mandate or offering. Update the same case; a separate reviewer must decide again.</Notice> : <Notice title={eligibility?.status === 'CHANGES_REQUIRED' ? 'Further information required' : 'Independent entity review required'}>{eligibility ? 'Respond to the reviewer in this same case. Resubmission does not create a new approval.' : 'Explain the entity’s objectives and source of funds for this exact fictional test offering. Next owner after submission: the appointed product Compliance reviewer.'}</Notice>}
+                      <fieldset className={styles.fieldset} disabled={command.busy || command.unknown}><legend>Entity eligibility request</legend><Field label="Entity investment statement" hint="20 to 2,000 characters. Describe the legal entity’s objectives, product fit and fictional source of funds."><textarea required minLength={20} maxLength={2000} value={statement} onChange={event => setStatement(event.target.value)} /></Field><button type="submit" className={styles.button} disabled={statement.trim().length < 20}>{eligibility ? 'Resubmit same entity eligibility case' : 'Submit entity for product eligibility review'}</button></fieldset>
+                    </form> : <Notice title={eligibility?.status === 'SUBMITTED' && !stale ? 'Independent entity review pending' : stale ? 'Entity eligibility context stale' : 'Entity request unavailable'} tone={stale ? 'warning' : undefined}>{eligibility?.status === 'SUBMITTED' && !stale ? 'The appointed product Compliance reviewer owns the next decision. Submission does not reserve units or grant transaction authority.' : 'No request is authorised by the current saved projection. Refresh saved state or contact the next responsible owner; no authority is inferred.'}</Notice>}
+        </div>}
+  </Panel>
 }
 
 export function ProductEligibilityPanel({ product, snapshot, onSaved, operatingContext }: { product: PortalProduct; snapshot: PortalSnapshot; onSaved: (snapshot: PortalSnapshot) => void; operatingContext?: PortalOperatingContext }) {
@@ -375,7 +470,77 @@ export function IssuerOfferingReview({ product, snapshot, onSaved }: { product: 
   </Panel>
 }
 
-export function ProductEligibilityReview({ eligibility, product, snapshot, onSaved }: { eligibility: PortalProductEligibility; product?: PortalProduct; snapshot: PortalSnapshot; onSaved: (snapshot: PortalSnapshot) => void }) {
+export function ProductEligibilityReview(props: { eligibility: PortalProductEligibility | PortalEntityProductEligibility; product?: PortalProduct; snapshot: PortalSnapshot; onSaved: (snapshot: PortalSnapshot) => void }) {
+  if (props.eligibility.account_kind === 'ENTITY') {
+    const records = validatedEntityProductEligibility(props.snapshot)
+    const item = records?.find(record => record.id === props.eligibility.id && record.revision === props.eligibility.revision)
+    return item ? <EntityProductEligibilityReview {...props} eligibility={item} />
+      : <Notice title="Entity eligibility records unavailable" tone="warning">The exact saved entity case is missing, invalid or ambiguous. Refresh the scoped review queue; no decision is available.</Notice>
+  }
+  return <IndividualProductEligibilityReview {...props} eligibility={props.eligibility as PortalProductEligibility} />
+}
+
+function EntityProductEligibilityReview({ eligibility, product, snapshot, onSaved }: {
+  eligibility: PortalEntityProductEligibility; product?: PortalProduct; snapshot: PortalSnapshot; onSaved: (snapshot: PortalSnapshot) => void;
+}) {
+  const [checks, setChecks] = useState({ identity: false, product_fit: false, restrictions: false, source_of_funds: false })
+  const [decision, setDecision] = useState('CHANGES_REQUIRED')
+  const [notes, setNotes] = useState('')
+  const [revokeReason, setRevokeReason] = useState('')
+  const command = usePortalCommand(onSaved)
+  // Only the separately authorised nested source is used. A general application
+  // list, account visibility or a provider badge cannot expand this evidence scope.
+  const application = eligibility.investor_application
+  const entitySource = application && !isWealthManagerDetailsV2(application.details) && application.details.investor_type === 'ENTITY' ? application : undefined
+  const currentAdmission = Boolean(entitySource && entitySource.status === 'APPROVED' && entitySource.revision === eligibility.application_revision
+    && entitySource.approved_until && Date.parse(entitySource.approved_until) > Date.now())
+  const scopedOffering = Boolean(product && product.id === eligibility.product_id && product.organisation_id === eligibility.organisation_id)
+  const currentOffering = Boolean(scopedOffering && product && isOfferingSubscribable(product)
+    && product.offering_package?.id === eligibility.offering_revision_id && product.revision === eligibility.product_revision
+    && product.terms_hash === eligibility.terms_hash && product.terms.eligible_investor_types.includes('ENTITY'))
+  const ownCase = eligibility.representative_user_id === snapshot.actor.id
+  const creatorConflict = product?.created_by === snapshot.actor.id
+  const permitted = eligibility.can_decide === true && snapshot.actor.can_review && eligibility.status === 'SUBMITTED'
+    && !ownCase && !creatorConflict && scopedOffering
+  const canApprove = permitted && eligibility.can_approve === true && currentAdmission && currentOffering
+  const canRevoke = eligibility.can_revoke === true && eligibility.status === 'APPROVED' && snapshot.actor.can_review
+    && !ownCase && !creatorConflict && scopedOffering
+  const allChecked = Object.values(checks).every(Boolean)
+  return <div className={styles.wideGrid}><div className={styles.stack}>
+    <Notice title="Synthetic TEST entity review only">This labelled manual decision is not genuine provider or document-scanner clearance. Approval is eligibility display only; it never authorises a subscription, payment or token issuance.</Notice>
+    <Panel title="Entity product eligibility case" action={<StatusBadge status={eligibility.status} />}><DetailList rows={[
+      { label: 'Case reference', value: <span className={styles.mono}>{eligibility.id}</span> }, { label: 'Case revision', value: eligibility.revision },
+      { label: 'Legal holder', value: eligibility.entity_name }, { label: 'Entity party', value: <span className={styles.mono}>{eligibility.entity_party_id}</span> },
+      { label: 'Entity investment account', value: <span className={styles.mono}>{eligibility.investment_account_id}</span> },
+      { label: 'Acting representative', value: <span className={styles.mono}>{eligibility.representative_user_id}</span> },
+      { label: 'Representative mandate', value: <span className={styles.mono}>{eligibility.representative_mandate_id}</span> },
+      { label: 'Mandate cycle / revision', value: `${eligibility.mandate_cycle} / ${eligibility.mandate_revision}` },
+      { label: 'Investor admission revision', value: eligibility.application_revision }, { label: 'Offering package reference', value: <span className={styles.mono}>{eligibility.offering_revision_id}</span> },
+      { label: 'Product workflow revision', value: eligibility.product_revision }, { label: 'Offering terms fingerprint', value: <span className={styles.mono}>{eligibility.terms_hash}</span> },
+      { label: 'Next responsible owner', value: entityEligibilityNextOwner(eligibility) },
+      { label: 'Decision Compliance appointment', value: <span className={styles.mono}>{eligibility.decision_appointment_id ?? 'Not decided'}</span> },
+      { label: 'Decision appointment revision', value: eligibility.decision_appointment_revision ?? 'Not decided' },
+      { label: 'Decision currency', value: eligibility.status === 'APPROVED' ? eligibility.effective ? 'Current eligibility decision only' : 'Stale; no authority' : 'Not approved' },
+    ]} /><h3 className={styles.sectionGap}>Entity investment statement</h3><p className={styles.copy}>{eligibility.investor_statement}</p>{eligibility.blocked_reason ? <Notice title="Saved eligibility gate" tone="warning">{eligibility.blocked_reason}</Notice> : null}</Panel>
+    {entitySource && !isWealthManagerDetailsV2(entitySource.details) ? <><Panel title="Authorised entity admission source"><DetailList rows={[{ label: 'Application reference', value: entitySource.id }, { label: 'Admission revision', value: entitySource.revision }, { label: 'Status', value: <StatusBadge status={entitySource.status} /> }, { label: 'Approval expiry', value: dateLabel(entitySource.approved_until) }]} /><ApplicationDetailsSummary persona="INVESTOR" details={entitySource.details} /></Panel><Panel title="Private supporting evidence" description="Only evidence already authorised in this nested source is shown. Each download rechecks separate current authority.">{entitySource.details.documents.length ? entitySource.details.documents.map(document => <PrivateDocument key={document.id} document={document} />) : <p className={styles.muted}>No evidence attached.</p>}</Panel></>
+      : <Notice title="Entity admission evidence unavailable" tone="warning">The source is outside this evidence scope. Approval is disabled; another visible application is not a substitute. An authorised reviewer may request information or reject with a reason.</Notice>}
+    {product ? <><ProductFacts product={product} /><OfferingDocuments product={product} /></> : <Notice title="Offering record unavailable" tone="warning">Refresh the scoped queue. No decision is available without the exact issuer offering record.</Notice>}
+  </div><Panel title="Independent entity eligibility decision" description="The backend rechecks the exact case, legal holder, representative mandate, current product Compliance appointment and published terms.">
+    <CommandFeedback command={command} />
+    {permitted && !canApprove ? <Notice title="Entity approval unavailable" tone="warning">Source admission, mandate, offering or separately authorised evidence is not current. Only an authorised information request or rejection is available.</Notice> : null}
+    {permitted ? <form className={styles.form} onSubmit={event => { event.preventDefault(); if (command.busy || command.unknown || notes.trim().length < 20 || decision === 'APPROVED' && (!canApprove || !allChecked)) return; void command.submit('review_product_eligibility', { eligibility_case_id: eligibility.id, expected_revision: eligibility.revision, decision, notes: notes.trim(), checks }) }}><fieldset className={styles.fieldset} disabled={command.busy || command.unknown}><legend>Synthetic entity evidence checks</legend>{([
+      { key: 'identity', label: 'Current entity admission and representative mandate reviewed' },
+      { key: 'product_fit', label: 'Entity statement and product fit reviewed' },
+      { key: 'restrictions', label: 'Exact published country, entity classification and restrictions reviewed' },
+      { key: 'source_of_funds', label: 'Authorised source-of-funds evidence reviewed' },
+    ] as const).map(item => <label key={item.key} className={styles.check}><input type="checkbox" checked={checks[item.key]} onChange={event => setChecks(current => ({ ...current, [item.key]: event.target.checked }))} />{item.label}</label>)}<Field label="Entity eligibility decision"><select value={decision} onChange={event => setDecision(event.target.value)}><option value="CHANGES_REQUIRED">Request further information</option><option value="APPROVED" disabled={!canApprove}>Approve entity eligibility decision only</option><option value="REJECTED">Reject entity product eligibility</option></select></Field><Field label="Entity review rationale" hint="20 to 3,000 characters. Record evidence, limitations and your decision reason."><textarea required minLength={20} maxLength={3000} value={notes} onChange={event => setNotes(event.target.value)} /></Field><button type="submit" className={styles.button} disabled={notes.trim().length < 20 || decision === 'APPROVED' && (!canApprove || !allChecked)}>Record entity eligibility decision</button></fieldset></form>
+      : <Notice title={eligibility.status === 'APPROVED' ? 'Entity decision recorded' : 'Entity decision unavailable'} tone="warning">{ownCase ? 'You cannot review your own entity eligibility case, even in another role.' : creatorConflict ? 'You created this offering and cannot review its entity eligibility.' : !scopedOffering ? 'The exact scoped issuer offering is unavailable.' : eligibility.status !== 'SUBMITTED' ? 'This case is not awaiting a new decision. Follow its next responsible owner.' : 'Current independent product Compliance authority is required.'}</Notice>}
+    {canRevoke ? <form className={`${styles.form} ${styles.sectionGap}`} onSubmit={event => { event.preventDefault(); if (command.busy || command.unknown || revokeReason.trim().length < 20) return; void command.submit('revoke_product_eligibility', { eligibility_case_id: eligibility.id, expected_revision: eligibility.revision, reason: revokeReason.trim() }) }}><Notice title="Terminal entity revocation" tone="warning">Protective revocation ends this decision even if applicant evidence or mandate has expired. It cannot grant authority or be reversed by mandate renewal.</Notice><Field label="Entity revocation reason" hint="20 to 2,000 characters. Record the evidence and protective reason."><textarea required minLength={20} maxLength={2000} disabled={command.busy || command.unknown} value={revokeReason} onChange={event => setRevokeReason(event.target.value)} /></Field><button type="submit" className={styles.buttonSecondary} disabled={command.busy || command.unknown || revokeReason.trim().length < 20}>Revoke entity product eligibility</button></form> : null}
+    {eligibility.review_notes ? <div className={styles.sectionGap}><h3>Recorded reviewer rationale</h3><p className={styles.copy}>{eligibility.review_notes}</p></div> : null}
+  </Panel></div>
+}
+
+function IndividualProductEligibilityReview({ eligibility, product, snapshot, onSaved }: { eligibility: PortalProductEligibility; product?: PortalProduct; snapshot: PortalSnapshot; onSaved: (snapshot: PortalSnapshot) => void }) {
   const [checks, setChecks] = useState({ identity: false, product_fit: false, restrictions: false, source_of_funds: false })
   const application = eligibility.investor_application
   const currentAdmission = Boolean(application && application.status === 'APPROVED' && application.revision === eligibility.application_revision && application.approved_until && Date.parse(application.approved_until) > Date.now() && !isWealthManagerDetailsV2(application.details))

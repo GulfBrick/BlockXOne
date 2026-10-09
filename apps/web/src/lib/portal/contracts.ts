@@ -101,6 +101,15 @@ export type PortalProductEligibility = {
   holder_user_id?: string; product_name?: string; account_kind?: string;
   investor_application?: Pick<PortalApplication, 'id' | 'revision' | 'status' | 'approved_until' | 'details'> | null;
 }
+/** Same canonical eligibility case; legal holder and acting person remain distinct. */
+export type PortalEntityProductEligibility = Omit<PortalProductEligibility, 'holder_user_id' | 'account_kind' | 'offering_revision_id'> & {
+  account_kind: 'ENTITY'; offering_revision_id: string;
+  entity_party_id: string; entity_name: string; representative_user_id: string;
+  representative_mandate_id: string; mandate_cycle: number; mandate_revision: number;
+  decision_appointment_id: string | null; decision_appointment_revision: number | null;
+  provider_mode: 'MANUAL_TEST_REVIEW'; next_owner: 'APPLICANT' | 'COMPLIANCE' | 'NONE';
+  can_request: boolean; blocked_reason: string | null;
+}
 export type PortalOrganisationMandate = {
   id: string; application_id: string; product_organisation_id: string; native_organisation_id: string | null;
   reviewer_scope_organisation_id: string; applicant_user_id: string; organisation_name: string;
@@ -246,6 +255,7 @@ export type PortalSnapshot = {
   requests?: { key: string; command: string }[];
   accounts?: PortalInvestmentAccount[]; entity_investment_accounts?: PortalEntityInvestmentAccount[];
   product_eligibility?: PortalProductEligibility[]; organisation_mandates?: PortalOrganisationMandate[];
+  entity_product_eligibility?: PortalEntityProductEligibility[];
   product_appointments?: PortalProductServiceAppointment[];
   product_appointment_candidates?: PortalProductAppointmentCandidate[];
   investing_representative_mandates?: PortalInvestingRepresentativeMandate[]; operating_context?: PortalOperatingContext;
@@ -360,6 +370,71 @@ export const writableProductTermsSchema = productTermsSchema.refine(v => v.asset
 export const reviewChecks = z.object({ identity: z.boolean(), ownership: z.boolean(), screening: z.boolean(), suitability: z.boolean() }).strict()
 export const offeringChecks = z.object({ issuer: z.boolean(), terms: z.boolean(), disclosures: z.boolean(), eligibility: z.boolean() }).strict()
 export const productEligibilityChecks = z.object({ identity: z.boolean(), product_fit: z.boolean(), restrictions: z.boolean(), source_of_funds: z.boolean() }).strict()
+export const entityProductEligibilitySchema = z.object({
+  id, investment_account_id: id, product_id: id, organisation_id: id,
+  account_kind: z.literal('ENTITY'), offering_revision_id: id,
+  application_revision: z.number().int().positive(), product_revision: z.number().int().positive(),
+  terms_hash: hash, revision: z.number().int().positive(),
+  status: z.enum(['SUBMITTED', 'CHANGES_REQUIRED', 'APPROVED', 'REJECTED', 'REVOKED']),
+  investor_statement: text(20, 2000), submitted_at: z.string().datetime({ offset: true }),
+  reviewed_at: z.string().datetime({ offset: true }).nullable(), reviewer_id: id.nullable(),
+  review_notes: text(20, 3000).nullable(), review_checks: productEligibilityChecks.partial(),
+  approved_until: z.string().datetime({ offset: true }).nullable(),
+  effective: z.boolean(), can_decide: z.boolean(), can_approve: z.boolean(), can_revoke: z.boolean(),
+  entity_party_id: id, entity_name: text(3, 160), representative_user_id: id,
+  representative_mandate_id: id, mandate_cycle: z.number().int().positive(), mandate_revision: z.number().int().positive(),
+  decision_appointment_id: id.nullable(), decision_appointment_revision: z.number().int().positive().nullable(),
+  provider_mode: z.literal('MANUAL_TEST_REVIEW'), next_owner: z.enum(['APPLICANT', 'COMPLIANCE', 'NONE']),
+  can_request: z.boolean(), blocked_reason: text(1, 120).nullable(), product_name: text(1, 160).optional(),
+  investor_application: z.object({
+    id, revision: z.number().int().positive(), status: z.enum(['DRAFT', 'SUBMITTED', 'CHANGES_REQUIRED', 'APPROVED', 'REJECTED']),
+    approved_until: z.string().datetime({ offset: true }).nullable(), details: applicationDetailsSchema,
+  }).strict().nullable().optional(),
+}).strict().superRefine((value, ctx) => {
+  if ((value.decision_appointment_id === null) !== (value.decision_appointment_revision === null)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['decision_appointment_id'], message: 'The decision appointment must have both identity and revision.' })
+  }
+  if (value.status !== 'SUBMITTED' && (!value.decision_appointment_id || !value.decision_appointment_revision
+    || !value.reviewer_id || !value.reviewed_at || !value.review_notes)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['status'], message: 'A reviewed entity case requires its appointment, reviewer, time and reason.' })
+  }
+  if (value.status === 'SUBMITTED' && (value.decision_appointment_id !== null || value.decision_appointment_revision !== null
+    || value.reviewer_id !== null || value.reviewed_at !== null || value.review_notes !== null || value.approved_until !== null
+    || Object.keys(value.review_checks).length !== 0)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['status'], message: 'A submitted entity case cannot carry an earlier decision.' })
+  }
+  if (value.status === 'APPROVED' && (!value.approved_until || !value.decision_appointment_id
+    || !value.reviewer_id || !(['identity', 'product_fit', 'restrictions', 'source_of_funds'] as const).every(field => value.review_checks[field] === true)
+    || Object.keys(value.review_checks).length !== 4)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['status'], message: 'An approved entity decision requires its complete review and appointment evidence.' })
+  }
+  if (value.effective && value.status !== 'APPROVED') {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['effective'], message: 'Only an approved decision can be current.' })
+  }
+  if (value.investor_application && (isWealthManagerDetailsV2(value.investor_application.details)
+    || value.investor_application.details.investor_type !== 'ENTITY')) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['investor_application'], message: 'An entity case cannot contain another admission capacity.' })
+  }
+})
+/** Missing, malformed or duplicate records are unavailable, not an empty authorised queue. */
+export function validatedEntityProductEligibility(snapshot: Pick<PortalSnapshot, 'entity_product_eligibility'>): PortalEntityProductEligibility[] | undefined {
+  const parsed = z.array(entityProductEligibilitySchema).safeParse(snapshot.entity_product_eligibility)
+  if (!parsed.success || new Set(parsed.data.map(item => item.id)).size !== parsed.data.length
+    || new Set(parsed.data.map(item => `${item.investment_account_id}:${item.product_id}`)).size !== parsed.data.length) return undefined
+  return parsed.data
+}
+const productEligibilityRequestSchema = z.object({
+  product_id: id, investment_account_id: id, expected_revision: z.number().int().min(0), investor_statement: text(20, 2000),
+  representative_mandate_id: id.optional(), expected_mandate_revision: z.number().int().positive().optional(),
+  expected_mandate_cycle: z.number().int().positive().optional(), expected_product_revision: z.number().int().positive().optional(),
+  offering_revision_id: id.optional(), terms_hash: hash.optional(),
+}).strict().superRefine((value, ctx) => {
+  const fields = ['representative_mandate_id', 'expected_mandate_revision', 'expected_mandate_cycle', 'expected_product_revision', 'offering_revision_id', 'terms_hash'] as const
+  const supplied = fields.filter(field => value[field] !== undefined)
+  if (supplied.length !== 0 && supplied.length !== fields.length) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['representative_mandate_id'], message: 'An entity request requires every mandate and offering binding.' })
+  }
+})
 export const representativeMandateChecks = z.object({ appointment: z.boolean(), evidence: z.boolean(), scope: z.boolean() }).strict()
 export const investingRepresentativeChecks = z.object({ appointment: z.boolean(), legal_entity: z.boolean(), scope: z.boolean() }).strict()
 export const productServiceAppointmentChecks = z.object({ appointment: z.boolean(), evidence: z.boolean(), scope: z.boolean() }).strict()
@@ -375,7 +450,7 @@ export const portalCommandSchema = z.discriminatedUnion('command', [
   z.object({ command: z.literal('review_investing_representative_mandate'), key: id, payload: z.object({ mandate_id: id, expected_revision: z.number().int().positive(), decision: z.enum(['APPROVED', 'CHANGES_REQUIRED', 'REJECTED']), notes: text(20, 3000), checks: investingRepresentativeChecks }).strict() }).strict(),
   z.object({ command: z.literal('apply_investing_representative_mandate'), key: id, payload: z.object({ mandate_id: id, expected_revision: z.number().int().positive() }).strict() }).strict(),
   z.object({ command: z.literal('revoke_investing_representative_mandate'), key: id, payload: z.object({ mandate_id: id, expected_revision: z.number().int().positive(), reason: text(20, 1000) }).strict() }).strict(),
-  z.object({ command: z.literal('request_product_eligibility'), key: id, payload: z.object({ product_id: id, investment_account_id: id, expected_revision: z.number().int().min(0), investor_statement: text(20, 2000) }).strict() }).strict(),
+  z.object({ command: z.literal('request_product_eligibility'), key: id, payload: productEligibilityRequestSchema }).strict(),
   z.object({ command: z.literal('review_product_eligibility'), key: id, payload: z.object({ eligibility_case_id: id, expected_revision: z.number().int().positive(), decision: z.enum(['APPROVED', 'CHANGES_REQUIRED', 'REJECTED']), notes: text(20, 3000), checks: productEligibilityChecks }).strict() }).strict(),
   z.object({ command: z.literal('revoke_product_eligibility'), key: id, payload: z.object({ eligibility_case_id: id, expected_revision: z.number().int().positive(), reason: text(20, 2000) }).strict() }).strict(),
   z.object({ command: z.literal('request_product_service_appointment'), key: id, payload: z.object({ product_id: id, role: z.enum(['IssuerFundManager', 'ComplianceOfficer']), appointee_user_id: id, native_membership_id: id, expected_product_revision: z.number().int().positive(), evidence_reference: text(20, 400), requested_until: z.string().datetime({ offset: false }).regex(/Z$/) }).strict() }).strict(),

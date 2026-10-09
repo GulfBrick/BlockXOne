@@ -1,5 +1,13 @@
 # BlockXOne platform releases
 
+## 1.1.0-rc.26 — Entity-account eligibility handoff candidate
+
+- Extend exact rc.25 source `f579f4c5285b866284526bafb0f21569b4b6a283` in the same repository, application, shell and two existing environments. No live role grant, provider activation, financial movement or contract change.
+- Add an exact entity/representative/mandate/offering-bound request and independent product-appointed Compliance decision over the existing canonical eligibility cases and immutable receipts. Keep individual history and execution guards unchanged.
+- Connect entity account, offering eligibility and review queue screens; show legal holder, active representative, responsible owner, case/mandate/package revisions, information requests and recorded decisions. Entity approval cannot enable a subscription or create ownership.
+- Require additive `supabase/features/bx1_entity_eligibility.sql` on the current reviewed reader/command chain. MAIN business admission remains closed. TEST may lead MAIN as a recorded prerelease; this candidate is not a claim of paired release alignment.
+- Source/cloud/hosted acceptance remains pending. Isolated cloud technical-readiness fixtures are not deployment/finality proof. Genuine Sumsub KYC/KYB, private-document engine/disposal, remaining account/mandate acceptance and both complete investment journeys remain separate deliverables.
+
 ## 1.1.0-rc.25 — Connected customer-admission handoff candidate
 
 - Extend rc.24 `fe877a6c06180453d3dd568ddec2d51c40c5f0d7` in the same application and existing TEST/MAIN projects. No login, role, wallet, contract or money change.

@@ -38,6 +38,8 @@ on:
       - apps/web/scripts/document-processing-proof.mjs
       - supabase/features/bx1_provider_binding.sql
       - apps/web/scripts/provider-binding-proof.mjs
+      - supabase/features/bx1_entity_eligibility.sql
+      - apps/web/scripts/entity-eligibility-proof.mjs
       - supabase/features/bx1_entry.sql
       - supabase/features/bx1_entry_admission.sql
       - PLATFORM_RELEASE.json
@@ -98,6 +100,8 @@ on:
       - apps/web/scripts/document-processing-proof.mjs
       - supabase/features/bx1_provider_binding.sql
       - apps/web/scripts/provider-binding-proof.mjs
+      - supabase/features/bx1_entity_eligibility.sql
+      - apps/web/scripts/entity-eligibility-proof.mjs
       - supabase/features/bx1_entry.sql
       - supabase/features/bx1_entry_admission.sql
       - PLATFORM_RELEASE.json
