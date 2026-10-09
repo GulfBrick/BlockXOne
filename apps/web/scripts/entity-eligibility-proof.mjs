@@ -342,12 +342,17 @@ export async function proveEntityEligibility(db, clients, featureSql) {
           effective_on: '2026-09-01', change_reason: 'Initial synthetic owner disclosure.', evidence_document_id: docs[2].id,
         }] }
       await db.query(`insert into bx1_portal.applications(id,user_id,persona,status,revision,details,reviewer_scope,
-        submitted_at,reviewed_at,reviewer_id,review_notes,review_checks,approved_until)
-        values($1,$2,'INVESTOR','APPROVED',3,$3::jsonb,$4,clock_timestamp()-interval '1 minute',statement_timestamp(),$5,
+        provider_mode,submitted_at,reviewed_at,reviewer_id,review_notes,review_checks,approved_until)
+        values($1,$2,'INVESTOR','APPROVED',3,$3::jsonb,$4,'MANUAL_TEST_REVIEW',clock_timestamp()-interval '1 minute',statement_timestamp(),$5,
           'Synthetic admission precondition; not hosted human or provider acceptance.',$6::jsonb,statement_timestamp()+interval '30 days')`,
       [id(200 + n), id(n), JSON.stringify(details), scope, id(4), JSON.stringify(admissionChecks)])
       await db.query(`insert into bx1_portal.application_detail_versions(application_id,application_revision,details,submitted_at,capture_kind)
         select id,2,details,submitted_at,'SUBMISSION' from bx1_portal.applications where id=$1`, [id(200 + n)])
+      await claims(n); await admin()
+      eq(await scalar('select jsonb_build_array(admission_purpose,provider_mode) from bx1_portal.applications where id=$1', [id(200 + n)]),
+        ['INVESTOR_ADMISSION', 'MANUAL_TEST_REVIEW'], `synthetic entity ${n}: server-owned purpose and explicit manual prerequisite mode`)
+      eq(await scalar('select bx1_portal.entity_application_account_openable($1)', [id(200 + n)]), true,
+        `synthetic entity ${n}: exact preserved admission gate is open under its applicant JWT before guarded create`)
       const opened = await command(n, applicant, 'create_entity_investment_account', { application_id: id(200 + n) })
       const account = opened.entity_investment_accounts.find(row => row.application_id === id(200 + n))
       truth(account?.id, 'fresh synthetic approved entity creates canonical account through unchanged guarded command')
@@ -374,10 +379,12 @@ export async function proveEntityEligibility(db, clients, featureSql) {
         effective_on: '2026-09-01', change_reason: 'Initial synthetic owner disclosure.', evidence_document_id: ownerDocuments[2].id,
       }] }
     await db.query(`insert into bx1_portal.applications(id,user_id,persona,status,revision,details,reviewer_scope,
-      reviewed_at,reviewer_id,review_notes,review_checks,approved_until)
-      values($1,$2,'WEALTH_MANAGER','APPROVED',3,$3::jsonb,$4,statement_timestamp(),$5,
+      provider_mode,reviewed_at,reviewer_id,review_notes,review_checks,approved_until)
+      values($1,$2,'WEALTH_MANAGER','APPROVED',3,$3::jsonb,$4,'MANUAL_TEST_REVIEW',statement_timestamp(),$5,
         'Synthetic issuer admission precondition only.',$6::jsonb,statement_timestamp()+interval '30 days')`,
     [ownerAppId, id(2), JSON.stringify(ownerDetails), scope, id(5), JSON.stringify(admissionChecks)])
+    eq(await scalar('select jsonb_build_array(admission_purpose,provider_mode) from bx1_portal.applications where id=$1', [ownerAppId]),
+      ['CUSTOMER_ORGANISATION_ADMISSION', 'MANUAL_TEST_REVIEW'], 'synthetic owner: server-owned purpose and explicit manual prerequisite mode')
     await db.query(`insert into bx1_portal.application_detail_versions(application_id,application_revision,details,submitted_at,capture_kind)
       select id,2,details,statement_timestamp()-interval '1 minute','SUBMISSION' from bx1_portal.applications where id=$1`, [ownerAppId])
     await db.query(`insert into bx1_portal.organisations(id,application_id,owner_id,name,reviewer_scope)
