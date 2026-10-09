@@ -9,18 +9,211 @@ function requireFixture() {
     throw new Error('Entity eligibility proof requires exact disposable cloud fixture')
 }
 
-export async function proveEntityEligibility(db, clients, featureSql) {
+const fixtureId = n => `ee760000-0000-4000-8000-${String(n).padStart(12, '0')}`
+const fixturePrefix = 'ee760000-0000-4000-8000-'
+const fixtureScope = '0ba2b126-bd85-4cfb-9a1d-83633c9def1e'
+const fixtureLabel = 'synthetic-legacy-v1-compatibility'
+const fixtureScalar = async (db, sql, params = []) => Object.values((await db.query(sql, params)).rows[0])[0]
+const sha256 = value => createHash('sha256').update(value).digest('hex')
+const freeze = value => {
+  if (value && typeof value === 'object') { for (const child of Object.values(value)) freeze(child); Object.freeze(value) }
+  return value
+}
+const fixtureDocument = (n, index, kind) => ({ id: fixtureId(800 + n * 10 + index), kind,
+  title: `Synthetic entity ${kind} evidence`, storage_path: `${fixtureId(n)}/${fixtureId(800 + n * 10 + index)}`,
+  sha256: 'a'.repeat(64), size: 25, mime_type: 'application/pdf' })
+const ownerDetails = () => ({ details_version: 3, full_name: 'Synthetic Wealth Manager', country: 'ZA',
+  company_name: 'Synthetic Entity Product Issuer', registration_reference: 'SYNTHETIC-ISSUER',
+  beneficial_owners: 'Fictional sole owner; not provider cleared.', business_activities: 'Synthetic wealth-manager product evaluation only.',
+  representative_position: 'Synthetic director', authority_basis: 'Fictional board mandate for isolated proof only.',
+  documents: ['IDENTITY', 'COMPANY', 'BENEFICIAL_OWNERS'].map((kind, index) => fixtureDocument(2, index, kind)),
+  test_data_acknowledged: true, ownership_change_reason: 'Initial synthetic issuer ownership disclosure for this bounded proof.',
+  ownership_control: [{ id: fixtureId(952), party_type: 'PERSON', legal_name: 'Synthetic Issuer Owner', registration_reference: '',
+    country: 'ZA', relationship: 'DIRECT_OWNER', ownership_basis_points: 10000,
+    control_basis: 'Fictional sole owner and controller.', effective_on: '2026-09-01',
+    change_reason: 'Initial synthetic owner disclosure.', evidence_document_id: fixtureId(822) }] })
+const legacyTerms = () => ({ asset_type: 'FUND', name: 'Synthetic Legacy ENTITY Eligibility Compatibility Fund',
+  issuer_name: 'Synthetic Entity Product Issuer', summary: 'Fictional historical-v1 package for eligibility compatibility only.',
+  strategy: 'Fictional diversified compatibility strategy; no investable fund or real portfolio.', share_class: 'Synthetic Class A',
+  currency: 'ZAR_TEST', unit_price_minor: '10000', cap_units: '100', minimum_units: '1',
+  pricing_basis: 'Fixed fictional legacy unit price for compatibility checks only.', fees: 'No real fees or payments in this synthetic proof.',
+  redemption_terms: 'Future governed service, unavailable for this fictional compatibility package.',
+  eligible_countries: ['ZA'], eligible_investor_types: ['INDIVIDUAL', 'ENTITY'], property_address: '',
+  property_valuation_minor: '0', rental_income_policy: '', documents: {
+    memorandum: 'Synthetic historical memorandum. No fund interest or investment is offered. '.repeat(2).trim(),
+    risks: 'Synthetic historical risk disclosure. No real investment, return or ownership is represented. '.repeat(2).trim(),
+    subscription_terms: 'Synthetic historical subscription terms. No funding, assets or token delivery is authorised. '.repeat(2).trim(),
+  } })
+const modernTerms = () => ({ ...legacyTerms(), name: 'Synthetic Modern ENTITY Eligibility Closed Fund',
+  terms_version: 2, currency: 'TST', settlement_decimals: 6, unit_price_minor: '10000000',
+  strategy: 'The fund.mandate policy is the authoritative investment mandate for this package.',
+  pricing_basis: 'The fund.nav and fund.dealing policies are the authoritative pricing terms for this package.',
+  fees: 'The fund.fees policy is the authoritative fee schedule for this package.',
+  redemption_terms: 'The fund.redemption, fund.dealing and fund.liquidity policies govern exits for this package.',
+  fund: {
+    mandate: 'Fictional diversified fund mandate with no real portfolio or investable claim.',
+    class_rights: 'Synthetic Class A equal economic rights, with no live ownership or transfer right.',
+    nav: { valuation_method: 'Synthetic marked portfolio value divided by issued test units.', frequency: 'MONTHLY',
+      pricing_cutoff: '16:00 UTC on last business day', correction_policy: 'Corrections require a reviewed replacement NAV version and disclosure.' },
+    dealing: { subscription_frequency: 'MONTHLY', redemption_frequency: 'MONTHLY', notice_days: 10, settlement_days: 5 },
+    fees: { management_bps: 100, performance_bps: 0, other_fees: 'No other synthetic fees are charged.' },
+    liquidity: { lockup_days: 0, gate_bps: 10000, suspension_policy: 'A separately reviewed suspension decision is required before dealing stops.' },
+    distributions: { frequency: 'NONE', policy: 'No distributions in this fictional initial fund class.' },
+    redemption: { price_basis: 'NAV', conditions: 'Redemption depends on the reviewed dealing calendar and available liquidity.' },
+  } })
+async function insertFixtureIdentity(db, n) {
+  const id = fixtureId
+  await db.query(`insert into auth.users(id,email,email_confirmed_at,is_anonymous)
+    values($1,$2,clock_timestamp(),false)`, [id(n), `entity-eligibility-${n}@example.invalid`])
+  await db.query(`insert into auth.mfa_factors(id,user_id,status,factor_type) values($1,$2,'verified','totp')`, [id(400 + n), id(n)])
+  await db.query(`insert into auth.sessions(id,user_id,not_after,created_at,aal,factor_id)
+    values($1,$2,clock_timestamp()+interval '1 hour',clock_timestamp()-interval '1 hour','aal2',$3)`, [id(100 + n), id(n), id(400 + n)])
+  await db.query('insert into public.bx1_profiles(id,display_name) values($1,$2)', [id(n), `Synthetic Entity Eligibility Actor ${n}`])
+  if (n !== 8) await db.query(`insert into bx1_private.persons(id,label,status,evidence_reference,bootstrap_receipt_id)
+    values($1,$2,'TRUSTED','synthetic:entity-proof-person',$3)`, [id(500 + n), `Synthetic entity-proof person ${n}`, id(600 + n)])
+  await db.query(`insert into bx1_private.person_principals(auth_user_id,person_id,status,evidence_reference,bootstrap_receipt_id)
+    values($1,$2,'TRUSTED','synthetic:entity-proof-principal',$3)`, [id(n), id(n === 8 ? 501 : 500 + n), id(700 + n)])
+}
+// Whole rows stay immutable except the expressly later product status/review timestamps.
+async function foundationEvidence(db) {
+  return fixtureScalar(db, `select jsonb_build_object(
+    'users',(select jsonb_agg(to_jsonb(t) order by id) from auth.users t where id=any($1::uuid[])),
+    'sessions',(select jsonb_agg(to_jsonb(t) order by id) from auth.sessions t where user_id=any($1::uuid[])),
+    'factors',(select jsonb_agg(to_jsonb(t) order by id) from auth.mfa_factors t where user_id=any($1::uuid[])),
+    'profiles',(select jsonb_agg(to_jsonb(t) order by id) from public.bx1_profiles t where id=any($1::uuid[])),
+    'persons',(select jsonb_agg(to_jsonb(t) order by id) from bx1_private.persons t where id=any($2::uuid[])),
+    'principals',(select jsonb_agg(to_jsonb(t) order by auth_user_id) from bx1_private.person_principals t where auth_user_id=any($1::uuid[])),
+    'application',(select to_jsonb(t) from bx1_portal.applications t where id=$3),
+    'submission',(select to_jsonb(t) from bx1_portal.application_detail_versions t where application_id=$3 and application_revision=2),
+    'ownership',(select jsonb_agg(to_jsonb(t) order by relationship_id) from bx1_portal.application_ownership_control_versions t where application_id=$3),
+    'organisation',(select to_jsonb(t) from bx1_portal.organisations t where id=$4),
+    'product',(select to_jsonb(t)-array['status','reviewer_id','review_notes','reviewed_at','published_at','review_checks'] from bx1_portal.products t where id=$5),
+    'offering',(select to_jsonb(t) from bx1_portal.offering_revisions t where id=$6))`,
+  [[fixtureId(2), fixtureId(5)], [fixtureId(502), fixtureId(505)], fixtureId(202), fixtureId(302), fixtureId(300), fixtureId(301)])
+}
+async function fixtureRelations(db) {
+  return (await db.query(`select n.nspname||'.'||c.relname relation from pg_class c join pg_namespace n on n.oid=c.relnamespace
+    where c.relkind='r' and n.nspname in ('auth','public','bx1_portal','bx1_private','storage') order by 1`)).rows.map(row => row.relation)
+}
+async function outsideFixture(db, relations) {
+  const result = {}
+  for (const relation of relations) {
+    assert.match(relation, /^[a-z0-9_]+\.[a-z0-9_]+$/)
+    result[relation] = await fixtureScalar(db, `select md5(coalesce(jsonb_agg(to_jsonb(t) order by to_jsonb(t)::text)::text,''))
+      from ${relation} t where to_jsonb(t)::text not like $1`, [`%${fixturePrefix}%`])
+  }
+  return result
+}
+async function functionEvidence(db, signatures) {
+  const result = {}
+  for (const signature of signatures) {
+    const row = await fixtureScalar(db, `select jsonb_build_object('definition',pg_get_functiondef(p.oid),
+      'owner',p.proowner,'acl',p.proacl,'security_definer',p.prosecdef,'config',p.proconfig,'volatility',p.provolatile,
+      'triggers',coalesce((select jsonb_agg(jsonb_build_object('table',t.tgrelid::regclass::text,'name',t.tgname,
+        'enabled',t.tgenabled,'definition',pg_get_triggerdef(t.oid)) order by t.tgrelid,t.tgname)
+        from pg_trigger t where t.tgfoid=p.oid),'[]'::jsonb)) from pg_proc p where p.oid=$1::regprocedure`, [signature])
+    const { definition, ...attributes } = row
+    result[signature] = { sha256: sha256(definition), ...attributes }
+  }
+  return result
+}
+export async function prepareEntityEligibilityLegacyFixture(db) {
+  requireFixture()
+  let checks = 0
+  const eq = (actual, expected, label) => { assert.deepEqual(actual, expected, label); checks++ }
+  const truth = (actual, label) => { assert.ok(actual, label); checks++ }
+  const scalar = (sql, params = []) => fixtureScalar(db, sql, params)
+  await db.query('reset role')
+  await db.query('savepoint entity_eligibility_legacy_preparation')
+  try {
+    eq(await scalar("select current_database()='bx1_demo_ci' and current_user='postgres'"), true, 'exact cloud owner preparation')
+    eq(await scalar("select to_regprocedure('bx1_portal.guard_fund_v2_product()') is null"), true, 'legacy foundation is prepared before v2 cutover, never bypassed after it')
+    const relations = await fixtureRelations(db), outside = await outsideFixture(db, relations)
+    for (const relation of relations) eq(await scalar(`select count(*)::int from ${relation} t where to_jsonb(t)::text like $1`, [`%${fixturePrefix}%`]), 0,
+      `${relation}: all entity fixture IDs are absent before preparation`)
+    const guards = ['bx1_portal.guard_offering_publication()', 'bx1_portal.guard_offering_subscription()',
+      'bx1_portal.guard_offering_eligibility()', 'bx1_portal.offering_operational(uuid)',
+      'bx1_portal.offering_technical_ready(uuid)']
+    const oldGuards = await functionEvidence(db, guards)
+    eq(await scalar('select bx1_portal.entry_manual_review_enabled()'), true, 'explicit TEST/manual scope is already enabled, not modified by preparation')
+    eq(await scalar('select reviewer_scope::text from bx1_portal.entry_configuration where singleton'), fixtureScope, 'prepared issuer uses the existing exact reviewer scope')
+    for (const n of [2, 5]) await insertFixtureIdentity(db, n)
+    const details = ownerDetails()
+    await db.query(`insert into bx1_portal.applications(id,user_id,persona,status,revision,details,reviewer_scope,provider_mode,
+      submitted_at,reviewed_at,reviewer_id,review_notes,review_checks,approved_until)
+      values($1,$2,'WEALTH_MANAGER','APPROVED',3,$3::jsonb,$4,'MANUAL_TEST_REVIEW',clock_timestamp()-interval '1 minute',
+        statement_timestamp(),$5,'Synthetic issuer admission prerequisite only; no provider or human acceptance.',
+        '{"identity":true,"ownership":true,"screening":true,"suitability":true}',statement_timestamp()+interval '30 days')`,
+    [fixtureId(202), fixtureId(2), JSON.stringify(details), fixtureScope, fixtureId(5)])
+    await db.query(`insert into bx1_portal.application_detail_versions(application_id,application_revision,details,submitted_at,capture_kind)
+      select id,2,details,submitted_at,'SUBMISSION' from bx1_portal.applications where id=$1`, [fixtureId(202)])
+    await db.query(`insert into bx1_portal.application_ownership_control_versions(application_id,application_revision,relationship_id,
+      party_type,legal_name,registration_reference,country,relationship,ownership_basis_points,control_basis,effective_on,
+      change_reason,ownership_change_reason,evidence_document_id,submitted_details_sha256,submitted_at)
+      select a.id,2,(r->>'id')::uuid,r->>'party_type',r->>'legal_name',r->>'registration_reference',r->>'country',r->>'relationship',
+        (r->>'ownership_basis_points')::integer,r->>'control_basis',(r->>'effective_on')::date,r->>'change_reason',
+        a.details->>'ownership_change_reason',(r->>'evidence_document_id')::uuid,encode(sha256(convert_to(a.details::text,'UTF8')),'hex'),a.submitted_at
+      from bx1_portal.applications a cross join lateral jsonb_array_elements(a.details->'ownership_control') r where a.id=$1`, [fixtureId(202)])
+    await db.query(`insert into bx1_portal.organisations(id,application_id,owner_id,name,reviewer_scope)
+      values($1,$2,$3,'Synthetic Entity Eligibility Issuer',$4)`, [fixtureId(302), fixtureId(202), fixtureId(2), fixtureScope])
+    await db.query('update bx1_portal.applications set organisation_id=$1 where id=$2', [fixtureId(302), fixtureId(202)])
+    const terms = legacyTerms()
+    await scalar('select bx1_portal.validate_terms($1::jsonb)', [JSON.stringify(terms)])
+    await db.query(`insert into bx1_portal.products(id,organisation_id,created_by,status,revision,terms,terms_hash,cap_units,unit_price_minor,minimum_units)
+      values($1,$2,$3,'IN_REVIEW',1,$4::jsonb,encode(sha256(convert_to(($4::jsonb)::text,'UTF8')),'hex'),
+        ($4::jsonb->>'cap_units')::numeric,($4::jsonb->>'unit_price_minor')::numeric,($4::jsonb->>'minimum_units')::numeric)`,
+    [fixtureId(300), fixtureId(302), fixtureId(2), JSON.stringify(terms)])
+    await db.query(`insert into bx1_portal.offering_revisions(id,product_id,package_number,origin,product_revision_at_submission,
+      terms,terms_hash,document_hashes,submitted_by,submitted_at) select $1,id,1,'SUBMITTED',revision,terms,terms_hash,
+      bx1_portal.offering_document_hashes(terms),created_by,clock_timestamp() from bx1_portal.products where id=$2`, [fixtureId(301), fixtureId(300)])
+    await db.query('update bx1_portal.products set current_offering_revision_id=$1 where id=$2', [fixtureId(301), fixtureId(300)])
+    eq(await scalar('select bx1_portal.customer_admission_package_current($1)', [fixtureId(202)]), true, 'synthetic owner has exact immutable predecessor and ownership hash, not invented approval lineage')
+    eq(await scalar('select jsonb_build_array(admission_purpose,provider_mode) from bx1_portal.applications where id=$1', [fixtureId(202)]),
+      ['CUSTOMER_ORGANISATION_ADMISSION', 'MANUAL_TEST_REVIEW'], 'purpose is server-derived and mode explicitly synthetic')
+    eq(await scalar('select bx1_portal.offering_technical_ready($1)', [fixtureId(301)]), false, 'prepared package has no technical acceptance')
+    const allowed = new Set(['auth.users','auth.sessions','auth.mfa_factors','public.bx1_profiles','bx1_private.persons',
+      'bx1_private.person_principals','bx1_portal.applications','bx1_portal.application_detail_versions',
+      'bx1_portal.application_ownership_control_versions','bx1_portal.organisations','bx1_portal.products','bx1_portal.offering_revisions'])
+    for (const relation of relations.filter(relation => !allowed.has(relation))) eq(await scalar(
+      `select count(*)::int from ${relation} t where to_jsonb(t)::text like $1`, [`%${fixturePrefix}%`]), 0,
+    `${relation}: no early grant, provider, storage, quarantine, processing, appointment, eligibility, money or command side effect`)
+    eq(await outsideFixture(db, relations), outside, 'preparation preserves every pre-existing outside-namespace row')
+    eq(await functionEvidence(db, guards), oldGuards, 'preparation preserves production guard definitions, owners, ACLs and enabled triggers')
+    const foundation = await foundationEvidence(db)
+    truth(foundation.product && foundation.offering && foundation.submission && foundation.ownership?.length === 1, 'complete exact pre-cutover foundation evidence')
+    const packet = freeze({ version: 1, label: fixtureLabel, checks, evidence: { namespace: fixturePrefix,
+      ids: { actors: [fixtureId(2), fixtureId(5)], application: fixtureId(202), organisation: fixtureId(302),
+        product: fixtureId(300), offering: fixtureId(301), documents: [fixtureId(820), fixtureId(821), fixtureId(822)] },
+      foundation, sha256: sha256(JSON.stringify(foundation)) } })
+    await db.query('release savepoint entity_eligibility_legacy_preparation')
+    return packet
+  } catch (error) {
+    await db.query('rollback to savepoint entity_eligibility_legacy_preparation; release savepoint entity_eligibility_legacy_preparation')
+    throw error
+  }
+}
+
+export async function proveEntityEligibility(db, clients, featureSql, preparedFixture) {
   requireFixture()
   assert.equal(clients.length, 2, 'entity proof requires two independent clients')
+  assert.equal(preparedFixture?.version, 1, 'exact prepared fixture packet required; no fallback')
+  assert.equal(preparedFixture.label, fixtureLabel, 'positive is historical compatibility only')
+  assert.ok(Number.isSafeInteger(preparedFixture.checks) && preparedFixture.checks >= 0, 'seed checks are counted separately by parent')
+  assert.deepEqual(Object.keys(preparedFixture).sort(), ['checks', 'evidence', 'label', 'version'])
+  assert.deepEqual(Object.keys(preparedFixture.evidence).sort(), ['foundation', 'ids', 'namespace', 'sha256'])
+  assert.equal(preparedFixture.evidence.namespace, fixturePrefix)
+  assert.deepEqual(preparedFixture.evidence.ids, { actors: [fixtureId(2), fixtureId(5)], application: fixtureId(202),
+    organisation: fixtureId(302), product: fixtureId(300), offering: fixtureId(301), documents: [fixtureId(820), fixtureId(821), fixtureId(822)] })
+  assert.equal(sha256(JSON.stringify(preparedFixture.evidence.foundation)), preparedFixture.evidence.sha256, 'altered seed evidence is rejected')
   let checks = 0, sequence = 0, begun = false, technicalInstalled = false
-  let originalTechnical, originalTechnicalHash
+  let originalTechnical, originalTechnicalHash, originalTechnicalEvidence
   const eq = (a, b, label) => { assert.deepEqual(a, b, label); checks++ }
   const truth = (value, label) => { assert.ok(value, label); checks++ }
   const scalar = async (sql, params = [], client = db) => Object.values((await client.query(sql, params)).rows[0])[0]
-  const id = n => `ee760000-0000-4000-8000-${String(n).padStart(12, '0')}`
+  const id = fixtureId
   const key = () => `ef760000-0000-4000-8000-${String(++sequence).padStart(12, '0')}`
-  const prefix = 'ee760000-0000-4000-8000-'
-  const scope = '0ba2b126-bd85-4cfb-9a1d-83633c9def1e'
+  const prefix = fixturePrefix
+  const scope = fixtureScope
   const otherScope = 'e3000000-0000-4000-8000-000000000002'
   const applicant = { mode: 'APPLICANT' }
   const reviewer = { mode: 'ROLE', organisationId: scope, role: 'ComplianceOfficer' }
@@ -50,13 +243,14 @@ export async function proveEntityEligibility(db, clients, featureSql) {
     return scalar('select public.bx1_portal_command_scoped($1,$2,$3::jsonb,$4::jsonb)',
       [action, request, JSON.stringify(body), JSON.stringify(context)], client)
   }
-  const denied = async (label, action, expectedCode = '42501') => {
+  const denied = async (label, action, expectedCode = '42501', expectedMessage = null) => {
     await admin(); await db.query('savepoint entity_expected_denial')
     let error
     try { await action() } catch (failure) { error = failure }
     await db.query('rollback to savepoint entity_expected_denial; release savepoint entity_expected_denial'); await admin()
     truth(error, `${label}: operation denied`)
     eq(error.code, expectedCode, `${label}: SQLSTATE`)
+    if (expectedMessage !== null) eq(error.message, expectedMessage, `${label}: preserved exact guard diagnostic`)
   }
   const probe = async action => {
     await admin(); await db.query('savepoint entity_probe')
@@ -110,6 +304,12 @@ export async function proveEntityEligibility(db, clients, featureSql) {
       'persons',(select md5(coalesce(jsonb_agg(to_jsonb(t) order by id)::text,'')) from bx1_private.persons t where id::text not like $1),
       'principals',(select md5(coalesce(jsonb_agg(to_jsonb(t) order by auth_user_id)::text,'')) from bx1_private.person_principals t where auth_user_id::text not like $1),
       'applications',(select md5(coalesce(jsonb_agg(to_jsonb(t) order by id)::text,'')) from bx1_portal.applications t where user_id::text not like $1),
+      'submissions',(select md5(coalesce(jsonb_agg(to_jsonb(t) order by application_id,application_revision)::text,'')) from bx1_portal.application_detail_versions t where application_id::text not like $1),
+      'ownership',(select md5(coalesce(jsonb_agg(to_jsonb(t) order by application_id,application_revision,relationship_id)::text,'')) from bx1_portal.application_ownership_control_versions t where application_id::text not like $1),
+      'organisations',(select md5(coalesce(jsonb_agg(to_jsonb(t) order by id)::text,'')) from bx1_portal.organisations t where id::text not like $1),
+      'products',(select md5(coalesce(jsonb_agg(to_jsonb(t) order by id)::text,'')) from bx1_portal.products t where id::text not like $1),
+      'offerings',(select md5(coalesce(jsonb_agg(to_jsonb(t) order by id)::text,'')) from bx1_portal.offering_revisions t where product_id::text not like $1),
+      'offering_decisions',(select md5(coalesce(jsonb_agg(to_jsonb(t) order by id)::text,'')) from bx1_portal.offering_decisions t where offering_revision_id::text not like $1),
       'accounts',(select md5(coalesce(jsonb_agg(to_jsonb(t) order by id)::text,'')) from bx1_portal.investment_accounts t where application_id::text not like $1),
       'investing_mandates',(select md5(coalesce(jsonb_agg(to_jsonb(t) order by id)::text,'')) from bx1_portal.investing_representative_mandates t where representative_user_id::text not like $1),
       'appointments',(select md5(coalesce(jsonb_agg(to_jsonb(t) order by id)::text,'')) from bx1_portal.product_service_appointments t where product_id::text not like $1),
@@ -122,12 +322,14 @@ export async function proveEntityEligibility(db, clients, featureSql) {
   const handoffFunctions = ['bx1_portal.customer_application_handoff(jsonb,uuid)',
     'bx1_portal.entry_read_pre_handoff()', 'bx1_portal.read_scoped_pre_handoff(jsonb)']
   const functions = ['bx1_portal.product_eligibility_current(uuid)', 'bx1_portal.account_usable(jsonb,uuid)',
-    'bx1_portal.offering_operational(uuid)', 'bx1_portal.guard_offering_eligibility()', ...handoffFunctions]
+    'bx1_portal.offering_operational(uuid)', 'bx1_portal.guard_offering_eligibility()',
+    'bx1_portal.guard_fund_v2_product()', 'bx1_portal.guard_real_estate_v2_product()',
+    // The FUND-named retained subscription guard covers both v2 asset classes.
+    'bx1_portal.guard_fund_v2_subscription()', 'bx1_portal.guard_offering_publication()',
+    'bx1_portal.guard_offering_subscription()', ...handoffFunctions]
   const functionHashes = async () => {
     await admin()
-    const result = {}
-    for (const signature of functions) result[signature] = await scalar('select md5(pg_get_functiondef($1::regprocedure))', [signature])
-    return result
+    return functionEvidence(db, functions)
   }
   const waitOn = async (waiter, blocker, relation = null, lock = null) => {
     for (let attempt = 0; attempt < 150; attempt++) {
@@ -203,14 +405,14 @@ export async function proveEntityEligibility(db, clients, featureSql) {
       revoked_at=clock_timestamp(),revoked_by_user_id=$2,revoke_reason='Synthetic exact appointment withdrawn.'
       where id=$1 and status='APPLIED'`, [target, id(6)])
   }
-  const createAppointment = async (appointment, actor, membership, staffRole) => {
+  const createAppointment = async (appointment, actor, membership, staffRole, targetProduct = product) => {
     await admin()
     await db.query(`insert into bx1_portal.product_service_appointments(id,product_id,product_organisation_id,
       reviewer_scope_organisation_id,role,appointee_user_id,native_membership_id,requested_by_user_id,requested_in_context,
       product_revision_at_request,terms_hash_at_request,evidence_reference,requested_until)
       values($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,1,$10,'Synthetic isolated entity-proof appointment evidence.',$11::timestamptz)`,
-    [appointment, productId, organisationId, scope, staffRole, id(actor), membership, id(2),
-      JSON.stringify({ mode: 'ROLE', organisationId: scope, role: 'OfferingManager' }), product.terms_hash, until])
+    [appointment, targetProduct.id, organisationId, scope, staffRole, id(actor), membership, id(2),
+      JSON.stringify({ mode: 'ROLE', organisationId: scope, role: 'OfferingManager' }), targetProduct.terms_hash, until])
     const receipt = await scalar(`insert into bx1_portal.product_service_appointment_receipts(appointment_id,
       appointment_revision,action,actor_id,operating_context,command_payload,status_after)
       values($1,2,'review_product_service_appointment',$2,$3::jsonb,
@@ -227,6 +429,9 @@ export async function proveEntityEligibility(db, clients, featureSql) {
   try {
     await begin()
     eq(await scalar("select current_database()='bx1_demo_ci' and current_user='postgres'"), true, 'exact disposable owner fixture')
+    eq(await foundationEvidence(db), preparedFixture.evidence.foundation, 'final chain consumes every exact prepared identity/admission/organisation/package row without replacement')
+    eq(await scalar('select status from bx1_portal.products where id=$1', [productId]), 'IN_REVIEW', 'legacy fixture enters final proof already in review; no post-cutover submit')
+    eq(await scalar('select bx1_portal.customer_admission_package_current($1)', [ownerAppId]), true, 'prepared owner retains exact submission and ownership predecessor')
     for (const signature of handoffFunctions) {
       eq(await scalar('select to_regprocedure($1) is not null', [signature]), true, `${signature} is retained in the final current reader chain`)
       eq(await scalar(`select not exists(select 1 from pg_proc p cross join lateral
@@ -243,10 +448,12 @@ export async function proveEntityEligibility(db, clients, featureSql) {
     const oldWriterDefinition = await scalar("select pg_get_functiondef('bx1_portal.execute_scoped(jsonb,text,uuid,jsonb)'::regprocedure)")
     originalTechnical = await scalar("select pg_get_functiondef('bx1_portal.offering_technical_ready(uuid)'::regprocedure)")
     originalTechnicalHash = createHash('sha256').update(originalTechnical).digest('hex')
+    originalTechnicalEvidence = await functionEvidence(db, ['bx1_portal.offering_technical_ready(uuid)'])
     truth(/SELECT false;/i.test(originalTechnical), 'original technical-ready definition is the explicit closed Stage4 gate')
     const nonNamespaceReadiness = (await db.query(`select id,bx1_portal.offering_technical_ready(id) ready
-      from bx1_portal.offering_revisions order by id`)).rows
+      from bx1_portal.offering_revisions where id<>$1 order by id`, [offeringId])).rows
     truth(nonNamespaceReadiness.every(row => row.ready === false), 'all prior nonnamespace technical readiness cases are negative')
+    eq(await scalar('select bx1_portal.offering_technical_ready($1)', [offeringId]), false, 'separately prepared own historical package is also closed initially')
     try { await db.query(featureSql) } catch (error) {
       const position = Number(error.position)
       if (position > 0 && position <= featureSql.length) error.fixtureLine = featureSql.slice(0, position - 1).split('\n').length
@@ -272,18 +479,7 @@ export async function proveEntityEligibility(db, clients, featureSql) {
         aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) acl where p.oid=$1::regprocedure and acl.grantee<>p.proowner)`, [signature]), true, `${signature} remains owner-only including PUBLIC`)
     // Fresh synthetic identities are test setup only, not business command side
     // effects or evidence that separate email accounts are independent humans.
-    for (const n of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) {
-      await db.query(`insert into auth.users(id,email,email_confirmed_at,is_anonymous)
-        values($1,$2,clock_timestamp(),false)`, [id(n), `entity-eligibility-${n}@example.invalid`])
-      await db.query(`insert into auth.mfa_factors(id,user_id,status,factor_type) values($1,$2,'verified','totp')`, [id(400 + n), id(n)])
-      await db.query(`insert into auth.sessions(id,user_id,not_after,created_at,aal,factor_id)
-        values($1,$2,clock_timestamp()+interval '1 hour',clock_timestamp()-interval '1 hour','aal2',$3)`, [id(100 + n), id(n), id(400 + n)])
-      await db.query('insert into public.bx1_profiles(id,display_name) values($1,$2)', [id(n), `Synthetic Entity Eligibility Actor ${n}`])
-      if (n !== 8) await db.query(`insert into bx1_private.persons(id,label,status,evidence_reference,bootstrap_receipt_id)
-        values($1,$2,'TRUSTED','synthetic:entity-proof-person',$3)`, [id(500 + n), `Synthetic entity-proof person ${n}`, id(600 + n)])
-      await db.query(`insert into bx1_private.person_principals(auth_user_id,person_id,status,evidence_reference,bootstrap_receipt_id)
-        values($1,$2,'TRUSTED','synthetic:entity-proof-principal',$3)`, [id(n), id(n === 8 ? 501 : 500 + n), id(700 + n)])
-    }
+    for (const n of [1, 3, 4, 6, 7, 8, 9, 10]) await insertFixtureIdentity(db, n)
     const memberships = new Map()
     for (const [n, staffRole] of [[2, 'OfferingManager'], [3, 'IssuerFundManager'], [4, 'ComplianceOfficer'],
       [5, 'ComplianceOfficer'], [6, 'SuperAdmin'], [7, 'ComplianceOfficer'], [8, 'ComplianceOfficer']]) {
@@ -306,8 +502,7 @@ export async function proveEntityEligibility(db, clients, featureSql) {
       for (const n of [1, 2, 9, 10]) {
         const docs = []
         for (const [index, kind] of ['IDENTITY', 'COMPANY', 'BENEFICIAL_OWNERS'].entries()) {
-          const doc = { id: id(800 + n * 10 + index), kind, title: `Synthetic entity ${kind} evidence`,
-            storage_path: `${id(n)}/${id(800 + n * 10 + index)}`, sha256: 'a'.repeat(64), size: 25, mime_type: 'application/pdf' }
+          const doc = fixtureDocument(n, index, kind)
           await admin()
           await db.query(`insert into storage.objects(bucket_id,name,metadata,user_metadata)
             values('bx1-portal-quarantine',$1,'{"size":25,"mimetype":"application/pdf"}',jsonb_build_object('sha256',$2::text))`, [doc.storage_path, doc.sha256])
@@ -369,65 +564,119 @@ export async function proveEntityEligibility(db, clients, featureSql) {
       mandateByActor.set(n, mandate)
       await admin()
     }
-    const ownerDocuments = documents.get(2)
-    const ownerDetails = { details_version: 3, full_name: 'Synthetic Wealth Manager', country: 'ZA', company_name: 'Synthetic Entity Product Issuer',
-      registration_reference: 'SYNTHETIC-ISSUER', beneficial_owners: 'Fictional sole owner; not provider cleared.', business_activities: 'Synthetic wealth-manager product evaluation only.',
-      representative_position: 'Synthetic director', authority_basis: 'Fictional board mandate for isolated proof only.', documents: ownerDocuments, test_data_acknowledged: true,
-      ownership_change_reason: 'Initial synthetic issuer ownership disclosure for this bounded proof.', ownership_control: [{
-        id: id(952), party_type: 'PERSON', legal_name: 'Synthetic Issuer Owner', registration_reference: '', country: 'ZA',
-        relationship: 'DIRECT_OWNER', ownership_basis_points: 10000, control_basis: 'Fictional sole owner and controller.',
-        effective_on: '2026-09-01', change_reason: 'Initial synthetic owner disclosure.', evidence_document_id: ownerDocuments[2].id,
-      }] }
-    await db.query(`insert into bx1_portal.applications(id,user_id,persona,status,revision,details,reviewer_scope,
-      provider_mode,reviewed_at,reviewer_id,review_notes,review_checks,approved_until)
-      values($1,$2,'WEALTH_MANAGER','APPROVED',3,$3::jsonb,$4,'MANUAL_TEST_REVIEW',statement_timestamp(),$5,
-        'Synthetic issuer admission precondition only.',$6::jsonb,statement_timestamp()+interval '30 days')`,
-    [ownerAppId, id(2), JSON.stringify(ownerDetails), scope, id(5), JSON.stringify(admissionChecks)])
-    eq(await scalar('select jsonb_build_array(admission_purpose,provider_mode) from bx1_portal.applications where id=$1', [ownerAppId]),
-      ['CUSTOMER_ORGANISATION_ADMISSION', 'MANUAL_TEST_REVIEW'], 'synthetic owner: server-owned purpose and explicit manual prerequisite mode')
-    await db.query(`insert into bx1_portal.application_detail_versions(application_id,application_revision,details,submitted_at,capture_kind)
-      select id,2,details,statement_timestamp()-interval '1 minute','SUBMISSION' from bx1_portal.applications where id=$1`, [ownerAppId])
-    await db.query(`insert into bx1_portal.organisations(id,application_id,owner_id,name,reviewer_scope)
-      values($1,$2,$3,'Synthetic Entity Eligibility Issuer',$4)`, [organisationId, ownerAppId, id(2), scope])
-    await db.query('update bx1_portal.applications set organisation_id=$1 where id=$2', [organisationId, ownerAppId])
-    const productTerms = await scalar(`select terms from bx1_portal.products where terms->'terms_version'='2'::jsonb
-      and terms->>'asset_type'='FUND' order by id limit 1`)
-    truth(productTerms, 'accepted typed fund terms used only as a shape template, not reused eligibility authority')
-    productTerms.name = 'Synthetic ENTITY Eligibility Evaluation Fund'
-    productTerms.eligible_investor_types = ['INDIVIDUAL', 'ENTITY']; productTerms.eligible_countries = ['ZA']
-    product = (await db.query(`insert into bx1_portal.products(id,organisation_id,created_by,terms,terms_hash,cap_units,unit_price_minor,minimum_units)
-      values($1,$2,$3,$4::jsonb,encode(sha256(convert_to(($4::jsonb)::text,'UTF8')),'hex'),
-        ($4::jsonb->>'cap_units')::numeric,($4::jsonb->>'unit_price_minor')::numeric,($4::jsonb->>'minimum_units')::numeric) returning *`,
-    [productId, organisationId, id(2), JSON.stringify(productTerms)])).rows[0]
+    eq(documents.get(2), ownerDetails().documents, 'late promoted owner documents match the immutable pre-cutover descriptors exactly')
+    eq(await foundationEvidence(db), preparedFixture.evidence.foundation, 'late synthetic identities/documents/admissions have not rewritten the prepared foundation')
+    product = (await db.query('select * from bx1_portal.products where id=$1', [productId])).rows[0]
+    eq(product.terms, legacyTerms(), 'positive terms are deterministic v1/ZAR_TEST, not an arbitrary v2 template')
+    await createAppointment(id(303), 3, memberships.get(3), 'IssuerFundManager')
+    await createAppointment(id(304), 4, memberships.get(4), 'ComplianceOfficer')
+    const approveSyntheticPackage = async targetOffering => {
+      for (const [actor, context, kind, decisionChecks] of [[3, issuer, 'ISSUER', { issuer_authority: true, terms: true, rights: true }],
+        [4, reviewer, 'COMPLIANCE', { issuer: true, terms: true, disclosures: true, eligibility: true }]]) {
+        await claims(actor); await admin()
+        await db.query(`insert into bx1_portal.offering_decisions(offering_revision_id,decision_kind,decision,actor_id,
+          operating_context,terms_hash,document_hashes,product_revision_at_decision,notes,checks)
+          select id,$2,'APPROVED',$3,$4::jsonb,terms_hash,document_hashes,product_revision_at_submission,
+            'Synthetic exact-package review precondition, not technical chain proof.',$5::jsonb
+          from bx1_portal.offering_revisions where id=$1`, [targetOffering, kind, id(actor), JSON.stringify(context), JSON.stringify(decisionChecks)])
+      }
+    }
+    await approveSyntheticPackage(offeringId)
+    eq(await scalar('select bx1_portal.offering_approved($1)', [productId]), true, 'current appointed exact-package synthetic decisions are operational preconditions')
+    eq(await scalar('select bx1_portal.offering_operational($1)', [productId]), false, 'real technical readiness is still closed before isolated override')
+    await db.query(`update bx1_portal.products set status='APPROVED',reviewer_id=$2,reviewed_at=clock_timestamp(),
+      review_notes='Synthetic historical-v1 package compatibility prerequisite only.',
+      review_checks='{"issuer":true,"terms":true,"disclosures":true,"eligibility":true}' where id=$1`, [productId, id(4)])
+    const typedTerms = modernTerms()
+    await scalar('select bx1_portal.validate_terms($1::jsonb)', [JSON.stringify(typedTerms)])
+    const modernProduct = (await db.query(`insert into bx1_portal.products(id,organisation_id,created_by,status,revision,
+      terms,terms_hash,cap_units,unit_price_minor,minimum_units) values($1,$2,$3,'IN_REVIEW',1,$4::jsonb,
+        encode(sha256(convert_to(($4::jsonb)::text,'UTF8')),'hex'),($4::jsonb->>'cap_units')::numeric,
+        ($4::jsonb->>'unit_price_minor')::numeric,($4::jsonb->>'minimum_units')::numeric) returning *`,
+    [id(308), organisationId, id(2), JSON.stringify(typedTerms)])).rows[0]
     await db.query(`insert into bx1_portal.offering_revisions(id,product_id,package_number,origin,
       product_revision_at_submission,terms,terms_hash,document_hashes,submitted_by,submitted_at)
       select $1,id,1,'SUBMITTED',revision,terms,terms_hash,bx1_portal.offering_document_hashes(terms),created_by,clock_timestamp()
-      from bx1_portal.products where id=$2`, [offeringId, productId])
-    await db.query('update bx1_portal.products set current_offering_revision_id=$1 where id=$2', [offeringId, productId])
-    await createAppointment(id(303), 3, memberships.get(3), 'IssuerFundManager')
-    await createAppointment(id(304), 4, memberships.get(4), 'ComplianceOfficer')
-    for (const [actor, context, kind, decisionChecks] of [[3, issuer, 'ISSUER', { issuer_authority: true, terms: true, rights: true }],
-      [4, reviewer, 'COMPLIANCE', { issuer: true, terms: true, disclosures: true, eligibility: true }]]) {
-      await claims(actor); await admin()
-      await db.query(`insert into bx1_portal.offering_decisions(offering_revision_id,decision_kind,decision,actor_id,
-        operating_context,terms_hash,document_hashes,product_revision_at_decision,notes,checks)
-        select id,$2,'APPROVED',$3,$4::jsonb,terms_hash,document_hashes,1,
-          'Synthetic exact-package review precondition, not technical chain proof.',$5::jsonb
-        from bx1_portal.offering_revisions where id=$1`, [offeringId, kind, id(actor), JSON.stringify(context), JSON.stringify(decisionChecks)])
-    }
-    eq(await scalar('select bx1_portal.offering_approved($1)', [productId]), true, 'current appointed exact-package synthetic decisions are operational preconditions')
-    eq(await scalar('select bx1_portal.offering_operational($1)', [productId]), false, 'real technical readiness is still closed before isolated override')
+      from bx1_portal.products where id=$2`, [id(309), id(308)])
+    await db.query('update bx1_portal.products set current_offering_revision_id=$1 where id=$2', [id(309), id(308)])
+    await createAppointment(id(310), 3, memberships.get(3), 'IssuerFundManager', modernProduct)
+    await createAppointment(id(311), 4, memberships.get(4), 'ComplianceOfficer', modernProduct)
+    await approveSyntheticPackage(id(309))
+    await db.query(`update bx1_portal.products set status='APPROVED',reviewer_id=$2,reviewed_at=clock_timestamp(),
+      review_notes='Synthetic modern-v2 approval remains settlement and technical closed.',
+      review_checks='{"issuer":true,"terms":true,"disclosures":true,"eligibility":true}' where id=$1`, [id(308), id(4)])
+    eq(await scalar('select bx1_portal.offering_approved($1)', [id(308)]), true, 'modern negative has exact current appointed package approval, not missing reviewers')
+    eq(await scalar('select bx1_portal.offering_technical_ready($1)', [id(309)]), false, 'modern negative has no technical override')
+    const expectedOutsideReadiness = [...nonNamespaceReadiness, { id: id(309), ready: false }].sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
+    eq((await db.query(`select id,bx1_portal.offering_technical_ready(id) ready from bx1_portal.offering_revisions
+      where id<>$1 order by id`, [offeringId])).rows, expectedOutsideReadiness,
+    'new modern negative is accounted for without dropping any prior readiness proof')
+    const negativeRelations = [...new Set([...moneyRelations, 'bx1_portal.products','bx1_portal.offering_revisions',
+      'bx1_portal.offering_decisions','bx1_portal.product_service_appointments','bx1_portal.product_service_appointment_receipts',
+      'bx1_portal.product_eligibility_cases','bx1_portal.product_eligibility_receipts','bx1_portal.events','bx1_portal.requests','bx1_portal.scoped_requests'])]
+    const beforeModernDenials = await snapshot(negativeRelations)
+    await denied('modern v2 publication retains the unconditional settlement seal', () => db.query(
+      "update bx1_portal.products set status='PUBLISHED',published_at=clock_timestamp() where id=$1", [id(308)]),
+    '23514', 'fund_v2_settlement_route_not_admitted')
+    const modernRequest = { ...requestBody(1), product_id: id(308), expected_product_revision: modernProduct.revision,
+      offering_revision_id: id(309), terms_hash: modernProduct.terms_hash }
+    await denied('approved but closed modern v2 cannot obtain entity eligibility', () => command(1, applicant, 'request_product_eligibility', modernRequest))
+    await denied('approved but closed modern v2 cannot subscribe', () => command(1, applicant, 'subscribe', {
+      product_id: id(308), investment_account_id: accountByActor.get(1), expected_revision: modernProduct.revision,
+      terms_hash: modernProduct.terms_hash, units: '1', accepted_documents: true, accepted_risks: true }))
+    eq(await snapshot(negativeRelations), beforeModernDenials, 'modern denials preserve exact product/package/appointment/case/audit/request/order/funding fingerprints')
+    eq(await scalar('select bx1_portal.offering_operational($1)', [id(308)]), false, 'modern approval is not modern operational acceptance')
     // EXACT isolated revision, all other revisions stay hard false. The
     // original definition is restored and SHA-256 verified in finally too.
     await db.query(`create or replace function bx1_portal.offering_technical_ready(target_revision uuid) returns boolean
       language sql volatile security definer set search_path='' as $$ select target_revision='${offeringId}'::uuid; $$`)
     technicalInstalled = true
+    const installedTechnicalEvidence = await functionEvidence(db, ['bx1_portal.offering_technical_ready(uuid)'])
+    const technicalSignature = 'bx1_portal.offering_technical_ready(uuid)'
+    const { sha256: originalSourceHash, ...originalAttributes } = originalTechnicalEvidence[technicalSignature]
+    const { sha256: syntheticSourceHash, ...syntheticAttributes } = installedTechnicalEvidence[technicalSignature]
+    truth(originalSourceHash !== syntheticSourceHash, 'sole technical fixture changes its explicit definition, not authority attributes')
+    eq(syntheticAttributes, originalAttributes, 'sole technical fixture preserves owner, ACL, security and search-path attributes')
     eq(await scalar('select bx1_portal.offering_technical_ready($1)', [offeringId]), true, 'explicit single synthetic technical fixture revision only')
     eq((await db.query(`select id,bx1_portal.offering_technical_ready(id) ready
-      from bx1_portal.offering_revisions where id<>$1 order by id`, [offeringId])).rows, nonNamespaceReadiness,
-    'all accepted nonnamespace readiness negatives are unchanged')
+      from bx1_portal.offering_revisions where id<>$1 order by id`, [offeringId])).rows, expectedOutsideReadiness,
+    'every accepted outside readiness negative and the new modern negative remain unchanged')
     await db.query("update bx1_portal.products set status='PUBLISHED',published_at=clock_timestamp() where id=$1", [productId])
-    eq(await scalar('select bx1_portal.offering_operational($1)', [productId]), true, 'positive case is expressly synthetic readiness, not Stage4 acceptance')
+    eq(await scalar('select bx1_portal.offering_operational($1)', [productId]), true, 'positive is historical-v1 compatibility with synthetic readiness, not Stage4 acceptance')
+    eq(await foundationEvidence(db), preparedFixture.evidence.foundation, 'publication preserves original foundation terms/hash/scalars/revision/pointer and owner history')
+    eq(await scalar('select bx1_portal.current_product_organisation($1)', [organisationId]), true, 'prerequisite: current approved and unheld issuer organisation')
+    eq(await scalar('select bx1_portal.customer_admission_package_current($1)', [ownerAppId]), true, 'prerequisite: issuer exact immutable submission and ownership predecessor remains complete')
+    eq(await scalar(`select jsonb_build_array(p.revision,p.terms_hash,p.current_offering_revision_id,p.cap_units::text,
+      p.unit_price_minor::text,p.minimum_units::text,r.origin,r.product_revision_at_submission,
+      r.terms_hash=p.terms_hash and r.terms=p.terms and r.document_hashes=bx1_portal.offering_document_hashes(p.terms))
+      from bx1_portal.products p join bx1_portal.offering_revisions r on r.id=p.current_offering_revision_id where p.id=$1`, [productId]),
+    [1, product.terms_hash, offeringId, '100', '10000', '1', 'SUBMITTED', 1, true], 'prerequisite: exact immutable v1 package, canonical hash and copied numeric scalars')
+    for (const n of [1, 9, 10]) {
+      await claims(n); await admin()
+      const account = accountByActor.get(n), mandate = mandateByActor.get(n)
+      eq(await scalar(`select exists(select 1 from bx1_portal.applications a join bx1_portal.application_detail_versions d
+        on d.application_id=a.id and d.application_revision=2 and d.capture_kind='SUBMISSION'
+        where a.id=$1 and a.user_id=$2 and a.status='APPROVED' and a.revision=3
+          and a.admission_purpose='INVESTOR_ADMISSION' and a.provider_mode='MANUAL_TEST_REVIEW'
+          and d.details=a.details and d.submitted_at=a.submitted_at and a.approved_until>clock_timestamp())`, [id(200 + n), id(n)]), true,
+      `prerequisite entity ${n}: exact synthetic approved admission and immutable submission`)
+      eq(await scalar('select bx1_portal.entity_account_admission_current($1)', [account]), true, `prerequisite entity ${n}: canonical current account admission`)
+      eq(await scalar('select bx1_portal.investing_mandate_effective($1)', [mandate.id]), true, `prerequisite entity ${n}: effective exact applied representative mandate`)
+      eq(await scalar(`select jsonb_build_array(m.representative_user_id,m.cycle,m.revision,m.transaction_limit_minor::text,
+        m.scope @> array['REQUEST_ELIGIBILITY']::text[],m.entity_party_id=i.entity_party_id,m.application_id=i.application_id)
+        from bx1_portal.investing_representative_mandates m join bx1_portal.investment_accounts i on i.id=m.investment_account_id
+        where m.id=$1 and i.id=$2`, [mandate.id, account]), [id(n), mandate.cycle, mandate.revision, '0', true, true, true],
+      `prerequisite entity ${n}: exact legal-party/account/representative/cycle/revision and zero execution limit`)
+      eq(await scalar('select bx1_portal.entity_eligibility_documents_current($1)', [account]), true, `prerequisite entity ${n}: exact promoted document receipts under retained scanner-required policy`)
+      eq(await scalar('select bx1_portal.entity_eligibility_source_current($1,$2,$3,$4,$5,$6,$7,$8)',
+        [account, mandate.id, mandate.cycle, mandate.revision, productId, product.revision, offeringId, product.terms_hash]), true,
+      `prerequisite entity ${n}: complete connected source currency before lifecycle commands`)
+      await claims(4); await admin()
+      eq(await scalar('select bx1_portal.entity_eligibility_reviewer($1::jsonb,$2,$3)', [JSON.stringify(reviewer), account, productId]), true,
+        `prerequisite entity ${n}: current independent exact product-appointed reviewer`)
+      eq(await scalar('select bx1_portal.entity_eligibility_source_access($1::jsonb,$2)', [JSON.stringify(reviewer), account]), true,
+        `prerequisite entity ${n}: separately authorised source application and every document path`)
+    }
     const proofAuthority = await authoritySnapshot()
     eq(await existingSubjects(), oldSubjects, 'isolated preconditions and synthetic document pipeline preserve every earlier subject, assurance and document fixture')
     await commit()
@@ -748,16 +997,23 @@ export async function proveEntityEligibility(db, clients, featureSql) {
       eq(await authoritySnapshot(), proofAuthority, 'all concurrency preserves native grants, policies, provider evidence and entry configuration')
       eq(await existingSubjects(), oldSubjects, 'wait revocations affect only explicitly owned fresh namespace subjects, never accepted participants')
       eq(await functionHashes(), oldFunctions, 'all production individual and offering guards are still unchanged')
+      eq(await foundationEvidence(db), preparedFixture.evidence.foundation, 'all lifecycle and rollback probes preserve exact immutable prepared foundation')
+      eq((await db.query(`select id,bx1_portal.offering_technical_ready(id) ready from bx1_portal.offering_revisions
+        where id<>$1 order by id`, [offeringId])).rows, expectedOutsideReadiness, 'all lifecycle/waits preserve every outside technical negative including modern v2')
       await db.query(originalTechnical)
       const restored = await scalar("select pg_get_functiondef('bx1_portal.offering_technical_ready(uuid)'::regprocedure)")
       eq(createHash('sha256').update(restored).digest('hex'), originalTechnicalHash, 'original technical-readiness function is exactly SHA-256 restored before returning')
+      eq(await functionEvidence(db, ['bx1_portal.offering_technical_ready(uuid)']), originalTechnicalEvidence,
+        'original technical-ready full definition hash/owner/ACL/security/search-path attributes are restored')
       eq(await scalar('select bx1_portal.offering_technical_ready($1)', [offeringId]), false, 'own positive fixture closes too when original readiness is restored')
+      eq(await scalar('select bx1_portal.offering_technical_ready($1)', [id(309)]), false, 'modern v2 remains closed after restoration too')
+      eq(await scalar('select status from bx1_portal.products where id=$1', [id(308)]), 'APPROVED', 'modern v2 negative is never published by the compatibility proof')
       await commit(); technicalInstalled = false
     } finally {
       if (begun) { await db.query('rollback'); begun = false }
       await interruptedReview
     }
-    console.log(`BX1_ENTITY_ELIGIBILITY_PASS assertions=${checks} fixture=synthetic-cloud-PostgreSQL17 subject=canonical-XOR decisionAppointment=exact-no-revival lifecycle=request-info-resubmit-review-revoke handoff=current-chain-actor-application-revision-nonmutating concurrency=three-distinct-observed-backend-PIDs auditRollback=atomic idempotency=overlapped-exact-replay technicalReadiness=synthetic-fixture-not-chain-proof providerAcceptance=not-proven scannerEngine=not-proven humanAcceptance=not-proven entityExecution=denied MAIN=sealed`)
+    console.log(`BX1_ENTITY_ELIGIBILITY_PASS assertions=${checks} fixture=synthetic-cloud-PostgreSQL17 positive=synthetic-legacy-v1-compatibility modernV2=approved-but-closed modernAcceptance=not-proven subject=canonical-XOR decisionAppointment=exact-no-revival lifecycle=request-info-resubmit-review-revoke handoff=current-chain-actor-application-revision-nonmutating concurrency=three-distinct-observed-backend-PIDs auditRollback=atomic idempotency=overlapped-exact-replay technicalReadiness=synthetic-fixture-not-chain-proof providerAcceptance=not-proven scannerEngine=not-proven humanAcceptance=not-proven entityExecution=denied MAIN=sealed`)
     return checks
   } finally {
     await Promise.all(clients.map(async client => { await client.query('rollback').catch(() => {}); await admin(client).catch(() => {}) }))
@@ -771,6 +1027,8 @@ export async function proveEntityEligibility(db, clients, featureSql) {
         await db.query(originalTechnical)
         const restored = await scalar("select pg_get_functiondef('bx1_portal.offering_technical_ready(uuid)'::regprocedure)")
         assert.equal(createHash('sha256').update(restored).digest('hex'), originalTechnicalHash, 'failure cleanup restores exact original technical-ready source')
+        assert.deepEqual(await functionEvidence(db, ['bx1_portal.offering_technical_ready(uuid)']), originalTechnicalEvidence,
+          'failure cleanup restores full original technical-ready owner/ACL/security/search-path attributes')
         await db.query('commit')
       } catch (error) { await db.query('rollback'); throw error }
     }
