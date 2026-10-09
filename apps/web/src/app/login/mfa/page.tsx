@@ -7,7 +7,7 @@ import { authDocumentReferrerPolicy } from '@/lib/auth-referrer-policy'
 import { platformRelease } from '@/lib/platform-release'
 import { createPageSupabaseClient } from '@/lib/supabase/page'
 import { hasRequiredMfa, readMfaContext, toMfaView } from '@/lib/supabase/mfa'
-import { useTestOrdinaryEntry } from '@/lib/supabase/test-ordinary-entry'
+import { isTestOrdinaryEntryAllowed } from '@/lib/supabase/test-ordinary-entry'
 import type { MfaView } from '@/lib/supabase/mfa-contracts'
 import { pendingStaffInvitations } from '@/lib/administration/staff-invitations'
 
@@ -33,7 +33,7 @@ export default async function MfaPage({ searchParams }: Props) {
       const context = await readMfaContext(client)
       signedIn = Boolean(context)
       if (context) { sufficient = hasRequiredMfa(context); view = toMfaView(context) }
-      ordinaryEntry = Boolean(context && continuation === 'workspace' && useTestOrdinaryEntry(context))
+      ordinaryEntry = Boolean(context && continuation === 'workspace' && isTestOrdinaryEntryAllowed(context))
       if (continuation === 'staff' && !(await pendingStaffInvitations(client)).length) unavailable = true
     } catch { unavailable = true }
   }

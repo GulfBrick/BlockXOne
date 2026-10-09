@@ -4,7 +4,7 @@ vi.mock('server-only', () => ({}))
 const mocks = vi.hoisted(() => ({ user: vi.fn(), sufficient: vi.fn(), current: vi.fn(), rpc: vi.fn(), passwordSession: vi.fn() }))
 vi.mock('./server', () => ({ readVerifiedUser: mocks.user }))
 vi.mock('./mfa', () => ({ hasOrdinaryPasswordSession: mocks.passwordSession, hasRequiredMfa: mocks.sufficient, isMfaContextCurrent: mocks.current }))
-import { readTestOrdinaryEntry, testOrdinaryEntryMfaPaused, useTestOrdinaryEntry } from './test-ordinary-entry'
+import { readTestOrdinaryEntry, testOrdinaryEntryMfaPaused, isTestOrdinaryEntryAllowed } from './test-ordinary-entry'
 import { entryActorId, entryFixture, entryOrganisationId } from '@/lib/portal/entry-test-fixtures'
 
 const user = { id: entryActorId, email: 'synthetic@example.invalid', email_confirmed_at: '2026-09-21', is_anonymous: false }
@@ -44,13 +44,13 @@ describe('temporary TEST ordinary entry is not MFA authority', () => {
   })
   it('does not reroute an already sufficient MFA context', async () => {
     mocks.sufficient.mockReturnValue(true)
-    expect(useTestOrdinaryEntry(context)).toBe(false)
+    expect(isTestOrdinaryEntryAllowed(context)).toBe(false)
     await expect(readTestOrdinaryEntry(client, context)).rejects.toMatchObject({ status: 403 })
     expect(mocks.rpc).not.toHaveBeenCalled()
   })
   it('does not use the exception for recovery/OAuth/missing or other authentication methods', async () => {
     mocks.passwordSession.mockReturnValue(false)
-    expect(useTestOrdinaryEntry(context)).toBe(false)
+    expect(isTestOrdinaryEntryAllowed(context)).toBe(false)
     await expect(readTestOrdinaryEntry(client, context)).rejects.toMatchObject({ status: 403 })
     expect(mocks.rpc).not.toHaveBeenCalled()
   })

@@ -10,7 +10,7 @@ import { evaluateActionPermission } from '@/lib/authorization/policy'
 import { createPageSupabaseClient } from '@/lib/supabase/page'
 import { readVerifiedUser, readWorkspace } from '@/lib/supabase/server'
 import { hasRequiredMfa, isMfaContextCurrent, readMfaContext } from '@/lib/supabase/mfa'
-import { readTestOrdinaryEntry, useTestOrdinaryEntry } from '@/lib/supabase/test-ordinary-entry'
+import { readTestOrdinaryEntry, isTestOrdinaryEntryAllowed } from '@/lib/supabase/test-ordinary-entry'
 import type { Bx1Workspace } from '@/lib/supabase/contracts'
 import { MetaMaskWalletLink } from '@/components/workspace/metamask-wallet-link'
 import { isWalletDatabaseConfigured } from '@/lib/wallets/database'
@@ -39,7 +39,7 @@ export default async function WorkspacePage() {
     if (signedIn) {
       context = await readMfaContext(client)
       if (context) {
-        if (useTestOrdinaryEntry(context)) {
+        if (isTestOrdinaryEntryAllowed(context)) {
           await readTestOrdinaryEntry(client, context)
           ordinaryEntry = true
         } else {

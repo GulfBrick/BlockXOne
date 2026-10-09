@@ -3,7 +3,7 @@ import { platformRelease } from '@/lib/platform-release'
 import { createPageSupabaseClient } from '@/lib/supabase/page'
 import { readVerifiedUser, readWorkspace } from '@/lib/supabase/server'
 import { hasRequiredMfa, isMfaContextCurrent, readMfaContext } from '@/lib/supabase/mfa'
-import { readTestOrdinaryEntry, useTestOrdinaryEntry } from '@/lib/supabase/test-ordinary-entry'
+import { readTestOrdinaryEntry, isTestOrdinaryEntryAllowed } from '@/lib/supabase/test-ordinary-entry'
 import { dashboardProjection, dashboardScopes, selectDashboardScope, type DashboardQuery } from './dashboard'
 import { PortalError, readPortal } from './server'
 import type { PortalPageData } from './contracts'
@@ -19,7 +19,7 @@ export async function loadRoleDashboard(query: DashboardQuery) {
   const user = await readVerifiedUser(client)
   if (!user?.email || !user.email_confirmed_at || user.is_anonymous) throw new PortalError('Sign in to continue.', 401)
   const context = await readMfaContext(client)
-  if (context && useTestOrdinaryEntry(context)) {
+  if (context && isTestOrdinaryEntryAllowed(context)) {
     const ordinary = await readTestOrdinaryEntry(client, context)
     const scopes = ordinary.workspace ? dashboardScopes(ordinary.workspace) : []
     const chooseContext = query.mode === undefined && query.organisation === undefined && query.role === undefined && scopes.length > 1

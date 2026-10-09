@@ -6,7 +6,7 @@ import { validateSetupPassword } from '@/lib/supabase/password-setup'
 import { canonicalAppOrigin, createRequestSupabaseClient, readVerifiedUser, readWorkspace, secureCookieOptions } from '@/lib/supabase/server'
 import { hasCanonicalOrigin, InvalidAuthRequest, LOGIN_EMAIL_COOKIE, PENDING_INVITE_COOKIE, privateResponse, readAuthForm, responseCookieAdapter } from '@/lib/supabase/http'
 import { hasRequiredMfa, isMfaContextCurrent, readMfaContext } from '@/lib/supabase/mfa'
-import { readTestOrdinaryEntry, useTestOrdinaryEntry } from '@/lib/supabase/test-ordinary-entry'
+import { readTestOrdinaryEntry, isTestOrdinaryEntryAllowed } from '@/lib/supabase/test-ordinary-entry'
 import { handleMfaAction, mfaErrorResponse } from '@/lib/supabase/mfa-actions'
 import { administrationErrorResponse, handleAdministrationAction } from '@/lib/administration/actions'
 import { identityEnvironmentEnabled, platformRelease } from '@/lib/platform-release'
@@ -141,7 +141,7 @@ async function dispatch(request: NextRequest, context: Context): Promise<NextRes
         return jar.finish(response)
       }
       const mfa = await readMfaContext(client)
-      if (mfa && useTestOrdinaryEntry(mfa)) {
+      if (mfa && isTestOrdinaryEntryAllowed(mfa)) {
         // An explicit TEST-only read exception, not a staff/password recovery
         // continuation. Protected queues, commands and MFA factors are unchanged.
         await readTestOrdinaryEntry(client, mfa)

@@ -6,7 +6,7 @@ vi.mock('@/lib/supabase/server', () => ({ readVerifiedUser: mocks.user, readWork
 vi.mock('@/lib/supabase/mfa', () => ({ readMfaContext: mocks.context, hasRequiredMfa: mocks.sufficient, isMfaContextCurrent: mocks.current }))
 vi.mock('./server', async original => ({ ...await original<object>(), readPortal: mocks.portal }))
 vi.mock('./entry-server', () => ({ readEntry: mocks.entry }))
-vi.mock('@/lib/supabase/test-ordinary-entry', () => ({ useTestOrdinaryEntry: mocks.paused, readTestOrdinaryEntry: mocks.ordinary }))
+vi.mock('@/lib/supabase/test-ordinary-entry', () => ({ isTestOrdinaryEntryAllowed: mocks.paused, readTestOrdinaryEntry: mocks.ordinary }))
 import { loadRoleDashboard } from './dashboard-server'
 import { PortalError } from './server'
 import { APPLICANT_CONTEXT, type PortalOperatingContext } from './operating-context'

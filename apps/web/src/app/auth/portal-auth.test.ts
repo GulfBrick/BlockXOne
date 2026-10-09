@@ -5,7 +5,7 @@ const mocks = vi.hoisted(() => ({ create: vi.fn(), user: vi.fn(), workspace: vi.
 vi.mock('@/lib/supabase/server', async original => ({ ...await original<object>(), createRequestSupabaseClient: mocks.create, readVerifiedUser: mocks.user, readWorkspace: mocks.workspace }))
 vi.mock('@/lib/supabase/mfa', () => ({ readMfaContext: mocks.mfaContext, hasRequiredMfa: mocks.sufficient, isMfaContextCurrent: mocks.current }))
 vi.mock('@/lib/portal/entry-server', () => ({ readEntry: mocks.portal }))
-vi.mock('@/lib/supabase/test-ordinary-entry', () => ({ useTestOrdinaryEntry: mocks.paused, readTestOrdinaryEntry: mocks.ordinary }))
+vi.mock('@/lib/supabase/test-ordinary-entry', () => ({ isTestOrdinaryEntryAllowed: mocks.paused, readTestOrdinaryEntry: mocks.ordinary }))
 vi.mock('@/lib/administration/staff-invitations', () => ({ pendingStaffInvitations: mocks.pendingStaff, beginStaffInvitation: mocks.beginStaff }))
 vi.mock('@/lib/supabase/mfa-actions', () => ({ handleMfaAction: vi.fn(), mfaErrorResponse: vi.fn() }))
 vi.mock('@/lib/administration/actions', () => ({ handleAdministrationAction: vi.fn(), administrationErrorResponse: vi.fn() }))

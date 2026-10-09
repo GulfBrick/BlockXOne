@@ -22,13 +22,13 @@ export function testOrdinaryEntryMfaPaused(env: Record<string, string | undefine
     && env.BLOCKXONE_APP_ORIGIN === 'https://testnet.bx1.co.za'
 }
 
-export function useTestOrdinaryEntry(context: VerifiedMfaContext, env: Record<string, string | undefined> = process.env): boolean {
+export function isTestOrdinaryEntryAllowed(context: VerifiedMfaContext, env: Record<string, string | undefined> = process.env): boolean {
   return testOrdinaryEntryMfaPaused(env) && hasOrdinaryPasswordSession(context) && !hasRequiredMfa(context)
 }
 
 /** Existing identity contracts, restricted to a separate caller-owned read. */
 export async function readTestOrdinaryEntry(client: SupabaseClient, context: VerifiedMfaContext) {
-  if (!useTestOrdinaryEntry(context)) throw new PortalError('Ordinary Testnet entry is not enabled.', 403)
+  if (!isTestOrdinaryEntryAllowed(context)) throw new PortalError('Ordinary Testnet entry is not enabled.', 403)
   const user = await readVerifiedUser(client)
   if (!user?.email || !user.email_confirmed_at || user.is_anonymous
     || !await isMfaContextCurrent(client, context)) throw new PortalError('Complete sign-in again.', 403)

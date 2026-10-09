@@ -6,7 +6,7 @@ import * as policy from '@/lib/authorization/policy'
 vi.mock('server-only', () => ({}))
 const mocks = vi.hoisted(() => ({ client: vi.fn(), user: vi.fn(), workspace: vi.fn(), configured: vi.fn(), mfa: vi.fn(), sufficient: vi.fn(), current: vi.fn(), paused: vi.fn(), ordinary: vi.fn() }))
 vi.mock('@/lib/supabase/mfa', () => ({ readMfaContext: mocks.mfa, hasRequiredMfa: mocks.sufficient, isMfaContextCurrent: mocks.current }))
-vi.mock('@/lib/supabase/test-ordinary-entry', () => ({ useTestOrdinaryEntry: mocks.paused, readTestOrdinaryEntry: mocks.ordinary }))
+vi.mock('@/lib/supabase/test-ordinary-entry', () => ({ isTestOrdinaryEntryAllowed: mocks.paused, readTestOrdinaryEntry: mocks.ordinary }))
 vi.mock('@/lib/supabase/page', () => ({ createPageSupabaseClient: mocks.client }))
 vi.mock('@/lib/supabase/server', () => ({ readVerifiedUser: mocks.user, readWorkspace: mocks.workspace }))
 vi.mock('@/lib/wallets/database', () => ({ isWalletDatabaseConfigured: mocks.configured }))
