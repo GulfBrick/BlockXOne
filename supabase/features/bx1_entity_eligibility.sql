@@ -91,8 +91,8 @@ begin
         e.representative_mandate_id,e.mandate_cycle,e.mandate_revision,e.offering_revision_id,
         e.application_revision,e.product_revision,e.terms_hash,e.status,
         e.decision_appointment_id,e.decision_appointment_revision)
-      or NEW.actor_id is distinct from case when NEW.action='request_product_eligibility'
-        then e.representative_user_id else e.reviewer_id end then
+      or NEW.actor_id is distinct from (case when NEW.action='request_product_eligibility'
+        then e.representative_user_id else e.reviewer_id end) then
       raise exception 'entity_eligibility_receipt_subject_mismatch' using errcode='23514'; end if;
   end if;
   select * into m from bx1_portal.investing_representative_mandates where id=e.representative_mandate_id;
