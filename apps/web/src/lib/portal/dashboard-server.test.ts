@@ -1,11 +1,12 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 vi.mock('server-only', () => ({}))
-const mocks = vi.hoisted(() => ({ client: {}, user: vi.fn(), workspace: vi.fn(), context: vi.fn(), sufficient: vi.fn(), current: vi.fn(), portal: vi.fn(), entry: vi.fn() }))
+const mocks = vi.hoisted(() => ({ client: {}, user: vi.fn(), workspace: vi.fn(), context: vi.fn(), sufficient: vi.fn(), current: vi.fn(), portal: vi.fn(), entry: vi.fn(), paused: vi.fn(), ordinary: vi.fn() }))
 vi.mock('@/lib/supabase/page', () => ({ createPageSupabaseClient: async () => mocks.client }))
 vi.mock('@/lib/supabase/server', () => ({ readVerifiedUser: mocks.user, readWorkspace: mocks.workspace }))
 vi.mock('@/lib/supabase/mfa', () => ({ readMfaContext: mocks.context, hasRequiredMfa: mocks.sufficient, isMfaContextCurrent: mocks.current }))
 vi.mock('./server', async original => ({ ...await original<object>(), readPortal: mocks.portal }))
 vi.mock('./entry-server', () => ({ readEntry: mocks.entry }))
+vi.mock('@/lib/supabase/test-ordinary-entry', () => ({ useTestOrdinaryEntry: mocks.paused, readTestOrdinaryEntry: mocks.ordinary }))
 import { loadRoleDashboard } from './dashboard-server'
 import { PortalError } from './server'
 import { APPLICANT_CONTEXT, type PortalOperatingContext } from './operating-context'
@@ -24,10 +25,32 @@ beforeEach(() => {
   mocks.workspace.mockResolvedValue({ user: { ...actor, platformUserId: 'person', displayName: null }, organisations: [{ id: organisation, name: 'A', roles: ['Investor'] }] })
   mocks.portal.mockImplementation(async (_client, context) => portalFor(context))
   mocks.entry.mockResolvedValue({ entry_version: 1, actor, applications: [], contexts: [], admission: { manual_test_review: true }, workflow: { version: 1, environment: 'TESTNET', actor_id: actor.id, scoped_read_available: true } })
+  mocks.paused.mockReturnValue(false)
 })
 afterEach(() => vi.unstubAllEnvs())
 
 describe('fresh dashboard authority and environment admission', () => {
+  it('uses only own identity/assignment projection during the temporary TEST entry pause', async () => {
+    mocks.paused.mockReturnValue(true); mocks.sufficient.mockReturnValue(false)
+    mocks.ordinary.mockResolvedValue({ version: 1, entry: { entry_version: 1, actor, applications: [], contexts: [], admission: { manual_test_review: false }, workflow: { version: 1, environment: 'TESTNET', actor_id: actor.id, scoped_read_available: false } }, workspace: { user: { ...actor, platformUserId: 'person', displayName: null }, organisations: [{ id: organisation, name: 'Own organisation', roles: ['ComplianceOfficer'] }] } })
+    const result = await loadRoleDashboard({ organisation, role: 'ComplianceOfficer' })
+    expect(result.kind).toBe('ordinary-entry')
+    expect(result.operatingContext).toEqual({ mode: 'ROLE', organisationId: organisation, role: 'ComplianceOfficer' })
+    expect(result.portal).toBeUndefined()
+    expect(mocks.ordinary).toHaveBeenCalledOnce()
+    expect(mocks.workspace).not.toHaveBeenCalled(); expect(mocks.portal).not.toHaveBeenCalled(); expect(mocks.entry).not.toHaveBeenCalled()
+  })
+  it.each([{ organisation: otherOrganisation, role: 'Investor' }, { organisation, role: 'SuperAdmin' }, { mode: 'applicant', organisation, role: 'Investor' }, { mode: 'ROLE' }, { mode: 'applicant', application: otherOrganisation }])('does not let the pause authorise forged context %j', async query => {
+    mocks.paused.mockReturnValue(true); mocks.sufficient.mockReturnValue(false)
+    mocks.ordinary.mockResolvedValue({ version: 1, entry: { entry_version: 1, actor, applications: [], contexts: [], admission: { manual_test_review: false } }, workspace: { user: { ...actor, platformUserId: 'person', displayName: null }, organisations: [{ id: organisation, name: 'Own organisation', roles: ['Investor'] }] } })
+    await expect(loadRoleDashboard(query)).rejects.toMatchObject({ status: 403 })
+    expect(mocks.workspace).not.toHaveBeenCalled(); expect(mocks.portal).not.toHaveBeenCalled(); expect(mocks.entry).not.toHaveBeenCalled()
+  })
+  it('does not fall back to business reads when the paused own-only backend denies access', async () => {
+    mocks.paused.mockReturnValue(true); mocks.ordinary.mockRejectedValue(new PortalError('Denied', 403))
+    await expect(loadRoleDashboard({})).rejects.toMatchObject({ status: 403 })
+    expect(mocks.workspace).not.toHaveBeenCalled(); expect(mocks.portal).not.toHaveBeenCalled(); expect(mocks.entry).not.toHaveBeenCalled()
+  })
   it('shows a context chooser rather than automatically exercising the first staff role', async () => {
     mocks.workspace.mockResolvedValue({ user: { ...actor, platformUserId: 'person', displayName: null }, organisations: [{ id: organisation, name: 'A', roles: ['Investor', 'SuperAdmin'] }] })
     const result = await loadRoleDashboard({})

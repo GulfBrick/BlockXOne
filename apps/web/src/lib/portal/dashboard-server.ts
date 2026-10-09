@@ -3,6 +3,7 @@ import { platformRelease } from '@/lib/platform-release'
 import { createPageSupabaseClient } from '@/lib/supabase/page'
 import { readVerifiedUser, readWorkspace } from '@/lib/supabase/server'
 import { hasRequiredMfa, isMfaContextCurrent, readMfaContext } from '@/lib/supabase/mfa'
+import { readTestOrdinaryEntry, useTestOrdinaryEntry } from '@/lib/supabase/test-ordinary-entry'
 import { dashboardProjection, dashboardScopes, selectDashboardScope, type DashboardQuery } from './dashboard'
 import { PortalError, readPortal } from './server'
 import type { PortalPageData } from './contracts'
@@ -18,6 +19,20 @@ export async function loadRoleDashboard(query: DashboardQuery) {
   const user = await readVerifiedUser(client)
   if (!user?.email || !user.email_confirmed_at || user.is_anonymous) throw new PortalError('Sign in to continue.', 401)
   const context = await readMfaContext(client)
+  if (context && useTestOrdinaryEntry(context)) {
+    const ordinary = await readTestOrdinaryEntry(client, context)
+    const scopes = ordinary.workspace ? dashboardScopes(ordinary.workspace) : []
+    const chooseContext = query.mode === undefined && query.organisation === undefined && query.role === undefined && scopes.length > 1
+    const applicant = query.mode === 'applicant' || !ordinary.workspace || chooseContext || (scopes.length === 0 && query.organisation === undefined && query.role === undefined)
+    if (query.mode !== undefined && query.mode !== 'applicant') throw new PortalError('Invalid operating context.', 403)
+    if (applicant && (query.organisation !== undefined || query.role !== undefined)) throw new PortalError('No active role assignment is available.', 403)
+    const scope = !applicant && ordinary.workspace ? selectDashboardScope(ordinary.workspace, query) : null
+    if (!applicant && !scope) throw new PortalError('This role or organisation is not assigned to you.', 403)
+    if (query.application !== undefined && (!applicant || !selectEntryApplication(ordinary.entry, query.application))) throw new PortalError('This application is not available to your signed-in account.', 403)
+    return { kind: 'ordinary-entry' as const, entry: ordinary.entry, user: ordinary.entry.actor, release, scopes, scope, chooseContext,
+      operatingContext: scope ? { mode: 'ROLE' as const, organisationId: scope.organisationId, role: scope.role } : APPLICANT_CONTEXT,
+      portal: undefined }
+  }
   if (context && !hasRequiredMfa(context)) throw new PortalError('Complete multi-factor authentication.', 403)
   const workspace = context ? await readWorkspace(client) : null
   if (workspace && workspace.user.id !== user.id) throw new PortalError('The signed-in account changed.', 403)

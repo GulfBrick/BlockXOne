@@ -7,6 +7,7 @@ import { authDocumentReferrerPolicy } from '@/lib/auth-referrer-policy'
 import { platformRelease } from '@/lib/platform-release'
 import { createPageSupabaseClient } from '@/lib/supabase/page'
 import { hasRequiredMfa, readMfaContext, toMfaView } from '@/lib/supabase/mfa'
+import { useTestOrdinaryEntry } from '@/lib/supabase/test-ordinary-entry'
 import type { MfaView } from '@/lib/supabase/mfa-contracts'
 import { pendingStaffInvitations } from '@/lib/administration/staff-invitations'
 
@@ -24,6 +25,7 @@ export default async function MfaPage({ searchParams }: Props) {
   let unavailable = !safeQuery
   let signedIn = false
   let sufficient = false
+  let ordinaryEntry = false
   let view: MfaView | null = null
   if (safeQuery) {
     try {
@@ -31,6 +33,7 @@ export default async function MfaPage({ searchParams }: Props) {
       const context = await readMfaContext(client)
       signedIn = Boolean(context)
       if (context) { sufficient = hasRequiredMfa(context); view = toMfaView(context) }
+      ordinaryEntry = Boolean(context && continuation === 'workspace' && useTestOrdinaryEntry(context))
       if (continuation === 'staff' && !(await pendingStaffInvitations(client)).length) unavailable = true
     } catch { unavailable = true }
   }
@@ -41,6 +44,7 @@ export default async function MfaPage({ searchParams }: Props) {
     <p className="text-sm font-semibold uppercase tracking-[0.16em] text-bxo-accent-primary">Secure access</p>
     <h1 className="mt-4 font-ui text-3xl font-medium tracking-tight text-bxo-text-primary sm:text-4xl">Verify your sign-in</h1>
     {unavailable || !view ? <p role="alert" className="mt-6 text-base text-bxo-text-secondary">Verification is temporarily unavailable. Reload before trying again.</p> : <><p className="mt-6 text-base text-bxo-text-secondary">Enter the six-digit code from your authenticator app.</p><MfaForm view={view} continuation={continuation} /></>}
+    {!unavailable && ordinaryEntry ? <section className="mt-6 border-t border-bxo-border-subtle pt-6"><p className="text-base text-bxo-text-secondary">Authenticator checks are temporarily paused for ordinary Testnet entry. Your existing factor is preserved; protected approvals and financial actions still require MFA.</p><a href="/portal" className="mt-4 inline-flex min-h-11 items-center rounded-lg bg-bxo-accent-primary px-5 py-3 font-semibold text-bxo-bg-primary">Continue to read-only Testnet workspace</a></section> : null}
     <form method="post" action="/auth/logout" className="mt-8"><Button type="submit" variant="outline" className="min-h-11">Sign out</Button></form>
   </main></PublicShell>
 }

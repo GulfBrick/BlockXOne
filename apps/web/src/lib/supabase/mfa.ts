@@ -131,6 +131,17 @@ export function hasRequiredMfa(context: VerifiedMfaContext): boolean {
     && (!data.status.requires_mfa || (data.aal === 'aal2' && data.status.session_is_mfa)))
 }
 
+// Read-only eligibility for the explicit temporary TEST entry exception. This
+// does not replace any existing assurance predicate or expose token claims.
+export function hasOrdinaryPasswordSession(context: VerifiedMfaContext): boolean {
+  const data = contexts.get(context)
+  return Boolean(data && data.expiresAt > Math.floor(Date.now() / 1000)
+    && data.aal === 'aal1' && data.status.active && data.status.session_aal === 'aal1'
+    && data.status.requires_mfa && !data.status.session_is_mfa && !data.status.session_is_totp
+    && data.factors.some(factor => factor.status === 'verified')
+    && data.methods.length > 0 && data.methods.every(method => method.method === 'password'))
+}
+
 // First-factor setup may be restarted without deleting any factor. Never
 // expose the token or infer permission from the serializable page view.
 function hasFirstFactorSetupContext(context: VerifiedMfaContext): boolean {

@@ -10,6 +10,7 @@ import { evaluateActionPermission } from '@/lib/authorization/policy'
 import { createPageSupabaseClient } from '@/lib/supabase/page'
 import { readVerifiedUser, readWorkspace } from '@/lib/supabase/server'
 import { hasRequiredMfa, isMfaContextCurrent, readMfaContext } from '@/lib/supabase/mfa'
+import { readTestOrdinaryEntry, useTestOrdinaryEntry } from '@/lib/supabase/test-ordinary-entry'
 import type { Bx1Workspace } from '@/lib/supabase/contracts'
 import { MetaMaskWalletLink } from '@/components/workspace/metamask-wallet-link'
 import { isWalletDatabaseConfigured } from '@/lib/wallets/database'
@@ -26,6 +27,7 @@ export default async function WorkspacePage() {
   let workspace: Bx1Workspace | null = null
   let signedIn = false
   let mfaRequired = false
+  let ordinaryEntry = false
   let unavailable = false
   const wallets: LinkedWallet[] = []
   const walletConfigured = isWalletDatabaseConfigured()
@@ -37,10 +39,15 @@ export default async function WorkspacePage() {
     if (signedIn) {
       context = await readMfaContext(client)
       if (context) {
-        mfaRequired = !hasRequiredMfa(context)
-        if (!mfaRequired) {
-          workspace = await readWorkspace(client)
-          if (!await isMfaContextCurrent(client, context)) throw new Error('Access unavailable')
+        if (useTestOrdinaryEntry(context)) {
+          await readTestOrdinaryEntry(client, context)
+          ordinaryEntry = true
+        } else {
+          mfaRequired = !hasRequiredMfa(context)
+          if (!mfaRequired) {
+            workspace = await readWorkspace(client)
+            if (!await isMfaContextCurrent(client, context)) throw new Error('Access unavailable')
+          }
         }
       }
     }
@@ -72,6 +79,7 @@ export default async function WorkspacePage() {
   } catch { unavailable = true }
   // Framework redirects throw; keep them outside the provider error catch.
   if (!unavailable && !signedIn) redirect('/login')
+  if (!unavailable && ordinaryEntry) redirect('/portal')
   if (!unavailable && mfaRequired) redirect('/login/mfa')
   if (!unavailable && !workspace) redirect('/workspace/access-denied')
   return (

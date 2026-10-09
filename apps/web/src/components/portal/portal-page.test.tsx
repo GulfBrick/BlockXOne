@@ -11,6 +11,7 @@ vi.mock('./role-dashboard', () => ({ RoleDashboardContent: () => createElement('
 vi.mock('./entry-screen', () => ({ EntryScreen: (props: unknown) => { fixture.entry(props); return createElement('p', null, 'Saved identity capacities') } }))
 import { PortalError } from '@/lib/portal/server'
 import { PortalPage } from './portal-page'
+import { entryApplication, entryFixture } from '@/lib/portal/entry-test-fixtures'
 
 const organisation = '33333333-3333-4333-8333-333333333333'
 const otherOrganisation = '44444444-4444-4444-8444-444444444444'
@@ -25,6 +26,24 @@ function roleData() {
 beforeEach(() => { vi.resetAllMocks(); fixture.load.mockResolvedValue(roleData()) })
 
 describe('portal server page access and selected context', () => {
+  it('renders the pause inside the existing shell without business or application mutation components', async () => {
+    const entry = entryFixture([entryApplication({ status: 'SUBMITTED' })])
+    fixture.load.mockResolvedValueOnce({ kind: 'ordinary-entry', user: entry.actor, entry, release, scopes: [scope], scope, operatingContext: context, portal: undefined })
+    const html = renderToStaticMarkup(await PortalPage({ view: '/portal', query: { organisation, role: 'Investor', add: 'capacity' } }))
+    expect(html).toContain('Authenticator paused for ordinary Testnet entry')
+    expect(html).toContain('My application status'); expect(html).toContain('submitted')
+    expect(html).toContain('Your existing authenticator has not been removed')
+    expect(html).not.toContain('<input'); expect(html).not.toContain('<form'); expect(html).not.toContain('Create or continue')
+    expect(fixture.entry).not.toHaveBeenCalled(); expect(fixture.screen).not.toHaveBeenCalled()
+  })
+  it('cannot use read-only entry to render a protected business child route', async () => {
+    const entry = entryFixture()
+    fixture.load.mockResolvedValueOnce({ kind: 'ordinary-entry', user: entry.actor, entry, release, scopes: [scope], scope, operatingContext: context, portal: undefined })
+    const html = renderToStaticMarkup(await PortalPage({ view: '/portal/compliance', query: { organisation, role: 'Investor' } }))
+    expect(html).toContain('Saved portal state is unavailable')
+    expect(html).not.toContain('My application status')
+    expect(fixture.entry).not.toHaveBeenCalled(); expect(fixture.screen).not.toHaveBeenCalled()
+  })
   it('redirects an anonymous session to the existing sign-in route', async () => {
     fixture.load.mockRejectedValueOnce(new PortalError('Sign in', 401))
     await expect(PortalPage({ view: '/portal' })).rejects.toThrow('REDIRECT:/login')

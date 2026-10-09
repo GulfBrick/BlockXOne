@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 vi.mock('server-only', () => ({}))
-import { canRestartPendingTotpSetup, hasCurrentTotp, hasRequiredMfa, isMfaContextCurrent, readMfaContext, requireRecentTotp, toMfaView } from './mfa'
+import { canRestartPendingTotpSetup, hasCurrentTotp, hasOrdinaryPasswordSession, hasRequiredMfa, isMfaContextCurrent, readMfaContext, requireRecentTotp, toMfaView } from './mfa'
 
 const now = 1_800_000_000
 const uid = '10000000-0000-4000-8000-000000000001'
@@ -172,5 +172,31 @@ describe('recent TOTP session assurance, never a business capability', () => {
     const context = (await readMfaContext(enrolled().client))!
     expect(requireRecentTotp(context, now + 600).allowed).toBe(false)
     expect(requireRecentTotp(context, now + 0.5).allowed).toBe(false)
+  })
+})
+
+describe('ordinary password session eligibility is not privileged assurance', () => {
+  it.each([{ amr: [{ method: 'password', timestamp: now }] }, { amr: ['password'] }])('admits only live enrolled AAL1 with password-only methods %j', async ({ amr }) => {
+    const context = (await readMfaContext(fixture({ aal: 'aal1', amr }, [factor()], status({ requires_mfa: true })).client))!
+    expect(hasOrdinaryPasswordSession(context)).toBe(true)
+    expect(hasRequiredMfa(context)).toBe(false)
+    expect(hasCurrentTotp(context)).toBe(false)
+    expect(requireRecentTotp(context, now)).toEqual({ allowed: false, reason: 'mfa_required' })
+  })
+  it.each([{ amr: undefined }, { amr: [] }, { amr: ['oauth'] }, { amr: ['recovery'] }, { amr: ['otp'] }, { amr: ['password', 'recovery'] }, { amr: [{ method: 'password', timestamp: now }, { method: 'totp', timestamp: now }] }])('denies absent/mixed/nonpassword methods %j', async ({ amr }) => {
+    const context = (await readMfaContext(fixture({ aal: 'aal1', amr }, [factor()], status({ requires_mfa: true })).client))!
+    expect(hasOrdinaryPasswordSession(context)).toBe(false)
+  })
+  it('does not admit unbound live upgrades, sufficient AAL2, no factors, manufactured or expired contexts', async () => {
+    const upgraded = (await readMfaContext(enrolled({ aal: 'aal1', amr: ['password'] }).client))!
+    expect(hasOrdinaryPasswordSession(upgraded)).toBe(false)
+    const sufficient = (await readMfaContext(enrolled().client))!
+    expect(hasOrdinaryPasswordSession(sufficient)).toBe(false)
+    const unenrolled = (await readMfaContext(fixture({ amr: ['password'] }).client))!
+    expect(hasOrdinaryPasswordSession(unenrolled)).toBe(false)
+    expect(hasOrdinaryPasswordSession({} as never)).toBe(false)
+    const ordinary = (await readMfaContext(fixture({ amr: ['password'] }, [factor()], status({ requires_mfa: true })).client))!
+    vi.spyOn(Date, 'now').mockReturnValue((now + 600) * 1000)
+    expect(hasOrdinaryPasswordSession(ordinary)).toBe(false)
   })
 })

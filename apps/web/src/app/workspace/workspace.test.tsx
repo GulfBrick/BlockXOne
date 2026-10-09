@@ -4,8 +4,9 @@ import type { ReactNode } from 'react'
 import { BX1_ROLES, type Bx1Role, type Bx1Workspace } from '@/lib/supabase/contracts'
 import * as policy from '@/lib/authorization/policy'
 vi.mock('server-only', () => ({}))
-const mocks = vi.hoisted(() => ({ client: vi.fn(), user: vi.fn(), workspace: vi.fn(), configured: vi.fn(), mfa: vi.fn(), sufficient: vi.fn(), current: vi.fn() }))
+const mocks = vi.hoisted(() => ({ client: vi.fn(), user: vi.fn(), workspace: vi.fn(), configured: vi.fn(), mfa: vi.fn(), sufficient: vi.fn(), current: vi.fn(), paused: vi.fn(), ordinary: vi.fn() }))
 vi.mock('@/lib/supabase/mfa', () => ({ readMfaContext: mocks.mfa, hasRequiredMfa: mocks.sufficient, isMfaContextCurrent: mocks.current }))
+vi.mock('@/lib/supabase/test-ordinary-entry', () => ({ useTestOrdinaryEntry: mocks.paused, readTestOrdinaryEntry: mocks.ordinary }))
 vi.mock('@/lib/supabase/page', () => ({ createPageSupabaseClient: mocks.client }))
 vi.mock('@/lib/supabase/server', () => ({ readVerifiedUser: mocks.user, readWorkspace: mocks.workspace }))
 vi.mock('@/lib/wallets/database', () => ({ isWalletDatabaseConfigured: mocks.configured }))
@@ -33,12 +34,19 @@ beforeEach(() => {
   mocks.mfa.mockResolvedValue({})
   mocks.sufficient.mockReturnValue(true)
   mocks.current.mockResolvedValue(true)
+  mocks.paused.mockReturnValue(false); mocks.ordinary.mockResolvedValue({ version: 1 })
   mocks.client.mockResolvedValue({})
   mocks.user.mockResolvedValue({ id: 'u1', email: 'real@example.test' })
   mocks.workspace.mockResolvedValue({ user: { id: 'u1', email: 'real@example.test', platformUserId: 'legacy1', displayName: 'Real Person' }, organisations: [{ id: 'o1', name: 'BlockXOne Internal', roles: ['SuperAdmin', 'FinancialController'] }] })
 })
 
 describe('server-rendered protected workspace', () => {
+  it('redirects paused ordinary entry to the existing portal without workspace or wallet reads', async () => {
+    mocks.paused.mockReturnValue(true); mocks.sufficient.mockReturnValue(false); mocks.configured.mockReturnValue(true)
+    const { from } = walletQuery([savedRow])
+    await expect(WorkspacePage()).rejects.toThrow('REDIRECT:/portal')
+    expect(mocks.ordinary).toHaveBeenCalledOnce(); expect(mocks.workspace).not.toHaveBeenCalled(); expect(from).not.toHaveBeenCalled()
+  })
   it('rejects a changed token after workspace lookup before querying wallets', async () => {
     mocks.configured.mockReturnValue(true)
     mocks.current.mockResolvedValue(false)

@@ -7,6 +7,7 @@ import { proveCustomerMonitoring } from './customer-monitoring-proof.mjs'
 import { proveDocumentRetentionAuthority } from './document-retention-authority-proof.mjs'
 import { proveDocumentProcessing } from './document-processing-proof.mjs'
 import { prepareEntityEligibilityLegacyFixture, proveEntityEligibility } from './entity-eligibility-proof.mjs'
+import { proveTestOrdinaryEntry } from './test-ordinary-entry-proof.mjs'
 import { proveOfferingFileQuarantine, proveOfferingFileProductIsolation } from './offering-file-quarantine-proof.mjs'
 
 // Exact disposable GitHub PostgreSQL17 service only. No local/project execution.
@@ -2645,6 +2646,9 @@ try {
   phase = 'entity-eligibility-final-chain-proof'
   checks += await proveEntityEligibility(db, proofClients,
     await source('../../../supabase/features/bx1_entity_eligibility.sql'), entityEligibilityFixture)
+  phase = 'test-ordinary-entry-proof'
+  checks += await proveTestOrdinaryEntry(db, proofClients,
+    await source('../../../supabase/features/bx1_test_ordinary_entry.sql'))
   phase = 'cleanup-committed-disposable-fixture'
   await db.query('drop schema bx1_portal,bx1_private,storage,auth,public cascade; create schema public')
   committedFixture = false

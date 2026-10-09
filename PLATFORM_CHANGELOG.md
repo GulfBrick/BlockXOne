@@ -1,5 +1,12 @@
 # BlockXOne platform releases
 
+## 1.1.0-rc.27 — Temporary TEST ordinary-entry exception candidate
+
+- Retain the reviewed rc.26 source and Stage 2 evidence. No new platform, identity model, customer roles, provider activation, money or contracts.
+- Add a default-off, explicitly admitted TEST-only self-context read for enrolled AAL1 password sessions. The existing portal may show own identity, effective assignment labels and redacted application status without an authenticator challenge.
+- Preserve all factors, strict MFA/session helpers, RLS and privileged workflow readers/writers. This is restricted ordinary entry, not MFA-free approvals or financial operation. Existing no-factor/AAL2 flows and MAIN remain unchanged.
+- Require the additive TEST ordinary-entry feature, matching server/database switches, independent source review, exact-source cloud negatives and hosted proof before enabling. Both switches provide a reversible pause; the authenticator failure and recovery acceptance are not declared resolved by this exception.
+
 ## 1.1.0-rc.26 — Entity-account eligibility handoff candidate
 
 - Extend exact rc.25 source `f579f4c5285b866284526bafb0f21569b4b6a283` in the same repository, application, shell and two existing environments. No live role grant, provider activation, financial movement or contract change.
