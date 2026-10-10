@@ -30,13 +30,14 @@ export async function POST(request: NextRequest) {
     if (!context.success) throw new PortalError('Select your operating context again before saving.', 403)
     const command = portalCommandSchema.safeParse(instruction)
     if (!command.success) throw new PortalError(command.error.issues[0]?.message ?? 'Check the request fields.', 400)
+    const reviewApplicationId = command.data.command === 'review_application' ? command.data.payload.application_id : null
     const client = createRequestSupabaseClient(jar.adapter)
     const mfa = context.data.mode === 'ROLE' && context.data.role === 'ComplianceOfficer' && testOrdinaryEntryMfaPaused(process.env) ? await readMfaContext(client) : null
     const synthetic = Boolean(mfa && isTestOrdinaryEntryAllowed(mfa))
     if (synthetic && command.data.command !== 'review_application') throw new PortalError('Only designated synthetic admission reviews are available without authenticator verification.', 403)
     const { user, snapshot: before } = synthetic && mfa ? await readSyntheticCompliance(client, context.data, mfa) : await readPortal(client, context.data)
     if (user.id !== expectedActor) throw new PortalError('The signed-in account changed. Reload before saving.', 403)
-    if (synthetic && command.data.command === 'review_application' && !before.applications.some(application => application.id === command.data.payload.application_id)) throw new PortalError('This case is not assigned for synthetic review.', 403)
+    if (synthetic && command.data.command === 'review_application' && !before.applications.some(application => application.id === reviewApplicationId)) throw new PortalError('This case is not assigned for synthetic review.', 403)
     const { data, error } = await client.rpc(synthetic ? 'bx1_portal_synthetic_compliance_command' : 'bx1_portal_command_scoped', { command: command.data.command, request_key: command.data.key, payload: command.data.payload, operating_context: context.data }).abortSignal(AbortSignal.timeout(15000))
     if (error) {
       if (error.code === '42501') throw new PortalError('You do not have current authority for this action.', 403)
@@ -45,7 +46,7 @@ export async function POST(request: NextRequest) {
     }
     if (synthetic && mfa) {
       const saved = parseSyntheticComplianceSnapshot(data, user.id, context.data)
-      if (!saved || command.data.command !== 'review_application' || !saved.applications.some(application => application.id === command.data.payload.application_id)
+      if (!saved || command.data.command !== 'review_application' || !saved.applications.some(application => application.id === reviewApplicationId)
         || !await isMfaContextCurrent(client, mfa)) throw new PortalError('The saved result could not be read. Refresh before retrying.', 503)
     } else if (!isPortalSnapshot(data, user.id) || data.rehearsal !== undefined || !portalContextMatches(data.operating_context, context.data)) throw new PortalError('The saved result could not be read. Refresh before retrying.', 503)
     return jar.finish(privateResponse(NextResponse.json({ snapshot: data })))

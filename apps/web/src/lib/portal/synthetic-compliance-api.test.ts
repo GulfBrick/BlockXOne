@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { NextRequest } from 'next/server'
 vi.mock('server-only', () => ({}))
 const mocks = vi.hoisted(() => ({ create: vi.fn(), normal: vi.fn(), narrow: vi.fn(), mfa: vi.fn(), current: vi.fn(), rpc: vi.fn(), paused: vi.fn(), allowed: vi.fn() }))
-vi.mock('@/lib/supabase/server', () => ({ createRequestSupabaseClient: mocks.create }))
+vi.mock('@/lib/supabase/server', async original => ({ ...await original<object>(), createRequestSupabaseClient: mocks.create }))
 vi.mock('@/lib/supabase/mfa', () => ({ readMfaContext: mocks.mfa, isMfaContextCurrent: mocks.current }))
 vi.mock('@/lib/supabase/test-ordinary-entry', () => ({ testOrdinaryEntryMfaPaused: mocks.paused, isTestOrdinaryEntryAllowed: mocks.allowed }))
 vi.mock('./synthetic-compliance', () => ({ readSyntheticCompliance: mocks.narrow }))

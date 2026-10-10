@@ -163,8 +163,8 @@ begin
     or p.revoked_at is not null or p.valid_from>pg_catalog.clock_timestamp() or p.expires_at<=pg_catalog.clock_timestamp()
     or a.context_kind is distinct from 'PERSONAL' or a.context_organisation_id is not null or a.reviewer_scope is distinct from p.reviewer_scope
     or a.provider_mode<>'MANUAL_TEST_REVIEW' or a.status not in ('SUBMITTED','CHANGES_REQUIRED','REJECTED','APPROVED')
-    or a.admission_purpose is distinct from case a.persona when 'INVESTOR' then 'INVESTOR_ADMISSION'
-      when 'WEALTH_MANAGER' then 'CUSTOMER_ORGANISATION_ADMISSION' end
+    or a.admission_purpose is distinct from (case a.persona when 'INVESTOR' then 'INVESTOR_ADMISSION'
+      when 'WEALTH_MANAGER' then 'CUSTOMER_ORGANISATION_ADMISSION' end)
     or a.details->'test_data_acknowledged' is distinct from 'true'::jsonb
     or pg_catalog.jsonb_typeof(a.details->'documents') is distinct from 'array'
     or pg_catalog.jsonb_array_length(a.details->'documents') not between 1 and 8
