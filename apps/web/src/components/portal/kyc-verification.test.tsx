@@ -70,7 +70,7 @@ describe('application-scoped sandbox identity verification', () => {
   it('requires the exact subject switch as well as the global gate, with absent switches denying availability', () => {
     const individual = entryApplication({ status: 'SUBMITTED', submitted_at: '2026-10-07T10:00:00Z',
       details: { full_name: 'Synthetic Applicant', country: 'ZA', investor_type: 'INDIVIDUAL' } })
-    const company = entryApplication({ ...individual, details: { ...individual.details, investor_type: 'ENTITY',
+    const company = entryApplication({ ...individual, details: { full_name: 'Synthetic Applicant', country: 'ZA', investor_type: 'ENTITY',
       details_version: 3, company_name: 'Synthetic Company', registration_reference: 'SYNTHETIC-REG' } })
     for (const application of [individual, company]) {
       const missing = renderKyc({ application, actorId: entryActorId, environment: 'TESTNET', sandboxEnabled: true })
@@ -100,7 +100,7 @@ describe('application-scoped sandbox identity verification', () => {
       expect(renderKyc({ application: { ...application, details }, actorId: entryActorId, environment: 'TESTNET',
         sandboxEnabled: true, individualEnabled: true, companyEnabled: true })).not.toContain('Start sandbox identity check')
     }
-    for (const detailsVersion of [2, 3]) {
+    for (const detailsVersion of [2, 3] as const) {
       const company = entryApplication({ ...application, persona: 'WEALTH_MANAGER', admission_purpose: 'CUSTOMER_ORGANISATION_ADMISSION',
         details: { full_name: 'Synthetic Applicant', country: 'ZA', details_version: detailsVersion,
           company_name: 'Synthetic Wealth Manager', registration_reference: 'SYNTHETIC-REG' } })
