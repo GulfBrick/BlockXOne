@@ -65,6 +65,16 @@ export async function proveSyntheticCompliance(db, clients, featureSql) {
     'requests',(select jsonb_agg(to_jsonb(t) order by actor_id,request_key) from bx1_portal.requests t),
     'scoped_requests',(select jsonb_agg(to_jsonb(t) order by actor_id,request_key) from bx1_portal.scoped_requests t),
     'bindings',(select jsonb_agg(to_jsonb(t) order by receipt_id,application_id,application_revision) from bx1_private.document_application_bindings t))::text)`)
+  const scannerDigest = () => scalar(`select md5(jsonb_build_object(
+    'policy',(select to_jsonb(t) from bx1_private.document_processing_policy t where singleton),
+    'quarantine',(select jsonb_agg(to_jsonb(t) order by id) from bx1_private.document_quarantine_items t),
+    'scan_events',(select jsonb_agg(to_jsonb(t) order by id) from bx1_private.document_scan_events t),
+    'jobs',(select jsonb_agg(to_jsonb(t) order by document_id) from bx1_private.document_processing_jobs t),
+    'attempts',(select jsonb_agg(to_jsonb(t) order by id) from bx1_private.document_processing_attempts t),
+    'claims',(select jsonb_agg(to_jsonb(t) order by worker_id,request_id) from bx1_private.document_processing_claim_receipts t),
+    'events',(select jsonb_agg(to_jsonb(t) order by id) from bx1_private.document_processing_events t))::text)`)
+  const lifecycleTriggerEnabled = () => scalar(`select tgenabled::text from pg_trigger
+    where tgrelid='bx1_private.document_lifecycle_policy'::regclass and tgname='bx1_document_lifecycle_activation'`)
   const policy = async (applicationId, n = 1, options = {}) => {
     await admin()
     await db.query(`insert into bx1_private.synthetic_compliance_cases(application_id,applicant_user_id,reviewer_user_id,
@@ -114,6 +124,10 @@ export async function proveSyntheticCompliance(db, clients, featureSql) {
   try {
     await begin()
     eq(await scalar("select current_database()='bx1_demo_ci' and current_user='postgres'"), true, 'exact disposable owner')
+    const inheritedLifecycleMode = await scalar('select mode from bx1_private.document_lifecycle_policy where singleton')
+    const inheritedScannerHistory = await scannerDigest()
+    eq(inheritedLifecycleMode, 'SCANNER_REQUIRED', 'preceding scanner/entity proof state is intentional and recorded')
+    eq(await lifecycleTriggerEnabled(), 'O', 'native no-downgrade trigger initially enabled')
     const oldFunctions = await functions()
     const oldPolicies = (await db.query('select schemaname,tablename,policyname,roles,cmd,qual,with_check from pg_policies order by 1,2,3')).rows
     const oldRows = await rowsDigest()
@@ -157,7 +171,18 @@ export async function proveSyntheticCompliance(db, clients, featureSql) {
     }
     await db.query('update bx1_portal.entry_configuration set test_ordinary_entry_enabled=true where singleton')
     await db.query('update bx1_private.document_receipt_policy set enforced=true where singleton')
-    eq(await scalar("select mode='SYNTHETIC_TEST_ONLY' from bx1_private.document_lifecycle_policy where singleton"), true, 'synthetic lifecycle admitted, never scanner downgrade')
+    await denied('unchanged native scanner policy forbids downgrade',
+      () => db.query("update bx1_private.document_lifecycle_policy set mode='SYNTHETIC_TEST_ONLY' where singleton"), '55000')
+    // Exact disposable-owner fixture selection only, not an admitted command or
+    // operational scanner downgrade. The preceding suite deliberately commits
+    // SCANNER_REQUIRED; this separate synthetic rehearsal must model TEST's
+    // actual SYNTHETIC_UNSCANNED configuration. Reenable before ANY business RPC.
+    await db.query('alter table bx1_private.document_lifecycle_policy disable trigger bx1_document_lifecycle_activation')
+    await db.query("update bx1_private.document_lifecycle_policy set mode='SYNTHETIC_TEST_ONLY' where singleton")
+    await db.query('alter table bx1_private.document_lifecycle_policy enable trigger bx1_document_lifecycle_activation')
+    eq(await lifecycleTriggerEnabled(), 'O', 'no-downgrade trigger active before all rehearsal RPCs')
+    eq(await scalar("select mode='SYNTHETIC_TEST_ONLY' from bx1_private.document_lifecycle_policy where singleton"), true, 'isolated disposable synthetic mode selected; no scanner acceptance claim')
+    eq(await scannerDigest(), inheritedScannerHistory, 'fixture selection changes no scanner admission, job, attempt or scan evidence')
     for (let n = 1; n <= 4; n++) {
       await db.query('insert into auth.users(id,email,email_confirmed_at,is_anonymous) values($1,$2,clock_timestamp(),false)', [id(n), `synthetic-compliance-${n}@example.invalid`])
       await db.query("insert into auth.sessions(id,user_id,not_after,created_at,aal) values($1,$2,clock_timestamp()+interval '1 hour',clock_timestamp(),$3)", [id(100 + n), id(n), n === 3 ? 'aal2' : 'aal1'])
@@ -326,6 +351,12 @@ export async function proveSyntheticCompliance(db, clients, featureSql) {
     await denied('revoked exact policy cannot be reopened', () => db.query('update bx1_private.synthetic_compliance_cases set revoked_at=null,revocation_reason=null where application_id=$1', [investor.id]), '23514')
     await db.query('update bx1_portal.entry_configuration set test_ordinary_entry_enabled=false where singleton')
     await denied('ordinary temporary switch left off', () => read())
+    // Restore through the unchanged guarded synthetic -> scanner upgrade; no
+    // trigger override is used here, and prior producer/evidence stays exact.
+    await db.query('update bx1_private.document_lifecycle_policy set mode=$1 where singleton', [inheritedLifecycleMode])
+    eq(await scalar('select mode from bx1_private.document_lifecycle_policy where singleton'), inheritedLifecycleMode, 'original scanner-required fixture mode restored via native upgrade')
+    eq(await lifecycleTriggerEnabled(), 'O', 'native lifecycle trigger remains active at completion')
+    eq(await scannerDigest(), inheritedScannerHistory, 'all preceding scanner producer and immutable evidence preserved')
     await commit()
     console.log(`BX1_SYNTHETIC_COMPLIANCE_PASS assertions=${checks} fixture=synthetic-cloud-PostgreSQL17 writer=sole-canonical-review actorScope=exact-owner-policy investor=normal-submit-rfi-resubmit-review-account manager=normal-submit-review-mandate-request-only auditRollback=proven dedupe=proven concurrency=session-and-policy-after-wait main=denied factors=preserved hostedAcceptance=not-proven independentHumans=not-proven providerAcceptance=not-proven documentBytes=not-proven mandateApply=not-relaxed`)
     return checks
