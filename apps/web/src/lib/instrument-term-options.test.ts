@@ -21,6 +21,12 @@ const localReadyRow = {
 }
 
 describe('typed instrument term options', () => {
+  it.each([null, 'MAINNET'] as const)('never uses the legacy execution lane for %s', scope => {
+    expect(evaluateChainCatalog(scope, [localReadyRow])).toEqual({ localPilotReady: false, executionReadyTestnetChainIDs: [] })
+    expect(() => instrumentExecutionConfiguration(scope, 80002)).toThrow('not admitted')
+    expect(() => offeringExecutionConfiguration(scope, 80002, 'ZAR')).toThrow('not admitted')
+    expect(shouldBlockForMissingTestnetManifest(true, scope, true)).toBe(true)
+  })
   it('exposes only backend-valid private-debt day-count conventions', () => {
     expect(privateDebtDayCountConventions).toEqual([
       'ACT_365',

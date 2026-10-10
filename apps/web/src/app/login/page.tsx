@@ -7,12 +7,15 @@ import { PublicShell } from '@/components/public/public-shell'
 import { SupabaseAuthForm } from '@/components/auth/supabase-auth-form'
 import { resolveAuthMode } from '@/lib/auth-mode'
 import { authDocumentReferrerPolicy } from '@/lib/auth-referrer-policy'
-import { BRANDED_ENTRY } from '@/lib/branded-entry'
 import { isAuthErrorCode } from '@/lib/supabase/contracts'
 import { LOGIN_EMAIL_COOKIE } from '@/lib/supabase/http'
 import { createPageSupabaseClient } from '@/lib/supabase/page'
 import { readWorkspace } from '@/lib/supabase/server'
 import { hasRequiredMfa, isMfaContextCurrent, readMfaContext } from '@/lib/supabase/mfa'
+import { identityEnvironmentEnabled, platformRelease } from '@/lib/platform-release'
+import { TESTNET_APP_ORIGIN } from '@/lib/testnet-fund/contracts'
+import { readEntry } from '@/lib/portal/entry-server'
+import { pendingStaffInvitations } from '@/lib/administration/staff-invitations'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -39,26 +42,40 @@ const portals = [
   },
 ]
 
+function isMainnetEntrySurface(env: Record<string, string | undefined>): boolean {
+  const release = platformRelease(env)
+  if (release) return release.environment === 'MAINNET'
+
+  // Keep outbound Testnet directions visible when MAIN auth-mode flags are broken.
+  // This display-only fallback never enables authentication or registration.
+  return env.BLOCKXONE_APP_ORIGIN === 'https://bx1.co.za'
+    && env.SUPABASE_URL === 'https://oqkevkjbkpugjotihtda.supabase.co'
+    && env.VERCEL_ENV === 'production'
+    && (env.NEXT_PUBLIC_SUPABASE_URL === undefined || env.NEXT_PUBLIC_SUPABASE_URL === env.SUPABASE_URL)
+    && (env.BLOCKXONE_ENVIRONMENT === undefined || env.BLOCKXONE_ENVIRONMENT === 'MAINNET')
+    && (env.NEXT_PUBLIC_BLOCKXONE_RUNTIME_SCOPE === undefined || env.NEXT_PUBLIC_BLOCKXONE_RUNTIME_SCOPE === 'MAINNET')
+}
+
 function TestnetEntryLinks() {
   return (
     <section aria-labelledby="testnet-access-title" className="mt-8 border-t border-bxo-border-subtle pt-6">
       <h2 id="testnet-access-title" className="font-ui text-lg font-medium text-bxo-text-primary">Looking for Testnet?</h2>
       <p className="mt-3 text-sm leading-6 text-bxo-text-secondary">Use the separate demo environment. Testnet balances have no real-world value; accounts and sessions are separate from Mainnet.</p>
       <div className="mt-3 flex flex-wrap gap-x-6 gap-y-2">
-        <a href={BRANDED_ENTRY.testnetLogin} className="inline-flex min-h-11 items-center text-sm font-semibold text-bxo-accent-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bxo-accent-primary">Testnet sign in</a>
-        <a href={BRANDED_ENTRY.testnetRegister} className="inline-flex min-h-11 items-center text-sm font-semibold text-bxo-accent-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bxo-accent-primary">Create a Testnet account</a>
+        <a href={`${TESTNET_APP_ORIGIN}/login`} className="inline-flex min-h-11 items-center text-sm font-semibold text-bxo-accent-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bxo-accent-primary">Testnet sign in</a>
+        <a href={`${TESTNET_APP_ORIGIN}/register`} className="inline-flex min-h-11 items-center text-sm font-semibold text-bxo-accent-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bxo-accent-primary">Create a Testnet account</a>
       </div>
     </section>
   )
 }
 
-function LoginChooserPage() {
+function LoginChooserPage({ mainnetEntry }: { mainnetEntry: boolean }) {
   return (
     <PublicShell>
       <main id="main-content" className="mx-auto max-w-[90rem] px-4 pb-24 pt-14 sm:px-6 sm:pt-20 lg:px-8 lg:pb-32 lg:pt-24">
         <section className="grid gap-10 border-b border-bxo-border-subtle pb-14 sm:pb-20 lg:grid-cols-12 lg:gap-8 lg:pb-24">
           <div className="lg:col-span-2" data-bxo-hero-detail>
-            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-bxo-accent-primary">Mainnet · Secure access</p>
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-bxo-accent-primary">Secure access</p>
             <p className="mt-3 text-xs uppercase tracking-[0.14em] text-bxo-text-tertiary">BXO / Access</p>
           </div>
 
@@ -123,7 +140,7 @@ function LoginChooserPage() {
             ))}
           </div>
         </section>
-        <TestnetEntryLinks />
+        {mainnetEntry ? <TestnetEntryLinks /> : null}
       </main>
     </PublicShell>
   )
@@ -131,7 +148,8 @@ function LoginChooserPage() {
 
 export default async function LoginPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const mode = resolveAuthMode()
-  if (mode === 'legacy') return <LoginChooserPage />
+  const mainnetEntry = isMainnetEntrySurface(process.env)
+  if (mode === 'legacy') return <LoginChooserPage mainnetEntry={mainnetEntry} />
   const params = await searchParams
   const setup = params.setup === '1'
   let unavailable = mode !== 'supabase'
@@ -145,9 +163,11 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
         mfaRequired = !hasRequiredMfa(context)
         if (!mfaRequired) {
           validSetup = Boolean(await readWorkspace(client))
+          if (!validSetup && (await pendingStaffInvitations(client)).length) validSetup = true
+          if (!validSetup && identityEnvironmentEnabled(process.env)) { await readEntry(client); validSetup = true }
           if (!await isMfaContextCurrent(client, context)) throw new Error('Access unavailable')
         }
-      }
+      } else if (identityEnvironmentEnabled(process.env)) { await readEntry(client); validSetup = true }
     }
     catch { unavailable = true }
   }
@@ -163,14 +183,15 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
   return (
     <PublicShell>
       <main id="main-content" className="mx-auto w-full max-w-md px-4 py-16 sm:px-6 sm:py-24">
-        <p className="text-sm font-semibold uppercase tracking-[0.16em] text-bxo-accent-primary">Mainnet · Secure access</p>
+        <p className="text-sm font-semibold uppercase tracking-[0.16em] text-bxo-accent-primary">{mainnetEntry ? 'Mainnet · Secure access' : 'Secure access'}</p>
         <h1 className="mt-4 font-ui text-3xl font-medium leading-tight tracking-tight text-bxo-text-primary sm:text-4xl">{setup ? 'Set your password' : 'Sign in to BlockXOne'}</h1>
-        {!setup ? <p className="mt-4 text-sm leading-6 text-bxo-text-secondary">This is Mainnet access. Signing in does not enable financial operations; permissions and release controls still apply.</p> : null}
+        {!setup && mainnetEntry ? <p className="mt-4 text-sm leading-6 text-bxo-text-secondary">This is Mainnet access. Signing in does not enable financial operations; permissions and release controls still apply.</p> : null}
         {unavailable ? <p role="alert" className="mt-6 text-base text-bxo-text-secondary">Access is temporarily unavailable. Please try again.</p>
           : !validSetup ? <p role="alert" className="mt-6 text-base text-bxo-text-secondary">This invitation link is invalid or has expired.</p>
           : <SupabaseAuthForm mode={setup ? 'setup' : 'login'} initialEmail={initialEmail} error={isAuthErrorCode(params.error) ? params.error : undefined} />}
+        {!setup && !unavailable && identityEnvironmentEnabled(process.env) ? <section aria-labelledby="test-account-title" className="mt-8 border-t border-bxo-border-subtle pt-6"><h2 id="test-account-title" className="text-base font-medium text-bxo-text-primary">New to BlockXOne?</h2><p className="mt-2 text-sm leading-6 text-bxo-text-secondary">Create a personal login, then apply as an investor or wealth manager. Registration does not grant approval or signing authority.</p><Link href="/register" className="mt-4 inline-flex min-h-11 w-full items-center justify-between gap-3 rounded-lg border border-bxo-accent-border bg-bxo-accent-soft px-4 py-3 text-sm font-semibold text-bxo-accent-primary hover:border-bxo-accent-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bxo-accent-primary">Create your account<ArrowRight aria-hidden="true" className="h-4 w-4" /></Link></section> : null}
         <Link href="/" className="mt-6 inline-flex min-h-11 items-center text-sm text-bxo-accent-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bxo-accent-primary">Back to home</Link>
-        {!setup ? <TestnetEntryLinks /> : null}
+        {!setup && mainnetEntry ? <TestnetEntryLinks /> : null}
       </main>
     </PublicShell>
   )

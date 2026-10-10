@@ -622,20 +622,20 @@ export async function runProductionContainmentProbe() {
       }
       await assertStatus(origin, '/auth/unknown', 404)
       await assertStatus(origin, '/workspace/unknown', 404)
-      for (const pathname of ['/login/mfa/unknown', '/auth/mfa-enroll/unknown', '/auth/mfa-verify/unknown', '/workspace/security/unknown']) {
+      for (const pathname of ['/login/mfa/unknown', '/auth/mfa-enroll/unknown', '/auth/mfa-verify/unknown', '/workspace/security/unknown', '/workspace/administration/unknown', '/auth/admin-command/unknown', '/workspace/Administration', '/auth/Admin-command']) {
         await assertStatus(origin, pathname, 404)
       }
-      for (const pathname of ['/login/mfa', '/workspace/security']) {
+      for (const pathname of ['/login/mfa', '/workspace/security', '/workspace/administration']) {
         const response = await fetch(`${origin}${pathname}`, { redirect: 'manual', signal: AbortSignal.timeout(5_000) })
         await response.body?.cancel()
         if (![303,307].includes(response.status) || new URL(response.headers.get('location') || '/', origin).pathname !== '/login') {
-          throw new Error('Anonymous MFA/security page must redirect only to login.')
+          throw new Error('Anonymous MFA/security/administration page must redirect only to login.')
         }
         if (!response.headers.get('cache-control')?.includes('no-store') || !response.headers.get('cache-control')?.includes('private')) {
-          throw new Error('MFA/security denial must be private/no-store.')
+          throw new Error('MFA/security/administration denial must be private/no-store.')
         }
       }
-      for (const pathname of ['/auth/mfa-enroll','/auth/mfa-verify']) {
+      for (const pathname of ['/auth/mfa-enroll','/auth/mfa-verify', '/auth/admin-command']) {
         await assertStatus(origin, pathname, 405)
         for (const forgedOrigin of [undefined, 'null', 'https://foreign.example']) {
           const response = await fetch(`${origin}${pathname}`, { method: 'POST', redirect: 'manual',
@@ -643,7 +643,7 @@ export async function runProductionContainmentProbe() {
             body: '', signal: AbortSignal.timeout(5_000) })
           await response.body?.cancel()
           if (response.status !== 403 || !response.headers.get('cache-control')?.includes('no-store')) {
-            throw new Error('MFA POST without canonical origin must deny privately before Auth.')
+            throw new Error('MFA/administration POST without canonical origin must deny privately before Auth.')
           }
         }
       }
@@ -655,6 +655,8 @@ export async function runProductionContainmentProbe() {
       await assertStatus(origin, '/workspace/security', 404)
       await assertStatus(origin, '/auth/mfa-enroll', 404)
       await assertStatus(origin, '/auth/mfa-verify', 404)
+      await assertStatus(origin, '/workspace/administration', 404)
+      await assertStatus(origin, '/auth/admin-command', 404)
     }
   } catch (error) {
     probeError = error

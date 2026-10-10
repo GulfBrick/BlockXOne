@@ -1,0 +1,115 @@
+# BlockXOne platform releases
+
+## 1.1.0-rc.28 — Connected Stage 2 handoff correction candidate
+
+- Continue the existing Stage 2 workflow from exact rc.27 source `0f749e2c8ca94309ffafe2cdcec115b51b668947`; no new platform or roadmap.
+- Correct the approved-mandate/appointment detail handoff for the scoped Super Admin without granting Compliance review access. Distinguish read-only sign-in security from a saved-records outage; privileged operations remain protected.
+- Overlap the independent own profile and membership reads, retaining subsequent current-authority checks. This removes one serial step; actual hosted latency improvement remains to be measured.
+- Require only the immutable application's selected Sumsub verification level through server configuration and the additive private binding replacement. Unused levels confer no availability; company KYB remains unadmitted without an actual company entitlement/level. Existing identity, provider and business history remain unchanged.
+- Require independent source review and exact-source cloud proof. Genuine provider events, document scanning/disposal, connected account/mandate acceptance, MFA recovery and both complete fund/property investment journeys remain incomplete. No roles, money, contracts or MAIN activation are changed by preparing this candidate.
+
+## 1.1.0-rc.27 — Temporary TEST ordinary-entry exception candidate
+
+- Retain the reviewed rc.26 source and Stage 2 evidence. No new platform, identity model, customer roles, provider activation, money or contracts.
+- Add a default-off, explicitly admitted TEST-only self-context read for enrolled AAL1 password sessions. The existing portal may show own identity, effective assignment labels and redacted application status without an authenticator challenge.
+- Preserve all factors, strict MFA/session helpers, RLS and privileged workflow readers/writers. This is restricted ordinary entry, not MFA-free approvals or financial operation. Existing no-factor/AAL2 flows and MAIN remain unchanged.
+- Require the additive TEST ordinary-entry feature, matching server/database switches, independent source review, exact-source cloud negatives and hosted proof before enabling. Both switches provide a reversible pause; the authenticator failure and recovery acceptance are not declared resolved by this exception.
+
+## 1.1.0-rc.26 — Entity-account eligibility handoff candidate
+
+- Extend exact rc.25 source `f579f4c5285b866284526bafb0f21569b4b6a283` in the same repository, application, shell and two existing environments. No live role grant, provider activation, financial movement or contract change.
+- Add an exact entity/representative/mandate/offering-bound request and independent product-appointed Compliance decision over the existing canonical eligibility cases and immutable receipts. Keep individual history and execution guards unchanged.
+- Connect entity account, offering eligibility and review queue screens; show legal holder, active representative, responsible owner, case/mandate/package revisions, information requests and recorded decisions. Entity approval cannot enable a subscription or create ownership.
+- Require additive `supabase/features/bx1_entity_eligibility.sql` on the current reviewed reader/command chain. MAIN business admission remains closed. TEST may lead MAIN as a recorded prerelease; this candidate is not a claim of paired release alignment.
+- Source/cloud/hosted acceptance remains pending. Isolated cloud technical-readiness fixtures are not deployment/finality proof. Genuine Sumsub KYC/KYB, private-document engine/disposal, remaining account/mandate acceptance and both complete investment journeys remain separate deliverables.
+
+## 1.1.0-rc.25 — Connected customer-admission handoff candidate
+
+- Extend rc.24 `fe877a6c06180453d3dd568ddec2d51c40c5f0d7` in the same application and existing TEST/MAIN projects. No login, role, wallet, contract or money change.
+- Add a pure-read, revision/person/environment/context-bound application handoff: actual next owner, monitoring/expiry blockers, account/mandate links and effective native-context destination. Missing or mismatched projections do not infer authority from approval.
+- Preserve rejected same-application resubmission with its recorded history; manager admission remains separate from Compliance mandate review and Super Admin application. Entity account existence remains separate from an investing representative's authority.
+- Require additive `supabase/features/bx1_customer_handoff.sql` on the current canonical migration chain before the dependent web release. Preserve function ownership, restricted helper grants and MAIN scoped RPC denial. Reads must leave business records unchanged.
+- Tests/builds execute only in the existing GitHub cloud acceptance workflow for both environments at the exact candidate commit. Independent source review, cloud evidence and branded hosted verification are required before release. Provider, document scanning/disposal and independent-human acceptance are separate outstanding gates; this increment does not close Stage 2 or either full lifecycle.
+
+## 1.1.0-rc.10 — Application handoff correction candidate
+
+- Based on released rc.9 `0a77d8c1cef6fb206bfd268a8b3f31bbc3e4e5f4`. Preserve existing identities, application references, private evidence and financial history.
+- Separate wealth-manager organisation/representative facts from investor questions; show truthful draft, submitted, changes-required and decision states in the same branded portal and reviewer screen.
+- Expose privacy-safe independent review assignment availability and block submission into an unstaffed route. Customer admission alone cannot grant new product-management authority through the legacy owner path.
+- Requires additive `supabase/features/bx1_application_admission.sql` after rc.9 in both existing environments before release. MAIN manual review remains unadmitted. No reviewer assignment, real approval, role grant, money movement or contract deployment is part of the source release.
+- Exact-source cloud checks, independent review and hosted UI/approval receipts are required. This candidate is not proof of complete Stage 2, all dashboard workflows, or either investment lifecycle.
+
+## 1.1.0-rc.9 — Stage 1 entry and identity-context candidate
+
+- Based on rc.8 source `de105558585e803cba36e750798b9c6c6ea658c8`, preserving existing auth/security, portal, account, funding and journal history.
+- Correct initial investor/wealth-manager intent, multiple immutable-persona applications, exact selected application commands and explicit authorised capacities in the existing shell. Signed-in registration offers Continue, Switch account and Add a capacity.
+- Share validated hosted identity entry across TESTNET/MAINNET without admitting legacy test-only business commands on MAINNET. Unknown runtime configuration no longer defaults to LOCAL_PILOT; historical records are retained.
+- Requires `supabase/features/bx1_entry.sql` and `bx1_entry_admission.sql` after the existing portal/authority sequence (and funding on TEST). MAIN lacks that baseline: install exact canonical missing dependencies atomically with the entry-only admission seal; do not expose unadmitted legacy/admin RPCs or seed customer grants. Review routing is server-owned and default-closed; organisation application review remains Stage 2. Apply and verify schema before releasing dependent routes.
+- Existing cloud workflow now builds both configurations and separately verifies additive entry SQL. Cloud checks and hosted journey acceptance are pending, not claimed by this changelog.
+- No real role grants, settlement routes, fund movements, contract changes or production financial admission. Existing branded deployments remain unchanged until controlled release. Full platform parity and eight-stage completion remain unproven.
+
+## 1.1.0-rc.8 — Integrated branded-entry and funding candidate
+
+- Base this candidate on accepted rc.7 source `57868141d87ac6eeba446be452793017da3f2da8`, retaining the exact branded TEST origin, legacy-alias redirect ordering, registration metadata/header alignment and strict same-origin request admission.
+- Integrate the previously unaccepted rc.5 funding work and its separately reviewed corrections into the same application: existing account/subscription obligations, reviewed TEST token routes, payer-signed receipt claims, independently verified evidence, Treasury/Controller reconciliation and balanced immutable journals/reversals.
+- Preserve all-nine-role and selected-organisation workflow boundaries. No second customer/order model, settlement asset, receiving address, financial authority or privileged test user is seeded. A claim signature is not payment; an accounting reversal is not a refund; funding does not imply issuance or a holding.
+- Keep the existing cloud acceptance workflow, its isolated funding PostgreSQL fixture, exact Edge verifier typecheck and read-only Amoy provider check. A registration-browser-proof dispatch runs only that bounded browser proof, not the funding campaigns.
+- rc.5 was not an accepted or hosted funding release. This integrated candidate requires its own exact-source cloud and hosted evidence; rc.7 registration evidence is retained as history, not reassigned to changed source.
+- MAINNET financial admission remains false. This candidate does not claim completed signup/email delivery, a funded investor journey, governed issuance, servicing, exit or full TESTNET/MAINNET lifecycle parity.
+
+## 1.1.0-rc.7 — Native registration submission repair
+
+- Align registration page metadata and middleware referrer policy for clean forms and validated intent/error presentation state. Native same-origin form POSTs must retain the canonical Origin rather than sending null and being rejected before Supabase signup.
+- Keep unknown, duplicated and token-bearing query states private; do not accept missing, null or foreign request origins. Existing signup validation, email confirmation, account isolation and role grants remain unchanged.
+- Add cloud Chromium proof of the real hosted registration document and browser-generated native POST Origin using an empty, intercepted invalid body. No credentials, consent, accounts, emails or real-world transactions are created by this request-level proof.
+- Based on rc.6 source 259ddc4e555f454faf123f368f0dabc5a2ef33d6; rc.5 funding remains excluded. This correction does not prove email delivery, completed KYC, financial flows or MAINNET parity.
+
+## 1.1.0-rc.6 — Branded TEST entry correction
+
+- Built from published rc.4 source `ff9e716cf09f1743cdb07d423ab60ca0e77eb506`. The unreleased rc.5 funding candidate is excluded; skipping its number does not include or approve its features.
+- Admit only the exact `https://testnet.bx1.co.za` branded origin alongside the existing preview-origin admission, retaining the pinned TEST backend, preview environment and auth/HTTPS gates.
+- Redirect GET/HEAD from the exact previous stable TEST alias to the branded origin before session refresh or host-only callback cookie handling, preserving path/query. Refuse legacy-alias mutation requests without replaying their bodies; do not trust forwarded host headers or change same-origin auth checks.
+- Preserve existing application data, roles, wallet adapter, schemas and contracts. This is not a MAINNET parity release or financial activation. MAIN public navigation is a separately scoped patch on its existing production source.
+- Cloud tests/build and DNS, HTTPS, callback, alias-redirect and hosted sign-in/registration checks must be recorded for this exact candidate. Previous release evidence is not reassigned; a source change alone does not prove the domain is configured or authentication works.
+
+## 1.1.0-rc.5 — Previously unaccepted canonical funding candidate
+
+- Candidate source `a0aca177d9bfc6672fc7e8a1ba113eb45a51ab0b` extended the existing account/subscription records with exact funding obligations, Treasury/Controller review, two-provider Amoy receipt verification and balanced journals/reversals.
+- Its cloud SQL acceptance did not pass; it was not deployed as an accepted funding release. rc.6 and rc.7 deliberately excluded these changes while repairing branded entry and registration.
+- rc.8 integrates this work only with separately reviewed corrections and new exact-source acceptance. The rc.5 version number or source availability is not proof of a working hosted financial flow.
+
+## 1.1.0-rc.4 — Accurate subscription-state wording
+
+- Correct dashboard, portfolio and new fictional offering-template language: these records are subscription instructions and requested amounts, not canonical funding obligations or settled holdings.
+- Preserve all saved offering versions, database records and scoped workflow controls. No schema, contract, permission or provider change.
+- rc.3 remains exact source `253bd3f81928645614ab0a4be3b6c379ce0b404d`, cloud run `35555160057`. This correction requires its own cloud and hosted verification; evidence is not silently reassigned.
+
+## 1.1.0-rc.3 — Connected offering and subscription workspaces
+
+- Replace responsibilities-first landings with operational investor opportunities/orders, issuer products/incoming orders and compliance queues in the existing branded application.
+- Retain selected role, organisation and environment across pages, private evidence, commands and durable retries. Server and database enforce the same operating context.
+- Add explicit organisation-authority provenance and owned individual investment accounts; no automatic memberships, organisation mappings or approval seeds.
+- Investor instructions and issuer inbox share one subscription record, accepted version/fingerprint and exact units/amount. AWAITING_FUNDING is not a holding, settled payment or token issuance.
+- Additive database cutover revokes unscoped writes; apply only after cloud acceptance and deploy this scoped candidate immediately afterward. Existing logins and saved identifiers remain intact.
+- This candidate does not claim a completed MAINNET parity release or either full settled product journey. Acceptance evidence is retained against the exact source; no previous run is reassigned to this candidate.
+
+## 1.1.0-rc.2 — Consistent post-MFA dashboard landing
+
+- Keep setup and account-security continuations unchanged while routing a completed MFA sign-in to `/portal` on validated TESTNET/MAINNET deployments.
+- Accept only the exact `/portal` client destination, not query-supplied redirects.
+- The prior rc.1 source `9621da42586bc3423a603469fd662336e144d5a3` passed cloud run `35549941325` (web tests, isolated fund/portal SQL, typecheck/build). This follow-up requires its own cloud result; previous proof is not reassigned to changed source.
+
+## 1.1.0-rc.1 — Role dashboards
+
+- One shared `/portal` dashboard model for all nine canonical roles in TESTNET and MAINNET.
+- Dashboard context is selected only from fresh active native role/organisation assignments after existing MFA admission.
+- Existing applicant registration and manual test onboarding are preserved; a self-selected persona grants no operator role.
+- Responsibilities, workflow actions, hand-offs and MetaMask authority boundaries differ by role, not by a separate application.
+- Exact approved brand artwork replaces the temporary text emblem. Shared carbon/midnight/chrome/cyan tokens and Archivo typography replace the portal-only palette.
+- Existing test records provide bounded work counts. Unavailable business adapters never report fake balances, funding or holdings.
+- The dashboard shows product version and deployment source identity. This candidate does not activate financial operations, add roles, modify schemas or deploy contracts.
+
+### Acceptance still required
+
+Cloud test/build results and authenticated hosted visual checks are recorded against the exact source commit. This candidate alone is not full testnet journey acceptance or MAINNET production admission. Product-organisation integration, financial core, governed issuance, servicing and exit remain subsequent connected workflow work, using this application and release lineage.
+

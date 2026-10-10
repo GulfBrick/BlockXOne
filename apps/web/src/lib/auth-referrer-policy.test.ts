@@ -1,8 +1,19 @@
 import { describe, expect, it } from 'vitest'
 import { authDocumentReferrerPolicy } from './auth-referrer-policy'
 import { AUTH_ERROR_COPY } from './supabase/contracts'
+import { REGISTRATION_ERRORS } from './portal/registration'
 
 describe('Auth document referrer policy', () => {
+  it('permits only clean canonical administration selectors for native signout', () => {
+    const id = '11111111-1111-4111-8111-111111111111'
+    for (const query of [{}, { organisation: id }, { proposal: id }, { organisation: id, proposal: id }]) {
+      expect(authDocumentReferrerPolicy('/workspace/administration', query)).toBe('strict-origin')
+      expect(authDocumentReferrerPolicy('/workspace/administration', new URLSearchParams(query as Record<string, string>))).toBe('strict-origin')
+    }
+    for (const query of [{ organisation: [id, id] }, { proposal: [id] }, { token: 'private' }, { organisation: id, role: 'SuperAdmin' }, { organisation: '' }, { proposal: 'invalid' }]) expect(authDocumentReferrerPolicy('/workspace/administration', query)).toBe('no-referrer')
+    expect(authDocumentReferrerPolicy('/workspace/administration', new URLSearchParams(`organisation=${id}&organisation=${id}`))).toBe('no-referrer')
+    expect(authDocumentReferrerPolicy('/auth/admin-command', {})).toBe('no-referrer')
+  })
   it.each(['/login/mfa', '/workspace/security'])('supports clean MFA native signout document %s', path => {
     expect(authDocumentReferrerPolicy(path, {})).toBe('strict-origin')
     for (const key of ['token', 'code', 'next', 'error']) expect(authDocumentReferrerPolicy(path, { [key]: 'private' })).toBe('no-referrer')
@@ -17,7 +28,7 @@ describe('Auth document referrer policy', () => {
   })
   // Native navigation POST + no-referrer yields Origin:null in Fetch. Only
   // clean form documents opt into strict-origin; origin admission stays strict.
-  it.each(['/login', '/workspace', '/auth/confirm'])('retains the origin for clean %s form submission', (path) => {
+  it.each(['/login', '/register', '/workspace', '/auth/confirm'])('retains the origin for clean %s form submission', (path) => {
     expect(authDocumentReferrerPolicy(path, new URLSearchParams())).toBe('strict-origin')
   })
   it.each([{ setup: '1' }, { error: 'invalid_credentials' }, { setup: '1', error: 'invalid_request' }])('allows fixed login presentation state %j', (query) => {
@@ -27,7 +38,56 @@ describe('Auth document referrer policy', () => {
     expect(authDocumentReferrerPolicy('/login', { setup: '1', error })).toBe('strict-origin')
     expect(authDocumentReferrerPolicy('/login', new URLSearchParams({ setup: '1', error }))).toBe('strict-origin')
   })
-  it.each(['/login', '/workspace', '/auth/confirm'])('does not expose referrers from token-bearing %s', (path) => {
+  it.each(Object.keys(REGISTRATION_ERRORS))('keeps fixed registration retry %s submit-capable', error => {
+    for (const intent of ['investor', 'wealth-manager']) {
+      expect(authDocumentReferrerPolicy('/register', { error, intent })).toBe('strict-origin')
+      expect(authDocumentReferrerPolicy('/register', new URLSearchParams({ error, intent }))).toBe('strict-origin')
+    }
+    expect(authDocumentReferrerPolicy('/register', { error })).toBe('strict-origin')
+  })
+  it.each(['investor', 'wealth-manager'])('allows only fixed registration intent %s', intent => {
+    expect(authDocumentReferrerPolicy('/register', { intent })).toBe('strict-origin')
+    expect(authDocumentReferrerPolicy('/register', new URLSearchParams({ intent }))).toBe('strict-origin')
+  })
+  it('retains native retry origin for only a canonical generic-error support reference', () => {
+    const ref = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+    const queries: Record<string, string>[] = [{ error: 'unavailable', ref }, { ref, error: 'unavailable', intent: 'wealth-manager' }]
+    for (const query of queries) {
+      expect(authDocumentReferrerPolicy('/register', query)).toBe('strict-origin')
+      expect(authDocumentReferrerPolicy('/register', new URLSearchParams(query))).toBe('strict-origin')
+    }
+  })
+  it('keeps malformed, repeated, stale or secret-bearing support-reference queries private', () => {
+    const ref = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+    const queries: Record<string, string | string[]>[] = [
+      { ref }, { error: 'email_invalid', ref }, { error: 'unavailable', ref: '<script>' },
+      { error: 'unavailable', ref: ref.toUpperCase() }, { error: 'unavailable', ref: `${ref}\n` },
+      { error: 'unavailable', ref: [ref] }, { error: ['unavailable'], ref },
+      { error: 'unavailable', ref, token_hash: 'synthetic-secret' }, { error: 'unavailable', ref, unknown: 'value' },
+    ]
+    for (const query of queries) expect(authDocumentReferrerPolicy('/register', query)).toBe('no-referrer')
+    for (const query of [
+      `ref=${ref}`, `error=email_invalid&ref=${ref}`, `error=unavailable&ref=arbitrary-message`,
+      `error=unavailable&ref=${ref}&ref=${ref}`, `error=unavailable&error=unavailable&ref=${ref}`,
+      `error=unavailable&ref=${ref}&intent=investor&intent=investor`, `error=unavailable&ref=${ref}&access_token=synthetic-secret`,
+    ]) expect(authDocumentReferrerPolicy('/register', new URLSearchParams(query))).toBe('no-referrer')
+    expect(authDocumentReferrerPolicy('/login', { error: 'unavailable', ref })).toBe('no-referrer')
+  })
+  it.each([
+    'intent=investor&intent=investor', 'error=email_invalid&error=email_invalid',
+    'intent=SuperAdmin', 'intent=', 'error=raw-provider-detail', 'error=constructor',
+    'next=https%3A%2F%2Fevil.test', 'status=check-email', 'intent=investor&token_hash=synthetic',
+  ])('keeps non-form or untrusted registration query %s private', query => {
+    expect(authDocumentReferrerPolicy('/register', new URLSearchParams(query))).toBe('no-referrer')
+  })
+  it.each([
+    { intent: ['investor'] }, { intent: ['investor', 'investor'] },
+    { error: ['email_invalid'] }, { error: ['email_invalid', 'email_invalid'] },
+    { role: 'SuperAdmin' }, { token_hash: 'synthetic' }, { intent: 'investor', next: '//evil.test' },
+  ])('rejects ambiguous or unknown registration metadata query %j', query => {
+    expect(authDocumentReferrerPolicy('/register', query)).toBe('no-referrer')
+  })
+  it.each(['/login', '/register', '/workspace', '/auth/confirm'])('does not expose referrers from token-bearing %s', (path) => {
     for (const key of ['token_hash', 'token', 'access_token', 'refresh_token', 'code']) {
       expect(authDocumentReferrerPolicy(path, new URLSearchParams({ [key]: 'synthetic-sensitive-value' }))).toBe('no-referrer')
     }

@@ -1,12 +1,13 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { ReactNode } from 'react'
 vi.mock('server-only', () => ({}))
-const mocks = vi.hoisted(() => ({ client: vi.fn(), workspace: vi.fn(), cookies: vi.fn(), mfa: vi.fn(), sufficient: vi.fn(), current: vi.fn() }))
+const mocks = vi.hoisted(() => ({ client: vi.fn(), workspace: vi.fn(), cookies: vi.fn(), mfa: vi.fn(), sufficient: vi.fn(), current: vi.fn(), entry: vi.fn() }))
 vi.mock('@/lib/supabase/mfa', () => ({ readMfaContext: mocks.mfa, hasRequiredMfa: mocks.sufficient, isMfaContextCurrent: mocks.current }))
 vi.mock('next/navigation', () => ({ redirect: (path: string) => { throw Error(`REDIRECT:${path}`) } }))
 vi.mock('@/lib/supabase/page', () => ({ createPageSupabaseClient: mocks.client }))
 vi.mock('@/lib/supabase/server', async (importOriginal) => ({ ...await importOriginal<object>(), readWorkspace: mocks.workspace }))
+vi.mock('@/lib/portal/entry-server', () => ({ readEntry: mocks.entry }))
 vi.mock('next/headers', () => ({ cookies: mocks.cookies }))
 vi.mock('@/components/public/public-shell', () => ({ PublicShell: ({ children }: { children: ReactNode }) => <>{children}</> }))
 import LoginPage, { generateMetadata } from './page'
@@ -14,13 +15,27 @@ import LoginPage, { generateMetadata } from './page'
 beforeEach(() => {
   vi.stubEnv('BLOCKXONE_AUTH_MODE', 'supabase')
   vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_AUTH_MODE', 'supabase')
+  vi.stubEnv('BLOCKXONE_TESTNET_FUND_DEMO', '')
   mocks.client.mockResolvedValue({})
   mocks.mfa.mockResolvedValue({})
   mocks.sufficient.mockReturnValue(true)
   mocks.current.mockResolvedValue(true)
   mocks.workspace.mockResolvedValue({ user: { id: 'u1' }, organisations: [{ id: 'o1' }] })
   mocks.cookies.mockResolvedValue({ get: () => undefined })
+  mocks.entry.mockRejectedValue(new Error('Synthetic entry denial'))
 })
+afterEach(() => vi.unstubAllEnvs())
+
+function configureTestIdentity() {
+  vi.stubEnv('SUPABASE_URL', 'https://fegnnnlseuejkrusbbkv.supabase.co')
+  vi.stubEnv('VERCEL_ENV', 'preview')
+  vi.stubEnv('BLOCKXONE_APP_ORIGIN', 'https://testnet.bx1.co.za')
+}
+function configureMainIdentity() {
+  vi.stubEnv('SUPABASE_URL', 'https://oqkevkjbkpugjotihtda.supabase.co')
+  vi.stubEnv('VERCEL_ENV', 'production')
+  vi.stubEnv('BLOCKXONE_APP_ORIGIN', 'https://bx1.co.za')
+}
 describe('server login/setup admission', () => {
   it('does not render password setup after the token changes during workspace lookup', async () => {
     mocks.current.mockResolvedValue(false)
@@ -49,24 +64,124 @@ describe('server login/setup admission', () => {
     }
     expect((await generateMetadata({ searchParams: Promise.resolve({ token_hash: 'synthetic' }) })).referrer).toBe('no-referrer')
   })
-  it('preserves Mainnet login and offers separate branded Testnet login and registration', async () => {
+  it('shows the real login without legacy portals or public registration', async () => {
     const html = renderToStaticMarkup(await LoginPage({ searchParams: Promise.resolve({}) }))
     expect(html).toContain('Sign in to BlockXOne')
-    expect(html).toContain('Mainnet · Secure access')
-    expect(html).toContain('Signing in does not enable financial operations')
     expect(html).toContain('action="/auth/login"')
     expect(html).not.toContain('Investor sign in')
+    expect(html).not.toContain('/register')
+  })
+  it('keeps MAIN sign-in local and gives separate canonical Testnet sign-in and registration links', async () => {
+    configureMainIdentity()
+    const html = renderToStaticMarkup(await LoginPage({ searchParams: Promise.resolve({}) }))
+    expect(html).toContain('Mainnet · Secure access')
+    expect(html).toContain('action="/auth/login"')
+    expect(html).toContain('Signing in does not enable financial operations')
     expect(html).toContain('href="https://testnet.bx1.co.za/login"')
     expect(html).toContain('href="https://testnet.bx1.co.za/register"')
     expect(html).toContain('accounts and sessions are separate from Mainnet')
-    expect(html).not.toContain('href="/register"')
-    expect(html).not.toContain('action="/auth/register"')
+    expect(html).toContain('href="/register"')
+    expect(html).toContain('Registration does not grant approval or signing authority')
     expect(html).not.toContain('.vercel.app')
+  })
+  it('keeps the Testnet links visible on MAIN when auth-mode flags make sign-in unavailable', async () => {
+    configureMainIdentity()
+    vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_AUTH_MODE', '')
+    const html = renderToStaticMarkup(await LoginPage({ searchParams: Promise.resolve({}) }))
+    expect(html).toContain('Access is temporarily unavailable.')
+    expect(html).not.toContain('<form')
+    expect(html).toContain('href="https://testnet.bx1.co.za/login"')
+    expect(html).toContain('href="https://testnet.bx1.co.za/register"')
+    expect(html).not.toContain('href="/register"')
+  })
+  it('does not place Testnet navigation on MAIN password-setup links', async () => {
+    configureMainIdentity()
+    const html = renderToStaticMarkup(await LoginPage({ searchParams: Promise.resolve({ setup: '1' }) }))
+    expect(html).toContain('action="/auth/setup"')
+    expect(html).not.toContain('href="https://testnet.bx1.co.za/login"')
+    expect(html).not.toContain('href="https://testnet.bx1.co.za/register"')
+  })
+  it.each([
+    ['BLOCKXONE_APP_ORIGIN', 'https://testnet.bx1.co.za'],
+    ['BLOCKXONE_APP_ORIGIN', 'https://bx1.co.za.evil.test'],
+    ['SUPABASE_URL', 'https://fegnnnlseuejkrusbbkv.supabase.co'],
+    ['VERCEL_ENV', 'preview'],
+    ['BLOCKXONE_ENVIRONMENT', 'TESTNET'],
+    ['NEXT_PUBLIC_BLOCKXONE_RUNTIME_SCOPE', 'TESTNET'],
+  ])('does not show MAIN-only Testnet navigation with a conflicting binding: %s', async (name, value) => {
+    configureMainIdentity()
+    vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_AUTH_MODE', '')
+    vi.stubEnv(name, value)
+    const html = renderToStaticMarkup(await LoginPage({ searchParams: Promise.resolve({}) }))
+    expect(html).toContain('Access is temporarily unavailable.')
+    expect(html).not.toContain('href="https://testnet.bx1.co.za/login"')
+    expect(html).not.toContain('href="https://testnet.bx1.co.za/register"')
+    expect(html).not.toContain('Mainnet · Secure access')
+  })
+  it('links new test customers to registration only in the exact hosted test environment', async () => {
+    vi.stubEnv('BLOCKXONE_TESTNET_FUND_DEMO', 'enabled')
+    vi.stubEnv('SUPABASE_URL', 'https://fegnnnlseuejkrusbbkv.supabase.co')
+    vi.stubEnv('VERCEL_ENV', 'preview')
+    vi.stubEnv('BLOCKXONE_APP_ORIGIN', 'https://bx1-customer-preview.vercel.app')
+    const html = renderToStaticMarkup(await LoginPage({ searchParams: Promise.resolve({}) }))
+    expect(html).toContain('href="/register"')
+    expect(html).toContain('Create your account')
+    expect(html).toContain('investor or wealth manager')
+    expect(html).toContain('Registration does not grant approval or signing authority')
+    expect(html).toContain('action="/auth/login"')
+    expect(html).not.toContain('href="https://testnet.bx1.co.za/login"')
+    expect(html).not.toContain('href="https://testnet.bx1.co.za/register"')
+    expect(html).not.toContain('Mainnet · Secure access')
+    const setup = renderToStaticMarkup(await LoginPage({ searchParams: Promise.resolve({ setup: '1' }) }))
+    expect(setup).not.toContain('href="/register"')
+    expect(setup).toContain('action="/auth/setup"')
+  })
+  it.each([
+    ['VERCEL_ENV', 'production'],
+    ['SUPABASE_URL', 'https://oqkevkjbkpugjotihtda.supabase.co'],
+    ['BLOCKXONE_APP_ORIGIN', 'https://bx1.co.za'],
+    ['NEXT_PUBLIC_BLOCKXONE_AUTH_MODE', ''],
+  ])('does not advertise registration when the exact test guard is broken: %s', async (name, value) => {
+    vi.stubEnv('BLOCKXONE_TESTNET_FUND_DEMO', 'enabled')
+    vi.stubEnv('SUPABASE_URL', 'https://fegnnnlseuejkrusbbkv.supabase.co')
+    vi.stubEnv('VERCEL_ENV', 'preview')
+    vi.stubEnv('BLOCKXONE_APP_ORIGIN', 'https://bx1-customer-preview.vercel.app')
+    vi.stubEnv(name, value)
+    const html = renderToStaticMarkup(await LoginPage({ searchParams: Promise.resolve({}) }))
+    expect(html).not.toContain('href="/register"')
+    expect(html).not.toContain('Create your account')
   })
   it('query setup=1 alone never authorizes password setup', async () => {
     mocks.workspace.mockResolvedValue(null)
     const html = renderToStaticMarkup(await LoginPage({ searchParams: Promise.resolve({ setup: '1' }) }))
     expect(html).toContain('This invitation link is invalid or has expired.')
+    expect(html).not.toContain('action="/auth/setup"')
+    expect(mocks.entry).not.toHaveBeenCalled()
+  })
+  it('does not authorize configured applicant recovery when the guarded identity read denies access', async () => {
+    configureTestIdentity()
+    mocks.workspace.mockResolvedValue(null)
+    const html = renderToStaticMarkup(await LoginPage({ searchParams: Promise.resolve({ setup: '1' }) }))
+    expect(mocks.entry).toHaveBeenCalledTimes(1)
+    expect(html).toContain('Access is temporarily unavailable.')
+    expect(html).not.toContain('action="/auth/setup"')
+    expect(html).not.toContain('Synthetic entry denial')
+  })
+  it('allows applicant password setup only after the canonical identity read succeeds', async () => {
+    configureTestIdentity()
+    mocks.workspace.mockResolvedValue(null)
+    mocks.entry.mockResolvedValue({ actor: { id: 'u1', email: 'synthetic@example.invalid' }, applications: [] })
+    const html = renderToStaticMarkup(await LoginPage({ searchParams: Promise.resolve({ setup: '1' }) }))
+    expect(mocks.entry).toHaveBeenCalledTimes(1)
+    expect(mocks.current.mock.invocationCallOrder[0]).toBeGreaterThan(mocks.entry.mock.invocationCallOrder[0])
+    expect(html).toContain('action="/auth/setup"')
+  })
+  it('does not mistake a query string for an applicant session when no native context exists', async () => {
+    configureTestIdentity()
+    mocks.mfa.mockResolvedValue(null)
+    const html = renderToStaticMarkup(await LoginPage({ searchParams: Promise.resolve({ setup: '1' }) }))
+    expect(mocks.entry).toHaveBeenCalledTimes(1)
+    expect(mocks.workspace).not.toHaveBeenCalled()
     expect(html).not.toContain('action="/auth/setup"')
   })
   it('renders password setup only after a fresh verified workspace', async () => {
@@ -74,8 +189,6 @@ describe('server login/setup admission', () => {
     expect(mocks.workspace).toHaveBeenCalledOnce()
     expect(html).toContain('action="/auth/setup"')
     expect(html).not.toContain('name="email"')
-    expect(html).not.toContain('href="https://testnet.bx1.co.za/login"')
-    expect(html).not.toContain('href="https://testnet.bx1.co.za/register"')
   })
   it('renders actionable setup errors only after checking the active workspace', async () => {
     const params = { setup: '1', error: 'password_mismatch' }

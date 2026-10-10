@@ -1,0 +1,233 @@
+import 'server-only'
+import { createHash, createHmac, timingSafeEqual } from 'node:crypto'
+import { Pool, type PoolConfig } from 'pg'
+import { z } from 'zod'
+import supabaseCa from '@/lib/wallets/supabase-ca.json'
+import { platformRelease } from '@/lib/platform-release'
+import { PortalError } from './server'
+import type { EntryApplication } from './entry-contracts'
+
+type Environment = Record<string, string | undefined>
+const PROJECT = 'fegnnnlseuejkrusbbkv'
+const POOLER = 'aws-0-eu-central-1.pooler.supabase.com'
+const TOKEN_PATH = '/resources/accessTokens/sdk'
+
+export type ProviderBinding = {
+  binding_id: string; application_id: string; application_revision: number;
+  actor_id: string; environment: 'TESTNET'; external_user_id: string;
+  expected_applicant_type: 'individual' | 'company'; expected_level_name: string;
+  expected_client_id: string; source_version_revision: number
+}
+export type ProviderEvidence = {
+  id: string; application_id: string; application_revision: number;
+  ordering_state: 'CURRENT' | 'STALE' | 'MANUAL_TEST'; duplicate: boolean
+}
+export type SumsubWebhook = {
+  externalUserId: string; applicantId: string; applicantType: 'individual' | 'company'; levelName: string; type: string; createdAtMs: string;
+  sandboxMode: true; testMode?: true; clientId: string; correlationId?: string;
+  reviewStatus?: string; reviewResult?: { reviewAnswer?: string; reviewRejectType?: string }
+}
+
+function required(value: string | undefined, min = 1): string {
+  if (!value || value.length < min || value !== value.trim() || /[\u0000-\u001f\u007f]/.test(value)) throw new PortalError('The identity provider is not configured for this environment.', 503)
+  return value
+}
+function requireTestnet(env: Environment) {
+  if (platformRelease(env)?.environment !== 'TESTNET') throw new PortalError('Sandbox identity verification is not admitted in this environment.', 404)
+}
+
+export function sumsubWebhookConfig(env: Environment = process.env) {
+  requireTestnet(env)
+  const clientId = required(env.BLOCKXONE_SUMSUB_SANDBOX_CLIENT_ID)
+  if (clientId.length > 150) throw new PortalError('The identity provider client is invalid.', 503)
+  return {
+    secret: required(env.BLOCKXONE_SUMSUB_SANDBOX_WEBHOOK_SECRET, 20),
+    clientId,
+  }
+}
+export function sumsubSessionConfig(applicantType: 'individual' | 'company', env: Environment = process.env) {
+  const webhook = sumsubWebhookConfig(env)
+  if (!['individual', 'company'].includes(applicantType)) throw new PortalError('The identity provider subject is unavailable.', 503)
+  // The submitted subject selects its own exact configured level. An unrelated
+  // missing level must not disable it; no fallback level is ever supplied.
+  const levelName = required(applicantType === 'individual'
+    ? env.BLOCKXONE_SUMSUB_SANDBOX_INDIVIDUAL_LEVEL : env.BLOCKXONE_SUMSUB_SANDBOX_COMPANY_LEVEL)
+  if (levelName.length > 120) throw new PortalError('The identity provider level is invalid.', 503)
+  return {
+    ...webhook,
+    appToken: required(env.BLOCKXONE_SUMSUB_SANDBOX_APP_TOKEN, 16),
+    appSecret: required(env.BLOCKXONE_SUMSUB_SANDBOX_APP_SECRET, 20),
+    levelName,
+    individualLevel: applicantType === 'individual' ? levelName : null,
+    companyLevel: applicantType === 'company' ? levelName : null,
+  }
+}
+
+export function providerEvidenceDatabaseConfig(env: Environment = process.env): PoolConfig {
+  try {
+    requireTestnet(env)
+    const url = new URL(env.BLOCKXONE_PROVIDER_EVIDENCE_DATABASE_URL ?? '')
+    const direct = url.hostname === `db.${PROJECT}.supabase.co`
+    const pooled = url.hostname === POOLER
+    const user = decodeURIComponent(url.username)
+    const port = Number(url.port || (direct ? 5432 : 6543))
+    if (!['postgres:', 'postgresql:'].includes(url.protocol) || (!direct && !pooled)
+      || user !== (direct ? 'bx1_provider_evidence_writer' : `bx1_provider_evidence_writer.${PROJECT}`)
+      || !decodeURIComponent(url.password) || url.pathname !== '/postgres' || url.hash
+      || port !== (direct ? 5432 : 6543) || url.searchParams.toString() !== 'sslmode=verify-full') throw new Error()
+    return {
+      host: url.hostname, port, database: 'postgres', user, password: decodeURIComponent(url.password),
+      ssl: { ca: supabaseCa.pem, rejectUnauthorized: true, servername: url.hostname },
+      max: 2, connectionTimeoutMillis: 3000, idleTimeoutMillis: 10000,
+      query_timeout: 8000, statement_timeout: 7000, lock_timeout: 4000,
+      application_name: 'bx1-provider-evidence',
+    }
+  } catch { throw new PortalError('The identity evidence writer is not configured for this environment.', 503) }
+}
+
+let pool: Pool | undefined
+function database(): Pool {
+  if (!pool) {
+    pool = new Pool(providerEvidenceDatabaseConfig())
+    pool.on('error', () => {})
+  }
+  return pool
+}
+/** Read-only server expectation; the database independently proves its immutable SUBMISSION source. */
+export function expectedProviderApplicantType(application: EntryApplication): 'individual' | 'company' {
+  if (application.status !== 'SUBMITTED' || application.context_kind !== 'PERSONAL' || !application.submitted_at)
+    throw new PortalError('Submit or resubmit this application before starting identity verification.', 409)
+  const details = application.details
+  const person = z.object({ full_name: z.string().trim().min(2).max(120), country: z.string().regex(/^[A-Z]{2}$/) }).safeParse(details)
+  if (!person.success) throw new PortalError('The submitted applicant subject is incomplete.', 409)
+  const unversioned = !Object.prototype.hasOwnProperty.call(details, 'details_version')
+  const company = z.object({ company_name: z.string().trim().min(3).max(160),
+    registration_reference: z.string().trim().min(3).max(100) }).safeParse(details).success
+  if (application.persona === 'INVESTOR' && application.admission_purpose === 'INVESTOR_ADMISSION') {
+    if (details.investor_type === 'INDIVIDUAL' && unversioned) return 'individual'
+    if (details.investor_type === 'ENTITY' && company && (unversioned || details.details_version === 3)) return 'company'
+  }
+  if (application.persona === 'WEALTH_MANAGER' && application.admission_purpose === 'CUSTOMER_ORGANISATION_ADMISSION'
+    && company && (details.details_version === 2 || details.details_version === 3)) return 'company'
+  throw new PortalError('The submitted applicant subject is not available for identity verification.', 409)
+}
+
+export async function bindProviderApplication(actorId: string, sessionId: string, applicationId: string, revision: number,
+  config: Pick<ReturnType<typeof sumsubSessionConfig>, 'individualLevel' | 'companyLevel' | 'clientId'>,
+  expectedApplicantType: 'individual' | 'company'): Promise<ProviderBinding> {
+  try {
+    const expectedLevel = expectedApplicantType === 'individual' ? config.individualLevel : config.companyLevel
+    if (!expectedLevel) throw new Error()
+    const { rows } = await database().query<{ result: ProviderBinding }>(
+      'select bx1_private.bind_provider_application($1,$2,$3,$4,$5,$6,$7) as result',
+      [actorId, sessionId, applicationId, revision, config.individualLevel, config.companyLevel, config.clientId],
+    )
+    const result = rows.length === 1 ? rows[0].result : null
+    const expectedExternal = `bx1:testnet:${applicationId}:r${revision}`
+    if (!result || result.actor_id !== actorId || result.application_id !== applicationId
+      || result.application_revision !== revision || result.environment !== 'TESTNET'
+      || result.source_version_revision !== revision || result.expected_applicant_type !== expectedApplicantType
+      || result.expected_level_name !== expectedLevel
+      || result.expected_client_id !== config.clientId
+      || result.external_user_id !== expectedExternal || !z.string().uuid().safeParse(result.binding_id).success) throw new Error()
+    return result
+  } catch { throw new PortalError('The identity evidence binding is unavailable. No provider session was issued.', 503) }
+}
+
+/** Sumsub signs the exact raw webhook bytes, not re-serialized JSON. SHA1 is intentionally refused. */
+export function verifySumsubWebhookDigest(raw: Uint8Array, algorithm: string | null, digest: string | null, secret: string): boolean {
+  const hashAlgorithm = algorithm === 'HMAC_SHA256_HEX' ? 'sha256' : algorithm === 'HMAC_SHA512_HEX' ? 'sha512' : null
+  if (!hashAlgorithm || !digest || !/^[0-9a-f]+$/i.test(digest) || digest.length !== (hashAlgorithm === 'sha256' ? 64 : 128)) return false
+  const supplied = Buffer.from(digest, 'hex')
+  const expected = createHmac(hashAlgorithm, secret).update(raw).digest()
+  return supplied.length === expected.length && timingSafeEqual(supplied, expected)
+}
+
+const eventTypes = ['applicantReviewed', 'applicantCreated', 'applicantPending', 'applicantOnHold',
+  'applicantPersonalInfoChanged', 'applicantReset', 'applicantLevelChanged', 'applicantActivated',
+  'applicantPrechecked', 'applicantAwaitingUser', 'applicantDeactivated', 'applicantDeleted'] as const
+const boundedText = (max: number, min = 1) => z.string().min(min).max(max)
+  .refine(value => value === value.trim() && !/[\u0000-\u001f\u007f]/.test(value))
+const webhookSchema = z.object({
+  externalUserId: z.string().regex(/^bx1:testnet:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}:r[1-9][0-9]*$/i).max(100),
+  applicantId: boundedText(100, 8), applicantType: z.enum(['individual', 'company']), levelName: boundedText(120),
+  type: z.enum(eventTypes),
+  createdAtMs: z.string().regex(/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\.\d{3}$/),
+  sandboxMode: z.literal(true), testMode: z.literal(true).optional(),
+  clientId: boundedText(150), correlationId: boundedText(150).optional(),
+  reviewStatus: boundedText(60).optional(),
+  reviewResult: z.object({ reviewAnswer: boundedText(60).optional(), reviewRejectType: boundedText(60).optional() }).passthrough().optional(),
+}).passthrough().superRefine((event, context) => {
+  if (event.type !== 'applicantReviewed' || event.reviewStatus !== 'completed') return
+  const answer = event.reviewResult?.reviewAnswer, reject = event.reviewResult?.reviewRejectType
+  if (!((answer === 'GREEN' && reject === undefined) || (answer === 'RED' && (reject === 'RETRY' || reject === 'FINAL'))))
+    context.addIssue({ code: z.ZodIssueCode.custom, message: 'A completed review requires an admitted provider outcome.' })
+})
+
+function canonicalJson(value: unknown, depth = 0): string {
+  if (depth > 32) throw new PortalError('The provider event is invalid.', 400)
+  if (value === null || typeof value !== 'object') return JSON.stringify(value)
+  if (Array.isArray(value)) return `[${value.map(item => canonicalJson(item, depth + 1)).join(',')}]`
+  const object = value as Record<string, unknown>
+  return `{${Object.keys(object).sort().map(key => `${JSON.stringify(key)}:${canonicalJson(object[key], depth + 1)}`).join(',')}}`
+}
+export function parseSumsubWebhook(raw: Uint8Array, expectedClientId: string) {
+  if (!raw.length || raw.length > 65536) throw new PortalError('The provider event is invalid.', 400)
+  let parsed: unknown
+  try { parsed = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(raw)) } catch { throw new PortalError('The provider event is invalid.', 400) }
+  const event = webhookSchema.safeParse(parsed)
+  if (!event.success || event.data.clientId !== expectedClientId) throw new PortalError('The provider event is not admitted.', 403)
+  const timestamp = Date.parse(event.data.createdAtMs.replace(' ', 'T') + 'Z')
+  if (!Number.isFinite(timestamp) || new Date(timestamp).toISOString().replace('T', ' ').replace('Z', '') !== event.data.createdAtMs)
+    throw new PortalError('The provider event time is invalid.', 400)
+  return {
+    event: event.data as SumsubWebhook,
+    eventAt: new Date(timestamp).toISOString(),
+    payloadHash: createHash('sha256').update(raw).digest('hex'),
+    semanticHash: createHash('sha256').update(canonicalJson(parsed)).digest('hex'),
+  }
+}
+
+export function sumsubRequestSignature(timestamp: string, path: string, body: string, secret: string): string {
+  return createHmac('sha256', secret).update(timestamp).update('POST').update(path).update(body).digest('hex')
+}
+export async function issueSumsubSandboxToken(externalUserId: string, levelName: string,
+  config: Pick<ReturnType<typeof sumsubSessionConfig>, 'appToken' | 'appSecret'>): Promise<string> {
+  const body = JSON.stringify({ userId: externalUserId, levelName, ttlInSecs: 600 })
+  const timestamp = Math.floor(Date.now() / 1000).toString()
+  let response: Response
+  try {
+    response = await fetch(`https://api.sumsub.com${TOKEN_PATH}`, {
+      method: 'POST', cache: 'no-store', redirect: 'error', signal: AbortSignal.timeout(10000),
+      headers: { 'Content-Type': 'application/json', 'X-App-Token': config.appToken,
+        'X-App-Access-Ts': timestamp, 'X-App-Access-Sig': sumsubRequestSignature(timestamp, TOKEN_PATH, body, config.appSecret) },
+      body,
+    })
+  } catch { throw new PortalError('The identity provider is temporarily unavailable. Retry this application later.', 503) }
+  if (!response.ok) throw new PortalError('The identity provider could not start verification. Retry this application later.', 503)
+  let parsed: unknown
+  try { parsed = await response.json() } catch { throw new PortalError('The identity provider response could not be verified.', 503) }
+  const token = z.object({ token: z.string().min(1).max(1024), userId: z.literal(externalUserId) }).safeParse(parsed)
+  if (!token.success) throw new PortalError('The identity provider response could not be verified.', 503)
+  return token.data.token
+}
+
+export async function recordProviderEvidence(input: ReturnType<typeof parseSumsubWebhook>): Promise<ProviderEvidence> {
+  const { event, eventAt, payloadHash, semanticHash } = input
+  try {
+    const { rows } = await database().query<{ result: ProviderEvidence }>(
+      'select bx1_private.record_provider_evidence($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) as result',
+      [event.externalUserId,event.applicantId,event.type,event.correlationId ?? null,event.clientId,
+        eventAt,payloadHash,semanticHash,event.reviewStatus ?? null,event.reviewResult?.reviewAnswer ?? null,
+        event.reviewResult?.reviewRejectType ?? null,event.testMode === true,true,event.applicantType,event.levelName],
+    )
+    const result = rows.length === 1 ? rows[0].result : null
+    if (!result || !z.string().uuid().safeParse(result.id).success
+      || !z.string().uuid().safeParse(result.application_id).success
+      || !Number.isInteger(result.application_revision) || result.application_revision < 1
+      || event.externalUserId !== `bx1:testnet:${result.application_id}:r${result.application_revision}`
+      || !['CURRENT','STALE','MANUAL_TEST'].includes(result.ordering_state)
+      || typeof result.duplicate !== 'boolean') throw new Error()
+    return result
+  } catch { throw new PortalError('The provider evidence could not be durably recorded. The provider should retry delivery.', 503) }
+}
