@@ -13,7 +13,16 @@ describe('normal admission command projection at applicant entry', () => {
     const initial = entryFixture([])
     initial.stage2_access = { version: 1, environment: 'TESTNET', actor_id: entryActorId, operating_context: { mode: 'APPLICANT' }, session_mode: 'TEST_PASSWORD', allowed_commands: [] }
     const html = renderToStaticMarkup(<EntryScreen initial={initial} release={release} />)
-    expect(html).toContain('Capacity application unavailable'); expect(html).not.toContain('<form')
+    expect(html).toContain('Capacity application unavailable')
+    expect(html).not.toContain('Capacity to apply for')
+    expect(html).not.toContain('Application context')
+    expect(html).not.toContain('Create or continue this application')
+    expect(html).not.toContain('Submit for review')
+    const forms = html.match(/<form\b[^>]*>[\s\S]*?<\/form>/g) ?? []
+    expect(forms).toHaveLength(1)
+    expect(forms[0]).toContain('action="/auth/logout"')
+    expect(forms[0]).toContain('method="post"')
+    expect(forms[0]).toMatch(/<button\b[^>]*type="submit"[^>]*>Sign out<\/button>/)
   })
   it('retains the same personal application but does not expose an unavailable submit action', () => {
     const initial = entryFixture([projectedApplication()])
