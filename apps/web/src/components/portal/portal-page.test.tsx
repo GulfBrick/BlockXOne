@@ -24,18 +24,19 @@ function roleData() {
   return { kind: 'role' as const, user, release, scope, scopes: [scope], operatingContext: context, availablePaths: ['/portal/opportunities'], queue: [], queueMessage: undefined,
     portal: { user, snapshot: { actor: { ...user, can_review: false }, operating_context: context, applications: [], organisations: [], products: [], subscriptions: [], events: [] } } }
 }
-const syntheticApplicationId = '77777777-7777-4777-8777-777777777777'
-function syntheticData() {
+const admissionApplicationId = '77777777-7777-4777-8777-777777777777'
+function admissionData() {
   const reviewContext = { ...context, role: 'ComplianceOfficer' as const }
   const reviewScope = { ...scope, role: 'ComplianceOfficer' as const }
   const applicant = '22222222-2222-4222-8222-222222222222'
   const snapshot: PortalSnapshot = { actor: { ...user, display_name: null, can_review: true }, operating_context: reviewContext,
-    rehearsal: { version: 1, environment: 'TESTNET', mode: 'SYNTHETIC_COMPLIANCE', actor_id: user.id, operating_context: reviewContext },
-    applications: [{ id: syntheticApplicationId, user_id: applicant, persona: 'INVESTOR', status: 'SUBMITTED', revision: 2,
-      details: { full_name: 'Fictional Applicant', country: 'ZA', investor_type: 'INDIVIDUAL', company_name: '', registration_reference: '', source_of_funds: 'Synthetic savings for this rehearsal only.', beneficial_owners: '', experience: 'Fictional experienced investor.', documents: [{ id: syntheticApplicationId, kind: 'IDENTITY', title: 'Fictional identity manifest', storage_path: `${applicant}/${syntheticApplicationId}`, sha256: 'a'.repeat(64), size: 100, mime_type: 'application/pdf' }], test_data_acknowledged: true },
+    stage2_access: { version: 1, environment: 'TESTNET', session_mode: 'TEST_PASSWORD', actor_id: user.id, operating_context: reviewContext,
+      allowed_commands: ['review_application', 'review_representative_mandate', 'review_investing_representative_mandate'] },
+    applications: [{ id: admissionApplicationId, user_id: applicant, persona: 'INVESTOR', status: 'SUBMITTED', revision: 2,
+      details: { full_name: 'Fictional Applicant', country: 'ZA', investor_type: 'INDIVIDUAL', company_name: '', registration_reference: '', source_of_funds: 'Synthetic savings for normal TEST admission.', beneficial_owners: '', experience: 'Fictional experienced investor.', documents: [{ id: admissionApplicationId, kind: 'IDENTITY', title: 'Fictional identity evidence', storage_path: `${applicant}/${admissionApplicationId}`, sha256: 'a'.repeat(64), size: 100, mime_type: 'application/pdf' }], test_data_acknowledged: true },
       submitted_at: '2026-10-10T12:00:00Z', reviewed_at: null, reviewer_id: null, review_notes: null, organisation_id: null, review_checks: {}, provider_mode: 'MANUAL_TEST_REVIEW', approved_until: null, admission_purpose: 'INVESTOR_ADMISSION' }],
     organisations: [], products: [], subscriptions: [], events: [], requests: [] }
-  return { kind: 'synthetic-compliance' as const, user, release, scope: reviewScope, scopes: [reviewScope], operatingContext: reviewContext, portal: { user, snapshot } }
+  return { kind: 'role' as const, user, release, scope: reviewScope, scopes: [reviewScope], operatingContext: reviewContext, portal: { user, snapshot } }
 }
 const mandateId = '55555555-5555-4555-8555-555555555555'
 function approvedMandate(change: Partial<PortalOrganisationMandate> = {}): PortalOrganisationMandate {
@@ -58,39 +59,40 @@ function adminData(mandate = approvedMandate()) {
 beforeEach(() => { vi.resetAllMocks(); fixture.load.mockResolvedValue(roleData()) })
 
 describe('portal server page access and selected context', () => {
-  it.each(['/portal', '/portal/compliance', '/portal/compliance/detail'] as const)('mounts the existing business screen only for a validated synthetic %s path', async view => {
-    const data = syntheticData()
+  it.each(['/portal', '/portal/compliance', '/portal/compliance/detail'] as const)('mounts the normal business screen for admitted Stage2 %s', async view => {
+    const data = admissionData()
     fixture.load.mockResolvedValueOnce(data)
-    renderToStaticMarkup(await PortalPage({ view, id: view.endsWith('/detail') ? syntheticApplicationId : undefined, query: { organisation, role: 'ComplianceOfficer' } }))
+    renderToStaticMarkup(await PortalPage({ view, id: view.endsWith('/detail') ? admissionApplicationId : undefined, query: { organisation, role: 'ComplianceOfficer' } }))
     expect(fixture.screen).toHaveBeenCalledWith(expect.objectContaining({ data: data.portal, view, operatingContext: data.operatingContext, scope: data.scope }))
     expect(fixture.entry).not.toHaveBeenCalled()
   })
-  it.each(['CHANGES_REQUIRED', 'REJECTED', 'APPROVED'] as const)('retains the same exact synthetic %s saved detail on refresh', async status => {
-    const data = syntheticData(); Object.assign(data.portal.snapshot.applications[0], { status, reviewed_at: '2026-10-10T12:30:00Z', reviewer_id: user.id,
+  it.each(['CHANGES_REQUIRED', 'REJECTED', 'APPROVED'] as const)('retains the same exact normal %s saved detail on refresh', async status => {
+    const data = admissionData(); Object.assign(data.portal.snapshot.applications[0], { status, reviewed_at: '2026-10-10T12:30:00Z', reviewer_id: user.id,
       review_notes: 'Fictional admission facts reviewed for this synthetic decision.', approved_until: status === 'APPROVED' ? '2099-01-01T00:00:00Z' : null,
       review_checks: { identity: true, ownership: true, screening: true, suitability: true } })
     fixture.load.mockResolvedValueOnce(data)
-    renderToStaticMarkup(await PortalPage({ view: '/portal/compliance/detail', id: syntheticApplicationId, query: { organisation, role: 'ComplianceOfficer' } }))
-    expect(fixture.screen).toHaveBeenCalledWith(expect.objectContaining({ data: data.portal, id: syntheticApplicationId }))
+    renderToStaticMarkup(await PortalPage({ view: '/portal/compliance/detail', id: admissionApplicationId, query: { organisation, role: 'ComplianceOfficer' } }))
+    expect(fixture.screen).toHaveBeenCalledWith(expect.objectContaining({ data: data.portal, id: admissionApplicationId }))
   })
-  it.each(['/portal/products', '/portal/products/detail', '/portal/portfolio', '/portal/orders/detail', '/portal/opportunities'] as const)('does not mount another workflow from a restricted synthetic %s projection', async view => {
-    fixture.load.mockResolvedValueOnce(syntheticData())
-    const html = renderToStaticMarkup(await PortalPage({ view, id: syntheticApplicationId, query: { organisation, role: 'ComplianceOfficer' } }))
+  it.each(['/portal/products', '/portal/products/detail', '/portal/portfolio', '/portal/orders/detail', '/portal/opportunities'] as const)('does not mount a non-admission %s workflow from password-only access', async view => {
+    fixture.load.mockResolvedValueOnce(admissionData())
+    const html = renderToStaticMarkup(await PortalPage({ view, id: admissionApplicationId, query: { organisation, role: 'ComplianceOfficer' } }))
     expect(html).toContain('Complete your account access')
     expect(fixture.screen).not.toHaveBeenCalled(); expect(fixture.entry).not.toHaveBeenCalled()
   })
-  it('denies an unreturned synthetic detail instead of treating an arbitrary id as a case', async () => {
-    fixture.load.mockResolvedValueOnce(syntheticData())
+  it('passes an unknown normal detail to the existing unavailable-record renderer without granting a case', async () => {
+    fixture.load.mockResolvedValueOnce(admissionData())
     renderToStaticMarkup(await PortalPage({ view: '/portal/compliance/detail', id: otherOrganisation, query: { organisation, role: 'ComplianceOfficer' } }))
-    expect(fixture.screen).not.toHaveBeenCalled(); expect(fixture.entry).not.toHaveBeenCalled()
+    expect(fixture.screen).toHaveBeenCalledWith(expect.objectContaining({ id: otherOrganisation })); expect(fixture.entry).not.toHaveBeenCalled()
   })
-  it('fails closed on a missing, actor/context-mismatched, protected or MAIN synthetic envelope', async () => {
-    const valid = syntheticData()
+  it('fails closed on malformed, actor/context-mismatched, legacy or MAIN password admission envelopes', async () => {
+    const valid = admissionData()
     const snapshots = [
       { ...valid.portal.snapshot, rehearsal: undefined },
       { ...valid.portal.snapshot, actor: { ...valid.portal.snapshot.actor, id: otherOrganisation } },
       { ...valid.portal.snapshot, operating_context: { ...valid.operatingContext, organisationId: otherOrganisation } },
-      { ...valid.portal.snapshot, organisation_mandates: [] },
+      { ...valid.portal.snapshot, stage2_access: { ...valid.portal.snapshot.stage2_access!, version: 2 } },
+      { ...valid.portal.snapshot, stage2_access: { ...valid.portal.snapshot.stage2_access!, allowed_commands: ['publish_product'] } },
     ]
     for (const snapshot of snapshots) {
       fixture.load.mockResolvedValueOnce({ ...valid, portal: { ...valid.portal, snapshot } })

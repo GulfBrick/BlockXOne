@@ -434,6 +434,30 @@ describe('onboarding and subscription boundaries', () => {
 })
 
 describe('operational landings and one subscription hand-off', () => {
+  it.each(['Investor', 'OfferingManager', 'IssuerFundManager', 'TransferAgent', 'TokenisationAgent', 'TreasuryOperator', 'FinancialController'] as const)('does not mount product or funding work from a password-only %s landing', role => {
+    const value = snapshot(); const context = operating(role)
+    value.operating_context = context
+    value.stage2_access = { version: 1, environment: 'TESTNET', actor_id: actor, operating_context: context, session_mode: 'TEST_PASSWORD', allowed_commands: [] }
+    value.organisations = [{ ...operatorOrganisation(), roles: [role] }]
+    value.products = [product()]; value.subscriptions = [order()]
+    const html = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal" operatingContext={context} release={{ environment: 'TESTNET', version: 'normal-fixture', source: 'normal-fixture' }} />)
+    expect(html).toContain('Action unavailable in this capacity')
+    expect(html).not.toContain('Fictional Test Fund')
+    expect(html).not.toContain('Product register')
+    expect(html).not.toContain('Funding records unavailable')
+    expect(html).not.toContain('Your subscription orders')
+    expect(html).not.toContain('<form'); expect(html).not.toContain('<button')
+  })
+  it.each(['OfferingManager', 'TreasuryOperator'] as const)('preserves existing %s landing behavior for a valid standard-session marker', role => {
+    const value = snapshot(); const context = operating(role)
+    value.operating_context = context
+    value.stage2_access = { version: 1, environment: 'TESTNET', actor_id: actor, operating_context: context, session_mode: 'STANDARD', allowed_commands: [] }
+    value.organisations = [{ ...operatorOrganisation(), roles: [role] }]
+    value.products = [product()]; value.subscriptions = [order()]
+    const html = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal" operatingContext={context} release={{ environment: 'TESTNET', version: 'normal-fixture', source: 'normal-fixture' }} />)
+    expect(html).not.toContain('Action unavailable in this capacity')
+    expect(html).toContain(role === 'OfferingManager' ? 'Product register' : 'Funding records unavailable')
+  })
   it('lands investors on account records, actual orders and opportunities before collapsed role help', () => {
     const value = snapshot(); value.operating_context = operating('Investor'); value.applications = [application()]; value.accounts = [account()]; value.products = [product()]; value.subscriptions = [order()]
     const html = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal" operatingContext={operating('Investor')} release={{ environment: 'TESTNET', version: 'source-version', source: 'abc123' }} />)
@@ -1188,6 +1212,39 @@ describe('entity product eligibility stays separate from execution', () => {
 })
 
 describe('portal command transport', () => {
+  it('uses the same command endpoint for normal admission and preserves returned context continuity', async () => {
+    const value = snapshot()
+    value.stage2_access = { version: 1, environment: 'TESTNET', actor_id: actor, operating_context: APPLICANT_CONTEXT,
+      session_mode: 'TEST_PASSWORD', allowed_commands: ['create_investment_account'] }
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ snapshot: value }), { headers: { 'content-type': 'application/json' } })); vi.stubGlobal('fetch', fetch)
+    const command = { command: 'create_investment_account' as const, key: requestKey, payload: { application_id: applicationId } }
+    expect(await postPortalCommand(command, APPLICANT_CONTEXT, actor, value.stage2_access)).toEqual(value)
+    expect(fetch).toHaveBeenCalledWith('/api/portal/command', expect.objectContaining({ body: JSON.stringify({ ...command, operating_context: APPLICANT_CONTEXT }), headers: { 'Content-Type': 'application/json', 'x-bx1-expected-actor': actor } }))
+  })
+  it.each(['missing', 'environment', 'session mode', 'actor', 'context'] as const)('retains uncertainty when a returned normal admission result changes %s', async failure => {
+    const value = snapshot()
+    const expected = { version: 1 as const, environment: 'TESTNET' as const, actor_id: actor, operating_context: APPLICANT_CONTEXT,
+      session_mode: 'TEST_PASSWORD' as const, allowed_commands: ['create_investment_account' as const] }
+    value.stage2_access = { ...expected }
+    if (failure === 'missing') delete value.stage2_access
+    if (failure === 'environment') value.stage2_access = { ...expected, environment: 'MAINNET', session_mode: 'STANDARD' }
+    if (failure === 'session mode') value.stage2_access = { ...expected, session_mode: 'STANDARD' }
+    if (failure === 'actor') value.stage2_access = { ...expected, actor_id: other }
+    if (failure === 'context') value.stage2_access = { ...expected, operating_context: operating('SuperAdmin'), allowed_commands: [] }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ snapshot: value }), { headers: { 'content-type': 'application/json' } })))
+    await expect(postPortalCommand({ command: 'create_investment_account', key: requestKey, payload: { application_id: applicationId } }, APPLICANT_CONTEXT, actor, expected)).rejects.toThrow(/admission context|changed admission context/)
+  })
+  it('rejects obsolete rehearsal and malformed admission projections instead of upgrading them to the full portal', async () => {
+    const value = snapshot(); value.rehearsal = { version: 1, environment: 'TESTNET', actor_id: actor, mode: 'SYNTHETIC_COMPLIANCE', operating_context: operating('ComplianceOfficer') }
+    const command = { command: 'create_investment_account' as const, key: requestKey, payload: { application_id: applicationId } }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ snapshot: value }), { headers: { 'content-type': 'application/json' } })))
+    await expect(postPortalCommand(command)).rejects.toThrow('not a normal admission record')
+    delete value.rehearsal
+    const invalid = { ...value, stage2_access: { version: 1, environment: 'TESTNET', actor_id: actor, operating_context: APPLICANT_CONTEXT,
+      session_mode: 'TEST_PASSWORD', allowed_commands: ['publish_product'] } }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ snapshot: invalid }), { headers: { 'content-type': 'application/json' } })))
+    await expect(postPortalCommand(command)).rejects.toThrow('admission context could not be verified')
+  })
   it('uses the fixed authenticated same-origin endpoint and the exact caller request key', async () => {
     const value = snapshot(); const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ snapshot: value }), { headers: { 'content-type': 'application/json' } })); vi.stubGlobal('fetch', fetch)
     const command = { command: 'publish_product' as const, key: requestKey, payload: { product_id: productId, expected_revision: 3 } }

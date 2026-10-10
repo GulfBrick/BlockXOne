@@ -3,7 +3,7 @@ import { platformRelease } from '@/lib/platform-release'
 import { createPageSupabaseClient } from '@/lib/supabase/page'
 import { readVerifiedUser, readWorkspace } from '@/lib/supabase/server'
 import { hasRequiredMfa, isMfaContextCurrent, readMfaContext } from '@/lib/supabase/mfa'
-import { readTestOrdinaryEntry, isTestOrdinaryEntryAllowed } from '@/lib/supabase/test-ordinary-entry'
+import { testOrdinaryEntryMfaPaused } from '@/lib/supabase/test-ordinary-entry'
 import { dashboardProjection, dashboardScopes, selectDashboardScope, type DashboardQuery } from './dashboard'
 import { PortalError, readPortal } from './server'
 import type { PortalPageData } from './contracts'
@@ -11,7 +11,7 @@ import { APPLICANT_CONTEXT, type PortalOperatingContext } from './operating-cont
 import { readEntry } from './entry-server'
 import { selectEntryApplication } from './entry-contracts'
 import { customerScopedReadAvailable } from './customer-handoff'
-import { readSyntheticCompliance } from './synthetic-compliance'
+import { validatedStage2Access } from './stage2-access'
 
 export async function loadRoleDashboard(query: DashboardQuery) {
   const release = platformRelease(process.env)
@@ -20,27 +20,31 @@ export async function loadRoleDashboard(query: DashboardQuery) {
   const user = await readVerifiedUser(client)
   if (!user?.email || !user.email_confirmed_at || user.is_anonymous) throw new PortalError('Sign in to continue.', 401)
   const context = await readMfaContext(client)
-  if (context && isTestOrdinaryEntryAllowed(context)) {
-    const ordinary = await readTestOrdinaryEntry(client, context)
-    const scopes = ordinary.workspace ? dashboardScopes(ordinary.workspace) : []
+  if (context && testOrdinaryEntryMfaPaused(process.env)) {
+    const entry = await readEntry(client)
+    if (entry.actor.id !== user.id) throw new PortalError('The signed-in account changed.', 403)
+    const scopes = entry.contexts.flatMap(item => item.roles.map(role => ({ organisationId: item.organisation_id, organisationName: item.name, role })))
     const chooseContext = query.mode === undefined && query.organisation === undefined && query.role === undefined && scopes.length > 1
-    const applicant = query.mode === 'applicant' || !ordinary.workspace || chooseContext || (scopes.length === 0 && query.organisation === undefined && query.role === undefined)
+    const applicant = query.mode === 'applicant' || chooseContext || (scopes.length === 0 && query.organisation === undefined && query.role === undefined)
     if (query.mode !== undefined && query.mode !== 'applicant') throw new PortalError('Invalid operating context.', 403)
     if (applicant && (query.organisation !== undefined || query.role !== undefined)) throw new PortalError('No active role assignment is available.', 403)
-    const scope = !applicant && ordinary.workspace ? selectDashboardScope(ordinary.workspace, query) : null
+    const scope = applicant ? null : query.organisation === undefined && query.role === undefined
+      ? scopes.length === 1 ? scopes[0] : null
+      : typeof query.organisation === 'string' && typeof query.role === 'string'
+        ? scopes.find(item => item.organisationId === query.organisation && item.role === query.role) ?? null : null
     if (!applicant && !scope) throw new PortalError('This role or organisation is not assigned to you.', 403)
-    if (query.application !== undefined && (!applicant || !selectEntryApplication(ordinary.entry, query.application))) throw new PortalError('This application is not available to your signed-in account.', 403)
-    if (scope?.role === 'ComplianceOfficer') {
-      const operatingContext: PortalOperatingContext = { mode: 'ROLE', organisationId: scope.organisationId, role: scope.role }
-      // This separate reader admits only owner-designated synthetic cases. The
-      // ordinary assignment labels never enable the full protected portal read.
-      const portal = await readSyntheticCompliance(client, operatingContext, context)
-      if (portal.user.id !== user.id || !await isMfaContextCurrent(client, context)) throw new PortalError('Complete sign-in again.', 403)
-      return { kind: 'synthetic-compliance' as const, user: ordinary.entry.actor, release, scopes, scope, operatingContext, portal }
+    if (query.application !== undefined && (!applicant || !selectEntryApplication(entry, query.application))) throw new PortalError('This application is not available to your signed-in account.', 403)
+    const operatingContext: PortalOperatingContext = scope ? { mode: 'ROLE', organisationId: scope.organisationId, role: scope.role } : APPLICANT_CONTEXT
+    if (scope && !['ComplianceOfficer', 'SuperAdmin'].includes(scope.role) && (entry.stage2_access?.session_mode === 'TEST_PASSWORD' || !hasRequiredMfa(context))) {
+      if (!await isMfaContextCurrent(client, context)) throw new PortalError('Complete sign-in again.', 403)
+      return { kind: 'ordinary-entry' as const, entry, user: entry.actor, release, scopes, scope, chooseContext, operatingContext, portal: undefined }
     }
-    return { kind: 'ordinary-entry' as const, entry: ordinary.entry, user: ordinary.entry.actor, release, scopes, scope, chooseContext,
-      operatingContext: scope ? { mode: 'ROLE' as const, organisationId: scope.organisationId, role: scope.role } : APPLICANT_CONTEXT,
-      portal: undefined }
+    const portal = await readPortal(client, operatingContext)
+    const access = validatedStage2Access(portal.snapshot, operatingContext, release.environment)
+    if (portal.user.id !== user.id || !access || !await isMfaContextCurrent(client, context)) throw new PortalError('Complete sign-in again.', 403)
+    if (applicant) return { kind: 'applicant' as const, entry, chooseContext, portal, release, operatingContext, scopes }
+    if (!scope) throw new PortalError('No active role assignment is available.', 403)
+    return { kind: 'role' as const, user: entry.actor, release, scope, operatingContext, portal, scopes, ...dashboardProjection(scope, release.environment, portal.snapshot) }
   }
   if (context && !hasRequiredMfa(context)) throw new PortalError('Complete multi-factor authentication.', 403)
   const workspace = context ? await readWorkspace(client) : null

@@ -8,6 +8,28 @@ import type { CustomerHandoff } from '@/lib/portal/customer-handoff'
 import { entryActorId, entryApplication, entryApplicationId, entryFixture, entryHandoff, entryOrganisationId } from '@/lib/portal/entry-test-fixtures'
 const release = { version: 'test', environment: 'TESTNET' as const, source: 'fixture' }
 const mandateId = '66666666-6666-4666-8666-666666666666'
+describe('normal admission command projection at applicant entry', () => {
+  it('does not create or submit a capacity when the current server command projection excludes it', () => {
+    const initial = entryFixture([])
+    initial.stage2_access = { version: 1, environment: 'TESTNET', actor_id: entryActorId, operating_context: { mode: 'APPLICANT' }, session_mode: 'TEST_PASSWORD', allowed_commands: [] }
+    const html = renderToStaticMarkup(<EntryScreen initial={initial} release={release} />)
+    expect(html).toContain('Capacity application unavailable'); expect(html).not.toContain('<form')
+  })
+  it('retains the same personal application but does not expose an unavailable submit action', () => {
+    const initial = entryFixture([projectedApplication()])
+    initial.stage2_access = { version: 1, environment: 'TESTNET', actor_id: entryActorId, operating_context: { mode: 'APPLICANT' }, session_mode: 'TEST_PASSWORD', allowed_commands: ['start_application'] }
+    const html = renderToStaticMarkup(<EntryScreen initial={initial} release={release} />)
+    expect(html).toContain('Submission action unavailable'); expect(html).toContain(entryApplicationId)
+    expect(html).not.toContain('Submit application for review')
+  })
+  it('does not mount applicant forms for a malformed or MAIN password-admission marker', () => {
+    const initial = entryFixture([])
+    initial.stage2_access = { version: 1, environment: 'TESTNET', actor_id: '44444444-4444-4444-8444-444444444444', operating_context: { mode: 'APPLICANT' }, session_mode: 'TEST_PASSWORD', allowed_commands: ['start_application'] }
+    expect(renderToStaticMarkup(<EntryScreen initial={initial} release={release} />)).toContain('Saved admission state unavailable')
+    initial.stage2_access.actor_id = entryActorId
+    expect(renderToStaticMarkup(<EntryScreen initial={initial} release={{ ...release, environment: 'MAINNET' }} />)).toContain('Saved admission state unavailable')
+  })
+})
 function mandate(change: Partial<EntryMandate> = {}): EntryMandate {
   return { id: mandateId, application_id: entryApplicationId, product_organisation_id: entryOrganisationId, native_organisation_id: null,
     applicant_user_id: entryActorId, organisation_name: 'Fictional Customer Organisation', role: 'OfferingManager', status: 'SUBMITTED', revision: 1,

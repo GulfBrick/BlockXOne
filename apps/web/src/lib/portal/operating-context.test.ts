@@ -122,20 +122,20 @@ describe('context-preserving navigation', () => {
 })
 
 describe('view permissions do not substitute for backend authority', () => {
-  it('restricts a validated synthetic projection to its root, queue and exact returned admission detail', () => {
+  it('rejects retained synthetic projections instead of promoting normal authority', () => {
     const value = syntheticSnapshot()
-    expect(portalViewAllowed('/portal', compliance, value)).toBe(true)
-    expect(portalViewAllowed('/portal/compliance', compliance, value)).toBe(true)
-    expect(portalViewAllowed('/portal/compliance/detail', compliance, value, syntheticCaseId)).toBe(true)
+    expect(portalViewAllowed('/portal', compliance, value)).toBe(false)
+    expect(portalViewAllowed('/portal/compliance', compliance, value)).toBe(false)
+    expect(portalViewAllowed('/portal/compliance/detail', compliance, value, syntheticCaseId)).toBe(false)
     expect(portalViewAllowed('/portal/compliance/detail', compliance, value)).toBe(false)
     expect(portalViewAllowed('/portal/compliance/detail', compliance, value, otherOrganisation)).toBe(false)
     for (const view of ['/portal/onboarding', '/portal/products', '/portal/products/new', '/portal/products/detail', '/portal/opportunities', '/portal/opportunities/detail', '/portal/portfolio', '/portal/orders/detail'] as const) expect(portalViewAllowed(view, compliance, value, syntheticCaseId)).toBe(false)
   })
-  it.each(['CHANGES_REQUIRED', 'REJECTED', 'APPROVED'] as const)('keeps exact saved synthetic %s decision visible without enabling a new type of record', status => {
+  it.each(['CHANGES_REQUIRED', 'REJECTED', 'APPROVED'] as const)('requires normal access for historical synthetic %s decisions', status => {
     const value = syntheticSnapshot(); Object.assign(value.applications[0], { status, reviewed_at: '2026-10-10T12:30:00Z', reviewer_id: syntheticReviewer,
       review_notes: 'Fictional admission facts reviewed for this synthetic decision.', approved_until: status === 'APPROVED' ? '2099-01-01T00:00:00Z' : null,
       review_checks: { identity: true, ownership: true, screening: true, suitability: true } })
-    expect(portalViewAllowed('/portal/compliance/detail', compliance, value, syntheticCaseId)).toBe(true)
+    expect(portalViewAllowed('/portal/compliance/detail', compliance, value, syntheticCaseId)).toBe(false)
     expect(portalViewAllowed('/portal/compliance/detail', compliance, value, 'mandate')).toBe(false)
   })
   it('denies malformed synthetic state, shared actor, wrong context and protected-array additions', () => {

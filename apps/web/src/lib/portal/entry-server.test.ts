@@ -58,6 +58,24 @@ describe('verified shared identity entry', () => {
     await expect(readEntry(client)).rejects.toMatchObject({ status: 403 })
     expect(mocks.rpc).not.toHaveBeenCalled()
   })
+  it('accepts the normal exact-actor applicant capability during the explicit TEST pause', async () => {
+    vi.stubEnv('BLOCKXONE_TESTNET_ORDINARY_ENTRY_MFA_PAUSED', 'enabled')
+    mocks.sufficient.mockReturnValue(false)
+    const data = { ...entryFixture(), stage2_access: { version: 1, environment: 'TESTNET', actor_id: entryActorId, operating_context: { mode: 'APPLICANT' }, session_mode: 'TEST_PASSWORD', allowed_commands: ['start_application', 'submit_application'] } }
+    mocks.rpc.mockReturnValue({ abortSignal: vi.fn().mockResolvedValue({ data, error: null }) })
+    expect((await readEntry(client)).stage2_access?.session_mode).toBe('TEST_PASSWORD')
+    expect(mocks.current).toHaveBeenCalledOnce()
+  })
+  it('does not let the TEST pause substitute for a missing backend capability', async () => {
+    vi.stubEnv('BLOCKXONE_TESTNET_ORDINARY_ENTRY_MFA_PAUSED', 'enabled')
+    mocks.sufficient.mockReturnValue(false)
+    await expect(readEntry(client)).rejects.toMatchObject({ status: 403 })
+  })
+  it.each([{}, undefined])('rejects raw legacy markers before the additive entry parser strips them: %j', rehearsal => {
+    const data = { ...entryFixture(), rehearsal }
+    mocks.rpc.mockReturnValue({ abortSignal: vi.fn().mockResolvedValue({ data, error: null }) })
+    return expect(readEntry(client)).rejects.toMatchObject({ status: 503 })
+  })
   it('rechecks MFA after the backend wait', async () => {
     mocks.current.mockResolvedValue(false)
     await expect(readEntry(client)).rejects.toMatchObject({ status: 403 })

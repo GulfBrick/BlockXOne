@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import { BX1_ROLES } from '@/lib/supabase/contracts'
 import type { PortalPath, PortalSnapshot } from './contracts'
-import { parseSyntheticComplianceSnapshot } from './synthetic-compliance-contracts'
+import { isTestPasswordAdmission, hasStage2CommandAccess, validatedStage2Access } from './stage2-access'
 
 export const portalOperatingContextSchema = z.discriminatedUnion('mode', [
   z.object({ mode: z.literal('ROLE'), organisationId: z.string().uuid(), role: z.enum(BX1_ROLES) }).strict(),
@@ -73,10 +73,19 @@ function superAdminApplyDetailAllowed(context: PortalOperatingContext, snapshot:
 }
 export function portalViewAllowed(view: PortalPath, context: PortalOperatingContext, snapshot: PortalSnapshot, id?: string): boolean {
   if ('rehearsal' in snapshot) {
-    const scoped = parseSyntheticComplianceSnapshot(snapshot, snapshot.actor.id, context)
-    if (!scoped) return false
-    return view === '/portal' || view === '/portal/compliance'
-      || view === '/portal/compliance/detail' && Boolean(id) && scoped.applications.filter(item => item.id === id).length === 1
+    return false
+  }
+  if (snapshot.stage2_access !== undefined && !validatedStage2Access(snapshot, context)) return false
+  if (isTestPasswordAdmission(snapshot)) {
+    if (view === '/portal' || view === '/portal/onboarding') return true
+    if (view === '/portal/portfolio') return context.mode === 'APPLICANT'
+    if (view === '/portal/compliance' || view === '/portal/compliance/detail') {
+      if (context.mode !== 'ROLE') return false
+      return context.role === 'ComplianceOfficer' && snapshot.actor.can_review
+        && hasStage2CommandAccess(snapshot, 'review_application', context)
+        || view === '/portal/compliance/detail' && superAdminApplyDetailAllowed(context, snapshot, id)
+    }
+    return false
   }
   if (view === '/portal' || view === '/portal/onboarding') return true
   if (view.startsWith('/portal/compliance')) return context.mode === 'ROLE' && context.role === 'ComplianceOfficer' && snapshot.actor.can_review

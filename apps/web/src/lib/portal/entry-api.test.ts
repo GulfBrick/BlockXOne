@@ -31,6 +31,20 @@ describe('canonical entry command boundary', () => {
     expect(mocks.rpc).toHaveBeenCalledWith('bx1_entry_command', { command: 'start_application', request_key: instruction.key, payload: instruction.payload })
     expect(mocks.read).toHaveBeenCalledTimes(2)
   })
+  it('does not execute a command absent from the current normal admission capability', async () => {
+    const stage2_access = { version: 1, environment: 'TESTNET', actor_id: entryActorId, operating_context: { mode: 'APPLICANT' }, session_mode: 'TEST_PASSWORD', allowed_commands: ['submit_application'] }
+    mocks.read.mockResolvedValue({ ...entryFixture(), stage2_access })
+    expect((await POST(request())).status).toBe(403)
+    expect(mocks.rpc).not.toHaveBeenCalled()
+  })
+  it('keeps uncertain-outcome guidance if the normal admission capability changes after writing', async () => {
+    const stage2_access = { version: 1, environment: 'TESTNET', actor_id: entryActorId, operating_context: { mode: 'APPLICANT' }, session_mode: 'TEST_PASSWORD', allowed_commands: ['start_application'] }
+    mocks.read.mockResolvedValueOnce({ ...entryFixture(), stage2_access }).mockResolvedValueOnce(entryFixture())
+    const response = await POST(request())
+    expect(response.status).toBe(503)
+    expect((await response.json()).error).toContain('original request reference')
+    expect(mocks.rpc).toHaveBeenCalledOnce()
+  })
   it.each(unsafeHeaders)('rejects unsafe origin or changed actor %#', async headers => {
     expect((await POST(request(instruction, headers))).status).toBe(403); expect(mocks.rpc).not.toHaveBeenCalled()
   })
@@ -70,5 +84,9 @@ describe('canonical entry command boundary', () => {
   it('does not report another actor result as saved', async () => {
     mocks.rpc.mockReturnValue({ abortSignal: vi.fn().mockResolvedValue({ data: { ...entryFixture(), actor: { id: '55555555-5555-4555-8555-555555555555', email: 'other@example.invalid' } }, error: null }) })
     expect((await POST(request())).status).toBe(503)
+  })
+  it.each([{}, undefined])('refuses a legacy marker on the saved entry envelope: %j', rehearsal => {
+    mocks.rpc.mockReturnValue({ abortSignal: vi.fn().mockResolvedValue({ data: { ...entryFixture(), rehearsal }, error: null }) })
+    return expect(POST(request())).resolves.toMatchObject({ status: 503 })
   })
 })

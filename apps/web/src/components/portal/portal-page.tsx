@@ -3,8 +3,8 @@ import { notFound, redirect } from 'next/navigation'
 import { PortalError, requirePortalEnvironment } from '@/lib/portal/server'
 import { loadRoleDashboard } from '@/lib/portal/dashboard-server'
 import { dashboardScopeHref, type DashboardQuery } from '@/lib/portal/dashboard'
-import { portalContextKey, portalOperatingContextSchema, portalScopeHref, portalViewAllowed } from '@/lib/portal/operating-context'
-import { parseSyntheticComplianceSnapshot } from '@/lib/portal/synthetic-compliance-contracts'
+import { portalContextKey, portalContextMatches, portalOperatingContextSchema, portalScopeHref, portalViewAllowed } from '@/lib/portal/operating-context'
+import { stage2AccessSchema } from '@/lib/portal/stage2-access'
 import { getRoleDashboard } from '@/lib/portal/role-dashboards'
 import type { PortalPath } from '@/lib/portal/contracts'
 import { PortalScreen } from './portal-screens'
@@ -23,8 +23,16 @@ export async function PortalPage({ view, id, query = {} }: { view: PortalPath; i
     // Onboarding is always the caller's application workspace, not the selected
     // staff role's client queue. Existing scoped staff dashboards stay separate.
     data = await loadRoleDashboard(view === '/portal/onboarding' ? { ...query, mode: 'applicant', organisation: undefined, role: undefined } : query)
-    if (data.kind === 'synthetic-compliance' && (!data.portal || data.release.environment !== 'TESTNET' || data.portal.user.id !== data.user.id
-      || !parseSyntheticComplianceSnapshot(data.portal.snapshot, data.user.id, data.operatingContext))) throw new PortalError('The synthetic review context could not be verified.', 503)
+    if (data.portal) {
+      const snapshot = data.portal.snapshot
+      if ('rehearsal' in snapshot) throw new PortalError('The saved admission state must be refreshed.', 503)
+      if (snapshot.stage2_access !== undefined) {
+        const access = stage2AccessSchema.safeParse(snapshot.stage2_access)
+        if (!access.success || access.data.actor_id !== data.portal.user.id || access.data.actor_id !== snapshot.actor.id
+          || access.data.environment !== data.release.environment || !portalContextMatches(access.data.operating_context, data.operatingContext)
+          || !portalContextMatches(snapshot.operating_context, data.operatingContext)) throw new PortalError('The saved admission context could not be verified.', 503)
+      }
+    }
     if (data.kind === 'ordinary-entry' && view !== '/portal' && view !== '/portal/onboarding') {
       ordinaryStepUpRequired = true
       throw new PortalError('Complete authenticator verification before opening protected operations.', 403)
@@ -40,7 +48,7 @@ export async function PortalPage({ view, id, query = {} }: { view: PortalPath; i
     <section className={`${styles.panel} ${styles.sectionGap}`} aria-labelledby="test-entry-applications"><div className={styles.panelHeader}><h2 id="test-entry-applications">My application status</h2></div><div className={styles.panelBody}>{data.entry.applications.length ? <ul>{data.entry.applications.map(application => <li key={application.id}><strong>{application.persona === 'INVESTOR' ? 'Investor' : 'Wealth manager'}</strong> · {application.status.replaceAll('_', ' ').toLowerCase()} · Revision {application.revision}<p>Reference {application.id}</p></li>)}</ul> : <p>No application is recorded for this login. Read-only entry does not create or approve one.</p>}</div></section>
   </PortalShell>
   if (data?.kind === 'applicant' && (view === '/portal' || view === '/portal/onboarding')) return <EntryScreen key={`${data.entry.actor.id}:${data.release.environment}:${String(query.application ?? '')}:${String(query.add ?? '')}`} initial={data.entry} release={data.release} applicationId={typeof query.application === 'string' ? query.application : undefined} addCapacity={query.add === 'capacity'} chooseContext={data.chooseContext} operationsAvailable={Boolean(data.portal)} />
-  if (data?.portal) return <PortalScreen key={`${data.portal.user.id}:${data.release.environment}:${portalContextKey(data.operatingContext)}:${view}:${id ?? ''}`} data={data.portal} view={view} id={id} operatingContext={data.operatingContext} release={data.release} scope={data.kind === 'role' || data.kind === 'synthetic-compliance' ? data.scope : undefined} scopes={data.scopes} />
+  if (data?.portal) return <PortalScreen key={`${data.portal.user.id}:${data.release.environment}:${portalContextKey(data.operatingContext)}:${view}:${id ?? ''}`} data={data.portal} view={view} id={id} operatingContext={data.operatingContext} release={data.release} scope={data.kind === 'role' ? data.scope : undefined} scopes={data.scopes} />
   if (data?.kind === 'role') {
     const dashboard = getRoleDashboard(data.scope.role)!
     return <PortalShell user={data.user} organisationName={data.scope.organisationName} capabilities={{ manageProducts: false, reviewCompliance: false, invest: false }} active="overview" title={dashboard.title} description={data.queueMessage} release={data.release} operatingContext={data.operatingContext} onboardingAvailable={false}>

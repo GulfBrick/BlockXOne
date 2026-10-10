@@ -54,6 +54,24 @@ beforeEach(() => { sessionStorage.clear(); sessionStorage.setItem(markerStorageK
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); sessionStorage.clear() })
 
 describe('real entry-screen review-availability interaction', () => {
+  it.each(['missing', 'session mode'] as const)('does not expand ordinary admission controls when a refresh changes the %s marker', async failure => {
+    const initial = missingReviewerSnapshot()
+    initial.stage2_access = { version: 1, environment: 'TESTNET', actor_id: entryActorId, operating_context: { mode: 'APPLICANT' },
+      session_mode: 'TEST_PASSWORD', allowed_commands: ['start_application', 'submit_application'] }
+    const next = reviewerAvailable(initial)
+    if (failure === 'missing') delete next.stage2_access
+    else next.stage2_access = { ...initial.stage2_access, session_mode: 'STANDARD' }
+    const fetchMock = isolatedEntryRead(next)
+    render(createElement(EntryScreen, { initial, release }))
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh review availability' }))
+    await waitFor(() => expect(screen.getByText('Saved admission state unavailable')).toBeTruthy())
+    expect(screen.queryByRole('button', { name: 'Submit for review' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Create or continue this application' })).toBeNull()
+    expect(screen.queryByLabelText(/^Full name/)).toBeNull()
+    expect(sessionStorage.getItem(markerStorageKey)).toBe(pendingMarker)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
   it('preserves typed answers and acknowledgement while the same saved revision regains submission availability', async () => {
     const initial = missingReviewerSnapshot()
     const fetchMock = isolatedEntryRead(reviewerAvailable(initial))

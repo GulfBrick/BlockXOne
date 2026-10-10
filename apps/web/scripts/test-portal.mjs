@@ -9,6 +9,7 @@ import { proveDocumentProcessing } from './document-processing-proof.mjs'
 import { prepareEntityEligibilityLegacyFixture, proveEntityEligibility } from './entity-eligibility-proof.mjs'
 import { proveTestOrdinaryEntry } from './test-ordinary-entry-proof.mjs'
 import { proveSyntheticCompliance } from './test-synthetic-compliance.mjs'
+import { proveAdmissionWorkflow } from './test-admission-workflow.mjs'
 import { proveOfferingFileQuarantine, proveOfferingFileProductIsolation } from './offering-file-quarantine-proof.mjs'
 
 // Exact disposable GitHub PostgreSQL17 service only. No local/project execution.
@@ -2655,6 +2656,9 @@ try {
   checks += await proveSyntheticCompliance(db, proofClients,
     await source('../../../supabase/features/bx1_synthetic_compliance.sql'),
     await source('../../../supabase/features/bx1_synthetic_compliance_lock_parity.sql'))
+  phase = 'normal-admission-workflow-proof'
+  checks += await proveAdmissionWorkflow(db, proofClients,
+    await source('../../../supabase/features/bx1_admission_workflow.sql'))
   phase = 'cleanup-committed-disposable-fixture'
   await db.query('drop schema bx1_portal,bx1_private,storage,auth,public cascade; create schema public')
   committedFixture = false
