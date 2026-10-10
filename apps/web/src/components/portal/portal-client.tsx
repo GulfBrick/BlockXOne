@@ -4,6 +4,7 @@ import { createContext, useContext, useEffect, useRef, useState, type ReactNode 
 import { portalCommandSchema, type PortalCommand, type PortalSnapshot } from '@/lib/portal/contracts'
 import { APPLICANT_CONTEXT, portalContextKey, portalContextMatches, type PortalOperatingContext } from '@/lib/portal/operating-context'
 import type { PlatformEnvironment } from '@/lib/platform-release'
+import { parseSyntheticComplianceSnapshot } from '@/lib/portal/synthetic-compliance-contracts'
 import styles from './portal.module.css'
 
 type Marker = { key: string; command: string; payloadHash: string }
@@ -12,9 +13,9 @@ type MarkerScope = { operatingContext: PortalOperatingContext; environment: Plat
 const markerKey = (actorId: string, scope?: MarkerScope) => scope
   ? `bx1-portal:${scope.environment}:${actorId}:${portalContextKey(scope.operatingContext)}:pending-request`
   : `bx1-portal:fegnnnlseuejkrusbbkv:${actorId}:pending-request`
-const PortalCommandContext = createContext<{ actorId: string; requests: { key: string; command: string }[] } & MarkerScope>({ actorId: '', requests: [], operatingContext: APPLICANT_CONTEXT, environment: 'TESTNET' })
+const PortalCommandContext = createContext<{ actorId: string; requests: { key: string; command: string }[]; synthetic?: boolean } & MarkerScope>({ actorId: '', requests: [], operatingContext: APPLICANT_CONTEXT, environment: 'TESTNET' })
 export function PortalCommandProvider({ snapshot, children, operatingContext = APPLICANT_CONTEXT, environment = 'TESTNET' }: { snapshot: PortalSnapshot; children: ReactNode; operatingContext?: PortalOperatingContext; environment?: PlatformEnvironment }) {
-  return <PortalCommandContext.Provider value={{ actorId: snapshot.actor.id, requests: snapshot.requests ?? [], operatingContext, environment }}>{children}</PortalCommandContext.Provider>
+  return <PortalCommandContext.Provider value={{ actorId: snapshot.actor.id, requests: snapshot.requests ?? [], operatingContext, environment, synthetic: Boolean(snapshot.rehearsal) }}>{children}</PortalCommandContext.Provider>
 }
 export function usePortalOperatingContext() { return useContext(PortalCommandContext).operatingContext }
 export function usePortalActorId() { return useContext(PortalCommandContext).actorId }
@@ -57,7 +58,7 @@ export function mayDiscardDeniedPortalRequest(definitive: boolean, hadPendingAtt
   return definitive && !hadPendingAttempt
 }
 
-export async function postPortalCommand(command: PortalCommand, operatingContext: PortalOperatingContext = APPLICANT_CONTEXT, expectedActor?: string): Promise<PortalSnapshot> {
+export async function postPortalCommand(command: PortalCommand, operatingContext: PortalOperatingContext = APPLICANT_CONTEXT, expectedActor?: string, synthetic = false): Promise<PortalSnapshot> {
   const response = await fetch('/api/portal/command', { method: 'POST', credentials: 'same-origin', cache: 'no-store', redirect: 'error', headers: { 'Content-Type': 'application/json', ...(expectedActor ? { 'x-bx1-expected-actor': expectedActor } : {}) }, body: JSON.stringify({ ...command, operating_context: operatingContext }), signal: AbortSignal.timeout(45000) })
   const contentType = response.headers.get('content-type') ?? ''
   if (!contentType.includes('application/json')) throw new Error('The platform did not confirm the outcome. Retry the saved request, not a new application.')
@@ -68,6 +69,11 @@ export async function postPortalCommand(command: PortalCommand, operatingContext
     throw error
   }
   if (!portalContextMatches(result.snapshot.operating_context, operatingContext) || (expectedActor && result.snapshot.actor?.id !== expectedActor)) throw new Error('The saved result belongs to an unverified operating context. Refresh to reconcile the original request.')
+  if (synthetic) {
+    const saved = expectedActor ? parseSyntheticComplianceSnapshot(result.snapshot, expectedActor, operatingContext) : null
+    if (!saved || command.command !== 'review_application' || !saved.applications.some(application => application.id === command.payload.application_id)) throw new Error('The saved synthetic review result could not be verified. Refresh to reconcile the original request.')
+  }
+  if (!synthetic && result.snapshot.rehearsal) throw new Error('The saved result changed operating mode. Refresh to reconcile the original request.')
   return result.snapshot as PortalSnapshot
 }
 
@@ -102,7 +108,7 @@ export function usePortalCommand(onSaved: (snapshot: PortalSnapshot) => void) {
       if (!isCurrent()) return false
       savedRequest.current = prepared
       sent = true
-      const snapshot = await postPortalCommand(prepared, context.operatingContext, context.actorId)
+      const snapshot = await postPortalCommand(prepared, context.operatingContext, context.actorId, context.synthetic)
       clearPortalMarker(sessionStorage, context.actorId, prepared, context)
       if (!isCurrent()) return false
       savedRequest.current = null; setUnknown(false); onSaved(snapshot); setMessage('Saved to your hosted workspace.'); return true

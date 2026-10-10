@@ -7,6 +7,18 @@ const organisation = '33333333-3333-4333-8333-333333333333'
 const otherOrganisation = '44444444-4444-4444-8444-444444444444'
 const investor: PortalOperatingContext = { mode: 'ROLE', organisationId: organisation, role: 'Investor' }
 const snapshot: PortalSnapshot = { actor: { id: 'actor', email: 'actor@example.invalid', display_name: null, can_review: false }, organisations: [], applications: [], products: [], subscriptions: [], events: [] }
+const syntheticReviewer = '11111111-1111-4111-8111-111111111111'
+const syntheticApplicant = '22222222-2222-4222-8222-222222222222'
+const syntheticCaseId = '55555555-5555-4555-8555-555555555555'
+const compliance: PortalOperatingContext = { mode: 'ROLE', organisationId: organisation, role: 'ComplianceOfficer' }
+function syntheticSnapshot(): PortalSnapshot {
+  return { actor: { id: syntheticReviewer, email: 'reviewer@example.invalid', display_name: null, can_review: true }, operating_context: compliance,
+    rehearsal: { version: 1, environment: 'TESTNET', mode: 'SYNTHETIC_COMPLIANCE', actor_id: syntheticReviewer, operating_context: { mode: 'ROLE', organisationId: organisation, role: 'ComplianceOfficer' } },
+    applications: [{ id: syntheticCaseId, user_id: syntheticApplicant, persona: 'INVESTOR', status: 'SUBMITTED', revision: 2,
+      details: { full_name: 'Fictional Applicant', country: 'ZA', investor_type: 'INDIVIDUAL', company_name: '', registration_reference: '', source_of_funds: 'Synthetic savings for this rehearsal only.', beneficial_owners: '', experience: 'Fictional experienced investor.', documents: [{ id: syntheticCaseId, kind: 'IDENTITY', title: 'Fictional identity manifest', storage_path: `${syntheticApplicant}/${syntheticCaseId}`, sha256: 'a'.repeat(64), size: 100, mime_type: 'application/pdf' }], test_data_acknowledged: true },
+      submitted_at: '2026-10-10T12:00:00Z', reviewed_at: null, reviewer_id: null, review_notes: null, organisation_id: null, review_checks: {}, provider_mode: 'MANUAL_TEST_REVIEW', approved_until: null, admission_purpose: 'INVESTOR_ADMISSION' }],
+    organisations: [], products: [], subscriptions: [], events: [], requests: [] }
+}
 const admin: PortalOperatingContext = { mode: 'ROLE', organisationId: organisation, role: 'SuperAdmin' }
 const caseId = '55555555-5555-4555-8555-555555555555'
 const future = '2099-10-20T00:00:00Z'
@@ -110,6 +122,33 @@ describe('context-preserving navigation', () => {
 })
 
 describe('view permissions do not substitute for backend authority', () => {
+  it('restricts a validated synthetic projection to its root, queue and exact returned admission detail', () => {
+    const value = syntheticSnapshot()
+    expect(portalViewAllowed('/portal', compliance, value)).toBe(true)
+    expect(portalViewAllowed('/portal/compliance', compliance, value)).toBe(true)
+    expect(portalViewAllowed('/portal/compliance/detail', compliance, value, syntheticCaseId)).toBe(true)
+    expect(portalViewAllowed('/portal/compliance/detail', compliance, value)).toBe(false)
+    expect(portalViewAllowed('/portal/compliance/detail', compliance, value, otherOrganisation)).toBe(false)
+    for (const view of ['/portal/onboarding', '/portal/products', '/portal/products/new', '/portal/products/detail', '/portal/opportunities', '/portal/opportunities/detail', '/portal/portfolio', '/portal/orders/detail'] as const) expect(portalViewAllowed(view, compliance, value, syntheticCaseId)).toBe(false)
+  })
+  it.each(['CHANGES_REQUIRED', 'REJECTED', 'APPROVED'] as const)('keeps exact saved synthetic %s decision visible without enabling a new type of record', status => {
+    const value = syntheticSnapshot(); Object.assign(value.applications[0], { status, reviewed_at: '2026-10-10T12:30:00Z', reviewer_id: syntheticReviewer,
+      review_notes: 'Fictional admission facts reviewed for this synthetic decision.', approved_until: status === 'APPROVED' ? '2099-01-01T00:00:00Z' : null,
+      review_checks: { identity: true, ownership: true, screening: true, suitability: true } })
+    expect(portalViewAllowed('/portal/compliance/detail', compliance, value, syntheticCaseId)).toBe(true)
+    expect(portalViewAllowed('/portal/compliance/detail', compliance, value, 'mandate')).toBe(false)
+  })
+  it('denies malformed synthetic state, shared actor, wrong context and protected-array additions', () => {
+    const values = [
+      { ...syntheticSnapshot(), rehearsal: undefined },
+      { ...syntheticSnapshot(), actor: { ...syntheticSnapshot().actor, id: syntheticApplicant } },
+      { ...syntheticSnapshot(), organisation_mandates: [] },
+      { ...syntheticSnapshot(), applications: [{ ...syntheticSnapshot().applications[0], status: 'DRAFT' as const }] },
+      { ...syntheticSnapshot(), applications: [{ ...syntheticSnapshot().applications[0], user_id: syntheticReviewer }] },
+    ]
+    for (const value of values) expect(portalViewAllowed('/portal', compliance, value)).toBe(false)
+    for (const context of [APPLICANT_CONTEXT, investor, admin, { ...compliance, organisationId: otherOrganisation }]) expect(portalViewAllowed('/portal/compliance', context, syntheticSnapshot())).toBe(false)
+  })
   it.each(['organisation', 'entity', 'appointment'] as const)('opens only the exact approved server-scoped %s apply detail for Super Admin', kind => {
     const value = applySnapshot(kind)
     expect(portalViewAllowed('/portal/compliance/detail', admin, value, caseId)).toBe(true)

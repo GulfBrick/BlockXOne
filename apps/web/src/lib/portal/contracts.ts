@@ -249,6 +249,7 @@ export const customerMonitoringSnapshotSchema = z.array(z.object({
   }
 })
 export type PortalSnapshot = {
+  rehearsal?: { version: 1; environment: 'TESTNET'; mode: 'SYNTHETIC_COMPLIANCE'; actor_id: string; operating_context: PortalOperatingContext };
   actor: { id: string; email: string; display_name: string | null; can_review: boolean };
   applications: PortalApplication[]; organisations: PortalOrganisation[];
   products: PortalProduct[]; subscriptions: PortalSubscription[]; events: PortalEvent[];

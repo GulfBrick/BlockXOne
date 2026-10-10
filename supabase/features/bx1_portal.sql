@@ -312,6 +312,35 @@ begin
   return v_result;
 end $$;
 
+-- Sole application-decision mutation. Guarded callers supply authority; this
+-- owner-only transition keeps revision/check/independence semantics identical
+-- for the normal portal and the separately admitted TEST rehearsal wrapper.
+create function bx1_portal.review_application_transition(target_application uuid,expected_revision integer,
+  decision text,notes text,checks jsonb,decision_at timestamptz) returns uuid
+language plpgsql volatile security definer set search_path='' as $$
+declare a bx1_portal.applications; approved_organisation uuid;
+begin
+  if auth.uid() is null or decision is null or decision not in ('APPROVED','CHANGES_REQUIRED','REJECTED')
+    or expected_revision is null or expected_revision<1 or decision_at is null or not pg_catalog.isfinite(decision_at)
+    or notes is null or char_length(notes) not between 20 and 3000 or notes<>btrim(notes) then
+    raise exception 'portal_invalid_decision' using errcode='22023'; end if;
+  perform bx1_portal.require_checks(checks,array['identity','ownership','screening','suitability'],decision='APPROVED');
+  select * into a from bx1_portal.applications where id=target_application for update;
+  if a.id is null or bx1_portal.independent_of(a.user_id) is not true then
+    raise exception 'portal_review_denied' using errcode='42501'; end if;
+  if a.status<>'SUBMITTED' or a.revision<>expected_revision then
+    raise exception 'portal_stale_application' using errcode='23514'; end if;
+  if decision='APPROVED' and a.persona='WEALTH_MANAGER' then
+    insert into bx1_portal.organisations(application_id,owner_id,name,reviewer_scope)
+      values(a.id,a.user_id,a.details->>'company_name',a.reviewer_scope) returning id into approved_organisation;
+  end if;
+  update bx1_portal.applications set status=decision,revision=revision+1,reviewer_id=auth.uid(),
+    reviewed_at=decision_at,review_notes=notes,review_checks=checks,
+    approved_until=case when decision='APPROVED' then decision_at+interval '30 days' end,
+    organisation_id=coalesce(approved_organisation,organisation_id) where id=a.id;
+  return approved_organisation;
+end $$;
+
 create function bx1_portal.execute_command(command text, request_key uuid, payload jsonb) returns jsonb
 language plpgsql volatile security definer set search_path='' as $$
 declare
@@ -352,12 +381,8 @@ begin
     perform bx1_portal.require_checks(payload->'checks',array['identity','ownership','screening','suitability'],payload->>'decision'='APPROVED');
     select * into a from bx1_portal.applications where id=(payload->>'application_id')::uuid for update;
     if not found or not bx1_portal.is_reviewer(a.reviewer_scope) or not bx1_portal.independent_of(a.user_id) then raise exception 'portal_review_denied' using errcode='42501'; end if;
-    if a.status<>'SUBMITTED' or a.revision<>(payload->>'expected_revision')::integer then raise exception 'portal_stale_application' using errcode='23514'; end if;
-    if payload->>'decision'='APPROVED' and a.persona='WEALTH_MANAGER' then
-      insert into bx1_portal.organisations(application_id,owner_id,name,reviewer_scope) values(a.id,a.user_id,a.details->>'company_name',a.reviewer_scope) returning * into o;
-      v_org:=o.id;
-    end if;
-    update bx1_portal.applications set status=payload->>'decision',revision=revision+1,reviewer_id=v_actor,reviewed_at=v_now,review_notes=payload->>'notes',review_checks=payload->'checks',approved_until=case when payload->>'decision'='APPROVED' then v_now+interval '30 days' end,organisation_id=coalesce(v_org,organisation_id) where id=a.id;
+    v_org:=bx1_portal.review_application_transition(a.id,(payload->>'expected_revision')::integer,
+      payload->>'decision',payload->>'notes',payload->'checks',v_now);
     v_subject:=a.id; v_application:=a.id; v_summary:='Manual TEST_ONLY onboarding decision: '||(payload->>'decision')||'. Approval, when given, expires after 30 days and is not provider verification.';
   elsif command='create_product' then
     perform bx1_portal.require_keys(payload,array['organisation_id','terms']);

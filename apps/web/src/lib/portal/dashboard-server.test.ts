@@ -1,12 +1,13 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 vi.mock('server-only', () => ({}))
-const mocks = vi.hoisted(() => ({ client: {}, user: vi.fn(), workspace: vi.fn(), context: vi.fn(), sufficient: vi.fn(), current: vi.fn(), portal: vi.fn(), entry: vi.fn(), paused: vi.fn(), ordinary: vi.fn() }))
+const mocks = vi.hoisted(() => ({ client: {}, user: vi.fn(), workspace: vi.fn(), context: vi.fn(), sufficient: vi.fn(), current: vi.fn(), portal: vi.fn(), entry: vi.fn(), paused: vi.fn(), ordinary: vi.fn(), synthetic: vi.fn() }))
 vi.mock('@/lib/supabase/page', () => ({ createPageSupabaseClient: async () => mocks.client }))
 vi.mock('@/lib/supabase/server', () => ({ readVerifiedUser: mocks.user, readWorkspace: mocks.workspace }))
 vi.mock('@/lib/supabase/mfa', () => ({ readMfaContext: mocks.context, hasRequiredMfa: mocks.sufficient, isMfaContextCurrent: mocks.current }))
 vi.mock('./server', async original => ({ ...await original<object>(), readPortal: mocks.portal }))
 vi.mock('./entry-server', () => ({ readEntry: mocks.entry }))
 vi.mock('@/lib/supabase/test-ordinary-entry', () => ({ isTestOrdinaryEntryAllowed: mocks.paused, readTestOrdinaryEntry: mocks.ordinary }))
+vi.mock('./synthetic-compliance', () => ({ readSyntheticCompliance: mocks.synthetic }))
 import { loadRoleDashboard } from './dashboard-server'
 import { PortalError } from './server'
 import { APPLICANT_CONTEXT, type PortalOperatingContext } from './operating-context'
@@ -15,6 +16,15 @@ const organisation = '33333333-3333-4333-8333-333333333333'
 const otherOrganisation = '44444444-4444-4444-8444-444444444444'
 const actor = { id: '11111111-1111-4111-8111-111111111111', email: 'actor@example.invalid', email_confirmed_at: '2026-09-21', is_anonymous: false }
 const roleContext: PortalOperatingContext = { mode: 'ROLE', organisationId: organisation, role: 'Investor' }
+const reviewContext: PortalOperatingContext = { mode: 'ROLE', organisationId: organisation, role: 'ComplianceOfficer' }
+function ordinaryFor(role = 'Investor') {
+  return { version: 1, entry: { entry_version: 1, actor, applications: [], contexts: [], admission: { manual_test_review: false }, workflow: { version: 1, environment: 'TESTNET', actor_id: actor.id, scoped_read_available: false } }, workspace: { user: { ...actor, platformUserId: 'person', displayName: null }, organisations: [{ id: organisation, name: 'Own organisation', roles: [role] }] } }
+}
+function syntheticPortal() {
+  return { user: actor, snapshot: { actor: { id: actor.id, email: actor.email, display_name: null, can_review: true }, operating_context: reviewContext,
+    rehearsal: { version: 1, environment: 'TESTNET', mode: 'SYNTHETIC_COMPLIANCE', actor_id: actor.id, operating_context: reviewContext },
+    organisations: [], applications: [], products: [], subscriptions: [], events: [], requests: [] } }
+}
 function portalFor(context: PortalOperatingContext) {
   return { user: actor, snapshot: { actor: { ...actor, can_review: false }, operating_context: context, organisations: [], applications: [], products: [], subscriptions: [], events: [] } }
 }
@@ -32,13 +42,52 @@ afterEach(() => vi.unstubAllEnvs())
 describe('fresh dashboard authority and environment admission', () => {
   it('uses only own identity/assignment projection during the temporary TEST entry pause', async () => {
     mocks.paused.mockReturnValue(true); mocks.sufficient.mockReturnValue(false)
-    mocks.ordinary.mockResolvedValue({ version: 1, entry: { entry_version: 1, actor, applications: [], contexts: [], admission: { manual_test_review: false }, workflow: { version: 1, environment: 'TESTNET', actor_id: actor.id, scoped_read_available: false } }, workspace: { user: { ...actor, platformUserId: 'person', displayName: null }, organisations: [{ id: organisation, name: 'Own organisation', roles: ['ComplianceOfficer'] }] } })
-    const result = await loadRoleDashboard({ organisation, role: 'ComplianceOfficer' })
+    mocks.ordinary.mockResolvedValue(ordinaryFor())
+    const result = await loadRoleDashboard({ organisation, role: 'Investor' })
     expect(result.kind).toBe('ordinary-entry')
-    expect(result.operatingContext).toEqual({ mode: 'ROLE', organisationId: organisation, role: 'ComplianceOfficer' })
+    expect(result.operatingContext).toEqual(roleContext)
     expect(result.portal).toBeUndefined()
     expect(mocks.ordinary).toHaveBeenCalledOnce()
     expect(mocks.workspace).not.toHaveBeenCalled(); expect(mocks.portal).not.toHaveBeenCalled(); expect(mocks.entry).not.toHaveBeenCalled()
+    expect(mocks.synthetic).not.toHaveBeenCalled()
+  })
+  it('uses only the narrow reader for an exact ordinary TEST Compliance assignment', async () => {
+    mocks.paused.mockReturnValue(true); mocks.sufficient.mockReturnValue(false)
+    mocks.ordinary.mockResolvedValue(ordinaryFor('ComplianceOfficer')); mocks.synthetic.mockResolvedValue(syntheticPortal())
+    const result = await loadRoleDashboard({ organisation, role: 'ComplianceOfficer' })
+    expect(result.kind).toBe('synthetic-compliance')
+    expect(result.operatingContext).toEqual(reviewContext)
+    expect(result.portal).toEqual(syntheticPortal())
+    expect(mocks.synthetic).toHaveBeenCalledTimes(1)
+    expect(mocks.synthetic).toHaveBeenCalledWith(mocks.client, reviewContext, {})
+    expect(mocks.workspace).not.toHaveBeenCalled(); expect(mocks.portal).not.toHaveBeenCalled(); expect(mocks.entry).not.toHaveBeenCalled()
+  })
+  it.each([401, 403, 503])('does not fall back to full or ordinary Compliance state after restricted read denial %s', async status => {
+    mocks.paused.mockReturnValue(true); mocks.sufficient.mockReturnValue(false)
+    mocks.ordinary.mockResolvedValue(ordinaryFor('ComplianceOfficer')); mocks.synthetic.mockRejectedValue(new PortalError('Restricted read denied', status))
+    await expect(loadRoleDashboard({ organisation, role: 'ComplianceOfficer' })).rejects.toMatchObject({ status })
+    expect(mocks.synthetic).toHaveBeenCalledOnce()
+    expect(mocks.workspace).not.toHaveBeenCalled(); expect(mocks.portal).not.toHaveBeenCalled(); expect(mocks.entry).not.toHaveBeenCalled()
+  })
+  it('rejects a changed identity or session after the restricted read without a fallback', async () => {
+    mocks.paused.mockReturnValue(true); mocks.ordinary.mockResolvedValue(ordinaryFor('ComplianceOfficer'))
+    mocks.synthetic.mockResolvedValue({ ...syntheticPortal(), user: { ...actor, id: otherOrganisation } })
+    await expect(loadRoleDashboard({ organisation, role: 'ComplianceOfficer' })).rejects.toMatchObject({ status: 403 })
+    mocks.synthetic.mockResolvedValue(syntheticPortal()); mocks.current.mockResolvedValue(false)
+    await expect(loadRoleDashboard({ organisation, role: 'ComplianceOfficer' })).rejects.toMatchObject({ status: 403 })
+    expect(mocks.portal).not.toHaveBeenCalled(); expect(mocks.entry).not.toHaveBeenCalled(); expect(mocks.workspace).not.toHaveBeenCalled()
+  })
+  it('does not exercise rehearsal review from the applicant or another ordinary role', async () => {
+    mocks.paused.mockReturnValue(true); mocks.ordinary.mockResolvedValue(ordinaryFor('ComplianceOfficer'))
+    const result = await loadRoleDashboard({ mode: 'applicant' })
+    expect(result.kind).toBe('ordinary-entry'); expect(mocks.synthetic).not.toHaveBeenCalled()
+  })
+  it('keeps normal assured Compliance reads on the unchanged full reader', async () => {
+    mocks.workspace.mockResolvedValue(ordinaryFor('ComplianceOfficer').workspace)
+    const result = await loadRoleDashboard({ organisation, role: 'ComplianceOfficer' })
+    expect(result.kind).toBe('role')
+    expect(mocks.portal).toHaveBeenCalledWith(mocks.client, reviewContext)
+    expect(mocks.synthetic).not.toHaveBeenCalled()
   })
   it.each([{ organisation: otherOrganisation, role: 'Investor' }, { organisation, role: 'SuperAdmin' }, { mode: 'applicant', organisation, role: 'Investor' }, { mode: 'ROLE' }, { mode: 'applicant', application: otherOrganisation }])('does not let the pause authorise forged context %j', async query => {
     mocks.paused.mockReturnValue(true); mocks.sufficient.mockReturnValue(false)

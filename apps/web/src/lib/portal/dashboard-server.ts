@@ -11,6 +11,7 @@ import { APPLICANT_CONTEXT, type PortalOperatingContext } from './operating-cont
 import { readEntry } from './entry-server'
 import { selectEntryApplication } from './entry-contracts'
 import { customerScopedReadAvailable } from './customer-handoff'
+import { readSyntheticCompliance } from './synthetic-compliance'
 
 export async function loadRoleDashboard(query: DashboardQuery) {
   const release = platformRelease(process.env)
@@ -29,6 +30,14 @@ export async function loadRoleDashboard(query: DashboardQuery) {
     const scope = !applicant && ordinary.workspace ? selectDashboardScope(ordinary.workspace, query) : null
     if (!applicant && !scope) throw new PortalError('This role or organisation is not assigned to you.', 403)
     if (query.application !== undefined && (!applicant || !selectEntryApplication(ordinary.entry, query.application))) throw new PortalError('This application is not available to your signed-in account.', 403)
+    if (scope?.role === 'ComplianceOfficer') {
+      const operatingContext: PortalOperatingContext = { mode: 'ROLE', organisationId: scope.organisationId, role: scope.role }
+      // This separate reader admits only owner-designated synthetic cases. The
+      // ordinary assignment labels never enable the full protected portal read.
+      const portal = await readSyntheticCompliance(client, operatingContext, context)
+      if (portal.user.id !== user.id || !await isMfaContextCurrent(client, context)) throw new PortalError('Complete sign-in again.', 403)
+      return { kind: 'synthetic-compliance' as const, user: ordinary.entry.actor, release, scopes, scope, operatingContext, portal }
+    }
     return { kind: 'ordinary-entry' as const, entry: ordinary.entry, user: ordinary.entry.actor, release, scopes, scope, chooseContext,
       operatingContext: scope ? { mode: 'ROLE' as const, organisationId: scope.organisationId, role: scope.role } : APPLICANT_CONTEXT,
       portal: undefined }

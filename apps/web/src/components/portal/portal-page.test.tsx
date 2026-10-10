@@ -12,7 +12,7 @@ vi.mock('./entry-screen', () => ({ EntryScreen: (props: unknown) => { fixture.en
 import { PortalError } from '@/lib/portal/server'
 import { PortalPage } from './portal-page'
 import { entryApplication, entryFixture } from '@/lib/portal/entry-test-fixtures'
-import type { PortalOrganisationMandate } from '@/lib/portal/contracts'
+import type { PortalOrganisationMandate, PortalSnapshot } from '@/lib/portal/contracts'
 
 const organisation = '33333333-3333-4333-8333-333333333333'
 const otherOrganisation = '44444444-4444-4444-8444-444444444444'
@@ -23,6 +23,19 @@ const release = { version: '1.1.0-rc.3', environment: 'TESTNET' as const, source
 function roleData() {
   return { kind: 'role' as const, user, release, scope, scopes: [scope], operatingContext: context, availablePaths: ['/portal/opportunities'], queue: [], queueMessage: undefined,
     portal: { user, snapshot: { actor: { ...user, can_review: false }, operating_context: context, applications: [], organisations: [], products: [], subscriptions: [], events: [] } } }
+}
+const syntheticApplicationId = '77777777-7777-4777-8777-777777777777'
+function syntheticData() {
+  const reviewContext = { ...context, role: 'ComplianceOfficer' as const }
+  const reviewScope = { ...scope, role: 'ComplianceOfficer' as const }
+  const applicant = '22222222-2222-4222-8222-222222222222'
+  const snapshot: PortalSnapshot = { actor: { ...user, display_name: null, can_review: true }, operating_context: reviewContext,
+    rehearsal: { version: 1, environment: 'TESTNET', mode: 'SYNTHETIC_COMPLIANCE', actor_id: user.id, operating_context: reviewContext },
+    applications: [{ id: syntheticApplicationId, user_id: applicant, persona: 'INVESTOR', status: 'SUBMITTED', revision: 2,
+      details: { full_name: 'Fictional Applicant', country: 'ZA', investor_type: 'INDIVIDUAL', company_name: '', registration_reference: '', source_of_funds: 'Synthetic savings for this rehearsal only.', beneficial_owners: '', experience: 'Fictional experienced investor.', documents: [{ id: syntheticApplicationId, kind: 'IDENTITY', title: 'Fictional identity manifest', storage_path: `${applicant}/${syntheticApplicationId}`, sha256: 'a'.repeat(64), size: 100, mime_type: 'application/pdf' }], test_data_acknowledged: true },
+      submitted_at: '2026-10-10T12:00:00Z', reviewed_at: null, reviewer_id: null, review_notes: null, organisation_id: null, review_checks: {}, provider_mode: 'MANUAL_TEST_REVIEW', approved_until: null, admission_purpose: 'INVESTOR_ADMISSION' }],
+    organisations: [], products: [], subscriptions: [], events: [], requests: [] }
+  return { kind: 'synthetic-compliance' as const, user, release, scope: reviewScope, scopes: [reviewScope], operatingContext: reviewContext, portal: { user, snapshot } }
 }
 const mandateId = '55555555-5555-4555-8555-555555555555'
 function approvedMandate(change: Partial<PortalOrganisationMandate> = {}): PortalOrganisationMandate {
@@ -45,6 +58,48 @@ function adminData(mandate = approvedMandate()) {
 beforeEach(() => { vi.resetAllMocks(); fixture.load.mockResolvedValue(roleData()) })
 
 describe('portal server page access and selected context', () => {
+  it.each(['/portal', '/portal/compliance', '/portal/compliance/detail'] as const)('mounts the existing business screen only for a validated synthetic %s path', async view => {
+    const data = syntheticData()
+    fixture.load.mockResolvedValueOnce(data)
+    renderToStaticMarkup(await PortalPage({ view, id: view.endsWith('/detail') ? syntheticApplicationId : undefined, query: { organisation, role: 'ComplianceOfficer' } }))
+    expect(fixture.screen).toHaveBeenCalledWith(expect.objectContaining({ data: data.portal, view, operatingContext: data.operatingContext, scope: data.scope }))
+    expect(fixture.entry).not.toHaveBeenCalled()
+  })
+  it.each(['CHANGES_REQUIRED', 'REJECTED', 'APPROVED'] as const)('retains the same exact synthetic %s saved detail on refresh', async status => {
+    const data = syntheticData(); Object.assign(data.portal.snapshot.applications[0], { status, reviewed_at: '2026-10-10T12:30:00Z', reviewer_id: user.id,
+      review_notes: 'Fictional admission facts reviewed for this synthetic decision.', approved_until: status === 'APPROVED' ? '2099-01-01T00:00:00Z' : null,
+      review_checks: { identity: true, ownership: true, screening: true, suitability: true } })
+    fixture.load.mockResolvedValueOnce(data)
+    renderToStaticMarkup(await PortalPage({ view: '/portal/compliance/detail', id: syntheticApplicationId, query: { organisation, role: 'ComplianceOfficer' } }))
+    expect(fixture.screen).toHaveBeenCalledWith(expect.objectContaining({ data: data.portal, id: syntheticApplicationId }))
+  })
+  it.each(['/portal/products', '/portal/products/detail', '/portal/portfolio', '/portal/orders/detail', '/portal/opportunities'] as const)('does not mount another workflow from a restricted synthetic %s projection', async view => {
+    fixture.load.mockResolvedValueOnce(syntheticData())
+    const html = renderToStaticMarkup(await PortalPage({ view, id: syntheticApplicationId, query: { organisation, role: 'ComplianceOfficer' } }))
+    expect(html).toContain('Complete your account access')
+    expect(fixture.screen).not.toHaveBeenCalled(); expect(fixture.entry).not.toHaveBeenCalled()
+  })
+  it('denies an unreturned synthetic detail instead of treating an arbitrary id as a case', async () => {
+    fixture.load.mockResolvedValueOnce(syntheticData())
+    renderToStaticMarkup(await PortalPage({ view: '/portal/compliance/detail', id: otherOrganisation, query: { organisation, role: 'ComplianceOfficer' } }))
+    expect(fixture.screen).not.toHaveBeenCalled(); expect(fixture.entry).not.toHaveBeenCalled()
+  })
+  it('fails closed on a missing, actor/context-mismatched, protected or MAIN synthetic envelope', async () => {
+    const valid = syntheticData()
+    const snapshots = [
+      { ...valid.portal.snapshot, rehearsal: undefined },
+      { ...valid.portal.snapshot, actor: { ...valid.portal.snapshot.actor, id: otherOrganisation } },
+      { ...valid.portal.snapshot, operating_context: { ...valid.operatingContext, organisationId: otherOrganisation } },
+      { ...valid.portal.snapshot, organisation_mandates: [] },
+    ]
+    for (const snapshot of snapshots) {
+      fixture.load.mockResolvedValueOnce({ ...valid, portal: { ...valid.portal, snapshot } })
+      renderToStaticMarkup(await PortalPage({ view: '/portal/compliance', query: { organisation, role: 'ComplianceOfficer' } }))
+    }
+    fixture.load.mockResolvedValueOnce({ ...valid, release: { ...release, environment: 'MAINNET' } })
+    renderToStaticMarkup(await PortalPage({ view: '/portal/compliance', query: { organisation, role: 'ComplianceOfficer' } }))
+    expect(fixture.screen).not.toHaveBeenCalled(); expect(fixture.entry).not.toHaveBeenCalled()
+  })
   it('renders the pause inside the existing shell without business or application mutation components', async () => {
     const entry = entryFixture([entryApplication({ status: 'SUBMITTED' })])
     fixture.load.mockResolvedValueOnce({ kind: 'ordinary-entry', user: entry.actor, entry, release, scopes: [scope], scope, operatingContext: context, portal: undefined })
