@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { readFile } from 'node:fs/promises'
 
 // Executed only by the parent's exact disposable GitHub PostgreSQL17 fixture.
 // This module never connects to a project, signs in, changes real Auth factors,
@@ -8,7 +9,7 @@ export async function proveSyntheticCompliance(db, clients, featureSql, lockPari
     || process.env.BX1_PORTAL_SQL_TEST_URL !== 'postgresql://postgres:bx1-synthetic-ci-only@127.0.0.1:5432/bx1_demo_ci')
     throw new Error('Synthetic Compliance proof requires exact disposable cloud fixture')
   assert.equal(clients.length, 2)
-  let checks = 0, begun = false, sequence = 600
+  let checks = 0, begun = false, sequence = 600, addedFixtureLockHelper = false
   const id = n => `ef810000-0000-4000-8000-${String(n).padStart(12, '0')}`
   const key = () => id(++sequence)
   const scope = '0ba2b126-bd85-4cfb-9a1d-83633c9def1e'
@@ -55,6 +56,10 @@ export async function proveSyntheticCompliance(db, clients, featureSql, lockPari
     from pg_proc p join pg_namespace n on n.oid=p.pronamespace
     where n.nspname in ('bx1_private','bx1_portal','public') and p.prokind='f'
     order by p.oid`)).rows
+  const lockHelperMetadata = async () => {
+    const oid = await scalar("select to_regprocedure('bx1_private.lock_funding_person(uuid,uuid)')::oid::text")
+    return (await functions()).find(f => f.oid === oid) ?? null
+  }
   const rowsDigest = () => scalar(`select md5(jsonb_build_object(
     'applications',(select jsonb_agg(to_jsonb(t) order by id) from bx1_portal.applications t),
     'accounts',(select jsonb_agg(to_jsonb(t) order by id) from bx1_portal.investment_accounts t),
@@ -236,6 +241,30 @@ export async function proveSyntheticCompliance(db, clients, featureSql, lockPari
   try {
     await begin()
     eq(await scalar("select current_database()='bx1_demo_ci' and current_user='postgres'"), true, 'exact disposable owner')
+    const originalLockHelper = await lockHelperMetadata()
+    if (!originalLockHelper) {
+      // The hosted TEST project already has this exact helper. The isolated
+      // portal fixture deliberately does not install the funding platform:
+      // extract only its canonical helper DDL, never duplicate its body or
+      // install funding tables/business functions. Restore original absence.
+      eq(await scalar(`select count(*)::int from pg_class where oid in
+        ('bx1_private.person_principals'::regclass,'bx1_private.persons'::regclass)
+        and relowner='bx1_authority_owner'::regrole and relrowsecurity`), 2,
+      'canonical private identity tables and authority owner available for fixture helper')
+      eq(await scalar(`select count(*)::int from pg_roles where rolname in
+        ('bx1_authority_owner','bx1_wallet_owner','bx1_wallet_verifier')`), 3,
+      'canonical helper owner and exact revoke-target roles already available')
+      const fundingSource = await readFile(new URL('../../../supabase/features/bx1_portal_funding.sql', import.meta.url), 'utf8')
+      const helperDefinitions = fundingSource.match(/create function bx1_private\.lock_funding_person\(actor uuid,expected_person uuid default null\) returns void\r?\nlanguage plpgsql volatile security definer set search_path='' as \$\$[\s\S]*?grant execute on function bx1_private\.lock_funding_person\(uuid,uuid\) to current_user;/g) ?? []
+      eq(helperDefinitions.length, 1, 'one exact canonical funding helper definition/owner/private ACL extracted')
+      const beforeHelperSecurity = await securityDigest(), beforeHelperRows = await rowsDigest(), beforeHelperIdentity = await identityDigest()
+      await db.query(helperDefinitions[0])
+      addedFixtureLockHelper = true
+      truth(await lockHelperMetadata(), 'canonical helper installed only in exact disposable fixture')
+      eq(await securityDigest(), beforeHelperSecurity, 'fixture helper setup changes no roles/edges/schema/table grants')
+      eq(await rowsDigest(), beforeHelperRows, 'fixture helper setup changes no business/evidence rows')
+      eq(await identityDigest(), beforeHelperIdentity, 'fixture helper setup changes no identity/session/factor data')
+    }
     const inheritedLifecycleMode = await scalar('select mode from bx1_private.document_lifecycle_policy where singleton')
     const inheritedScannerHistory = await scannerDigest()
     eq(inheritedLifecycleMode, 'SCANNER_REQUIRED', 'preceding scanner/entity proof state is intentional and recorded')
@@ -485,12 +514,18 @@ export async function proveSyntheticCompliance(db, clients, featureSql, lockPari
     eq(await scalar('select mode from bx1_private.document_lifecycle_policy where singleton'), inheritedLifecycleMode, 'original scanner-required fixture mode restored via native upgrade')
     eq(await lifecycleTriggerEnabled(), 'O', 'native lifecycle trigger remains active at completion')
     eq(await scannerDigest(), inheritedScannerHistory, 'all preceding scanner producer and immutable evidence preserved')
+    if (addedFixtureLockHelper) await db.query('drop function bx1_private.lock_funding_person(uuid,uuid)')
+    eq(await lockHelperMetadata(), originalLockHelper, 'original helper absence or exact OID/body/owner/ACL/security config restored at completion')
     await commit()
+    addedFixtureLockHelper = false
     console.log(`BX1_SYNTHETIC_COMPLIANCE_PASS assertions=${checks} fixture=synthetic-cloud-PostgreSQL17 writer=sole-canonical-review actorScope=exact-owner-policy investor=normal-submit-rfi-resubmit-review-account manager=normal-submit-review-mandate-request-only auditRollback=proven dedupe=proven concurrency=session-and-policy-after-wait hostedPrivilegeParity=non-super-SELECT-only-principal main=denied factors=preserved hostedAcceptance=not-proven independentHumans=not-proven providerAcceptance=not-proven documentBytes=not-proven mandateApply=not-relaxed`)
     return checks
   } finally {
     if (begun) await db.query('rollback').catch(() => {})
     await admin().catch(() => {})
     await Promise.all(clients.map(async client => { await client.query('rollback').catch(() => {}); await admin(client).catch(() => {}) }))
+    // Failure after a fixture commit still leaves no helper added by this
+    // module; the parent independently removes all disposable schemas too.
+    if (addedFixtureLockHelper) await db.query('drop function if exists bx1_private.lock_funding_person(uuid,uuid)').catch(() => {})
   }
 }
