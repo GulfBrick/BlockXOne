@@ -1,5 +1,13 @@
 # BlockXOne platform releases
 
+## 1.1.0-rc.28 — Connected Stage 2 handoff correction candidate
+
+- Continue the existing Stage 2 workflow from exact rc.27 source `0f749e2c8ca94309ffafe2cdcec115b51b668947`; no new platform or roadmap.
+- Correct the approved-mandate/appointment detail handoff for the scoped Super Admin without granting Compliance review access. Distinguish read-only sign-in security from a saved-records outage; privileged operations remain protected.
+- Overlap the independent own profile and membership reads, retaining subsequent current-authority checks. This removes one serial step; actual hosted latency improvement remains to be measured.
+- Require only the immutable application's selected Sumsub verification level through server configuration and the additive private binding replacement. Unused levels confer no availability; company KYB remains unadmitted without an actual company entitlement/level. Existing identity, provider and business history remain unchanged.
+- Require independent source review and exact-source cloud proof. Genuine provider events, document scanning/disposal, connected account/mandate acceptance, MFA recovery and both complete fund/property investment journeys remain incomplete. No roles, money, contracts or MAIN activation are changed by preparing this candidate.
+
 ## 1.1.0-rc.27 — Temporary TEST ordinary-entry exception candidate
 
 - Retain the reviewed rc.26 source and Stage 2 evidence. No new platform, identity model, customer roles, provider activation, money or contracts.

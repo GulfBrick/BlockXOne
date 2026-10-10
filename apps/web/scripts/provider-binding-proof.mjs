@@ -55,7 +55,7 @@ export async function proveProviderBindingDefaultAcl(db) {
 // Called BEFORE the final pure handoff transaction. Owns bounded transactions,
 // commits feature + synthetic race fixtures before two other backend clients,
 // and leaves the installed schema for the unchanged document-processing proof.
-export async function proveProviderBinding(db, clients, featureSql) {
+export async function proveProviderBinding(db, clients, featureSql, subjectAvailabilitySql) {
   requireFixture()
   assert.equal(clients.length, 2, 'provider pin race requires two independent clients')
   let checks = 0, sequence = 0, begun = false
@@ -266,14 +266,45 @@ export async function proveProviderBinding(db, clients, featureSql) {
 
     await begin()
     const businessBefore = await businessFingerprint()
+    // Preserve already-qualified individual bindings across the additive body
+    // replacement; company bindings below are new post-cutover insertions.
+    await bind(1); await bind(4)
+    const beforeSubjectCutover = await providerSnapshot()
+    const bindingMetadata = () => scalar(`select jsonb_build_object('oid',p.oid::text,
+      'owner',p.proowner::regrole::text,'acl',p.proacl::text,'security_definer',p.prosecdef,
+      'config',p.proconfig) from pg_proc p where p.oid=$1::regprocedure`, [bindSignature])
+    const metadataBeforeSubjectCutover = await bindingMetadata()
+    await db.query(subjectAvailabilitySql)
+    eq(await bindingMetadata(), metadataBeforeSubjectCutover, 'subject cutover preserves exact function OID/owner/ACL/security/search path')
+    eq(await providerSnapshot(), beforeSubjectCutover, 'subject cutover preserves every legacy/qualified provider row and receipt')
+    eq(await businessFingerprint(), businessBefore, 'subject cutover preserves every business row')
+    checks += await proveProviderBindingDefaultAcl(db)
     const bindings = []
-    for (const n of [1, 2, 3, 4]) bindings.push(await bind(n))
+    for (const n of [1, 2, 3, 4]) bindings.push(await bind(n, fixtureRevisions.get(n),
+      n === 2 || n === 3 ? [null, companyLevel, clientId] : [individualLevel, null, clientId]))
     eq(bindings.map(b => [b.expected_applicant_type, b.expected_level_name, b.expected_client_id, b.source_version_revision]),
       [['individual', individualLevel, clientId, 2], ['company', companyLevel, clientId, 2], ['company', companyLevel, clientId, 2], ['individual', individualLevel, clientId, 2]],
-    'three subject variants derive immutable type and configured exact level/client')
+    'three subject variants bind exact selected levels with their unused level NULL')
     eq((await bind(1)).binding_id, bindings[0].binding_id, 'exact qualified binding retry is idempotent')
     await admin()
     eq(await scalar('select count(*)::int from bx1_private.provider_boundary_receipts where source_kind=\'SERVER_BINDING\''), 4, 'one machine binding receipt per binding including retry')
+    await probe(async () => {
+      const individualOnly = await bind(6, fixtureRevisions.get(6), [individualLevel, null, clientId])
+      eq([individualOnly.expected_applicant_type, individualOnly.expected_level_name], ['individual', individualLevel],
+        'new individual binding needs no company capability')
+    })
+    const beforeLevelDenials = await providerSnapshot()
+    for (const invalid of [null, '', ' ', ` ${individualLevel}`, `${companyLevel} `, 'invalid\nlevel', 'x'.repeat(121)]) {
+      await denied('selected individual NULL/invalid level denied', () => bind(1, fixtureRevisions.get(1), [invalid, null, clientId]), '22023')
+      await denied('selected company NULL/invalid level denied', () => bind(2, fixtureRevisions.get(2), [null, invalid, clientId]), '22023')
+    }
+    for (const unused of [null, '', 'Changed-Unused-Level', 'invalid\nunused', 'x'.repeat(121)]) {
+      eq((await bind(1, fixtureRevisions.get(1), [individualLevel, unused, clientId])).binding_id, bindings[0].binding_id,
+        'unused company availability/config drift cannot alter individual binding')
+      eq((await bind(2, fixtureRevisions.get(2), [unused, companyLevel, clientId])).binding_id, bindings[1].binding_id,
+        'unused individual availability/config drift cannot alter company binding')
+    }
+    eq(await providerSnapshot(), beforeLevelDenials, 'selected-level denials and unused-level retries create no rows or receipts')
     await denied('individual config drift cannot rewrite binding', () => bind(1, fixtureRevisions.get(1), ['Changed-Level', companyLevel, clientId]))
     await denied('case-sensitive level drift is denied', () => bind(1, fixtureRevisions.get(1), [individualLevel.toLowerCase(), companyLevel, clientId]))
     await denied('client drift cannot rewrite binding', () => bind(1, fixtureRevisions.get(1), [individualLevel, companyLevel, 'other-client']))

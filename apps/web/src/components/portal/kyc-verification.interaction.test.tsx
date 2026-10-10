@@ -44,9 +44,10 @@ function Scope({ children, actor = entryActorId, context = APPLICANT_CONTEXT }: 
   const snapshot = { actor: { id: actor }, requests: [] } as unknown as PortalSnapshot
   return <PortalCommandProvider snapshot={snapshot} operatingContext={context} environment="TESTNET">{children}</PortalCommandProvider>
 }
-function applicant(application = submitted(), actor = entryActorId, context = APPLICANT_CONTEXT) {
+function applicant(application = submitted(), actor = entryActorId, context = APPLICANT_CONTEXT,
+  availability: { sandboxEnabled?: boolean; individualEnabled?: boolean; companyEnabled?: boolean } = { individualEnabled: true, companyEnabled: true }) {
   return <Scope actor={actor} context={context}><KycVerification application={application} actorId={entryActorId}
-    environment="TESTNET" sandboxEnabled /></Scope>
+    environment="TESTNET" sandboxEnabled {...availability} /></Scope>
 }
 function reviewer(applicationId = entryApplicationId, revision = 3, actor = entryActorId, context = reviewerContext) {
   return <Scope actor={actor} context={context}><ProviderEvidenceReview applicationId={applicationId} revision={revision} environment="TESTNET" /></Scope>
@@ -71,9 +72,36 @@ function serveEvents(events: unknown[]) {
   vi.stubGlobal('fetch', fetcher)
   return fetcher
 }
-afterEach(() => { cleanup(); vi.unstubAllGlobals() })
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.unstubAllEnvs() })
 
 describe('mounted revision-bound provider evidence', () => {
+  it.each(['individual', 'company'] as const)('offers only the enabled %s subject, while the other subject stays unavailable', async subject => {
+    const fetcher = serveEvents([])
+    const availability = { individualEnabled: subject === 'individual', companyEnabled: subject === 'company' }
+    const selected = subject === 'individual' ? submitted() : submittedEntity()
+    const unrelated = subject === 'individual' ? submittedEntity() : submitted()
+    const mounted = render(applicant(selected, entryActorId, APPLICANT_CONTEXT, availability))
+    await waitFor(() => expect(screen.getByText('No provider evidence received yet')).toBeTruthy())
+    expect(screen.getByRole('button', { name: 'Start sandbox identity check' })).toBeTruthy()
+    mounted.rerender(applicant(unrelated, entryActorId, APPLICANT_CONTEXT, availability))
+    expect(screen.queryByRole('button', { name: 'Start sandbox identity check' })).toBeNull()
+    expect(screen.getByText(subject === 'individual' ? 'Company sandbox verification unavailable' : 'Individual sandbox verification unavailable')).toBeTruthy()
+    expect(fetcher.mock.calls.every(([input]) => String(input).startsWith('/api/portal/kyc/evidence?'))).toBe(true)
+  })
+  it.each(['individual', 'company'] as const)('keeps %s start unavailable when its switch is absent or the global gate is closed', async subject => {
+    vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_SUMSUB_SANDBOX_INDIVIDUAL_ENABLED', undefined)
+    vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_SUMSUB_SANDBOX_COMPANY_ENABLED', undefined)
+    const fetcher = serveEvents([])
+    const application = subject === 'individual' ? submitted() : submittedEntity()
+    const mounted = render(applicant(application, entryActorId, APPLICANT_CONTEXT, {}))
+    await waitFor(() => expect(screen.getByText('No provider evidence received yet')).toBeTruthy())
+    expect(screen.queryByRole('button', { name: 'Start sandbox identity check' })).toBeNull()
+    mounted.rerender(applicant(application, entryActorId, APPLICANT_CONTEXT,
+      { sandboxEnabled: false, individualEnabled: true, companyEnabled: true }))
+    expect(screen.queryByRole('button', { name: 'Start sandbox identity check' })).toBeNull()
+    expect(screen.getByText('Sandbox identity check not connected')).toBeTruthy()
+    expect(fetcher.mock.calls.every(([input]) => String(input).startsWith('/api/portal/kyc/evidence?'))).toBe(true)
+  })
   it.each([
     ['applicantPending', 'Provider review pending'], ['applicantReset', 'Provider verification reset'],
     ['applicantDeactivated', 'Provider verification inactive'], ['applicantDeleted', 'Provider verification deleted'],
@@ -186,7 +214,7 @@ describe('mounted revision-bound provider evidence', () => {
     expect(screen.queryByTestId('sandbox-sdk')).toBeNull()
   })
 
-  it.each(['actor', 'context', 'application', 'revision', 'state', 'subject'])('drops a delayed token and old outcome after %s changes', async change => {
+  it.each(['actor', 'context', 'application', 'revision', 'state', 'subject', 'availability'])('drops a delayed token and old outcome after %s changes', async change => {
     const pending = deferred<Response>()
     let evidenceCalls = 0
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
@@ -204,7 +232,8 @@ describe('mounted revision-bound provider evidence', () => {
           : change === 'subject' ? submittedEntity() : submitted()
     if (change === 'subject') expect(changedApplication.details).toMatchObject({ details_version: 3, investor_type: 'ENTITY' })
     mounted.rerender(applicant(changedApplication, change === 'actor' ? otherActor : entryActorId,
-      change === 'context' ? reviewerContext : APPLICANT_CONTEXT))
+      change === 'context' ? reviewerContext : APPLICANT_CONTEXT,
+      { individualEnabled: change !== 'availability', companyEnabled: true }))
     await act(async () => { pending.resolve(token()); await pending.promise })
     expect(screen.queryByTestId('sandbox-sdk')).toBeNull()
     expect(screen.queryByText(/Sandbox verification opened/)).toBeNull()
@@ -212,11 +241,11 @@ describe('mounted revision-bound provider evidence', () => {
       expect(screen.queryByRole('button', { name: 'Start sandbox identity check' })).toBeNull()
       expect(screen.queryByText(/Provider review completed: GREEN/)).toBeNull()
     }
-    if (change === 'application' || change === 'revision' || change === 'state' || change === 'subject') expect(screen.queryByText(/Provider review completed: GREEN/)).toBeNull()
-    if (change === 'state') expect(screen.queryByRole('button', { name: 'Start sandbox identity check' })).toBeNull()
+    if (change === 'application' || change === 'revision' || change === 'state' || change === 'subject' || change === 'availability') expect(screen.queryByText(/Provider review completed: GREEN/)).toBeNull()
+    if (change === 'state' || change === 'availability') expect(screen.queryByRole('button', { name: 'Start sandbox identity check' })).toBeNull()
   })
 
-  it.each(['actor', 'context', 'application'])('removes an already mounted token when %s changes', async change => {
+  it.each(['actor', 'context', 'application', 'availability'])('removes an already mounted token when %s changes', async change => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       if (String(input) === '/api/portal/kyc/session') return token()
       return evidence(new URL(String(input), 'https://synthetic.invalid').searchParams.get('application_id')!, [])
@@ -225,7 +254,8 @@ describe('mounted revision-bound provider evidence', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Start sandbox identity check' }))
     await waitFor(() => expect(screen.getByTestId('sandbox-sdk')).toBeTruthy())
     mounted.rerender(applicant(change === 'application' ? { ...submitted(), id: entryOrganisationId } : submitted(),
-      change === 'actor' ? otherActor : entryActorId, change === 'context' ? reviewerContext : APPLICANT_CONTEXT))
+      change === 'actor' ? otherActor : entryActorId, change === 'context' ? reviewerContext : APPLICANT_CONTEXT,
+      { individualEnabled: change !== 'availability', companyEnabled: true }))
     expect(screen.queryByTestId('sandbox-sdk')).toBeNull()
     expect(screen.queryByText(/Sandbox verification opened/)).toBeNull()
   })

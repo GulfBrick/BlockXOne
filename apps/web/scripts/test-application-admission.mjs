@@ -237,6 +237,7 @@ try {
     await sqlFile(`../../../supabase/migrations/${file}`)
   }
   await sqlFile('../../../supabase/features/bx1_provider_binding.sql')
+  await sqlFile('../../../supabase/features/bx1_provider_subject_availability.sql')
   checks += await proveProviderBindingDefaultAcl(db)
   const handoffRecords = async () => {
     await admin()

@@ -1,5 +1,18 @@
 # Stage 2 provider-evidence integration boundary
 
+## Selected-subject configuration — rc.28 candidate, 2026-10-10
+
+The provider's current access checkpoint supersedes the historical "no account"/NOLOGIN setup notes below: the retained 2026-10-09 native receipt records a TEST sandbox connector and individual level; company KYB entitlement/level and a genuine current application event remain unaccepted. Revalidate that receipt's actual provider/configuration before activation. Do not create another provider account or rerun historical schema installation.
+
+Install `supabase/features/bx1_provider_subject_availability.sql` only after the existing qualification feature. It replaces the seven-argument private binding function body without replaying `ADD COLUMN` or changing its signature, owner, ACL, bindings or events. New web code requires only the exact level selected by the immutable submitted application's individual/company subject; the unused argument is NULL, never a guessed or copied level. Missing or invalid selected configuration denies before binding/token issuance. All common credentials, client, TEST-only and current-session/MFA gates remain required.
+
+Browser availability additionally requires the existing global `NEXT_PUBLIC_BLOCKXONE_SUMSUB_SANDBOX_ENABLED=true` and the matching explicit presentation switch:
+
+- `NEXT_PUBLIC_BLOCKXONE_SUMSUB_SANDBOX_INDIVIDUAL_ENABLED=true` only for the actually validated individual sandbox level.
+- `NEXT_PUBLIC_BLOCKXONE_SUMSUB_SANDBOX_COMPANY_ENABLED=true` only after a genuine company KYB entitlement and correctly typed company level are validated.
+
+Absent/false switches deny; they cannot authorize a backend request or turn a provider result into customer admission. Company remains unavailable while its prerequisite is missing, without blocking an independently configured individual. The additive feature, source/cloud acceptance, scoped TEST publication and actual submitted-case -> signed provider event -> visible reviewer handoff are separate gates. No switch is activated merely by committing this candidate.
+
 This increment adds a Sumsub sandbox adapter to the existing BlockXOne portal. Its provider-evidence schema is shared by TEST and MAIN, but the current writer functions and web routes admit **TEST sandbox operations only**. MAIN remains fail-closed until a separately reviewed live provider adapter, credentials and operating admission are delivered. It does not approve customers, product eligibility, mandates, roles, or accounts. No provider credentials or hosted settings are committed here.
 
 Current owner checkpoint (2026-10-07): Daniel confirmed there is no Sumsub account yet. Provider account/terms and exact sandbox individual/company levels are prerequisite setup tasks, not a login defect or a reason to fabricate a provider result. Engineering can continue source delivery, but genuine provider acceptance cannot pass until access is supplied and an actual authenticated event is shown against the correct case. Private file dispatch is separately described in [the document-processing adapter contract](stage2-document-processing.md); it does not substitute for Sumsub or approve a customer.

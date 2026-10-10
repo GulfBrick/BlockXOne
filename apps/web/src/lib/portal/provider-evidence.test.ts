@@ -83,16 +83,54 @@ describe('Sumsub sandbox evidence boundary', () => {
     const binding = { binding_id: session, application_id: applicationId, application_revision: 2, actor_id: actor,
       environment: 'TESTNET', external_user_id: externalUserId, expected_applicant_type: 'individual',
       expected_level_name: config.individualLevel, expected_client_id: config.clientId, source_version_revision: 2 }
+    const selectedConfig = sumsubSessionConfig('individual')
     databaseMock.query.mockResolvedValue({ rows: [{ result: binding }] })
-    expect(await bindProviderApplication(actor, session, applicationId, 2, config, 'individual')).toEqual(binding)
+    expect(await bindProviderApplication(actor, session, applicationId, 2, selectedConfig, 'individual')).toEqual(binding)
     expect(databaseMock.query).toHaveBeenLastCalledWith(expect.stringContaining('($1,$2,$3,$4,$5,$6,$7)'),
-      [actor, session, applicationId, 2, config.individualLevel, config.companyLevel, config.clientId])
+      [actor, session, applicationId, 2, config.individualLevel, null, config.clientId])
     for (const changes of [{ expected_applicant_type: 'company' }, { expected_level_name: 'Individual-sandbox' },
       { expected_client_id: 'wrong-client' }, { source_version_revision: 1 }, { expected_applicant_type: null },
       { actor_id: session }, { external_user_id: 'other' }]) {
       databaseMock.query.mockResolvedValueOnce({ rows: [{ result: { ...binding, ...changes } }] })
-      await expect(bindProviderApplication(actor, session, applicationId, 2, config, 'individual')).rejects.toThrow('No provider session was issued')
+      await expect(bindProviderApplication(actor, session, applicationId, 2, selectedConfig, 'individual')).rejects.toThrow('No provider session was issued')
     }
+  })
+  it.each(['individual', 'company'] as const)('selects only the exact %s level and never supplies an unused fallback', applicantType => {
+    const selectedKey = applicantType === 'individual' ? 'BLOCKXONE_SUMSUB_SANDBOX_INDIVIDUAL_LEVEL' : 'BLOCKXONE_SUMSUB_SANDBOX_COMPANY_LEVEL'
+    const unusedKey = applicantType === 'individual' ? 'BLOCKXONE_SUMSUB_SANDBOX_COMPANY_LEVEL' : 'BLOCKXONE_SUMSUB_SANDBOX_INDIVIDUAL_LEVEL'
+    const levelName = applicantType === 'individual' ? config.individualLevel : config.companyLevel
+    for (const unused of [undefined, '', 'Different-Unused-Level', ' invalid\nunused ', 'x'.repeat(121)]) {
+      vi.stubEnv(unusedKey, unused)
+      expect(sumsubSessionConfig(applicantType)).toMatchObject({ levelName,
+        individualLevel: applicantType === 'individual' ? levelName : null,
+        companyLevel: applicantType === 'company' ? levelName : null })
+    }
+    for (const invalid of [undefined, '', ' ', ` ${levelName}`, `${levelName} `, 'invalid\nlevel', 'x'.repeat(121)]) {
+      vi.stubEnv(selectedKey, invalid)
+      expect(() => sumsubSessionConfig(applicantType)).toThrow()
+    }
+  })
+  it('refuses a NULL selected binding level before querying the restricted writer', async () => {
+    for (const applicantType of ['individual', 'company'] as const) {
+      await expect(bindProviderApplication('11111111-1111-4111-8111-111111111111',
+        '22222222-2222-4222-8222-222222222222', applicationId, 2,
+        { individualLevel: null, companyLevel: null, clientId: config.clientId }, applicantType)).rejects.toThrow('No provider session was issued')
+    }
+    expect(databaseMock.query).not.toHaveBeenCalled()
+  })
+  it('binds a company with the unused individual level NULL and validates its persisted exact qualification', async () => {
+    vi.stubEnv('BLOCKXONE_SUMSUB_SANDBOX_INDIVIDUAL_LEVEL', undefined)
+    const selectedConfig = sumsubSessionConfig('company')
+    const actor = '11111111-1111-4111-8111-111111111111', session = '22222222-2222-4222-8222-222222222222'
+    const binding = { binding_id: session, application_id: applicationId, application_revision: 2, actor_id: actor,
+      environment: 'TESTNET', external_user_id: externalUserId, expected_applicant_type: 'company',
+      expected_level_name: config.companyLevel, expected_client_id: config.clientId, source_version_revision: 2 }
+    databaseMock.query.mockResolvedValue({ rows: [{ result: binding }] })
+    expect(await bindProviderApplication(actor, session, applicationId, 2, selectedConfig, 'company')).toEqual(binding)
+    expect(databaseMock.query).toHaveBeenCalledWith(expect.stringContaining('($1,$2,$3,$4,$5,$6,$7)'),
+      [actor, session, applicationId, 2, null, config.companyLevel, config.clientId])
+    databaseMock.query.mockResolvedValueOnce({ rows: [{ result: { ...binding, expected_level_name: 'Company-sandbox' } }] })
+    await expect(bindProviderApplication(actor, session, applicationId, 2, selectedConfig, 'company')).rejects.toThrow('No provider session was issued')
   })
   it('records qualified scalars and refuses a durable receipt for another external application or revision', async () => {
     const input = parseSumsubWebhook(Buffer.from(JSON.stringify(base)), config.clientId)
@@ -125,15 +163,15 @@ describe('Sumsub sandbox evidence boundary', () => {
     await expect(issueSumsubSandboxToken(externalUserId, config.individualLevel, config)).rejects.toThrow('could not be verified')
   })
   it('fails closed with absent credentials, MAIN environment or wrong database writer identity', () => {
-    expect(sumsubSessionConfig().companyLevel).toBe(config.companyLevel)
+    expect(sumsubSessionConfig('company').companyLevel).toBe(config.companyLevel)
     vi.stubEnv('BLOCKXONE_SUMSUB_SANDBOX_APP_SECRET', '')
-    expect(() => sumsubSessionConfig()).toThrow('not configured')
+    expect(() => sumsubSessionConfig('individual')).toThrow('not configured')
     vi.stubEnv('BLOCKXONE_SUMSUB_SANDBOX_APP_SECRET', config.appSecret)
     vi.stubEnv('BLOCKXONE_PROVIDER_EVIDENCE_DATABASE_URL', 'postgresql://postgres:synthetic@aws-0-eu-central-1.pooler.supabase.com:6543/postgres?sslmode=verify-full')
     expect(() => providerEvidenceDatabaseConfig()).toThrow('writer is not configured')
     vi.stubEnv('SUPABASE_URL', 'https://oqkevkjbkpugjotihtda.supabase.co')
     vi.stubEnv('VERCEL_ENV', 'production')
     vi.stubEnv('BLOCKXONE_APP_ORIGIN', 'https://bx1.co.za')
-    expect(() => sumsubSessionConfig()).toThrow('not admitted')
+    expect(() => sumsubSessionConfig('individual')).toThrow('not admitted')
   })
 })

@@ -139,15 +139,37 @@ async function loadProviderEvidence(applicationId: string): Promise<ProviderEven
   return parsed.data.events
 }
 
-type Props = { application: EntryApplication; environment: PlatformEnvironment; actorId: string; sandboxEnabled?: boolean }
+// Presentation only: the server/database independently derive and bind the
+// immutable submitted subject and its exact provider level before any token.
+function presentationApplicantType(application: EntryApplication): 'individual' | 'company' | null {
+  const details = application.details
+  const person = z.object({ full_name: z.string().trim().min(2).max(120), country: z.string().regex(/^[A-Z]{2}$/) }).safeParse(details)
+  if (!person.success) return null
+  const unversioned = !Object.prototype.hasOwnProperty.call(details, 'details_version')
+  const company = z.object({ company_name: z.string().trim().min(3).max(160),
+    registration_reference: z.string().trim().min(3).max(100) }).safeParse(details).success
+  if (application.persona === 'INVESTOR' && application.admission_purpose === 'INVESTOR_ADMISSION') {
+    if (details.investor_type === 'INDIVIDUAL' && unversioned) return 'individual'
+    if (details.investor_type === 'ENTITY' && company && (unversioned || details.details_version === 3)) return 'company'
+  }
+  if (application.persona === 'WEALTH_MANAGER' && application.admission_purpose === 'CUSTOMER_ORGANISATION_ADMISSION'
+    && company && (details.details_version === 2 || details.details_version === 3)) return 'company'
+  return null
+}
+type Props = { application: EntryApplication; environment: PlatformEnvironment; actorId: string; sandboxEnabled?: boolean;
+  individualEnabled?: boolean; companyEnabled?: boolean }
 type Session = { scope: string; token: string }
 type Evidence = { scope: string; events: ProviderEvent[] }
 
 export function KycVerification({ application, environment, actorId,
-  sandboxEnabled = process.env.NEXT_PUBLIC_BLOCKXONE_SUMSUB_SANDBOX_ENABLED === 'true' }: Props) {
+  sandboxEnabled = process.env.NEXT_PUBLIC_BLOCKXONE_SUMSUB_SANDBOX_ENABLED === 'true',
+  individualEnabled = process.env.NEXT_PUBLIC_BLOCKXONE_SUMSUB_SANDBOX_INDIVIDUAL_ENABLED === 'true',
+  companyEnabled = process.env.NEXT_PUBLIC_BLOCKXONE_SUMSUB_SANDBOX_COMPANY_ENABLED === 'true' }: Props) {
   const operatingContext = usePortalOperatingContext(), liveActor = usePortalActorId()
   const applicantContext = operatingContext.mode === 'APPLICANT' && liveActor === actorId
-  const scope = `${environment}:${actorId}:${liveActor}:${portalContextKey(operatingContext)}:${application.id}:${application.revision}:${application.status}:${application.context_kind}:${application.admission_purpose}:${application.persona}:${application.submitted_at}:${application.details.investor_type ?? ''}:${application.details.details_version ?? ''}`
+  const applicantType = presentationApplicantType(application)
+  const subjectEnabled = applicantType === 'individual' ? individualEnabled : applicantType === 'company' ? companyEnabled : false
+  const scope = `${environment}:${actorId}:${liveActor}:${portalContextKey(operatingContext)}:${application.id}:${application.revision}:${application.status}:${application.context_kind}:${application.admission_purpose}:${application.persona}:${application.submitted_at}:${application.details.investor_type ?? ''}:${application.details.details_version ?? ''}:${sandboxEnabled}:${individualEnabled}:${companyEnabled}`
   const activeScope = useRef(scope)
   activeScope.current = scope
   const evidenceRequest = useRef(0)
@@ -162,7 +184,7 @@ export function KycVerification({ application, environment, actorId,
   const [evidenceMessage, setEvidenceMessage] = useState('')
   const testnet = environment === 'TESTNET'
   const mayRead = testnet && applicantContext && Boolean(actorId)
-  const mayStart = mayRead && sandboxEnabled && application.context_kind === 'PERSONAL'
+  const mayStart = mayRead && sandboxEnabled && subjectEnabled && application.context_kind === 'PERSONAL'
     && application.status === 'SUBMITTED' && Boolean(application.submitted_at)
     && ['INVESTOR_ADMISSION', 'CUSTOMER_ORGANISATION_ADMISSION'].includes(application.admission_purpose)
 
@@ -268,6 +290,13 @@ export function KycVerification({ application, environment, actorId,
     {testnet ? <>
       <Notice title="Sandbox: fictional identity information only">When enabled, the Sumsub check opens inside your application. Do not submit a real identity document here. A provider result is evidence for an independent reviewer; it never grants account, role, product eligibility or signing authority.</Notice>
       {!sandboxEnabled ? <Notice title="Sandbox identity check not connected">The provider session is unavailable until the TEST sandbox credentials, webhook and evidence writer are verified. Your application and its recorded review state remain available.</Notice> : null}
+      {sandboxEnabled && applicantType && !subjectEnabled ? <Notice title={applicantType === 'company'
+        ? 'Company sandbox verification unavailable' : 'Individual sandbox verification unavailable'}>
+        {applicantType === 'company'
+          ? 'Company verification remains unavailable until sandbox KYB entitlement, the exact company level and its evidence connection are verified. An individual check cannot verify this company application.'
+          : 'Individual verification remains unavailable until its exact sandbox level and evidence connection are verified.'}
+        {' Your application and historical provider evidence remain available; no clearance is inferred.'}
+      </Notice> : null}
       <div className={styles.sectionGap} role="status" aria-live="polite">
         <strong>{currentEvidence ? providerEvidenceLabel(currentEvidence, application.revision) : evidenceBusy ? 'Checking provider evidence...' : 'Provider evidence has not been checked'}</strong>
         {currentEvidence ? <ProviderEvidenceDetails events={currentEvidence} revision={application.revision} /> : null}

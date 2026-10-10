@@ -32,7 +32,6 @@ export async function POST(request: NextRequest) {
     if (!/^application\/json(?:;\s*charset=utf-8)?$/i.test(request.headers.get('content-type') ?? '')) throw new PortalError('Send a JSON request.', 415)
     const actorId = request.headers.get('x-bx1-expected-actor') ?? ''
     if (!z.string().uuid().safeParse(actorId).success) throw new PortalError('Refresh your signed-in account before continuing.', 403)
-    const config = sumsubSessionConfig()
     providerEvidenceDatabaseConfig()
     const raw = await readPortalBody(request, 4096)
     let body: unknown
@@ -48,9 +47,10 @@ export async function POST(request: NextRequest) {
       || !['INVESTOR_ADMISSION','CUSTOMER_ORGANISATION_ADMISSION'].includes(application.admission_purpose))
       throw new PortalError('Submit or resubmit the current application before starting identity verification.', 409)
     const applicantType = expectedProviderApplicantType(application)
+    const config = sumsubSessionConfig(applicantType)
     const sessionId = await currentSessionId(client, actorId)
     const binding = await bindProviderApplication(actorId, sessionId, application.id, application.revision, config, applicantType)
-    const levelName = applicantType === 'individual' ? config.individualLevel : config.companyLevel
+    const levelName = config.levelName
     if (binding.expected_applicant_type !== applicantType || binding.expected_level_name !== levelName
       || binding.expected_client_id !== config.clientId || binding.source_version_revision !== application.revision)
       throw new PortalError('The persisted identity context did not match this submitted application.', 503)

@@ -15,13 +15,18 @@ import styles from './portal.module.css'
 export async function PortalPage({ view, id, query = {} }: { view: PortalPath; id?: string; query?: DashboardQuery }) {
   let data: Awaited<ReturnType<typeof loadRoleDashboard>> | null = null
   let status = 503
+  let ordinaryStepUpRequired = false
   try {
     // Business providers are admitted explicitly; both releases share this shell.
     if (view !== '/portal' && view !== '/portal/onboarding') requirePortalEnvironment()
     // Onboarding is always the caller's application workspace, not the selected
     // staff role's client queue. Existing scoped staff dashboards stay separate.
     data = await loadRoleDashboard(view === '/portal/onboarding' ? { ...query, mode: 'applicant', organisation: undefined, role: undefined } : query)
-    if (data.portal && !portalViewAllowed(view, data.operatingContext, data.portal.snapshot)) throw new PortalError('This action is not available in your selected context.', 403)
+    if (data.kind === 'ordinary-entry' && view !== '/portal' && view !== '/portal/onboarding') {
+      ordinaryStepUpRequired = true
+      throw new PortalError('Complete authenticator verification before opening protected operations.', 403)
+    }
+    if (data.portal && !portalViewAllowed(view, data.operatingContext, data.portal.snapshot, id)) throw new PortalError('This action is not available in your selected context.', 403)
     if (!data.portal && view !== '/portal' && view !== '/portal/onboarding') throw new PortalError('Saved portal state is unavailable.', 503)
   } catch (error) { data = null; if (error instanceof PortalError) status = error.status }
   if (!data && status === 404) notFound()
@@ -43,5 +48,5 @@ export async function PortalPage({ view, id, query = {} }: { view: PortalPath; i
   }
   const retryContext = portalOperatingContextSchema.safeParse(query.mode === 'applicant' && query.organisation === undefined && query.role === undefined ? { mode: 'APPLICANT' } : query.mode === undefined ? { mode: 'ROLE', organisationId: query.organisation, role: query.role } : null)
   const retry = retryContext.success ? portalScopeHref(view, retryContext.data, id) : '/portal'
-  return <div className={styles.portal} style={{ display: 'block' }}><main className={styles.content}><p className={styles.eyebrow}>BlockXOne / Client portal</p><h1 className={styles.title}>{status === 403 ? 'Complete your account access.' : 'Saved portal state is unavailable.'}</h1><p className={styles.subtitle}>{status === 403 ? 'Your selected role or organisation does not currently have access. Complete any required multi-factor authentication or use your assigned context. No new privileges have been assigned.' : 'The hosted platform could not load your saved records. Your existing applications and investments have not been changed.'}</p><div className={`${styles.actions} ${styles.sectionGap}`}><Link href={status === 403 ? '/login/mfa' : retry} className={styles.button}>{status === 403 ? 'Complete sign-in security' : 'Retry loading the portal'}</Link><Link href="/portal" className={styles.buttonSecondary}>Use my assigned dashboard</Link><Link href="/workspace" className={styles.buttonSecondary}>Return to account workspace</Link></div></main></div>
+  return <div className={styles.portal} style={{ display: 'block' }}><main className={styles.content}><p className={styles.eyebrow}>BlockXOne / Client portal</p><h1 className={styles.title}>{ordinaryStepUpRequired ? 'Authenticator required for protected operations.' : status === 403 ? 'Complete your account access.' : 'Saved portal state is unavailable.'}</h1><p className={styles.subtitle}>{ordinaryStepUpRequired ? 'The temporary Testnet pause permits read-only entry only. Your existing authenticator has not been removed. Complete authenticator verification before opening Compliance evidence, approvals, account changes or financial operations; your assigned role and organisation are still checked separately.' : status === 403 ? 'Your selected role or organisation does not currently have access. Complete any required multi-factor authentication or use your assigned context. No new privileges have been assigned.' : 'The hosted platform could not load your saved records. Your existing applications and investments have not been changed.'}</p><div className={`${styles.actions} ${styles.sectionGap}`}><Link href={status === 403 ? '/login/mfa' : retry} className={styles.button}>{status === 403 ? 'Complete sign-in security' : 'Retry loading the portal'}</Link><Link href="/portal" className={styles.buttonSecondary}>Use my assigned dashboard</Link><Link href="/workspace" className={styles.buttonSecondary}>Return to account workspace</Link></div></main></div>
 }

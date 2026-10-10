@@ -37,6 +37,7 @@ on:
       - supabase/features/bx1_document_processing.sql
       - apps/web/scripts/document-processing-proof.mjs
       - supabase/features/bx1_provider_binding.sql
+      - supabase/features/bx1_provider_subject_availability.sql
       - apps/web/scripts/provider-binding-proof.mjs
       - supabase/features/bx1_entity_eligibility.sql
       - apps/web/scripts/entity-eligibility-proof.mjs
@@ -99,6 +100,7 @@ on:
       - supabase/features/bx1_document_processing.sql
       - apps/web/scripts/document-processing-proof.mjs
       - supabase/features/bx1_provider_binding.sql
+      - supabase/features/bx1_provider_subject_availability.sql
       - apps/web/scripts/provider-binding-proof.mjs
       - supabase/features/bx1_entity_eligibility.sql
       - apps/web/scripts/entity-eligibility-proof.mjs

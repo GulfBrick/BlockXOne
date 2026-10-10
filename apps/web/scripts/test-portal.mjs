@@ -2598,7 +2598,8 @@ try {
     issuerContext, 'review_offering_issuer', issuerInput(issuerTrustRace.product))
   phase = 'provider-binding-final-chain-proof'
   checks += await proveProviderBinding(db, proofClients,
-    await source('../../../supabase/features/bx1_provider_binding.sql'))
+    await source('../../../supabase/features/bx1_provider_binding.sql'),
+    await source('../../../supabase/features/bx1_provider_subject_availability.sql'))
   phase = 'shared-handoff-final-reader-chain'
   await db.query('begin'); begun = true
   await admin()

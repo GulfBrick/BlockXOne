@@ -1,6 +1,6 @@
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { entryApplication, entryActorId, entryApplicationId } from '@/lib/portal/entry-test-fixtures'
 import { KycVerification, ProviderEvidenceReview, parseKycSession, providerEvidenceLabel } from './kyc-verification'
 import { PortalIdentityProvider } from './portal-client'
@@ -24,6 +24,12 @@ function renderKyc(props: Parameters<typeof KycVerification>[0]) {
     </PortalIdentityProvider>
   )
 }
+beforeEach(() => {
+  vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_SUMSUB_SANDBOX_ENABLED', undefined)
+  vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_SUMSUB_SANDBOX_INDIVIDUAL_ENABLED', undefined)
+  vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_SUMSUB_SANDBOX_COMPANY_ENABLED', undefined)
+})
+afterEach(() => vi.unstubAllEnvs())
 
 describe('application-scoped sandbox identity verification', () => {
   it('accepts only an exact TEST session for the current application revision', () => {
@@ -46,8 +52,9 @@ describe('application-scoped sandbox identity verification', () => {
   })
 
   it('offers only the TEST applicant a provider session and keeps MAIN closed', () => {
-    const application = entryApplication({ revision: 3, review_route: 'AVAILABLE', status: 'SUBMITTED', submitted_at: '2026-10-07T10:00:00Z' })
-    const test = renderKyc({ application, actorId: entryActorId, environment: 'TESTNET', sandboxEnabled: true })
+    const application = entryApplication({ revision: 3, review_route: 'AVAILABLE', status: 'SUBMITTED', submitted_at: '2026-10-07T10:00:00Z',
+      details: { full_name: 'Synthetic Individual', country: 'ZA', investor_type: 'INDIVIDUAL' } })
+    const test = renderKyc({ application, actorId: entryActorId, environment: 'TESTNET', sandboxEnabled: true, individualEnabled: true })
     expect(test).toContain('Start sandbox identity check')
     expect(test).toContain('Refresh recorded evidence')
     expect(test).toContain('never grants account, role, product eligibility or signing authority')
@@ -55,10 +62,51 @@ describe('application-scoped sandbox identity verification', () => {
     const unconfigured = renderKyc({ application, actorId: entryActorId, environment: 'TESTNET', sandboxEnabled: false })
     expect(unconfigured).toContain('Sandbox identity check not connected')
     expect(unconfigured).not.toContain('Start sandbox identity check')
-    const main = renderKyc({ application, actorId: entryActorId, environment: 'MAINNET' })
+    const main = renderKyc({ application, actorId: entryActorId, environment: 'MAINNET', sandboxEnabled: true, individualEnabled: true, companyEnabled: true })
     expect(main).toContain('Production identity provider not admitted')
     expect(main).not.toContain('Start sandbox identity check')
     expect(main).not.toContain('Refresh recorded evidence')
+  })
+  it('requires the exact subject switch as well as the global gate, with absent switches denying availability', () => {
+    const individual = entryApplication({ status: 'SUBMITTED', submitted_at: '2026-10-07T10:00:00Z',
+      details: { full_name: 'Synthetic Applicant', country: 'ZA', investor_type: 'INDIVIDUAL' } })
+    const company = entryApplication({ ...individual, details: { ...individual.details, investor_type: 'ENTITY',
+      details_version: 3, company_name: 'Synthetic Company', registration_reference: 'SYNTHETIC-REG' } })
+    for (const application of [individual, company]) {
+      const missing = renderKyc({ application, actorId: entryActorId, environment: 'TESTNET', sandboxEnabled: true })
+      expect(missing).not.toContain('Start sandbox identity check')
+      expect(missing).toContain(application === company ? 'Company sandbox verification unavailable' : 'Individual sandbox verification unavailable')
+      const globallyClosed = renderKyc({ application, actorId: entryActorId, environment: 'TESTNET', sandboxEnabled: false,
+        individualEnabled: true, companyEnabled: true })
+      expect(globallyClosed).not.toContain('Start sandbox identity check')
+    }
+    const individualOnly = { actorId: entryActorId, environment: 'TESTNET' as const, sandboxEnabled: true, individualEnabled: true, companyEnabled: false }
+    expect(renderKyc({ ...individualOnly, application: individual })).toContain('Start sandbox identity check')
+    const companyClosed = renderKyc({ ...individualOnly, application: company })
+    expect(companyClosed).not.toContain('Start sandbox identity check')
+    expect(companyClosed).toContain('An individual check cannot verify this company application')
+    const companyOnly = { ...individualOnly, individualEnabled: false, companyEnabled: true }
+    expect(renderKyc({ ...companyOnly, application: company })).toContain('Start sandbox identity check')
+    expect(renderKyc({ ...companyOnly, application: individual })).not.toContain('Start sandbox identity check')
+  })
+  it('uses only non-secret explicit subject flags and refuses unsupported/incomplete presentation subjects', () => {
+    const application = entryApplication({ status: 'SUBMITTED', submitted_at: '2026-10-07T10:00:00Z',
+      details: { full_name: 'Synthetic Applicant', country: 'ZA', investor_type: 'INDIVIDUAL' } })
+    vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_SUMSUB_SANDBOX_ENABLED', 'true')
+    vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_SUMSUB_SANDBOX_INDIVIDUAL_ENABLED', 'true')
+    expect(renderKyc({ application, actorId: entryActorId, environment: 'TESTNET' })).toContain('Start sandbox identity check')
+    for (const details of [{}, { ...application.details, country: 'zz' }, { ...application.details, details_version: 3 },
+      { ...application.details, investor_type: 'ENTITY' }]) {
+      expect(renderKyc({ application: { ...application, details }, actorId: entryActorId, environment: 'TESTNET',
+        sandboxEnabled: true, individualEnabled: true, companyEnabled: true })).not.toContain('Start sandbox identity check')
+    }
+    for (const detailsVersion of [2, 3]) {
+      const company = entryApplication({ ...application, persona: 'WEALTH_MANAGER', admission_purpose: 'CUSTOMER_ORGANISATION_ADMISSION',
+        details: { full_name: 'Synthetic Applicant', country: 'ZA', details_version: detailsVersion,
+          company_name: 'Synthetic Wealth Manager', registration_reference: 'SYNTHETIC-REG' } })
+      expect(renderKyc({ application: company, actorId: entryActorId, environment: 'TESTNET', sandboxEnabled: true,
+        companyEnabled: true })).toContain('Start sandbox identity check')
+    }
   })
 
   it('does not restart an approved, rejected or historical application', () => {

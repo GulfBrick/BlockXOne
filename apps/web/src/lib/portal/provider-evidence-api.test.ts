@@ -41,7 +41,10 @@ beforeEach(() => {
   mocks.create.mockReturnValue({ auth: { getSession: vi.fn().mockResolvedValue({ data: { session: { access_token: jwt } }, error: null }),
     getUser: vi.fn().mockResolvedValue({ data: { user: { id: actor } }, error: null }) }, rpc: mocks.rpc })
   mocks.entry.mockResolvedValue(entry)
-  mocks.config.mockReturnValue({ individualLevel: 'synthetic-individual', companyLevel: 'synthetic-company', clientId: 'synthetic-client' })
+  mocks.config.mockImplementation((applicantType: 'individual' | 'company') => ({
+    levelName: applicantType === 'individual' ? 'synthetic-individual' : 'synthetic-company',
+    individualLevel: applicantType === 'individual' ? 'synthetic-individual' : null,
+    companyLevel: applicantType === 'company' ? 'synthetic-company' : null, clientId: 'synthetic-client' }))
   mocks.webhookConfig.mockReturnValue({ secret: 'synthetic-secret', clientId: 'synthetic-client' })
   mocks.bind.mockResolvedValue({ binding_id: sessionId, external_user_id: `bx1:testnet:${applicationId}:r2`,
     expected_applicant_type: 'individual', expected_level_name: 'synthetic-individual', expected_client_id: 'synthetic-client', source_version_revision: 2 })
@@ -62,7 +65,8 @@ describe('hosted KYC backend boundaries', () => {
     expect(await response.json()).toMatchObject({ token: 'synthetic-short-lived-token', application_id: applicationId,
       application_revision: 2, environment: 'TESTNET' })
     expect(mocks.bind).toHaveBeenCalledWith(actor, sessionId, applicationId, 2, expect.objectContaining({
-      individualLevel: 'synthetic-individual', companyLevel: 'synthetic-company', clientId: 'synthetic-client' }), 'individual')
+      individualLevel: 'synthetic-individual', companyLevel: null, clientId: 'synthetic-client' }), 'individual')
+    expect(mocks.config).toHaveBeenCalledWith('individual')
     expect(mocks.token).toHaveBeenCalledWith(`bx1:testnet:${applicationId}:r2`, 'synthetic-individual', expect.anything())
     expect(mocks.entry).toHaveBeenCalledTimes(3)
   })
@@ -91,7 +95,42 @@ describe('hosted KYC backend boundaries', () => {
         expected_applicant_type: 'company', expected_level_name: 'synthetic-company', expected_client_id: 'synthetic-client', source_version_revision: 2 })
       expect((await startSession(sessionRequest())).status).toBe(200)
       expect(mocks.token).toHaveBeenLastCalledWith(`bx1:testnet:${applicationId}:r2`, 'synthetic-company', expect.anything())
+      expect(mocks.config).toHaveBeenLastCalledWith('company')
+      expect(mocks.bind).toHaveBeenLastCalledWith(actor, sessionId, applicationId, 2,
+        expect.objectContaining({ individualLevel: null, companyLevel: 'synthetic-company' }), 'company')
     }
+  })
+  it.each(['individual', 'company'] as const)('uses real %s config independently of an absent unrelated provider level', async applicantType => {
+    const actual = await vi.importActual<typeof import('./provider-evidence')>('./provider-evidence')
+    mocks.config.mockImplementation(actual.sumsubSessionConfig)
+    for (const [key, value] of Object.entries({
+      BLOCKXONE_SUMSUB_SANDBOX_APP_TOKEN: 'synthetic-app-token',
+      BLOCKXONE_SUMSUB_SANDBOX_APP_SECRET: 'synthetic-app-secret-long-enough',
+      BLOCKXONE_SUMSUB_SANDBOX_WEBHOOK_SECRET: 'synthetic-webhook-secret-long-enough',
+      BLOCKXONE_SUMSUB_SANDBOX_CLIENT_ID: 'synthetic-client',
+    })) vi.stubEnv(key, value)
+    const selectedKey = applicantType === 'individual' ? 'BLOCKXONE_SUMSUB_SANDBOX_INDIVIDUAL_LEVEL' : 'BLOCKXONE_SUMSUB_SANDBOX_COMPANY_LEVEL'
+    const unusedKey = applicantType === 'individual' ? 'BLOCKXONE_SUMSUB_SANDBOX_COMPANY_LEVEL' : 'BLOCKXONE_SUMSUB_SANDBOX_INDIVIDUAL_LEVEL'
+    const selectedLevel = `synthetic-${applicantType}`
+    vi.stubEnv(selectedKey, selectedLevel)
+    vi.stubEnv(unusedKey, undefined)
+    if (applicantType === 'company') mocks.entry.mockResolvedValue({ ...entry, applications: [{ ...app, details: {
+      ...app.details, investor_type: 'ENTITY', company_name: 'Synthetic Entity', registration_reference: 'SYNTHETIC-REG' } }] })
+    mocks.bind.mockResolvedValue({ binding_id: sessionId, external_user_id: `bx1:testnet:${applicationId}:r2`,
+      expected_applicant_type: applicantType, expected_level_name: selectedLevel,
+      expected_client_id: 'synthetic-client', source_version_revision: 2 })
+    expect((await startSession(sessionRequest())).status).toBe(200)
+    expect(mocks.bind).toHaveBeenLastCalledWith(actor, sessionId, applicationId, 2, expect.objectContaining({
+      individualLevel: applicantType === 'individual' ? selectedLevel : null,
+      companyLevel: applicantType === 'company' ? selectedLevel : null }), applicantType)
+    expect(mocks.token).toHaveBeenLastCalledWith(`bx1:testnet:${applicationId}:r2`, selectedLevel, expect.anything())
+    mocks.bind.mockClear(); mocks.token.mockClear()
+    for (const invalid of [undefined, '', ' ', ` ${selectedLevel}`, 'invalid\nlevel', 'x'.repeat(121)]) {
+      vi.stubEnv(selectedKey, invalid)
+      expect((await startSession(sessionRequest())).status).toBe(503)
+    }
+    expect(mocks.bind).not.toHaveBeenCalled()
+    expect(mocks.token).not.toHaveBeenCalled()
   })
   it('fails closed before the SDK call on persisted type, level, client or source drift', async () => {
     for (const changes of [{ expected_applicant_type: 'company' }, { expected_level_name: 'SYNTHETIC-individual' },

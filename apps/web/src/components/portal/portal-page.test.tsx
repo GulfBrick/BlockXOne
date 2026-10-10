@@ -12,6 +12,7 @@ vi.mock('./entry-screen', () => ({ EntryScreen: (props: unknown) => { fixture.en
 import { PortalError } from '@/lib/portal/server'
 import { PortalPage } from './portal-page'
 import { entryApplication, entryFixture } from '@/lib/portal/entry-test-fixtures'
+import type { PortalOrganisationMandate } from '@/lib/portal/contracts'
 
 const organisation = '33333333-3333-4333-8333-333333333333'
 const otherOrganisation = '44444444-4444-4444-8444-444444444444'
@@ -22,6 +23,24 @@ const release = { version: '1.1.0-rc.3', environment: 'TESTNET' as const, source
 function roleData() {
   return { kind: 'role' as const, user, release, scope, scopes: [scope], operatingContext: context, availablePaths: ['/portal/opportunities'], queue: [], queueMessage: undefined,
     portal: { user, snapshot: { actor: { ...user, can_review: false }, operating_context: context, applications: [], organisations: [], products: [], subscriptions: [], events: [] } } }
+}
+const mandateId = '55555555-5555-4555-8555-555555555555'
+function approvedMandate(change: Partial<PortalOrganisationMandate> = {}): PortalOrganisationMandate {
+  return { id: mandateId, application_id: 'application', product_organisation_id: 'product-org', native_organisation_id: null,
+    reviewer_scope_organisation_id: organisation, applicant_user_id: 'separate-applicant', organisation_name: 'Fictional customer',
+    role: 'OfferingManager', status: 'APPROVED', revision: 2, requested_until: '2099-10-20T00:00:00Z',
+    evidence_reference: 'Synthetic appointment evidence', review_notes: 'Independent appointment review',
+    reviewer_user_id: 'separate-reviewer', applied_by_user_id: null, admission_revision: 3, admission_status: 'APPROVED',
+    admission_approved_until: '2099-10-20T00:00:00Z', admission_purpose: 'CUSTOMER_ORGANISATION_ADMISSION',
+    effective: false, next_owner: 'SUPER_ADMIN', can_request: false, can_review: false, can_apply: true, can_revoke: false, ...change }
+}
+function adminData(mandate = approvedMandate()) {
+  const data = roleData()
+  const adminContext = { ...context, role: 'SuperAdmin' as const }
+  const adminScope = { ...scope, role: 'SuperAdmin' as const }
+  return { ...data, scope: adminScope, scopes: [adminScope], operatingContext: adminContext,
+    portal: { ...data.portal, snapshot: { ...data.portal.snapshot, operating_context: adminContext,
+      mandate_queue_available: true, organisation_mandates: [mandate] } } }
 }
 beforeEach(() => { vi.resetAllMocks(); fixture.load.mockResolvedValue(roleData()) })
 
@@ -36,13 +55,71 @@ describe('portal server page access and selected context', () => {
     expect(html).not.toContain('<input'); expect(html).not.toContain('<form'); expect(html).not.toContain('Create or continue')
     expect(fixture.entry).not.toHaveBeenCalled(); expect(fixture.screen).not.toHaveBeenCalled()
   })
-  it('cannot use read-only entry to render a protected business child route', async () => {
+  it.each(['/portal/compliance', '/portal/compliance/detail', '/portal/products', '/portal/portfolio', '/portal/orders/detail'] as const)('requires security step-up without private components or false retry for ordinary %s', async view => {
     const entry = entryFixture()
     fixture.load.mockResolvedValueOnce({ kind: 'ordinary-entry', user: entry.actor, entry, release, scopes: [scope], scope, operatingContext: context, portal: undefined })
-    const html = renderToStaticMarkup(await PortalPage({ view: '/portal/compliance', query: { organisation, role: 'Investor' } }))
-    expect(html).toContain('Saved portal state is unavailable')
+    const html = renderToStaticMarkup(await PortalPage({ view, id: 'private-record', query: { organisation, role: 'Investor' } }))
+    expect(html).toContain('Authenticator required for protected operations')
+    expect(html).toContain('read-only entry only'); expect(html).toContain('Your existing authenticator has not been removed')
+    expect(html).toContain('href="/login/mfa"'); expect(html).toContain('Complete sign-in security')
+    expect(html).not.toContain('Saved portal state is unavailable'); expect(html).not.toContain('Retry loading the portal')
+    expect(html).not.toContain('private-record'); expect(html).not.toContain('<input'); expect(html).not.toContain('<form')
     expect(html).not.toContain('My application status')
     expect(fixture.entry).not.toHaveBeenCalled(); expect(fixture.screen).not.toHaveBeenCalled()
+  })
+  it('passes an exact own-scope approved mandate apply detail to the existing Super Admin handler without reviewer powers', async () => {
+    const data = adminData()
+    fixture.load.mockResolvedValueOnce(data)
+    renderToStaticMarkup(await PortalPage({ view: '/portal/compliance/detail', id: mandateId, query: { organisation, role: 'SuperAdmin' } }))
+    expect(fixture.screen).toHaveBeenCalledWith(expect.objectContaining({ data: data.portal, view: '/portal/compliance/detail',
+      id: mandateId, operatingContext: data.operatingContext, scope: data.scope }))
+    expect(data.portal.snapshot.actor.can_review).toBe(false)
+    expect(fixture.entry).not.toHaveBeenCalled()
+  })
+  it('reopens the same applied mandate detail with the real receipt and existing guarded revocation flag intact', async () => {
+    fixture.load.mockResolvedValueOnce(adminData())
+    renderToStaticMarkup(await PortalPage({ view: '/portal/compliance/detail', id: mandateId, query: { organisation, role: 'SuperAdmin' } }))
+    const applied = { ...approvedMandate({ status: 'APPLIED', revision: 3, native_organisation_id: otherOrganisation,
+      applied_by_user_id: user.id, can_apply: false, can_revoke: true, next_owner: 'NONE', effective: true }),
+      approval_receipt_id: '66666666-6666-4666-8666-666666666666', applied_at: '2026-10-02T00:00:00Z' }
+    const saved = adminData(applied)
+    fixture.load.mockResolvedValueOnce(saved)
+    renderToStaticMarkup(await PortalPage({ view: '/portal/compliance/detail', id: mandateId, query: { organisation, role: 'SuperAdmin' } }))
+    expect(fixture.screen).toHaveBeenCalledTimes(2)
+    expect(fixture.screen).toHaveBeenLastCalledWith(expect.objectContaining({ data: saved.portal, id: mandateId,
+      operatingContext: saved.operatingContext }))
+    expect(saved.portal.snapshot.organisation_mandates[0]).toEqual(applied)
+    expect(saved.portal.snapshot.actor.can_review).toBe(false)
+    expect(fixture.entry).not.toHaveBeenCalled()
+  })
+  it.each([
+    { applied_by_user_id: 'other-admin', approval_receipt_id: '66666666-6666-4666-8666-666666666666', applied_at: '2026-10-02T00:00:00Z' },
+    { applied_by_user_id: user.id, approval_receipt_id: null, applied_at: '2026-10-02T00:00:00Z' },
+    { applied_by_user_id: user.id, approval_receipt_id: '66666666-6666-4666-8666-666666666666', applied_at: null },
+  ])('denies an applied mandate without own-applier and actual returned receipt evidence %#', async proof => {
+    const applied = { ...approvedMandate({ status: 'APPLIED', native_organisation_id: otherOrganisation,
+      can_apply: false, can_revoke: true, next_owner: 'NONE' }), ...proof }
+    fixture.load.mockResolvedValueOnce(adminData(applied))
+    const html = renderToStaticMarkup(await PortalPage({ view: '/portal/compliance/detail', id: mandateId, query: { organisation, role: 'SuperAdmin' } }))
+    expect(html).toContain('Complete your account access'); expect(fixture.screen).not.toHaveBeenCalled()
+  })
+  it.each([
+    { view: '/portal/compliance' as const, id: mandateId, change: {} },
+    { view: '/portal/compliance/detail' as const, id: 'application', change: {} },
+    { view: '/portal/compliance/detail' as const, id: 'product-org', change: {} },
+    { view: '/portal/compliance/detail' as const, id: undefined, change: {} },
+    { view: '/portal/compliance/detail' as const, id: mandateId, change: { status: 'SUBMITTED' as const } },
+    { view: '/portal/compliance/detail' as const, id: mandateId, change: { reviewer_scope_organisation_id: otherOrganisation } },
+    { view: '/portal/compliance/detail' as const, id: mandateId, change: { can_apply: false } },
+    { view: '/portal/compliance/detail' as const, id: mandateId, change: { applicant_user_id: user.id } },
+    { view: '/portal/compliance/detail' as const, id: mandateId, change: { reviewer_user_id: user.id } },
+    { view: '/portal/compliance/detail' as const, id: mandateId, change: { can_review: true } },
+  ])('does not expose other Compliance routes, records or non-applicable cases to Super Admin %#', async ({ view, id, change }) => {
+    fixture.load.mockResolvedValueOnce(adminData(approvedMandate(change)))
+    const html = renderToStaticMarkup(await PortalPage({ view, id, query: { organisation, role: 'SuperAdmin' } }))
+    expect(html).toContain('Complete your account access')
+    expect(html).not.toContain('Fictional customer'); expect(html).not.toContain('Independent appointment review')
+    expect(fixture.screen).not.toHaveBeenCalled(); expect(fixture.entry).not.toHaveBeenCalled()
   })
   it('redirects an anonymous session to the existing sign-in route', async () => {
     fixture.load.mockRejectedValueOnce(new PortalError('Sign in', 401))

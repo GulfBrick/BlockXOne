@@ -137,6 +137,7 @@ try {
   await sqlFile('../../../supabase/migrations/20260923205519_stage3_immutable_offering_packages.sql')
   await sqlFile('../../../supabase/migrations/20260924110608_stage2_provider_evidence.sql')
   await sqlFile('../../../supabase/features/bx1_provider_binding.sql')
+  await sqlFile('../../../supabase/features/bx1_provider_subject_availability.sql')
   checks += await proveProviderBindingDefaultAcl(db)
   await sqlFile('../../../supabase/migrations/20260924110911_stage1_staff_invitation_intents.sql')
   eq(await scalar("select has_table_privilege(current_user,'bx1_private.authority_scopes','REFERENCES')"), false,

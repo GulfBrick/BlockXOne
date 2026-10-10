@@ -241,6 +241,7 @@ try {
     await sqlFile(`../../../supabase/migrations/${file}`)
   }
   await sqlFile('../../../supabase/features/bx1_provider_binding.sql')
+  await sqlFile('../../../supabase/features/bx1_provider_subject_availability.sql')
   checks += await proveProviderBindingDefaultAcl(db)
   const handoffBaseline = await snapshot()
   const writerBeforeHandoff = await scalar("select md5(pg_get_functiondef('bx1_portal.execute_scoped(jsonb,text,uuid,jsonb)'::regprocedure))")

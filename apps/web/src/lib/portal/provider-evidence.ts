@@ -45,16 +45,21 @@ export function sumsubWebhookConfig(env: Environment = process.env) {
     clientId,
   }
 }
-export function sumsubSessionConfig(env: Environment = process.env) {
+export function sumsubSessionConfig(applicantType: 'individual' | 'company', env: Environment = process.env) {
   const webhook = sumsubWebhookConfig(env)
-  const individualLevel = required(env.BLOCKXONE_SUMSUB_SANDBOX_INDIVIDUAL_LEVEL)
-  const companyLevel = required(env.BLOCKXONE_SUMSUB_SANDBOX_COMPANY_LEVEL)
-  if (individualLevel.length > 120 || companyLevel.length > 120) throw new PortalError('The identity provider level is invalid.', 503)
+  if (!['individual', 'company'].includes(applicantType)) throw new PortalError('The identity provider subject is unavailable.', 503)
+  // The submitted subject selects its own exact configured level. An unrelated
+  // missing level must not disable it; no fallback level is ever supplied.
+  const levelName = required(applicantType === 'individual'
+    ? env.BLOCKXONE_SUMSUB_SANDBOX_INDIVIDUAL_LEVEL : env.BLOCKXONE_SUMSUB_SANDBOX_COMPANY_LEVEL)
+  if (levelName.length > 120) throw new PortalError('The identity provider level is invalid.', 503)
   return {
     ...webhook,
     appToken: required(env.BLOCKXONE_SUMSUB_SANDBOX_APP_TOKEN, 16),
     appSecret: required(env.BLOCKXONE_SUMSUB_SANDBOX_APP_SECRET, 20),
-    individualLevel, companyLevel,
+    levelName,
+    individualLevel: applicantType === 'individual' ? levelName : null,
+    companyLevel: applicantType === 'company' ? levelName : null,
   }
 }
 
@@ -111,6 +116,8 @@ export async function bindProviderApplication(actorId: string, sessionId: string
   config: Pick<ReturnType<typeof sumsubSessionConfig>, 'individualLevel' | 'companyLevel' | 'clientId'>,
   expectedApplicantType: 'individual' | 'company'): Promise<ProviderBinding> {
   try {
+    const expectedLevel = expectedApplicantType === 'individual' ? config.individualLevel : config.companyLevel
+    if (!expectedLevel) throw new Error()
     const { rows } = await database().query<{ result: ProviderBinding }>(
       'select bx1_private.bind_provider_application($1,$2,$3,$4,$5,$6,$7) as result',
       [actorId, sessionId, applicationId, revision, config.individualLevel, config.companyLevel, config.clientId],
@@ -120,7 +127,7 @@ export async function bindProviderApplication(actorId: string, sessionId: string
     if (!result || result.actor_id !== actorId || result.application_id !== applicationId
       || result.application_revision !== revision || result.environment !== 'TESTNET'
       || result.source_version_revision !== revision || result.expected_applicant_type !== expectedApplicantType
-      || result.expected_level_name !== (expectedApplicantType === 'individual' ? config.individualLevel : config.companyLevel)
+      || result.expected_level_name !== expectedLevel
       || result.expected_client_id !== config.clientId
       || result.external_user_id !== expectedExternal || !z.string().uuid().safeParse(result.binding_id).success) throw new Error()
     return result
@@ -184,7 +191,8 @@ export function parseSumsubWebhook(raw: Uint8Array, expectedClientId: string) {
 export function sumsubRequestSignature(timestamp: string, path: string, body: string, secret: string): string {
   return createHmac('sha256', secret).update(timestamp).update('POST').update(path).update(body).digest('hex')
 }
-export async function issueSumsubSandboxToken(externalUserId: string, levelName: string, config = sumsubSessionConfig()): Promise<string> {
+export async function issueSumsubSandboxToken(externalUserId: string, levelName: string,
+  config: Pick<ReturnType<typeof sumsubSessionConfig>, 'appToken' | 'appSecret'>): Promise<string> {
   const body = JSON.stringify({ userId: externalUserId, levelName, ttlInSecs: 600 })
   const timestamp = Math.floor(Date.now() / 1000).toString()
   let response: Response
