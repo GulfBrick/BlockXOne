@@ -9,7 +9,7 @@ describe('one product version with isolated deployment identity', () => {
     const manifest = JSON.parse(readFileSync(new URL('../../../../PLATFORM_RELEASE.json', import.meta.url), 'utf8'))
     expect(manifest.product).toBe('BlockXOne')
     expect(manifest.version).toBe(PLATFORM_VERSION)
-    expect(manifest.baseSource).toBe('cf4586175e5261fe360ffb54a0c1ddc632523912')
+    expect(manifest.baseSource).toBe('5ee01fab35cae74232139643006cedaed069bf58')
     expect(manifest.environments).toEqual(['TESTNET', 'MAINNET'])
     expect(manifest.sharedEntry).toBe('/login')
     expect(manifest.sharedDashboard).toBe('/portal')

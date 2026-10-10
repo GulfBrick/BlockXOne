@@ -133,6 +133,19 @@ describe('portal navigation and source-driven surfaces', () => {
     // Keep ordinary portal links on the existing client router.
     expect(html).toMatch(/<a\b[^>]*href="\/portal"[^>]*data-client-navigation="true"/)
   })
+  it('enters account workspace through a full document request on desktop and mobile', () => {
+    const html = renderToStaticMarkup(<PortalShell user={data().user} capabilities={{ manageProducts: false, reviewCompliance: true, invest: false }} active="compliance" title="Compliance queue"><p>Saved content</p></PortalShell>)
+    const workspaceLinks = html.match(/<a\b[^>]*href="\/workspace"[^>]*>[\s\S]*?<\/a>/g) ?? []
+    expect(workspaceLinks).toHaveLength(2)
+    for (const link of workspaceLinks) {
+      expect(link).toContain('Account workspace')
+      expect(link).not.toContain('data-client-navigation')
+    }
+    // Keep scoped business navigation on the client router; only the account
+    // boundary starts a new document before any server workspace redirect.
+    expect(html).toMatch(/<a\b[^>]*href="\/portal"[^>]*data-client-navigation="true"/)
+    expect(html).toMatch(/<a\b[^>]*href="\/portal\/compliance"[^>]*data-client-navigation="true"/)
+  })
   it.each(['Investor', 'ComplianceOfficer', 'TransferAgent', 'TokenisationAgent', 'TreasuryOperator', 'FinancialController', 'SuperAdmin'])('does not infer product authority from %s', role => {
     const value = snapshot(); value.organisations = [{ id: organisation, name: 'Fictional Org', status: 'ACTIVE', roles: [role] }]
     expect(productManagementOrganisations(value)).toEqual([])
