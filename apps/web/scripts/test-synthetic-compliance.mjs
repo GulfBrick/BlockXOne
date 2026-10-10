@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 // Executed only by the parent's exact disposable GitHub PostgreSQL17 fixture.
 // This module never connects to a project, signs in, changes real Auth factors,
 // downloads bytes, runs a scanner, or claims hosted/independent-human acceptance.
-export async function proveSyntheticCompliance(db, clients, featureSql) {
+export async function proveSyntheticCompliance(db, clients, featureSql, lockParitySql) {
   if (process.env.GITHUB_ACTIONS !== 'true'
     || process.env.BX1_PORTAL_SQL_TEST_URL !== 'postgresql://postgres:bx1-synthetic-ci-only@127.0.0.1:5432/bx1_demo_ci')
     throw new Error('Synthetic Compliance proof requires exact disposable cloud fixture')
@@ -73,6 +73,15 @@ export async function proveSyntheticCompliance(db, clients, featureSql) {
     'principals',(select jsonb_agg(to_jsonb(t) order by auth_user_id) from bx1_private.person_principals t),
     'memberships',(select jsonb_agg(to_jsonb(t) order by id) from public.bx1_memberships t),
     'factors',(select jsonb_agg(to_jsonb(t) order by id) from auth.mfa_factors t))::text)`)
+  const securityDigest = () => scalar(`select md5(jsonb_build_object(
+    'roles',(select jsonb_agg(to_jsonb(t) order by oid) from (select oid,rolname,rolsuper,rolinherit,
+      rolcreaterole,rolcreatedb,rolcanlogin,rolreplication,rolbypassrls,rolconnlimit,rolvaliduntil,rolconfig from pg_roles) t),
+    'edges',(select jsonb_agg(to_jsonb(t) order by roleid,member,grantor) from pg_auth_members t),
+    'schemas',(select jsonb_agg(to_jsonb(t) order by oid) from (select oid,nspname,nspowner,nspacl
+      from pg_namespace where nspname in ('auth','public','bx1_private','bx1_portal')) t),
+    'tables',(select jsonb_agg(to_jsonb(t) order by oid) from (select c.oid,c.relname,c.relowner,c.relacl,
+      c.relrowsecurity,c.relforcerowsecurity from pg_class c join pg_namespace n on n.oid=c.relnamespace
+      where n.nspname in ('auth','public','bx1_private','bx1_portal')) t))::text)`)
   const scannerDigest = () => scalar(`select md5(jsonb_build_object(
     'policy',(select to_jsonb(t) from bx1_private.document_processing_policy t where singleton),
     'quarantine',(select jsonb_agg(to_jsonb(t) order by id) from bx1_private.document_quarantine_items t),
@@ -129,6 +138,101 @@ export async function proveSyntheticCompliance(db, clients, featureSql) {
   }
   const review = (a, decision = 'APPROVED') => ({ application_id: a.id, expected_revision: a.revision, decision,
     notes: 'Fictional manifest-only TEST rehearsal; not independent human or provider acceptance.', checks: reviewChecks })
+  const proveHostedLockParity = async (investor, manager) => {
+    await admin()
+    const executor = 'bx1_synthetic_compliance_ci_lock_owner'
+    const lockSignature = 'bx1_portal.lock_synthetic_compliance(jsonb,uuid)'
+    const lockOid = await scalar('select $1::regprocedure::oid::text', [lockSignature])
+    const oldLockDefinition = await scalar('select pg_get_functiondef($1::regprocedure)', [lockSignature])
+    const normalize = text => text.replace(/\r\n/g, '\n')
+    const oldLock = normalize(lockParitySql.match(/old_lock:=\$old\$([\s\S]*?)\$old\$/)?.[1] ?? '')
+    const newLock = normalize(lockParitySql.match(/new_lock:=\$new\$([\s\S]*?)\$new\$/)?.[1] ?? '')
+    truth(oldLock && newLock, 'exact frozen corrective lock replacement present')
+    eq(normalize(oldLockDefinition).split(oldLock).length, 2, 'one old direct principal lock before correction')
+    eq(await scalar('select count(*)::int from pg_roles where rolname=$1', [executor]), 0, 'parity executor absent initially')
+    const nativeProbeActor = await scalar('select auth_user_id from bx1_private.person_principals order by auth_user_id limit 1')
+    truth(nativeProbeActor, 'preceding committed fixture supplies actual mapped principal lock target')
+    const probe = clients[0]
+    const probePrincipal = async () => {
+      await probe.query('begin'); await admin(probe)
+      try { return (await probe.query('select auth_user_id from bx1_private.person_principals where auth_user_id=$1 for update nowait', [nativeProbeActor])).rows.length }
+      finally { await probe.query('rollback') }
+    }
+    eq(await probePrincipal(), 1, 'committed mapped principal is lockable before isolated parity probe')
+    const beforeRows = await rowsDigest(), beforeIdentity = await identityDigest(), beforeSecurity = await securityDigest()
+    const beforeFunctions = await functions()
+    const installExecutor = async () => {
+      await db.query(`create role ${executor} nologin noinherit nosuperuser nocreatedb nocreaterole noreplication bypassrls;
+        grant usage on schema auth,public,bx1_private to ${executor};
+        grant usage,create on schema bx1_portal to ${executor};
+        grant select,update on bx1_portal.entry_configuration,bx1_private.synthetic_compliance_cases,
+          bx1_portal.applications,auth.users,auth.sessions,auth.mfa_factors,
+          public.bx1_profiles,public.bx1_organisations,public.bx1_memberships to ${executor};
+        grant select on bx1_private.person_principals to ${executor};
+        grant execute on function bx1_portal.synthetic_compliance_context(jsonb),
+          bx1_private.lock_funding_person(uuid,uuid) to ${executor};
+        alter function bx1_portal.lock_synthetic_compliance(jsonb,uuid) owner to ${executor};
+        grant execute on function bx1_portal.lock_synthetic_compliance(jsonb,uuid) to postgres`)
+      eq(await scalar(`select not rolsuper and not rolinherit and not rolcanlogin and not rolcreaterole
+        and not rolcreatedb and not rolreplication and rolbypassrls from pg_roles where rolname=$1`, [executor]), true,
+      'lock body itself executes as non-superuser with hosted-like RLS visibility')
+      eq(await scalar("select has_table_privilege($1,'bx1_private.person_principals','SELECT')", [executor]), true, 'parity executor has native principal SELECT')
+      eq(await scalar("select has_any_column_privilege($1,'bx1_private.person_principals','UPDATE')", [executor]), false, 'parity executor has no native principal row-lock or UPDATE privilege')
+      eq(await scalar("select pg_has_role($1,'bx1_authority_owner','MEMBER')", [executor]), false, 'parity executor cannot inherit or set private identity owner')
+      eq(await scalar('select proowner=$2::regrole from pg_proc where oid=$1::regprocedure', [lockSignature, executor]), true, 'SECURITY DEFINER parent owner, not only caller, is non-superuser')
+    }
+    const assertRestored = async (expectedFunctions, label) => {
+      await admin()
+      eq(await functions(), expectedFunctions, `${label} all function owners/ACLs/bodies/config restored`)
+      eq(await securityDigest(), beforeSecurity, `${label} all roles/edges/schema and table grants restored`)
+      eq(await rowsDigest(), beforeRows, `${label} business and evidence rows restored`)
+      eq(await identityDigest(), beforeIdentity, `${label} identity/session/factor/role data restored`)
+      eq(await scalar('select count(*)::int from pg_roles where rolname=$1', [executor]), 0, `${label} disposable executor removed`)
+    }
+    await db.query('savepoint uncorrected_hosted_lock_parity')
+    await installExecutor()
+    let uncorrectedDiagnostic
+    await denied('uncorrected hosted-like full public read reproduces native lock permission failure',
+      () => read().catch(error => { uncorrectedDiagnostic = error.message; throw error }))
+    truth(/permission denied for table person_principals/.test(uncorrectedDiagnostic ?? ''), 'old denial is specifically native principal permission, not earlier authority gate')
+    await admin(); await db.query('rollback to savepoint uncorrected_hosted_lock_parity; release savepoint uncorrected_hosted_lock_parity')
+    await assertRestored(beforeFunctions, 'uncorrected parity rollback')
+    await db.query(lockParitySql)
+    const correctedFunctions = await functions()
+    for (const previous of beforeFunctions) {
+      const actual = correctedFunctions.find(f => f.oid === previous.oid)
+      eq(previous.oid === lockOid ? { ...actual, body: previous.body } : actual, previous,
+        `corrective install preserves function ${previous.oid} except exact target lock body`)
+    }
+    eq(correctedFunctions.length, beforeFunctions.length, 'correction creates no new function or helper')
+    eq(normalize(await scalar('select pg_get_functiondef($1::regprocedure)', [lockSignature])),
+      normalize(oldLockDefinition).replace('declare actor uuid:=auth.uid();', 'declare actor uuid:=auth.uid(); locked_actor uuid;').replace(oldLock, newLock),
+      'only declaration and direct principal lock changed; every other guard/lock retained')
+    eq(await securityDigest(), beforeSecurity, 'corrective feature changes no roles/edges/schema/table grants')
+    eq(await rowsDigest(), beforeRows, 'corrective feature changes no business/evidence rows')
+    eq(await identityDigest(), beforeIdentity, 'corrective feature changes no native identity/session/factor data')
+    await db.query('savepoint corrected_hosted_lock_parity')
+    await installExecutor()
+    eq((await read()).applications.map(a => a.id).sort(), [investor.id, manager.id].sort(), 'corrected non-super lock owner permits full exact designated public projection')
+    const rfi = await command(review(investor, 'CHANGES_REQUIRED'))
+    eq(rfi.applications.find(a => a.id === investor.id).status, 'CHANGES_REQUIRED', 'corrected non-super lock owner permits same canonical public RFI command')
+    await denied('non-super parity preserves normal full reader AAL2 boundary', async () => {
+      await claims(); await scalar('select public.bx1_portal_read_scoped($1::jsonb)', [JSON.stringify(context)])
+    })
+    // This committed mapped row comes from the preceding synthetic fixture,
+    // not a new no-profile applicant mapping. Prove the unchanged authority-
+    // owner helper takes an actual conflicting row lock, not a zero-row no-op.
+    await claims(); await db.query(`set local role ${executor}`)
+    await scalar('select bx1_private.lock_funding_person($1,null)', [nativeProbeActor])
+    let lockConflict
+    try { await probePrincipal() } catch (error) { lockConflict = error.code }
+    eq(lockConflict, '55P03', 'existing owner helper locks actual mapped principal against a distinct backend')
+    await admin(); await db.query('rollback to savepoint corrected_hosted_lock_parity; release savepoint corrected_hosted_lock_parity')
+    await assertRestored(correctedFunctions, 'corrected parity rollback')
+    eq(await probePrincipal(), 1, 'isolated mapped-principal lock released after parity rollback')
+    eq((await read()).applications.map(a => a.id).sort(), [investor.id, manager.id].sort(), 'corrected ordinary owner queue intact after non-super scenario')
+    await admin()
+  }
   try {
     await begin()
     eq(await scalar("select current_database()='bx1_demo_ci' and current_user='postgres'"), true, 'exact disposable owner')
@@ -212,6 +316,7 @@ export async function proveSyntheticCompliance(db, clients, featureSql) {
     const investorDetails = await details(1), managerDetails = await details(1, true)
     investor = await submit(investor.id, investor.revision, investorDetails)
     manager = await submit(manager.id, manager.revision, managerDetails)
+    await proveHostedLockParity(investor, manager)
     const snapshot = await read()
     eq(snapshot.rehearsal, { version: 1, environment: 'TESTNET', mode: 'SYNTHETIC_COMPLIANCE', actor_id: id(2), operating_context: context }, 'exact strict rehearsal marker')
     eq(Object.keys(snapshot).sort(), ['actor', 'applications', 'events', 'operating_context', 'organisations', 'products', 'rehearsal', 'requests', 'subscriptions'], 'fixed minimal projection')
@@ -381,7 +486,7 @@ export async function proveSyntheticCompliance(db, clients, featureSql) {
     eq(await lifecycleTriggerEnabled(), 'O', 'native lifecycle trigger remains active at completion')
     eq(await scannerDigest(), inheritedScannerHistory, 'all preceding scanner producer and immutable evidence preserved')
     await commit()
-    console.log(`BX1_SYNTHETIC_COMPLIANCE_PASS assertions=${checks} fixture=synthetic-cloud-PostgreSQL17 writer=sole-canonical-review actorScope=exact-owner-policy investor=normal-submit-rfi-resubmit-review-account manager=normal-submit-review-mandate-request-only auditRollback=proven dedupe=proven concurrency=session-and-policy-after-wait main=denied factors=preserved hostedAcceptance=not-proven independentHumans=not-proven providerAcceptance=not-proven documentBytes=not-proven mandateApply=not-relaxed`)
+    console.log(`BX1_SYNTHETIC_COMPLIANCE_PASS assertions=${checks} fixture=synthetic-cloud-PostgreSQL17 writer=sole-canonical-review actorScope=exact-owner-policy investor=normal-submit-rfi-resubmit-review-account manager=normal-submit-review-mandate-request-only auditRollback=proven dedupe=proven concurrency=session-and-policy-after-wait hostedPrivilegeParity=non-super-SELECT-only-principal main=denied factors=preserved hostedAcceptance=not-proven independentHumans=not-proven providerAcceptance=not-proven documentBytes=not-proven mandateApply=not-relaxed`)
     return checks
   } finally {
     if (begun) await db.query('rollback').catch(() => {})

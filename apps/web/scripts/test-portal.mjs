@@ -2653,7 +2653,8 @@ try {
     await source('../../../supabase/features/bx1_test_ordinary_entry.sql'))
   phase = 'synthetic-compliance-review-proof'
   checks += await proveSyntheticCompliance(db, proofClients,
-    await source('../../../supabase/features/bx1_synthetic_compliance.sql'))
+    await source('../../../supabase/features/bx1_synthetic_compliance.sql'),
+    await source('../../../supabase/features/bx1_synthetic_compliance_lock_parity.sql'))
   phase = 'cleanup-committed-disposable-fixture'
   await db.query('drop schema bx1_portal,bx1_private,storage,auth,public cascade; create schema public')
   committedFixture = false
