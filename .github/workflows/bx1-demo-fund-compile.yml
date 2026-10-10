@@ -36,6 +36,9 @@ on:
       - supabase/features/bx1_customer_handoff.sql
       - supabase/features/bx1_document_processing.sql
       - apps/web/scripts/document-processing-proof.mjs
+      - apps/web/scripts/document-scanner-runner.mjs
+      - apps/web/scripts/document-scanner-runner.node-test.mjs
+      - apps/web/scripts/document-scanner-engine-proof.mjs
       - supabase/features/bx1_provider_binding.sql
       - supabase/features/bx1_provider_subject_availability.sql
       - apps/web/scripts/provider-binding-proof.mjs
@@ -99,6 +102,9 @@ on:
       - supabase/features/bx1_customer_handoff.sql
       - supabase/features/bx1_document_processing.sql
       - apps/web/scripts/document-processing-proof.mjs
+      - apps/web/scripts/document-scanner-runner.mjs
+      - apps/web/scripts/document-scanner-runner.node-test.mjs
+      - apps/web/scripts/document-scanner-engine-proof.mjs
       - supabase/features/bx1_provider_binding.sql
       - supabase/features/bx1_provider_subject_availability.sql
       - apps/web/scripts/provider-binding-proof.mjs
@@ -144,6 +150,47 @@ permissions:
   contents: read
 
 jobs:
+  document-scanner-engine:
+    name: Real scanner engine and bounded producer
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.mode != 'registration-browser-proof' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out exact scanner source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+          submodules: false
+          lfs: false
+      - name: Select pinned Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22.23.1'
+          check-latest: false
+          package-manager-cache: false
+      - name: Install cryptographically pinned official ClamAV in disposable cloud runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 2 --max-time 180 \
+            'https://github.com/Cisco-Talos/clamav/releases/download/clamav-1.4.6/clamav-1.4.6.linux.x86_64.deb' \
+            --output "$RUNNER_TEMP/bx1-clamav-1.4.6.deb"
+          printf '%s  %s\n' 'd3ee9e401974855a1edc1761b1425417d126de618d5f0c91cd51209f69f6fcc2' "$RUNNER_TEMP/bx1-clamav-1.4.6.deb" | sha256sum --check --strict
+          sudo dpkg --install "$RUNNER_TEMP/bx1-clamav-1.4.6.deb"
+          test -x /usr/local/bin/clamscan
+          printf '%s  %s\n' '08160a5c11103e1a7af3b783b25e947a52bb0a598c40102c7aaa6525e477f7bf' '/usr/local/bin/clamscan' | sha256sum --check --strict
+          /usr/local/bin/clamscan --version
+      - name: Prove producer protocol negatives without real customer data
+        shell: bash
+        run: node --test apps/web/scripts/document-scanner-runner.node-test.mjs
+      - name: Prove real benign and detection-fixture scans
+        shell: bash
+        env:
+          BX1_SCANNER_CLOUD_PROOF: github-clamav-1.4.6
+          BX1_SCANNER_CLOUD_ENGINE: /usr/local/bin/clamscan
+          BX1_SCANNER_PACKAGE_SHA256: d3ee9e401974855a1edc1761b1425417d126de618d5f0c91cd51209f69f6fcc2
+        run: node apps/web/scripts/document-scanner-engine-proof.mjs
   compile-and-build:
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.mode != 'registration-browser-proof' }}
     runs-on: ubuntu-24.04
