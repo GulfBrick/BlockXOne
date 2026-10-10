@@ -65,6 +65,14 @@ export async function proveSyntheticCompliance(db, clients, featureSql) {
     'requests',(select jsonb_agg(to_jsonb(t) order by actor_id,request_key) from bx1_portal.requests t),
     'scoped_requests',(select jsonb_agg(to_jsonb(t) order by actor_id,request_key) from bx1_portal.scoped_requests t),
     'bindings',(select jsonb_agg(to_jsonb(t) order by receipt_id,application_id,application_revision) from bx1_private.document_application_bindings t))::text)`)
+  const identityDigest = () => scalar(`select md5(jsonb_build_object(
+    'users',(select jsonb_agg(to_jsonb(t) order by id) from auth.users t),
+    'sessions',(select jsonb_agg(to_jsonb(t) order by id) from auth.sessions t),
+    'profiles',(select jsonb_agg(to_jsonb(t) order by id) from public.bx1_profiles t),
+    'persons',(select jsonb_agg(to_jsonb(t) order by id) from bx1_private.persons t),
+    'principals',(select jsonb_agg(to_jsonb(t) order by auth_user_id) from bx1_private.person_principals t),
+    'memberships',(select jsonb_agg(to_jsonb(t) order by id) from public.bx1_memberships t),
+    'factors',(select jsonb_agg(to_jsonb(t) order by id) from auth.mfa_factors t))::text)`)
   const scannerDigest = () => scalar(`select md5(jsonb_build_object(
     'policy',(select to_jsonb(t) from bx1_private.document_processing_policy t where singleton),
     'quarantine',(select jsonb_agg(to_jsonb(t) order by id) from bx1_private.document_quarantine_items t),
@@ -284,12 +292,27 @@ export async function proveSyntheticCompliance(db, clients, featureSql) {
       if (label.startsWith('private byte')) { await claims(); eq(await scalar(sql, values), 0, label) }
       else await denied(label, async () => { await claims(); await scalar(sql, values) })
     }
-    await admin(); await db.query('savepoint same_person')
+    await admin()
+    const beforeKnownPersonIdentity = await identityDigest()
+    eq(await scalar('select count(*)::int from public.bx1_profiles where id=$1', [id(1)]), 0, 'ordinary positive flow still has no applicant native profile before isolated identity negative')
+    eq(await scalar('select count(*)::int from bx1_private.person_principals where auth_user_id=any($1::uuid[])', [[id(1), id(2)]]), 0, 'neither fictional login is mapped before isolated identity negative')
+    eq(await scalar('select count(*)::int from bx1_private.persons where id=$1', [id(450)]), 0, 'fictional same-person identity absent before isolated negative')
+    await db.query('savepoint same_person')
+    // Canonical principal FK requires a native profile, but only this fictional
+    // negative scenario supplies one. No factor/membership or applicant entry
+    // prerequisite is added; rollback must remove the whole identity setup.
+    await db.query('insert into public.bx1_profiles(id,display_name) values($1,$2)', [id(1), 'Synthetic known-person negative scenario only'])
     await db.query("insert into bx1_private.persons(id,label,status,evidence_reference,bootstrap_receipt_id) values($1,'Synthetic known same person','TRUSTED','synthetic:rc29-same-person',$2)", [id(450), id(451)])
     for (const n of [1, 2]) await db.query("insert into bx1_private.person_principals(auth_user_id,person_id,status,evidence_reference,bootstrap_receipt_id) values($1,$2,'TRUSTED','synthetic:rc29-same-person-principal',$3)", [id(n), id(450), id(451 + n)])
+    eq(await scalar('select count(*)::int from bx1_private.person_principals where auth_user_id=any($1::uuid[]) and person_id=$2', [[id(1), id(2)], id(450)]), 2, 'known-person denial uses actual canonical mapping prerequisites')
     eq((await read()).applications, [], 'known same person denies even existing designated cases')
     await denied('known same person cannot review', () => command(review(investor)))
     await admin(); await db.query('rollback to savepoint same_person; release savepoint same_person')
+    eq(await identityDigest(), beforeKnownPersonIdentity, 'isolated identity negative restores all native identity, session, role and factor rows exactly')
+    eq(await scalar('select count(*)::int from public.bx1_profiles where id=$1', [id(1)]), 0, 'ordinary applicant remains without native profile after identity rollback')
+    eq(await scalar('select count(*)::int from bx1_private.person_principals where auth_user_id=any($1::uuid[])', [[id(1), id(2)]]), 0, 'both fictional principal mappings disappear after identity rollback')
+    eq(await scalar('select count(*)::int from bx1_private.persons where id=$1', [id(450)]), 0, 'fictional same-person record disappears after identity rollback')
+    eq((await read()).applications.map(a => a.id).sort(), [investor.id, manager.id].sort(), 'designated queue restored after isolated known-person denial')
     await denied('banned applicant case omitted without poisoning queue', async () => {
       await db.query("update auth.users set banned_until=clock_timestamp()+interval '1 hour' where id=$1", [id(1)])
       eq((await read()).applications, [], 'designated banned applicant omitted')
