@@ -158,7 +158,9 @@ describe('mounted normal customer-admission workflow', () => {
     expect(screen.getByText('Fictional identity evidence')).toBeTruthy()
     expect(screen.getByText('Revision 2')).toBeTruthy()
     expect(proof.privateDocument).toHaveBeenCalled(); expect(proof.documentHistory).toHaveBeenCalled(); expect(proof.providerEvidence).toHaveBeenCalled()
-    await waitFor(() => expect(screen.getByText('No provider evidence received yet')).toBeTruthy())
+    expect(screen.getByText('KYC placeholder · manual sandbox review')).toBeTruthy()
+    expect(screen.getByText('Recorded provider facts are optional evidence, not a review prerequisite.')).toBeTruthy()
+    expect(globalThis.fetch).not.toHaveBeenCalled()
     expect(screen.getAllByRole('checkbox').every(input => !(input as HTMLInputElement).checked)).toBe(true)
 
     fireEvent.change(screen.getByLabelText('Decision'), { target: { value: decision } })
@@ -180,7 +182,8 @@ describe('mounted normal customer-admission workflow', () => {
     expect(screen.getByText('Revision 3')).toBeTruthy(); expect(screen.getByText(rationale)).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Record review decision' })).toBeNull()
     expect(proof.submit).toHaveBeenCalledTimes(1)
-    await waitFor(() => expect(screen.getByText('No provider evidence received yet')).toBeTruthy())
+    expect(screen.getByText('Recorded provider facts are optional evidence, not a review prerequisite.')).toBeTruthy()
+    expect(globalThis.fetch).not.toHaveBeenCalled()
   })
 
   it.each(['/portal', '/portal/compliance'] as const)('keeps normal pending work and saved case decisions connected in %s', view => {

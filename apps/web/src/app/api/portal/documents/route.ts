@@ -6,7 +6,8 @@ import { portalFailure, readPortalBody } from '@/lib/portal/http'
 import { hasCanonicalOrigin, privateResponse, responseCookieAdapter } from '@/lib/supabase/http'
 import { createRequestSupabaseClient } from '@/lib/supabase/server'
 import { portalOperatingContextSchema, portalScopeHref } from '@/lib/portal/operating-context'
-import { documentReceiptDatabaseConfig, documentReceiptId, registerDocumentReceipt } from '@/lib/portal/document-receipts'
+import { validatedStage2Access } from '@/lib/portal/stage2-access'
+import { documentReceiptDatabaseConfig, documentReceiptId, registerDocumentReceipt, verifiedDocumentReceiptSession } from '@/lib/portal/document-receipts'
 import { acceptScannerMessage, documentScannerConfig, DocumentLifecycleError, quarantineDocument } from '@/lib/portal/document-lifecycle'
 
 export const dynamic = 'force-dynamic'
@@ -64,10 +65,13 @@ export async function POST(request: NextRequest) {
     const expectedActor = request.headers.get('x-bx1-expected-actor') ?? ''
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(expectedActor)) throw new PortalError('Refresh your signed-in account before uploading.', 403)
     const client = createRequestSupabaseClient(jar.adapter)
-    const { user } = await readPortal(client, context.data)
+    const { user, snapshot } = await readPortal(client, context.data)
     if (user.id !== expectedActor) throw new PortalError('The signed-in account changed. Reload before uploading.', 403)
     const strictReceipts = await receiptPolicy(client)
     const mode = await lifecycleMode(client)
+    const access = validatedStage2Access(snapshot, context.data, 'TESTNET')
+    const passwordReceipt = mode === 'SYNTHETIC_TEST_ONLY' && context.data.mode === 'APPLICANT'
+      && access?.session_mode === 'TEST_PASSWORD' && access.allowed_commands.includes('submit_application')
     if (mode === 'SCANNER_REQUIRED' && !strictReceipts) throw new PortalError('Private document receipts are not enforced.', 503)
     // Check the server-only database credential before an irreversible Storage
     // upload. A missing credential never creates an unreceipted strict upload.
@@ -108,9 +112,11 @@ export async function POST(request: NextRequest) {
       const storedBytes = new Uint8Array(await saved.data.arrayBuffer())
       if (detectedType(storedBytes) !== mime || !Buffer.from(storedBytes).equals(Buffer.from(bytes)))
         throw new PortalError('The saved evidence bytes differ from this upload. Do not submit this document.', 409)
-      const sessionId = await currentSessionId(client, user.id)
-      if (sessionId !== uploadSessionId) throw new PortalError('The signed-in session changed while uploading.', 403)
-      await registerDocumentReceipt(user.id, sessionId, document.data)
+      const session = passwordReceipt ? await verifiedDocumentReceiptSession(client, user.id).catch(() => {
+        throw new PortalError('The signed-in session is unavailable.', 403)
+      }) : { sessionId: await currentSessionId(client, user.id), attestation: null }
+      if (session.sessionId !== uploadSessionId) throw new PortalError('The signed-in session changed while uploading.', 403)
+      await registerDocumentReceipt(user.id, session.sessionId, document.data, session.attestation)
     }
     return jar.finish(privateResponse(NextResponse.json({ document: document.data, validation_state: strictReceipts ? 'SYNTHETIC_UNSCANNED' : 'LEGACY_UNVERIFIED' }, { status: uploaded.error ? 200 : 201 })))
   } catch (error) { return jar.finish(portalFailure(error instanceof DocumentLifecycleError

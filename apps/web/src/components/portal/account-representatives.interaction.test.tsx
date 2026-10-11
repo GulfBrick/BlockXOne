@@ -5,18 +5,22 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { portalCommandSchema, type PortalApplication, type PortalEntityInvestmentAccount, type PortalInvestingRepresentativeMandate, type PortalSnapshot } from '@/lib/portal/contracts'
 import { APPLICANT_CONTEXT, portalScopeHref, type PortalOperatingContext } from '@/lib/portal/operating-context'
+import { entryFixture } from '@/lib/portal/entry-test-fixtures'
 import type { PlatformRelease } from '@/lib/platform-release'
 
 // Mounted normal panels/commands, with synthetic command and document-lookup
 // responses. This does not prove hosted bytes, scanner/provider acceptance,
 // customer approval or operation by independent human beings.
 const proof = vi.hoisted(() => ({
-  submit: vi.fn(), retry: vi.fn(), current: undefined as PortalSnapshot | undefined, result: undefined as PortalSnapshot | undefined,
+  submit: vi.fn(), retry: vi.fn(), load: vi.fn(), current: undefined as PortalSnapshot | undefined, result: undefined as PortalSnapshot | undefined,
   busy: false, unknown: false, message: '', lookupChange: {} as Record<string, unknown>, lookupFailure: false,
 }))
 vi.mock('next/link', () => ({ default: ({ children, ...props }: React.ComponentProps<'a'>) => <a {...props}>{children}</a> }))
 vi.mock('next/image', () => ({ default: ({ src, alt }: { src: string; alt: string }) => <img src={src} alt={alt} /> }))
 vi.mock('next/dynamic', () => ({ default: () => () => null }))
+vi.mock('next/navigation', () => ({ redirect: (path: string) => { throw new Error(`REDIRECT:${path}`) }, notFound: () => { throw new Error('NOT_FOUND') } }))
+vi.mock('@/lib/portal/server', () => ({ requirePortalEnvironment: vi.fn(), PortalError: class extends Error { constructor(message: string, public readonly status: number) { super(message) } } }))
+vi.mock('@/lib/portal/dashboard-server', () => ({ loadRoleDashboard: proof.load }))
 vi.mock('./portal-client', async importOriginal => ({
   ...await importOriginal<typeof import('./portal-client')>(),
   usePortalCommand: (onSaved: (snapshot: PortalSnapshot) => void) => ({
@@ -30,6 +34,7 @@ vi.mock('./portal-client', async importOriginal => ({
 }))
 import { PortalScreen } from './portal-screens'
 import { RepresentativeProposalInbox } from './portal-workflows'
+import { PortalPage } from './portal-page'
 
 const owner = '11111111-1111-4111-8111-111111111111'
 const target = '22222222-2222-4222-8222-222222222222'
@@ -84,6 +89,14 @@ function ownerSnapshot(): PortalSnapshot {
     reviewer_user_id: reviewer, applied_by_user_id: admin, effective: true, next_owner: 'NONE',
     representative_email: null, representative_name: null, representative_application_id: null, representative_application_revision: null, proposal_hash: null, can_respond: false })]
   return value
+}
+function applicantDashboard(value: PortalSnapshot) {
+  const entry = entryFixture([])
+  entry.actor = { id: value.actor.id, email: value.actor.email }
+  entry.workflow = { version: 1, environment: 'TESTNET', actor_id: value.actor.id, scoped_read_available: true }
+  entry.stage2_access = value.stage2_access
+  return { kind: 'applicant' as const, entry, chooseContext: false, portal: { user: entry.actor, snapshot: value },
+    release, operatingContext: APPLICANT_CONTEXT, scopes: [] }
 }
 
 beforeEach(() => {
@@ -151,6 +164,53 @@ describe('normal mounted account-representative handoffs', () => {
     mount(snapshot(), '/portal')
     await waitFor(() => expect((screen.getByRole('button', { name: 'Accept representative proposal' }) as HTMLButtonElement).disabled).toBe(false))
     expect(screen.queryByRole('heading', { name: 'Entity investment account' })).toBeNull()
+  })
+
+  it('discovers a pending proposal from the real applicant HOME and follows its canonical inbox through consent', async () => {
+    const value = snapshot(); proof.current = value
+    proof.load.mockResolvedValue(applicantDashboard(value))
+    proof.result = { ...value, investing_representative_mandates: [mandate({ revision: 2, status: 'SUBMITTED', can_respond: false,
+      consent_decision: 'ACCEPT', consent_receipt_id: consentId, responded_at: new Date(Date.now() - 60_000).toISOString(), next_owner: 'COMPLIANCE' })] }
+    const home = render(await PortalPage({ view: '/portal', query: { mode: 'applicant' } }))
+    expect(screen.getByRole('heading', { name: 'Representative proposals awaiting your response' })).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'My application capacities' })).toBeTruthy()
+    const destination = screen.getByRole('link', { name: 'Open my representative proposals' })
+    expect(destination.getAttribute('href')).toBe('/portal/portfolio?mode=applicant')
+    expect(screen.queryByRole('button', { name: 'Accept representative proposal' })).toBeNull()
+    expect(screen.queryByText(entityApplicationId)).toBeNull(); expect(screen.queryByText(accountId)).toBeNull()
+    expect(globalThis.fetch).not.toHaveBeenCalled(); expect(proof.submit).not.toHaveBeenCalled()
+    // Resolve the real server page at the offered route. Browser navigation and
+    // HTTP responses are fixture boundaries; neither entry nor inbox is mocked.
+    const route = new URL(destination.getAttribute('href')!, 'https://testnet.bx1.co.za')
+    home.unmount()
+    render(await PortalPage({ view: route.pathname as '/portal/portfolio', query: { mode: route.searchParams.get('mode')! } }))
+    await waitFor(() => expect((screen.getByRole('button', { name: 'Accept representative proposal' }) as HTMLButtonElement).disabled).toBe(false))
+    expect(screen.getByRole('heading', { name: 'Your representative proposals' })).toBeTruthy()
+    expect(screen.queryByText(entityApplicationId)).toBeNull(); expect(screen.queryByText(accountId)).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Accept representative proposal' }))
+    await waitFor(() => expect(screen.getByText(consentId)).toBeTruthy())
+    expect(proof.submit.mock.calls).toEqual([['respond_investing_representative_proposal', {
+      mandate_id: mandateId, expected_revision: 1, proposal_hash: proposalHash, decision: 'ACCEPT',
+    }]])
+    expect(screen.getByText('No account access is granted by your response. Next owner: Independent BlockXOne Compliance Officer.')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /Apply|Send settlement|Accept terms/ })).toBeNull()
+    expect(proof.load.mock.calls).toEqual([[{ mode: 'applicant' }], [{ mode: 'applicant' }]])
+  })
+
+  it.each(['other-target', 'self', 'expired', 'terminal', 'duplicate', 'missing'] as const)('does not advertise a pending HOME proposal for %s state', async state => {
+    const value = snapshot(); proof.current = value
+    if (state === 'other-target') value.investing_representative_mandates = [mandate({ representative_user_id: owner })]
+    if (state === 'self') value.investing_representative_mandates = [mandate({ applicant_user_id: target })]
+    if (state === 'expired') value.investing_representative_mandates = [mandate({ requested_until: new Date(Date.now() - 60_000).toISOString() })]
+    if (state === 'terminal') value.investing_representative_mandates = [mandate({ status: 'DECLINED', can_respond: false, consent_decision: 'DECLINE' })]
+    if (state === 'duplicate') value.investing_representative_mandates = [mandate(), mandate()]
+    if (state === 'missing') value.investing_representative_mandates = undefined
+    proof.load.mockResolvedValue(applicantDashboard(value))
+    render(await PortalPage({ view: '/portal', query: { mode: 'applicant' } }))
+    expect(screen.getByRole('heading', { name: 'My application capacities' })).toBeTruthy()
+    expect(screen.queryByRole('link', { name: 'Open my representative proposals' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Accept representative proposal' })).toBeNull()
+    expect(globalThis.fetch).not.toHaveBeenCalled(); expect(proof.submit).not.toHaveBeenCalled()
   })
 
   it.each(['revision', 'proposal', 'proposer', 'document', 'kind', 'url', 'processing', 'unavailable'] as const)('withholds acceptance for mismatched %s lookup evidence', async failure => {

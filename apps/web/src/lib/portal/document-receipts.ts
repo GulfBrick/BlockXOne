@@ -8,6 +8,47 @@ import type { EvidenceDocument } from './contracts'
 type Environment = Record<string, string | undefined>
 const POOLER = 'aws-0-eu-central-1.pooler.supabase.com'
 const PROJECTS = { TESTNET: 'fegnnnlseuejkrusbbkv', MAINNET: 'oqkevkjbkpugjotihtda' } as const
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const TEST_ISSUER = `https://${PROJECTS.TESTNET}.supabase.co/auth/v1`
+
+export type DocumentReceiptAttestation = {
+  iss: string; sub: string; session_id: string; role: 'authenticated'; aal: 'aal1';
+  exp: number; is_anonymous: false; amr: [{ method: 'password'; timestamp: number }]
+}
+type ReceiptAuthClient = { auth: {
+  getSession(): Promise<{ data: { session: { access_token: string } | null }; error: unknown }>;
+  getUser(token: string): Promise<{ data: { user: { id: string } | null }; error: unknown }>;
+} }
+
+/** getUser verifies this actual token before any claims are transported. Never
+ * accept an attestation from form fields, headers or user metadata. */
+export async function verifiedDocumentReceiptSession(client: ReceiptAuthClient, actorId: string): Promise<{
+  sessionId: string; attestation: DocumentReceiptAttestation
+}> {
+  try {
+    const session = await client.auth.getSession()
+    const token = session.data.session?.access_token
+    if (session.error || !token) throw new Error()
+    const verified = await client.auth.getUser(token)
+    if (verified.error || verified.data.user?.id !== actorId) throw new Error()
+    const claims = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8')) as Record<string, unknown>
+    if (claims.sub !== actorId || typeof claims.session_id !== 'string' || !UUID.test(claims.session_id)) throw new Error()
+    // Invoke this only for the validated TEST_PASSWORD applicant snapshot.
+    // Native callers use the existing session lookup and eight-argument path.
+    if (claims.iss !== TEST_ISSUER || claims.aal !== 'aal1') throw new Error()
+    const now = Math.floor(Date.now() / 1000)
+    const amr = claims.amr
+    if (claims.role !== 'authenticated' || claims.is_anonymous !== false
+      || typeof claims.exp !== 'number' || !Number.isSafeInteger(claims.exp) || claims.exp <= now || claims.exp >= 1e12
+      || !Array.isArray(amr) || amr.length !== 1 || !amr[0] || typeof amr[0] !== 'object'
+      || amr[0].method !== 'password' || typeof amr[0].timestamp !== 'number'
+      || !Number.isSafeInteger(amr[0].timestamp) || amr[0].timestamp <= 0 || amr[0].timestamp > now) throw new Error()
+    return { sessionId: claims.session_id, attestation: {
+      iss: claims.iss, sub: actorId, session_id: claims.session_id, role: 'authenticated', aal: 'aal1',
+      exp: claims.exp, is_anonymous: false, amr: [{ method: 'password', timestamp: amr[0].timestamp }],
+    } }
+  } catch { throw new DocumentReceiptError() }
+}
 
 export class DocumentReceiptError extends Error {
   constructor() { super('The private evidence receipt is unavailable. Do not submit this document until it is confirmed.'); this.name = 'DocumentReceiptError' }
@@ -61,11 +102,15 @@ export async function documentReceiptQuery<T>(sql: string, parameters: readonly 
   } catch { throw new DocumentReceiptError() }
 }
 
-export async function registerDocumentReceipt(actorId: string, sessionId: string, document: EvidenceDocument): Promise<void> {
+export async function registerDocumentReceipt(actorId: string, sessionId: string, document: EvidenceDocument,
+  attestation: DocumentReceiptAttestation | null = null): Promise<void> {
   try {
     const { rows } = await database().query<{ result: Record<string, unknown> }>(
-      'select bx1_private.register_document_receipt($1,$2,$3,$4,$5,$6,$7,$8) as result',
-      [actorId, sessionId, document.id, document.kind, document.title, document.sha256, document.size, document.mime_type],
+      attestation
+        ? 'select bx1_private.register_document_receipt($1::uuid,$2::uuid,$3::uuid,$4::text,$5::text,$6::text,$7::integer,$8::text,$9::jsonb) as result'
+        : 'select bx1_private.register_document_receipt($1,$2,$3,$4,$5,$6,$7,$8) as result',
+      [actorId, sessionId, document.id, document.kind, document.title, document.sha256, document.size, document.mime_type,
+        ...(attestation ? [JSON.stringify(attestation)] : [])],
     )
     const receipt = rows.length === 1 ? rows[0].result : null
     if (!receipt || receipt.id !== document.id || receipt.actor_id !== actorId

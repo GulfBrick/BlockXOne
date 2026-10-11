@@ -47,7 +47,18 @@ export async function PortalPage({ view, id, query = {} }: { view: PortalPath; i
     <nav aria-label="Your assigned capacities" className={`${styles.scopeSelector} ${styles.sectionGap}`}><p>Choose one of your existing capacities. Selecting a label does not grant authority.</p><div className={styles.actions}><Link href="/portal?mode=applicant" className={styles.buttonSecondary}>Personal applications</Link>{data.scopes.map(scope => <Link key={`${scope.organisationId}-${scope.role}`} href={dashboardScopeHref(scope)} className={styles.buttonSecondary}>{scope.organisationName} · {getRoleDashboard(scope.role)!.title}</Link>)}</div></nav>
     <section className={`${styles.panel} ${styles.sectionGap}`} aria-labelledby="test-entry-applications"><div className={styles.panelHeader}><h2 id="test-entry-applications">My application status</h2></div><div className={styles.panelBody}>{data.entry.applications.length ? <ul>{data.entry.applications.map(application => <li key={application.id}><strong>{application.persona === 'INVESTOR' ? 'Investor' : 'Wealth manager'}</strong> · {application.status.replaceAll('_', ' ').toLowerCase()} · Revision {application.revision}<p>Reference {application.id}</p></li>)}</ul> : <p>No application is recorded for this login. Read-only entry does not create or approve one.</p>}</div></section>
   </PortalShell>
-  if (data?.kind === 'applicant' && (view === '/portal' || view === '/portal/onboarding')) return <EntryScreen key={`${data.entry.actor.id}:${data.release.environment}:${String(query.application ?? '')}:${String(query.add ?? '')}`} initial={data.entry} release={data.release} applicationId={typeof query.application === 'string' ? query.application : undefined} addCapacity={query.add === 'capacity'} chooseContext={data.chooseContext} operationsAvailable={Boolean(data.portal)} />
+  if (data?.kind === 'applicant' && (view === '/portal' || view === '/portal/onboarding')) {
+    const snapshot = data.portal?.snapshot
+    // Discovery only. The existing inbox rechecks the exact proposal, evidence
+    // and consent capability; this count cannot grant representative authority.
+    const proposals = snapshot && data.operatingContext.mode === 'APPLICANT' && snapshot.operating_context?.mode === 'APPLICANT'
+      && snapshot.actor.id === data.entry.actor.id && data.portal?.user.id === data.entry.actor.id
+      ? (snapshot.investing_representative_mandates ?? []).filter(item => item.status === 'PROPOSED'
+        && item.representative_user_id === snapshot.actor.id && item.applicant_user_id !== snapshot.actor.id
+        && Boolean(item.proposal_hash) && Date.parse(item.requested_until) > Date.now()) : []
+    const representativeProposalCount = new Set(proposals.map(item => item.id)).size === proposals.length ? proposals.length : 0
+    return <EntryScreen key={`${data.entry.actor.id}:${data.release.environment}:${String(query.application ?? '')}:${String(query.add ?? '')}`} initial={data.entry} release={data.release} applicationId={typeof query.application === 'string' ? query.application : undefined} addCapacity={query.add === 'capacity'} chooseContext={data.chooseContext} operationsAvailable={Boolean(data.portal)} representativeProposalCount={representativeProposalCount} />
+  }
   if (data?.portal) return <PortalScreen key={`${data.portal.user.id}:${data.release.environment}:${portalContextKey(data.operatingContext)}:${view}:${id ?? ''}`} data={data.portal} view={view} id={id} operatingContext={data.operatingContext} release={data.release} scope={data.kind === 'role' ? data.scope : undefined} scopes={data.scopes} />
   if (data?.kind === 'role') {
     const dashboard = getRoleDashboard(data.scope.role)!

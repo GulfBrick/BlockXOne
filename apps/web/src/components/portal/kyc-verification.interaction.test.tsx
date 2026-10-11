@@ -45,12 +45,12 @@ function Scope({ children, actor = entryActorId, context = APPLICANT_CONTEXT }: 
   return <PortalCommandProvider snapshot={snapshot} operatingContext={context} environment="TESTNET">{children}</PortalCommandProvider>
 }
 function applicant(application = submitted(), actor = entryActorId, context = APPLICANT_CONTEXT,
-  availability: { sandboxEnabled?: boolean; individualEnabled?: boolean; companyEnabled?: boolean } = { individualEnabled: true, companyEnabled: true }) {
+  availability: { sandboxEnabled?: boolean; individualEnabled?: boolean; companyEnabled?: boolean; manualTestReview?: boolean } = { individualEnabled: true, companyEnabled: true }) {
   return <Scope actor={actor} context={context}><KycVerification application={application} actorId={entryActorId}
     environment="TESTNET" sandboxEnabled {...availability} /></Scope>
 }
-function reviewer(applicationId = entryApplicationId, revision = 3, actor = entryActorId, context = reviewerContext) {
-  return <Scope actor={actor} context={context}><ProviderEvidenceReview applicationId={applicationId} revision={revision} environment="TESTNET" /></Scope>
+function reviewer(applicationId = entryApplicationId, revision = 3, actor = entryActorId, context = reviewerContext, manualTestReview = false) {
+  return <Scope actor={actor} context={context}><ProviderEvidenceReview applicationId={applicationId} revision={revision} environment="TESTNET" manualTestReview={manualTestReview} /></Scope>
 }
 function event(overrides: Record<string, unknown> = {}) {
   return { id: 'f1111111-1111-4111-8111-111111111111', application_id: entryApplicationId, application_revision: 3,
@@ -75,6 +75,51 @@ function serveEvents(events: unknown[]) {
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.unstubAllEnvs() })
 
 describe('mounted revision-bound provider evidence', () => {
+  it.each(['draft', 'individual', 'company'] as const)('keeps manual %s sandbox KYC non-blocking while preserving optional authentic evidence', async subject => {
+    const fetcher = serveEvents([event(subject === 'company' ? { applicant_type: 'company' }
+      : subject === 'draft' ? { application_revision: 2, projection_state: 'REVISION_STALE' } : {})])
+    const application = subject === 'company' ? submittedEntity() : subject === 'draft' ? entryApplication({
+      ...submitted(), status: 'DRAFT', submitted_at: null, provider_mode: 'UNASSIGNED',
+    }) : submitted()
+    render(applicant(application, entryActorId, APPLICANT_CONTEXT, { individualEnabled: true, companyEnabled: true, manualTestReview: true }))
+    expect(screen.getByRole('heading', { name: 'KYC placeholder · manual sandbox review' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Start sandbox identity check' })).toBeNull()
+    expect(screen.queryByTestId('sandbox-sdk')).toBeNull()
+    expect(fetcher).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'View recorded provider evidence' }))
+    await waitFor(() => expect(screen.getByText(subject === 'draft' ? 'Only historical provider evidence is recorded'
+      : 'Provider review completed: GREEN - independent BlockXOne review required')).toBeTruthy())
+    expect(fetcher).toHaveBeenCalledTimes(1)
+    expect(screen.getByText(subject === 'draft' ? 'Not effective; historical/conflicting evidence only' : 'Current provider evidence only')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /Approve|Open.*account|Start sandbox identity check/ })).toBeNull()
+    expect(screen.queryByTestId('sandbox-sdk')).toBeNull()
+  })
+
+  it('does not automatically fetch manual reviewer evidence and preserves genuine history on explicit read', async () => {
+    const fetcher = serveEvents([event({ application_revision: 2, projection_state: 'REVISION_STALE' })])
+    render(reviewer(entryApplicationId, 3, entryActorId, reviewerContext, true))
+    expect(fetcher).not.toHaveBeenCalled()
+    expect(screen.getByText(/Sumsub is not a required step for this manual TEST case/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'View recorded provider evidence' }))
+    await waitFor(() => expect(screen.getByText('Only historical provider evidence is recorded')).toBeTruthy())
+    expect(fetcher).toHaveBeenCalledTimes(1)
+    expect(screen.getByText('REVISION_STALE')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /Approve|Record review decision/ })).toBeNull()
+  })
+
+  it('reports an unavailable optional provider read without presenting it as a manual sandbox prerequisite', async () => {
+    const fetcher = vi.fn(async () => json({ error: 'Provider unavailable' }, 503))
+    vi.stubGlobal('fetch', fetcher)
+    render(applicant(submitted(), entryActorId, APPLICANT_CONTEXT, { manualTestReview: true }))
+    expect(fetcher).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'View recorded provider evidence' }))
+    await waitFor(() => expect(screen.getByText(/this optional evidence read does not block submission/)).toBeTruthy())
+    expect(screen.getByRole('heading', { name: 'KYC placeholder · manual sandbox review' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Start sandbox identity check' })).toBeNull()
+    expect(screen.queryByText(/Provider review completed: GREEN/)).toBeNull()
+    expect(fetcher).toHaveBeenCalledTimes(1)
+  })
+
   it.each(['individual', 'company'] as const)('offers only the enabled %s subject, while the other subject stays unavailable', async subject => {
     const fetcher = serveEvents([])
     const availability = { individualEnabled: subject === 'individual', companyEnabled: subject === 'company' }

@@ -139,4 +139,28 @@ describe('application-scoped sandbox identity verification', () => {
     expect(main).toContain('Production provider not admitted')
     expect(main).not.toContain('Refresh signed provider evidence')
   })
+
+  it('labels manual TEST KYC as a placeholder without changing MAIN or offering a provider session', () => {
+    for (const status of ['DRAFT', 'SUBMITTED', 'CHANGES_REQUIRED'] as const) {
+      const application = entryApplication({ status, revision: 3, submitted_at: status === 'DRAFT' ? null : '2026-10-07T10:00:00Z',
+        details: { full_name: 'Synthetic Individual', country: 'ZA', investor_type: 'INDIVIDUAL' } })
+      const html = renderKyc({ application, actorId: entryActorId, environment: 'TESTNET', manualTestReview: true,
+        sandboxEnabled: true, individualEnabled: true, companyEnabled: true })
+      expect(html).toContain('KYC placeholder · manual sandbox review')
+      expect(html).toContain('Sumsub is not required to complete this fictional sandbox application')
+      expect(html).toContain('View recorded provider evidence')
+      expect(html).not.toContain('Start sandbox identity check')
+      expect(html).not.toContain('Submit the application for review first')
+      expect(html).not.toContain('Sandbox identity check not connected')
+      const main = renderKyc({ application, actorId: entryActorId, environment: 'MAINNET', manualTestReview: true })
+      expect(main).toContain('Production identity provider not admitted')
+      expect(main).not.toContain('KYC placeholder')
+    }
+    const review = renderToStaticMarkup(createElement(ProviderEvidenceReview, {
+      applicationId: entryApplicationId, revision: 3, environment: 'TESTNET', manualTestReview: true,
+    }))
+    expect(review).toContain('Sumsub is not a required step for this manual TEST case')
+    expect(review).toContain('View recorded provider evidence')
+    expect(review).not.toContain('Record review decision')
+  })
 })
