@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 
 // Called only AFTER the unchanged rc.32 proof, before test-portal's existing
@@ -226,6 +227,44 @@ export async function proveAccountRepresentatives(db, clients, admissionSql, rep
     eq(await rows(baselineRelations), baselineRows, 'reinstalling exact rc32 parent creates no business or authority rows')
     eq(await security(), baselineSecurity, 'parent prerequisite/install preserves global role/table/RLS metadata')
     phase = 'representatives-install-and-preservation'
+    // The offering migration renames the entity reader only AFTER the retained
+    // SuperAdmin shell migration has narrowed its early guard. Derive that
+    // exact precondition from both immutable source files, not an observed hash.
+    const normalizeBody = body => body.replaceAll('\r\n', '\n').replace(/^[ \n\t]+|[ \n\t]+$/g, '')
+    const bodyHash = body => createHash('sha256').update(normalizeBody(body), 'utf8').digest('hex')
+    const entitySql = await readFile(new URL('../../../supabase/migrations/20260923171126_stage2_entity_investment_accounts.sql', import.meta.url), 'utf8')
+    const shellSql = await readFile(new URL('../../../supabase/migrations/20260923175822_stage2_superadmin_shell_mfa_boundary.sql', import.meta.url), 'utf8')
+    const offeringSql = await readFile(new URL('../../../supabase/migrations/20260923205519_stage3_immutable_offering_packages.sql', import.meta.url), 'utf8')
+    const entityReaders = [...entitySql.matchAll(/create function bx1_portal\.read_scoped\(c jsonb\)[\s\S]*?as \$\$([\s\S]*?)\$\$;/g)]
+    const earlyGuards = [...shellSql.matchAll(/early_guard text:=\$bx1_pattern\$([\s\S]*?)\$bx1_pattern\$;/g)]
+    const narrowedGuards = [...shellSql.matchAll(/narrowed_guard text:=\$bx1_replacement\$([\s\S]*?)\$bx1_replacement\$;/g)]
+    eq(entityReaders.length, 1, 'retained entity migration has one canonical reader body')
+    eq(earlyGuards.length, 1, 'retained shell migration has one exact early-guard pattern')
+    eq(narrowedGuards.length, 1, 'retained shell migration has one exact narrowed-guard replacement')
+    eq(offeringSql.split('alter function bx1_portal.read_scoped(jsonb) rename to read_scoped_pre_offering;').length - 1, 1,
+      'retained offering migration renames the already-narrowed reader exactly once')
+    const originalReader = normalizeBody(entityReaders[0][1])
+    eq(bodyHash(originalReader), 'd617365508c6b7a9dda915738f66e5efec488006914da45de55810c9fdd95790',
+      'retained pre-shell entity reader matches its original source digest')
+    // Only POSIX whitespace needs translation for this retained SQL regex.
+    const earlyGuard = new RegExp(earlyGuards[0][1].replaceAll('[[:space:]]', '\\s'), 'g')
+    eq([...originalReader.matchAll(earlyGuard)].length, 1, 'retained shell guard transformation has exactly one reader callsite')
+    const narrowedReader = originalReader.replace(earlyGuard, () => normalizeBody(narrowedGuards[0][1]))
+    const narrowedHash = bodyHash(narrowedReader)
+    eq(narrowedHash, '35b5e3f4757154acd203df6d998b8996dc8f2be1595f328cee8ebf7f902d6668',
+      'source-derived post-shell reader has the exact installation precondition')
+    eq(narrowedReader.split('where m.representative_user_id=auth.uid();').length - 1, 1,
+      'post-shell reader retains exactly one intended representative visibility callsite')
+    const cutoverBlocks = [...representativesSql.matchAll(/\$cutovers\$(\[[\s\S]*?\])\$cutovers\$::jsonb/g)]
+    eq(cutoverBlocks.length, 1, 'representatives feature has one exact frozen cutover recipe block')
+    const readerRecipes = JSON.parse(cutoverBlocks[0][1]).filter(spec => spec.signature === 'bx1_portal.read_scoped_pre_offering(jsonb)')
+    eq(readerRecipes.length, 1, 'representatives feature has one exact renamed-reader recipe')
+    eq(readerRecipes[0], { signature: 'bx1_portal.read_scoped_pre_offering(jsonb)', hash: narrowedHash,
+      changes: [{ from: 'where m.representative_user_id=auth.uid();',
+        to: 'where m.representative_user_id=auth.uid() or m.applicant_user_id=auth.uid();', count: 1 }] },
+    'reader recipe requires source-derived exact body and unchanged single targeted replacement')
+    const installedReader = await scalar("select prosrc from pg_proc where oid='bx1_portal.read_scoped_pre_offering(jsonb)'::regprocedure")
+    eq(normalizeBody(installedReader), narrowedReader, 'actual cloud parent reader equals the exact retained migration-derived body')
     await db.query(representativesSql)
     installedFunctions = await functions()
     for (const prior of parentFunctions) {

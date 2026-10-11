@@ -250,7 +250,7 @@ describe('normal mounted account-representative handoffs', () => {
     const adminContext: PortalOperatingContext = { mode: 'ROLE', organisationId, role: 'SuperAdmin' }
     const applying = snapshot(admin, adminContext); applying.applications = [application()]
     applying.investing_representative_mandates = [{ ...reviewed.investing_representative_mandates[0], can_apply: true }]
-    proof.result = { ...applying, investing_representative_mandates: [{ ...applying.investing_representative_mandates![0], status: 'APPLIED', revision: 4, can_apply: false, applied_at: '2026-10-11T01:20:00Z', applied_by_user_id: admin, effective: true, next_owner: 'NONE' }] }
+    proof.result = { ...applying, investing_representative_mandates: [{ ...applying.investing_representative_mandates![0], status: 'APPLIED', revision: 4, can_apply: false, applied_at: new Date(Date.now() - 60_000).toISOString(), applied_by_user_id: admin, effective: true, next_owner: 'NONE' }] }
     mount(applying, '/portal/compliance/detail', mandateId)
     await waitFor(() => expect(screen.getByRole('button', { name: 'Apply account-view mandate' })).toBeTruthy())
     fireEvent.click(screen.getByRole('button', { name: 'Apply account-view mandate' }))
