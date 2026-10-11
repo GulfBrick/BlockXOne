@@ -592,7 +592,32 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
 
     phase = 'rollback-only-post-cutover-standard-package-parity'
     const beforeStandard = await state()
+    // pg8.20 Client.query uses connectionParameters.query_timeout for these
+    // string queries; capture only deadlines, never the full credential config.
+    const standardEngineConfig = async () => ({
+      ...await scalar(`select jsonb_build_object(
+        'server_version_num',current_setting('server_version_num'),
+        'jit',current_setting('jit'),'jit_above_cost',current_setting('jit_above_cost'),
+        'jit_inline_above_cost',current_setting('jit_inline_above_cost'),
+        'jit_optimize_above_cost',current_setting('jit_optimize_above_cost'),
+        'join_collapse_limit',current_setting('join_collapse_limit'),
+        'from_collapse_limit',current_setting('from_collapse_limit'),
+        'geqo_threshold',current_setting('geqo_threshold'),
+        'statement_timeout',current_setting('statement_timeout'))`),
+      client_query_timeout_ms: db.connectionParameters.query_timeout,
+      client_statement_timeout_ms: db.connectionParameters.statement_timeout,
+    })
+    const standardEngineBefore = await standardEngineConfig()
+    eq(standardEngineBefore.statement_timeout, '15s', 'STANDARD parity retains the actual fifteen-second server deadline')
+    eq(standardEngineBefore.client_statement_timeout_ms, 15000, 'retained client startup config sets fifteen-second statement timeout')
+    eq(standardEngineBefore.client_query_timeout_ms, 20000, 'STANDARD parity retains the actual pg twenty-second client deadline')
+    let standardEngineScoped, initialStandardReadElapsedMs = null, initialStandardReadOutcome = 'NOT_STARTED'
     await isolated(async () => {
+      // Observed hosted TEST/MAIN engine parity only, not a diagnosed JIT cause.
+      // This is the sole setting change and rollback must restore its baseline.
+      await db.query('set local jit=off')
+      standardEngineScoped = await standardEngineConfig()
+      eq(standardEngineScoped, { ...standardEngineBefore, jit: 'off' }, 'STANDARD savepoint changes only JIT and leaves both deadlines and all captured planner settings exact')
       // Retained CI fixture pattern only: stored AAL2 plus a verified own factor,
       // matching token assurance and distinct mapped fictional people. This is
       // not an actual MFA challenge or independently verified-human acceptance.
@@ -614,7 +639,15 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
       eq(await scalar('select bx1_portal.representative_mandate_effective($1)', [mandate.id]), true, 'STANDARD fixture keeps unchanged global mandate authority effective')
       eq(await scalar('select bx1_portal.scoped_operator($1::jsonb,$2)', [JSON.stringify(manager), application.organisation_id]), true, 'STANDARD fixture passes unchanged scoped operator guard')
       eq(await scalar('select bx1_portal.is_operator($1)', [application.organisation_id]), true, 'STANDARD fixture passes unchanged core operator guard')
-      const standardRead = await read(1, manager, assured)
+      const initialStandardReadStarted = performance.now()
+      let standardRead
+      try {
+        standardRead = await read(1, manager, assured)
+        initialStandardReadOutcome = 'RETURNED'
+      } finally {
+        initialStandardReadElapsedMs = performance.now() - initialStandardReadStarted
+        if (initialStandardReadOutcome === 'NOT_STARTED') initialStandardReadOutcome = 'FAILED'
+      }
       eq(standardRead.operating_context, manager, 'STANDARD read retains exact native manager context')
       eq(standardRead.stage2_access.session_mode, 'STANDARD', 'post-cutover public read retains STANDARD assurance marker')
       eq(standardRead.offering_access ?? null, null, 'STANDARD read does not advertise password-only offering exception')
@@ -632,6 +665,17 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
         eq([saved.status, saved.revision, saved.terms], ['DRAFT', draft.revision + 1, revisedTerms], `${asset} canonical typed save retains STANDARD revision and terms`)
         eq(productFrom(await read(1, manager, assured), draft.id).terms, revisedTerms, `${asset} STANDARD canonical read returns saved package draft`)
       }
+    }).finally(async () => {
+      const standardEngineRestored = await standardEngineConfig()
+      eq(standardEngineRestored, standardEngineBefore, 'STANDARD savepoint rollback restores exact prior JIT, planner settings and both deadlines even on failure')
+      console.log('BX1_STANDARD_ENGINE_PARITY_RECEIPT', JSON.stringify({
+        fixture: 'disposable-cloud-PostgreSQL17', before: standardEngineBefore,
+        scoped: standardEngineScoped ?? null, restored: standardEngineRestored,
+        initial_public_read_helper_outcome: initialStandardReadOutcome,
+        initial_public_read_helper_elapsed_ms: initialStandardReadElapsedMs,
+        timing_scope: 'CI-helper-wall-clock-including-claims-and-RPC-not-SQL-time-or-SLA',
+        jit_causality: 'NOT_ESTABLISHED', hosted_performance: 'NOT_MEASURED',
+      }))
     })
     eq(await state(), beforeStandard, 'STANDARD parity rollback removes every temporary factor, mapping, session upgrade, draft, journal and audit row')
     eq(await functions(), installedFunctions, 'STANDARD parity changes no original or installed authority function')
