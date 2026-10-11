@@ -797,8 +797,8 @@ end $$;
 create function bx1_portal.offering_workflow_parent_command(c jsonb,action text,key uuid,body jsonb) returns jsonb
 language plpgsql volatile security definer set search_path='' as $$
 begin
-  if bx1_portal.admission_password_session() then
-    if action not in ('save_product','submit_product') or bx1_portal.offering_workflow_command_allowed(c,action) is not true then
+  if bx1_portal.admission_password_session() and action in ('save_product','submit_product') then
+    if bx1_portal.offering_workflow_command_allowed(c,action) is not true then
       raise exception 'offering_package_parent_command_denied' using errcode='42501'; end if;
     return bx1_portal.execute_scoped_pre_eligibility(c,action,key,body);
   end if;

@@ -13,6 +13,10 @@ const family = {
   SuperAdmin: ['apply_product_service_appointment'],
 }
 const allCommands = Object.values(family).flat()
+const admissionCommands = ['start_application', 'submit_application', 'review_application', 'create_investment_account',
+  'create_entity_investment_account', 'request_representative_mandate', 'review_representative_mandate',
+  'apply_representative_mandate', 'request_investing_representative_mandate', 'respond_investing_representative_proposal',
+  'review_investing_representative_mandate', 'apply_investing_representative_mandate']
 const timestamp = value => {
   assert.equal(typeof value, 'string', 'journal timestamp is explicit text')
   assert.match(value, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/, 'journal timestamp has explicit offset')
@@ -37,6 +41,37 @@ function validateInputJournal(actual, expected, fields, window, allowedFields = 
     assert.deepEqual(Object.fromEntries(fields.map(field => [field, row[field]])), intent, 'journal action/payload/context stays exact')
     const at = timestamp(row.created_at)
     assert.ok(at >= start && at <= end, 'journal row timestamp remains within database proof window')
+  }
+}
+// Only the four added admission/account record families use this exact-tuple
+// validator. Expectations are authored inputs plus canonical returned IDs;
+// generated receipt IDs/times never excuse a different subject or payload.
+function validateAdmissionRecords(actual, expected, timeFields, window, receiptIds = false) {
+  assert.equal(actual.length, expected.length, 'admission records have only the intended additions')
+  const start = timestamp(window.start), end = timestamp(window.end), seen = new Set(), ids = new Set()
+  for (const row of actual) {
+    const match = receiptIds ? `${row.mandate_id}:${row.mandate_revision}` : row.id
+    assert.ok(!seen.has(match), 'admission record identity/revision occurs once'); seen.add(match)
+    const intent = expected.find(value => (receiptIds ? `${value.mandate_id}:${value.mandate_revision}` : value.id) === match)
+    assert.ok(intent, 'admission record matches exact intended subject, not actor/schema wildcard')
+    const fields = [...new Set([...Object.keys(intent), ...timeFields, ...(receiptIds ? ['id'] : [])])]
+    assert.deepEqual(Object.keys(row).sort(), fields.sort(), 'admission record has exact canonical fields')
+    if (receiptIds) {
+      assert.match(row.id, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/, 'receipt has generated UUID')
+      assert.notEqual(row.id, '00000000-0000-0000-0000-000000000000', 'receipt UUID is nonzero')
+      assert.ok(!ids.has(row.id), 'receipt identity occurs once'); ids.add(row.id)
+    }
+    for (const field of fields) {
+      if (timeFields.includes(field)) {
+        if (Object.hasOwn(intent, field)) {
+          if (intent[field] === null) assert.equal(row[field], null, 'terminal record retains null timestamp')
+          else assert.equal(timestamp(row[field]), timestamp(intent[field]), 'record timestamp matches exact input/returned binding')
+        } else {
+          const at = timestamp(row[field])
+          assert.ok(at >= start && at <= end, 'generated record timestamp is inside database proof window')
+        }
+      } else if (!(receiptIds && field === 'id' && !Object.hasOwn(intent, field))) assert.deepEqual(row[field], intent[field], 'admission field retains exact input-derived value')
+    }
   }
 }
 const terms = (asset = 'FUND') => ({ asset_type: asset, name: `Synthetic ${asset} product`, issuer_name: 'Synthetic test issuer', summary: 'Fictional offering solely for testing a customer investment journey.', strategy: 'Fictional long-term diversified test strategy. This is not an investment offer.', share_class: 'Test Class A', currency: 'ZAR_TEST', unit_price_minor: '9007199254740993', cap_units: '10', minimum_units: '1', pricing_basis: 'Fixed synthetic unit price for workflow checks.', fees: 'No real fees or payments in this test.', redemption_terms: 'Future governed redemption service; not yet available for this test product.', eligible_countries: ['ZA'], eligible_investor_types: ['INDIVIDUAL', 'ENTITY'], property_address: asset === 'REAL_ESTATE' ? '100 Fictional Test Street' : '', property_valuation_minor: asset === 'REAL_ESTATE' ? '1234567890' : '0', rental_income_policy: asset === 'REAL_ESTATE' ? 'Fictional rental income policy requiring future reconciliation.' : '', documents: { memorandum: 'Synthetic memorandum. No property, fund interest or investment is offered. '.repeat(2).trim(), risks: 'Synthetic risk disclosure. This test does not represent real investment or ownership. '.repeat(2).trim(), subscription_terms: 'Synthetic subscription terms. Reservations do not confirm funding, assets or token delivery. '.repeat(2).trim() } })
@@ -91,7 +126,8 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
   const role = (name, organisationId = scope) => ({ mode: 'ROLE', organisationId, role: name })
   const applicant = { mode: 'APPLICANT' }, reviewer = role('ComplianceOfficer'), issuer = role('IssuerFundManager'), applier = role('SuperAdmin')
   let manager, application, mandate, membership, binding, proofStartedAt, committedResponseLossFixture
-  const inputs = [], productIds = new Set(), appointmentIds = new Set(), revisionIds = new Set(), documents = []
+  let individual, entity, individualAccount, entityAccount, investingMandate
+  const inputs = [], productIds = new Set(), appointmentIds = new Set(), revisionIds = new Set(), documents = [], admissionCases = []
   const eq = (actual, expected, label) => { assert.deepEqual(actual, expected, label); checks++ }
   const truth = (actual, label) => { assert.ok(actual, label); checks++ }
   const scalar = async (sql, values = [], client = db) => Object.values((await client.query(sql, values)).rows[0])[0]
@@ -127,7 +163,11 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
     if (action === 'start_application') intent.subject_id = snapshot.applications.find(a => a.user_id === id(n) && a.persona === payload.persona)?.id
     else if (action === 'create_product') intent.subject_id = snapshot.products.find(p => p.terms.name === payload.terms.name)?.id
     else if (action === 'request_product_service_appointment') intent.subject_id = snapshot.product_appointments.find(a => a.product_id === payload.product_id && a.role === payload.role)?.id
+    else if (action === 'create_investment_account') intent.subject_id = snapshot.accounts.find(a => a.application_id === payload.application_id)?.id
+    else if (action === 'create_entity_investment_account') intent.subject_id = snapshot.entity_investment_accounts.find(a => a.application_id === payload.application_id)?.id
+    else if (action === 'request_investing_representative_mandate') intent.subject_id = snapshot.investing_representative_mandates.find(m => m.investment_account_id === payload.investment_account_id && m.representative_email === payload.representative_email)?.id
     else intent.subject_id = payload.appointment_id ?? payload.application_id ?? payload.product_id ?? payload.mandate_id
+    truth(intent.subject_id, `${action} has an exact canonical returned/input subject`)
     return snapshot
   }
   const denied = async (label, run, expected = '42501') => {
@@ -244,6 +284,7 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
       notes: 'Fictional cloud functional admission only; not provider/scanner or independent-human acceptance.',
       checks: { identity: true, ownership: true, screening: true, suitability: true } })).applications.find(a => a.id === application.id)
     eq(application.status, 'APPROVED', 'manager obtains canonical current customer admission')
+    admissionCases.push({ actor: id(1), application: clone(application), details: clone(details), documents: clone(applicationDocuments) })
     mandate = (await act(1, applicant, 'request_representative_mandate', { application_id: application.id, expected_revision: 0,
       evidence_reference: 'Fictional board appointment evidence for exact TEST management scope only.', requested_until: new Date(Date.now() + 86400000).toISOString() }))
       .organisation_mandates.find(m => m.application_id === application.id)
@@ -256,6 +297,39 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
     membership = await scalar('select native_membership_id from bx1_portal.representative_mandates where id=$1', [mandate.id])
     binding = await scalar('select authority_binding_id from bx1_portal.representative_mandates where id=$1', [mandate.id])
     eq(await scalar('select jsonb_agg(role order by role) from public.bx1_memberships where user_id=$1', [id(1)]), ['OfferingManager'], 'canonical mandate creates no reviewer/issuer role')
+  }
+  const admitInvestor = async (n, kind, documentBase) => {
+    let a = (await act(n, applicant, 'start_application', { persona: 'INVESTOR' })).applications.find(value => value.persona === 'INVESTOR' && value.user_id === id(n))
+    const company = kind === 'ENTITY'
+    const evidence = (company ? ['IDENTITY', 'COMPANY', 'BENEFICIAL_OWNERS'] : ['IDENTITY']).map((type, i) => ({
+      id: id(documentBase + i), kind: type, title: `Fictional post-cutover ${kind} ${type}`,
+      storage_path: `${id(n)}/${id(documentBase + i)}`, sha256: 'c'.repeat(64), size: 100, mime_type: 'application/pdf',
+    }))
+    await admin()
+    for (const d of evidence) {
+      documents.push(d)
+      await db.query(`insert into storage.objects(bucket_id,name,owner_id,metadata) values('bx1-portal-documents',$1,$2,'{"size":100,"mimetype":"application/pdf"}')`, [d.storage_path, id(n)])
+      await scalar('select bx1_private.register_document_receipt($1,$2,$3,$4,$5,$6,$7,$8)', [id(n), id(100 + n), d.id, d.kind, d.title, d.sha256, d.size, d.mime_type])
+    }
+    // Same accepted individual/entity detail contracts as the representatives
+    // proof, but distinct document IDs from the manager admission above.
+    const details = { full_name: `Fictional Post-cutover Investor ${n}`, country: 'ZA', investor_type: kind,
+      company_name: company ? 'Fictional Post-cutover Investor Entity' : '', registration_reference: company ? 'FICTIONAL-PARITY-001' : '',
+      beneficial_owners: company ? 'One fictional controlling owner; no actual company evidence.' : '',
+      source_of_funds: 'Fictional savings only; no customer money or personal information.',
+      experience: 'Fictional experience for isolated functional workflow checks.', documents: evidence, test_data_acknowledged: true,
+      ...(company ? { details_version: 3, ownership_change_reason: 'Initial fictional structured entity ownership.',
+        ownership_control: [{ id: id(601), party_type: 'PERSON', legal_name: 'Fictional Parity Controlling Owner', registration_reference: '', country: 'ZA',
+          relationship: 'DIRECT_OWNER', ownership_basis_points: 10000, control_basis: 'Fictional direct control for disposable functional proof only.',
+          effective_on: '2026-09-01', change_reason: 'Initial fictional ownership disclosure.', evidence_document_id: evidence[2].id }] } : {}) }
+    a = (await act(n, applicant, 'submit_application', { application_id: a.id, expected_revision: a.revision, details })).applications.find(value => value.id === a.id)
+    a = (await act(2, reviewer, 'review_application', { application_id: a.id, expected_revision: a.revision, decision: 'APPROVED',
+      notes: 'Fictional post-cutover admission parity only; no provider, scanned bytes or independent-human acceptance.',
+      checks: { identity: true, ownership: true, screening: true, suitability: true } })).applications.find(value => value.id === a.id)
+    eq([a.status, a.revision, a.organisation_id], ['APPROVED', 3, null], `${kind} investor obtains current admission, not a customer organisation or role`)
+    const result = { actor: id(n), application: clone(a), details: clone(details), documents: clone(evidence) }
+    admissionCases.push(result)
+    return result
   }
   const appoint = async (p, targetRole, actorNumber) => {
     const body = { product_id: p.id, role: targetRole, appointee_user_id: id(actorNumber), native_membership_id: id(400 + actorNumber),
@@ -434,6 +508,47 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
     eq(stage2Admin.allowed_commands, ['apply_representative_mandate', 'apply_investing_representative_mandate'], 'original two SuperAdmin admission commands remain exact')
     eq(new Set([...stage2Applicant.allowed_commands, ...admissionBefore.allowed_commands, ...stage2Admin.allowed_commands]).size, 12, 'existing twelve-command Stage2 family remains separate from the ten offering commands')
     await admitManager()
+    phase = 'post-cutover-public-twelve-command-admission-delegation-parity'
+    individual = await admitInvestor(7, 'INDIVIDUAL', 620)
+    const individualBody = { application_id: individual.application.id }
+    individualAccount = (await act(7, applicant, 'create_investment_account', individualBody)).accounts.find(a => a.application_id === individual.application.id)
+    eq([individualAccount.kind, individualAccount.holder_user_id, individualAccount.status], ['INDIVIDUAL', id(7), 'ACTIVE'], 'post-cutover individual account uses its current personal approval')
+    entity = await admitInvestor(1, 'ENTITY', 610)
+    const entityBody = { application_id: entity.application.id }
+    entityAccount = (await act(1, applicant, 'create_entity_investment_account', entityBody)).entity_investment_accounts.find(a => a.application_id === entity.application.id)
+    truth(entityAccount.id !== individualAccount.id, 'post-cutover entity and individual have distinct unchanged legal-holder accounts')
+    const proposalBody = { investment_account_id: entityAccount.id, expected_revision: 0,
+      representative_email: 'offering-workflow-7@example.invalid', appointment_document_id: entity.documents[1].id,
+      evidence_reference: 'Fictional reviewed COMPANY document proposes a named representative; it does not appoint or delegate authority.',
+      requested_until: new Date(Date.now() + 86400000).toISOString() }
+    const proposalKey = key()
+    const investingFrom = (snapshot, mandateId) => snapshot.investing_representative_mandates.find(m => m.id === mandateId)
+    investingMandate = (await act(1, applicant, 'request_investing_representative_mandate', proposalBody, proposalKey)).investing_representative_mandates.find(m => m.investment_account_id === entityAccount.id && m.representative_user_id === id(7))
+    eq([investingMandate.status, investingMandate.revision, investingMandate.effective], ['PROPOSED', 1, false], 'post-cutover proposal alone grants no account authority')
+    const targetProposal = await read(7, applicant)
+    truth(investingFrom(targetProposal, investingMandate.id)?.can_respond, 'exact current target receives immutable proposal response action')
+    truth(!targetProposal.applications.some(a => a.id === entity.application.id), 'proposal does not expose the target to the full entity application')
+    truth(!targetProposal.entity_investment_accounts.some(a => a.id === entityAccount.id && a.can_view), 'proposal grants no early entity ACCOUNT_VIEW')
+    eq(investingFrom(await command(1, applicant, 'request_investing_representative_mandate', proposalBody, proposalKey), investingMandate.id).revision, 1, 'proposal retry returns exact same immutable cycle')
+    const responseBody = { mandate_id: investingMandate.id, expected_revision: 1, proposal_hash: investingMandate.proposal_hash, decision: 'ACCEPT' }
+    await denied('proposer cannot consent on target behalf after package cutover', () => command(1, applicant, 'respond_investing_representative_proposal', responseBody))
+    await denied('wrong-scope Compliance cannot review entity representative', () => command(6, role('ComplianceOfficer', otherScope), 'review_investing_representative_mandate', {
+      mandate_id: investingMandate.id, expected_revision: 2, decision: 'APPROVED', notes: 'Fictional prohibited cross-scope review.', checks: { appointment: true, legal_entity: true, scope: true } }))
+    const responseKey = key()
+    investingMandate = investingFrom(await act(7, applicant, 'respond_investing_representative_proposal', responseBody, responseKey), investingMandate.id)
+    eq([investingMandate.status, investingMandate.revision, investingMandate.effective], ['SUBMITTED', 2, false], 'explicit consent hands off to Compliance without account access')
+    eq(investingFrom(await command(7, applicant, 'respond_investing_representative_proposal', responseBody, responseKey), investingMandate.id).revision, 2, 'consent exact-key retry has one effect')
+    investingMandate = investingFrom(await act(2, reviewer, 'review_investing_representative_mandate', { mandate_id: investingMandate.id,
+      expected_revision: investingMandate.revision, decision: 'APPROVED', notes: 'Fictional independent review of exact approved entity document and consenting investor; not independent-human proof.',
+      checks: { appointment: true, legal_entity: true, scope: true } }), investingMandate.id)
+    eq([investingMandate.status, investingMandate.revision, investingMandate.effective], ['APPROVED', 3, false], 'review alone gives no effective entity account authority')
+    investingMandate = investingFrom(await act(5, applier, 'apply_investing_representative_mandate', { mandate_id: investingMandate.id, expected_revision: investingMandate.revision }), investingMandate.id)
+    eq([investingMandate.status, investingMandate.revision, investingMandate.effective], ['APPLIED', 4, true], 'distinct SuperAdmin applies only exact consenting representative scope')
+    const targetApplied = await read(7, applicant), targetAccount = targetApplied.entity_investment_accounts.find(a => a.id === entityAccount.id)
+    eq([targetAccount.can_view, targetAccount.can_request_eligibility], [true, false], 'applied fixed mandate gives account view but no product eligibility or financial authority')
+    eq([...new Set(inputs.filter(input => admissionCommands.includes(input.command)).map(input => input.command))].sort(), [...admissionCommands].sort(), 'all twelve inherited Stage2 commands actually execute through public APIs after offering cutover')
+    await denied('manager ROLE cannot use delegated applicant account command', () => command(1, manager, 'create_entity_investment_account', entityBody))
+    await denied('password representative cannot use protected revoke through delegation', () => command(7, applicant, 'revoke_investing_representative_mandate', { mandate_id: investingMandate.id, expected_revision: investingMandate.revision, reason: 'Fictional attempted password-only revocation.' }))
     eq((await read(2, reviewer)).stage2_access, admissionBefore, 'offering cutover preserves exact inherited Stage2 role capability projection')
     access(await read(1, manager), 1, manager)
     access(await read(3, issuer), 3, issuer)
@@ -666,7 +781,8 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
       const expectedOffering = ownInputs.filter(input => family[context.role].includes(input.command))
         .map(input => ({ key: input.request_key, command: input.command }))
       for (const receipt of expectedOffering) recoveredCommands.add(receipt.command)
-      const expectedStage2 = ownInputs.filter(input => ['review_application', 'review_representative_mandate', 'apply_representative_mandate'].includes(input.command))
+      const expectedStage2 = ownInputs.filter(input => ['review_application', 'review_representative_mandate', 'apply_representative_mandate',
+        'review_investing_representative_mandate', 'apply_investing_representative_mandate'].includes(input.command))
         .map(input => ({ key: input.request_key, command: input.command }))
       truth(Array.isArray(snapshot.requests), `${context.role} fresh read has committed request-key projection`)
       for (const receipt of snapshot.requests) eq(Object.keys(receipt).sort(), ['command', 'key'], 'fresh receipt projection exposes only key/command, never payload, actor or foreign details')
@@ -787,8 +903,10 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
       }
       added[name] = current.filter(value => !inherited.some(row => JSON.stringify(row) === JSON.stringify(value)))
     }
-    const legacyActions = new Set(['review_application', 'create_product', 'save_product', 'submit_product', 'review_product'])
-    const scopedActions = new Set([...legacyActions, 'review_offering_issuer', 'begin_offering_amendment', 'reopen_offering_review'])
+    const legacyActions = new Set(['review_application', 'create_investment_account', 'create_product', 'save_product', 'submit_product', 'review_product'])
+    const scopedActions = new Set([...legacyActions, 'create_entity_investment_account', 'request_investing_representative_mandate',
+      'respond_investing_representative_proposal', 'review_investing_representative_mandate', 'apply_investing_representative_mandate',
+      'review_offering_issuer', 'begin_offering_amendment', 'reopen_offering_review'])
     const projectInput = (input, includeContext = false, stripped = false) => ({ actor_id: input.actor_id, request_key: input.request_key,
       command: input.command, payload: stripped ? Object.fromEntries(Object.entries(input.payload).filter(([field]) => !['offering_revision_id', 'terms_hash'].includes(field))) : clone(input.payload),
       ...(includeContext ? { operating_context: clone(input.operating_context) } : {}) })
@@ -825,14 +943,28 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
       const index = remainingEvents.findIndex(e => e.actor_id === input.actor_id && e.kind === input.command && e.subject_id === subject)
       truth(index >= 0, 'canonical event corresponds to intended actor/action/exact application/product/appointment/revision')
       const [event] = remainingEvents.splice(index, 1)
-      eq([event.investor_id, event.application_id, event.organisation_id], [null,
-        ['start_application', 'submit_application', 'review_application'].includes(input.command) ? application.id : null,
-        ['start_application', 'submit_application'].includes(input.command) ? null : application.organisation_id], 'event preserves canonical subject dimensions')
+      const admissionCase = admissionCases.find(value => value.application.id === input.subject_id || value.application.id === input.payload.application_id)
+      const applicationCommand = ['start_application', 'submit_application', 'review_application'].includes(input.command)
+      const accountCommand = ['create_investment_account', 'create_entity_investment_account'].includes(input.command)
+      const investingCommand = ['request_investing_representative_mandate', 'respond_investing_representative_proposal',
+        'review_investing_representative_mandate', 'apply_investing_representative_mandate'].includes(input.command)
+      if (applicationCommand || accountCommand) truth(admissionCase, 'application/account audit dimensions come from exact authored case and returned ID')
+      eq([event.investor_id, event.application_id, event.organisation_id], [
+        input.command === 'create_investment_account' ? individual.actor : null,
+        applicationCommand || accountCommand ? admissionCase.application.id : investingCommand ? entity.application.id : null,
+        ['start_application', 'submit_application'].includes(input.command) || accountCommand || investingCommand ? null
+          : input.command === 'review_application' ? admissionCase.application.organisation_id : application.organisation_id], 'event preserves per-case canonical subject dimensions')
       truth(timestamp(event.created_at) >= timestamp(window.start) && timestamp(event.created_at) <= timestamp(window.end), 'event timestamp is inside database proof window')
       const eventSummary = {
         start_application: 'Additional unapproved application capacity created; no role or eligibility granted.',
         submit_application: 'Exact personal application submitted to the admitted synthetic manual-review route.',
         review_application: 'Manual TEST_ONLY onboarding decision: APPROVED. Approval, when given, expires after 30 days and is not provider verification.',
+        create_investment_account: 'Individual investment account opened from current reviewed application. No holding or funding created.',
+        create_entity_investment_account: 'Reviewed synthetic entity investment account opened. No representative, order, holding, wallet or funding authority granted.',
+        request_investing_representative_mandate: 'Additional representative proposed, not appointed. Target consent and independent appointment review required; zero transaction limit.',
+        respond_investing_representative_proposal: 'Named representative response to exact immutable proposal: ACCEPT. No account access or financial authority granted.',
+        review_investing_representative_mandate: 'Independent synthetic review of exact entity representative appointment: APPROVED. No trading granted.',
+        apply_investing_representative_mandate: 'Separately approved entity representative mandate applied: account view and future eligibility request; zero transaction limit.',
         create_product: 'Typed test product draft created. No assets or tokens issued.',
         save_product: input.payload.terms?.asset_type === 'REAL_ESTATE' ? 'Synthetic property draft terms revised; earlier review no longer applies.' : 'Test product draft terms revised; earlier review no longer applies.',
         submit_product: 'Test offering submitted for independent compliance review.',
@@ -882,25 +1014,102 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
     closed('public.bx1_memberships', 7, row => row.id === membership && row.user_id === id(1) && row.organisation_id === mandate.native_organisation_id && row.role === 'OfferingManager' && row.status === 'ACTIVE'
       || [2, 3, 4, 5, 6, 7].some(n => row.id === id(400 + n) && row.user_id === id(n) && row.organisation_id === (n === 6 ? otherScope : scope)
         && row.role === (n === 3 ? 'IssuerFundManager' : n === 5 ? 'SuperAdmin' : n === 7 ? 'Investor' : 'ComplianceOfficer') && row.status === 'ACTIVE'))
-    closed('bx1_portal.applications', 1, row => row.id === application.id && row.user_id === id(1) && row.status === 'APPROVED' && row.persona === 'WEALTH_MANAGER' && row.revision === application.revision)
+    closed('bx1_portal.applications', 3, row => admissionCases.some(value => row.id === value.application.id && row.user_id === value.actor
+      && row.status === 'APPROVED' && row.persona === value.application.persona && row.revision === value.application.revision
+      && row.context_kind === 'PERSONAL' && row.context_organisation_id === null && row.provider_mode === 'MANUAL_TEST_REVIEW'
+      && row.reviewer_scope === scope && row.reviewer_id === id(2) && isDeepStrictEqual(row.details, value.details)))
     closed('bx1_portal.organisations', 1, row => row.id === application.organisation_id && row.application_id === application.id && row.owner_id === id(1) && row.reviewer_scope === scope && row.status === 'ACTIVE')
-    const submitIntent = inputs.find(input => input.command === 'submit_application')
-    closed('bx1_portal.application_detail_versions', 1, row => row.application_id === application.id && row.application_revision === submitIntent.payload.expected_revision + 1
-      && row.capture_kind === 'SUBMISSION' && isDeepStrictEqual(row.details, application.details))
-    closed('bx1_portal.application_ownership_control_versions', 1, row => row.application_id === application.id && row.application_revision === submitIntent.payload.expected_revision + 1
-      && row.relationship_id === id(501) && row.evidence_document_id === documents[2].id && row.ownership_basis_points === 10000)
+    const submissions = inputs.filter(input => input.command === 'submit_application')
+    closed('bx1_portal.application_detail_versions', 3, row => submissions.some(input => row.application_id === input.payload.application_id
+      && row.application_revision === input.payload.expected_revision + 1 && row.capture_kind === 'SUBMISSION' && isDeepStrictEqual(row.details, input.payload.details)))
+    const detailsHashes = new Map()
+    for (const input of submissions) detailsHashes.set(input.payload.application_id,
+      await scalar("select encode(sha256(convert_to($1::jsonb::text,'UTF8')),'hex')", [JSON.stringify(input.payload.details)]))
+    closed('bx1_portal.application_ownership_control_versions', 2, row => submissions.some(input => (input.payload.details.ownership_control ?? []).some(owner =>
+      row.application_id === input.payload.application_id && row.application_revision === input.payload.expected_revision + 1
+      && row.relationship_id === owner.id && row.party_type === owner.party_type && row.legal_name === owner.legal_name
+      && row.registration_reference === owner.registration_reference && row.country === owner.country && row.relationship === owner.relationship
+      && row.ownership_basis_points === owner.ownership_basis_points && row.control_basis === owner.control_basis && row.effective_on === owner.effective_on
+      && row.change_reason === owner.change_reason && row.ownership_change_reason === input.payload.details.ownership_change_reason
+      && row.evidence_document_id === owner.evidence_document_id && row.submitted_details_sha256 === detailsHashes.get(input.payload.application_id))))
+    const proposalInput = inputs.find(input => input.command === 'request_investing_representative_mandate')
+    const consentInput = inputs.find(input => input.command === 'respond_investing_representative_proposal')
+    const reviewInput = inputs.find(input => input.command === 'review_investing_representative_mandate')
+    const applyInput = inputs.find(input => input.command === 'apply_investing_representative_mandate')
+    const expectedParty = { id: entityAccount.entity_party_id, application_id: entity.application.id, admission_revision: entity.application.revision,
+      submitted_revision: inputs.find(input => input.command === 'submit_application' && input.payload.application_id === entity.application.id).payload.expected_revision + 1,
+      legal_name: entity.details.company_name, registration_reference: entity.details.registration_reference, country: entity.details.country,
+      submitted_details_sha256: detailsHashes.get(entity.application.id) }
+    const expectedAccounts = [
+      { id: individualAccount.id, holder_user_id: individual.actor, application_id: individual.application.id, kind: 'INDIVIDUAL', status: 'ACTIVE', entity_party_id: null },
+      { id: entityAccount.id, holder_user_id: null, application_id: entity.application.id, kind: 'ENTITY', status: 'ACTIVE', entity_party_id: expectedParty.id },
+    ]
+    const expectedInvesting = { id: investingMandate.id, investment_account_id: proposalInput.payload.investment_account_id,
+      application_id: entity.application.id, entity_party_id: expectedParty.id, applicant_user_id: proposalInput.actor_id,
+      representative_user_id: consentInput.actor_id, reviewer_scope_organisation_id: scope, admission_revision: entity.application.revision,
+      cycle: 1, revision: applyInput.payload.expected_revision + 1, status: 'APPLIED', scope: ['ACCOUNT_VIEW', 'REQUEST_ELIGIBILITY'], transaction_limit_minor: 0,
+      evidence_reference: proposalInput.payload.evidence_reference, appointment_document_id: proposalInput.payload.appointment_document_id,
+      appointment_document_sha256: entity.documents[1].sha256, requested_until: proposalInput.payload.requested_until,
+      reviewer_user_id: reviewInput.actor_id, review_notes: reviewInput.payload.notes, review_checks: clone(reviewInput.payload.checks),
+      approval_receipt_id: investingMandate.approval_receipt_id, applied_by_user_id: applyInput.actor_id,
+      revoked_at: null, revoked_by_user_id: null, revoke_reason: null, representative_email: proposalInput.payload.representative_email,
+      representative_name: individual.details.full_name, representative_application_id: individual.application.id,
+      representative_application_revision: individual.application.revision, representative_submitted_revision: 2,
+      representative_details_sha256: detailsHashes.get(individual.application.id), proposal_hash: consentInput.payload.proposal_hash,
+      consent_decision: consentInput.payload.decision, consent_receipt_id: investingMandate.consent_receipt_id }
+    const receiptInputs = [proposalInput, consentInput, reviewInput, applyInput]
+    const expectedInvestingReceipts = receiptInputs.map((input, index) => ({ mandate_id: investingMandate.id, mandate_revision: index + 1,
+      action: input.command, actor_id: input.actor_id, operating_context: clone(input.operating_context), command_payload: clone(input.payload),
+      admission_revision: entity.application.revision, status_after: ['PROPOSED', 'SUBMITTED', 'APPROVED', 'APPLIED'][index],
+      ...(index === 1 ? { id: investingMandate.consent_receipt_id } : index === 2 ? { id: investingMandate.approval_receipt_id } : {}) }))
+    for (const [table, expected, timeFields, receiptIds] of [
+      ['legal_entity_parties', [expectedParty], ['created_at'], false],
+      ['investment_accounts', expectedAccounts, ['created_at'], false],
+      ['investing_representative_mandates', [expectedInvesting], ['created_at', 'submitted_at', 'reviewed_at', 'applied_at', 'responded_at', 'requested_until', 'revoked_at'], false],
+      ['investing_representative_receipts', expectedInvestingReceipts, ['recorded_at'], true],
+    ]) {
+      checked.add(`bx1_portal.${table}`)
+      validateAdmissionRecords(added[`bx1_portal.${table}`], expected, timeFields, window, receiptIds); checks++
+    }
+    const rawInvesting = added['bx1_portal.investing_representative_mandates'][0]
+    eq(rawInvesting.submitted_at, rawInvesting.responded_at, 'explicit consent sets exact submitted handoff timestamp')
+    truth(timestamp(rawInvesting.responded_at) <= timestamp(rawInvesting.reviewed_at) && timestamp(rawInvesting.reviewed_at) <= timestamp(rawInvesting.applied_at),
+      'explicit consent, independent review and application retain their ordered finite handoff times')
+    const memoryReceipts = expectedInvestingReceipts.map((value, index) => ({ ...clone(value), id: value.id ?? id(960 + index), recorded_at: window.start }))
+    validateAdmissionRecords(memoryReceipts, expectedInvestingReceipts, ['recorded_at'], window, true); checks++
+    for (const [label, mutate] of [
+      ['missing receipt', value => value.pop()], ['extra receipt', value => value.push({ ...clone(value[0]), mandate_revision: 99 })],
+      ['duplicate revision', value => { value[1].mandate_revision = 1 }], ['duplicate ID', value => { value[0].id = value[1].id }],
+      ['foreign mandate', value => { value[0].mandate_id = id(990) }], ['wrong actor', value => { value[1].actor_id = id(1) }],
+      ['wrong command', value => { value[0].action = 'subscribe' }], ['wrong scope', value => { value[2].operating_context.organisationId = otherScope }],
+      ['changed proposal hash', value => { value[1].command_payload.proposal_hash = 'f'.repeat(64) }],
+      ['changed decision', value => { value[1].command_payload.decision = 'DECLINE' }], ['wrong status', value => { value[1].status_after = 'APPLIED' }],
+      ['wrong admission', value => { value[0].admission_revision++ }], ['wrong consent binding', value => { value[1].id = id(990) }],
+      ['extra field', value => { value[0].unrelated = true }], ['missing payload', value => { delete value[0].command_payload }],
+      ['invalid receipt time', value => { value[0].recorded_at = 'invalid' }],
+      ['outside receipt time', value => { value[0].recorded_at = new Date(timestamp(window.start) - 1000).toISOString() }],
+    ]) {
+      const negative = clone(memoryReceipts); mutate(negative)
+      assert.throws(() => validateAdmissionRecords(negative, expectedInvestingReceipts, ['recorded_at'], window, true), { code: 'ERR_ASSERTION' }, `pure admission footprint rejects ${label}`); checks++
+    }
     closed('bx1_portal.representative_mandates', 1, row => row.id === mandate.id && row.application_id === application.id && row.applicant_user_id === id(1)
       && row.product_organisation_id === application.organisation_id && row.native_organisation_id === mandate.native_organisation_id && row.native_membership_id === membership
       && row.authority_binding_id === binding && row.status === 'APPLIED' && row.revision === mandate.revision)
     closed('bx1_portal.organisation_authority_bindings', 1, row => row.id === binding && row.product_organisation_id === application.organisation_id
       && row.native_organisation_id === mandate.native_organisation_id && row.role === 'OfferingManager' && row.status === 'ACTIVE')
     closed('bx1_portal.customer_monitoring_cases', 1, row => row.application_id === application.id && row.state === 'CURRENT' && row.revision === 3 && row.last_receipt_id === monitoringId && row.decided_by === id(2))
-    closed('storage.objects', 3, row => row.bucket_id === 'bx1-portal-documents' && row.owner_id === id(1) && documents.some(d => d.storage_path === row.name))
-    closed('bx1_private.document_upload_receipts', 3, row => documents.some(d => row.id === d.id && row.storage_path === d.storage_path && row.kind === d.kind && row.sha256 === d.sha256
-      && row.title === d.title && row.byte_size === d.size && row.mime_type === d.mime_type) && row.actor_id === id(1) && row.session_id === id(101) && row.validation_state === 'SYNTHETIC_UNSCANNED')
-    closed('bx1_private.document_application_bindings', 3, row => documents.some(d => d.id === row.receipt_id) && row.application_id === application.id && row.application_revision === submitIntent.payload.expected_revision + 1)
-    closed('bx1_private.document_receipt_events', 6, row => documents.some(d => d.id === row.receipt_id) && (row.kind === 'REGISTERED' && row.application_id === null && row.application_revision === null
-      || row.kind === 'BOUND' && row.application_id === application.id && row.application_revision === submitIntent.payload.expected_revision + 1))
+    closed('storage.objects', 7, row => row.bucket_id === 'bx1-portal-documents' && admissionCases.some(value => row.owner_id === value.actor
+      && value.documents.some(d => d.storage_path === row.name && isDeepStrictEqual(row.metadata, { size: d.size, mimetype: d.mime_type }))))
+    closed('bx1_private.document_upload_receipts', 7, row => admissionCases.some(value => row.actor_id === value.actor
+      && row.session_id === id(100 + Number(value.actor.slice(-12))) && value.documents.some(d => row.id === d.id && row.storage_path === d.storage_path
+        && row.kind === d.kind && row.sha256 === d.sha256 && row.title === d.title && row.byte_size === d.size && row.mime_type === d.mime_type))
+      && row.validation_state === 'SYNTHETIC_UNSCANNED')
+    closed('bx1_private.document_application_bindings', 7, row => submissions.some(input => row.application_id === input.payload.application_id
+      && row.application_revision === input.payload.expected_revision + 1 && input.payload.details.documents.some(d => d.id === row.receipt_id)))
+    closed('bx1_private.document_receipt_events', 14, row => documents.some(d => d.id === row.receipt_id)
+      && (row.kind === 'REGISTERED' && row.application_id === null && row.application_revision === null
+        || row.kind === 'BOUND' && submissions.some(input => row.application_id === input.payload.application_id
+          && row.application_revision === input.payload.expected_revision + 1 && input.payload.details.documents.some(d => d.id === row.receipt_id))))
     closed('bx1_portal.products', 2, row => productIds.has(row.id) && row.organisation_id === application.organisation_id && row.created_by === id(1)
       && row.status === 'APPROVED' && row.published_at === null && String(row.reserved_units) === '0' && row.terms.terms_version === 2 && row.terms.currency === 'TST'
       && revisionIds.has(row.current_offering_revision_id))
@@ -930,7 +1139,7 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
       and (terms_hash<>encode(sha256(convert_to(terms::text,'UTF8')),'hex') or document_hashes<>bx1_portal.offering_document_hashes(terms))`, [[...revisionIds]]), 0,
       'each immutable package hash/document text digest matches its own exact frozen terms; no actual e-signature or file-clean claim')
     await commit()
-    console.log(`BX1_OFFERING_WORKFLOW_PASS assertions=${checks} fixture=synthetic-cloud-PostgreSQL17 parent=admission795-and-committed-representatives-first assets=FUND-and-REAL_ESTATE commands=canonical-package-only appointments=independently-reviewed-and-applied changesRequired=proven amendment=fresh-immutable-lineage reopen=same-hash-fresh-decisions replay=durable-exact-key auditRollback=proven concurrency=real-admission-monitoring-membership-product-revision-appointment-waits inheritedRows=exact inputJournals=exact globalSecurity=unchanged outcome=approved-unpublished-unopened cleanup=caller-exact-schema-required hostedAcceptance=not-proven documentBytes=not-proven fileScanning=not-proven eSignature=not-proven independentHumans=not-proven technicalReadiness=not-verified`)
+    console.log(`BX1_OFFERING_WORKFLOW_PASS assertions=${checks} fixture=synthetic-cloud-PostgreSQL17 parent=admission795-and-committed-representatives-first assets=FUND-and-REAL_ESTATE commands=canonical-package-only postCutoverAdmission=12-public-commands-and-distinct-individual-entity-consent-accounts appointments=independently-reviewed-and-applied changesRequired=proven amendment=fresh-immutable-lineage reopen=same-hash-fresh-decisions replay=durable-exact-key auditRollback=proven concurrency=real-admission-monitoring-membership-product-revision-appointment-waits inheritedRows=exact inputJournals=exact globalSecurity=unchanged outcome=approved-unpublished-unopened cleanup=caller-exact-schema-required hostedAcceptance=not-proven documentBytes=not-proven fileScanning=not-proven eSignature=not-proven independentHumans=not-proven technicalReadiness=not-verified`)
     return checks
   } catch (error) {
     error.offeringWorkflowPhase = phase
