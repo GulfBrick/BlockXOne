@@ -450,12 +450,29 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
     eq(recipeMatches.length, 1, 'offering installer has one exact recipe array')
     const recipes = JSON.parse(recipeMatches[0][1])
     eq(recipes.length, 14, 'cutover has exactly fourteen reviewed retained targets')
-    const admissionRecipeSeparator = ',\n  {\n    "signature": "bx1_portal.admission_access(jsonb)"'
+    eq(recipes.map(recipe => recipe.signature), [
+      "bx1_portal.execute_scoped_pre_eligibility(jsonb,text,uuid,jsonb)",
+      "bx1_portal.execute_command_pre_entry(text,uuid,jsonb)",
+      "bx1_portal.execute_scoped_pre_monitoring(jsonb,text,uuid,jsonb)",
+      "bx1_portal.execute_scoped(jsonb,text,uuid,jsonb)",
+      "bx1_portal.read_scoped(jsonb)",
+      "bx1_portal.read_scoped_pre_handoff(jsonb)",
+      "bx1_portal.save_fund_v2_scoped(jsonb,uuid,jsonb)",
+      "bx1_portal.save_real_estate_v2_scoped(jsonb,uuid,jsonb)",
+      "bx1_portal.execute_appointed_compliance_decision(jsonb,uuid,jsonb)",
+      "bx1_portal.execute_begin_offering_amendment(jsonb,uuid,jsonb)",
+      "bx1_portal.execute_reopen_offering_review(jsonb,uuid,jsonb)",
+      "bx1_portal.execute_product_service_appointment(jsonb,text,uuid,jsonb)",
+      "bx1_portal.guard_offering_decision_appointment()",
+      "bx1_portal.admission_access(jsonb)"
+    ], 'all fourteen installed recipes preserve their exact signature order')
     const recipeText = normalizedBody(recipeMatches[0][1])
-    const admissionRecipeOffset = recipeText.lastIndexOf(admissionRecipeSeparator)
-    truth(admissionRecipeOffset > 0, 'only the final fourteenth recipe targets the admission marker')
-    eq(sourceHash(`${recipeText.slice(0, admissionRecipeOffset)}\n]`),
-      '3ca96cdf193693c1f1887f025aca2ccc41fe349b6655dd63b3f7888e11880358', 'original thirteen recipe entries remain byte-exact after line-ending normalization')
+    const wholeRecipeEntries = [...recipeText.matchAll(/  \{\n    "signature":[\s\S]*?\n  \}/g)].map(match => match[0])
+    eq(wholeRecipeEntries.length, 14, 'each ordered retained recipe has one complete source entry')
+    const protectedRecipeText = `[\n${wholeRecipeEntries.filter(entry =>
+      !entry.includes('"signature": "bx1_portal.read_scoped_pre_handoff(jsonb)"')).join(',\n')}\n]`
+    eq(sourceHash(protectedRecipeText), '62ef46a4938467cea4dbb45986e7ca834391c8fcdd9ae04ca52a2c93d22def8b',
+      'all other thirteen whole recipe entries retain exact ordering and source bytes')
     const admissionRecipes = recipes.filter(recipe => recipe.signature === 'bx1_portal.admission_access(jsonb)')
     eq(admissionRecipes.length, 1, 'projection correction adds only one exact admission marker signature')
     const admissionRecipe = admissionRecipes[0]
@@ -511,20 +528,62 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
     eq(candidateRecipes.length, 1, 'candidate correction targets only the installed retained inner reader')
     const candidateRecipe = candidateRecipes[0]
     eq(candidateRecipe.expected_sha256, '9b410b549291c11fc639ba1968ff6402601f175dc054496d1bfac0304881a37c', 'complete original candidate reader fence remains exact')
-    eq(candidateRecipe.changes.length, 2, 'candidate correction changes only its query and final candidate scope guard')
+    eq(candidateRecipe.changes.length, 5, 'retained reader has exactly candidate, final fence, declarations, product and org projection replacements')
     const candidateReaderSource = (await readFile(new URL('../../../supabase/migrations/20260928174847_stage3_product_service_appointments.sql', import.meta.url), 'utf8')).replaceAll('\r\n', '\n')
     const readerMatches = [...candidateReaderSource.matchAll(/create function bx1_portal\.read_scoped\(c jsonb\) returns jsonb\nlanguage plpgsql volatile security definer set search_path='' as \$\$([\s\S]*?)\$\$;/g)]
     eq(readerMatches.length, 1, 'retained migration supplies one complete candidate-bearing body')
     const originalCandidateReader = normalizedBody(readerMatches[0][1])
     eq(sourceHash(originalCandidateReader), candidateRecipe.expected_sha256, 'historical source reconstructs the exact original retained reader')
     eq(normalizedBody(await scalar('select prosrc from pg_proc where oid=$1::regprocedure', [candidateRecipe.signature])), originalCandidateReader, 'current installed retained target matches the full historical source before cutover')
+    const baselineCandidateGuard = `  if exists(with resolved_candidates as materialized (
+      select p.id as product_id,o.id as organisation_id
+      from pg_catalog.jsonb_array_elements(candidates) emitted
+      left join bx1_portal.products p on p.id=(emitted.value->>'product_id')::uuid
+      left join bx1_portal.organisations o on o.id=p.organisation_id
+    ), emitted_organisations as materialized (
+      select distinct organisation_id from resolved_candidates where organisation_id is not null
+    ) select 1 where exists(select 1 from resolved_candidates
+        where product_id is null or organisation_id is null)
+      or exists(select 1 from emitted_organisations current_org
+        where bx1_portal.scoped_operator(c,current_org.organisation_id) is not true)) then
+    raise exception 'product_appointment_candidate_scope_changed' using errcode='42501'; end if;
+  if bx1_portal.valid_operating_context(c) is not true then
+    raise exception 'product_appointment_context_changed' using errcode='42501'; end if;`
+    const baselineCandidateReader = originalCandidateReader.replace(candidateRecipe.changes[0].from, candidateRecipe.changes[0].to)
+      .replace(candidateRecipe.changes[1].from, baselineCandidateGuard)
+    eq(sourceHash(baselineCandidateReader), '7cf11dffab988f78a8b1fe9d7e394e03b3055058d8df687f4e6b2c21cc7c3605',
+      'exact exhausted 5e4c5ea effective reader remains reconstructed evidence, not new acceptance')
+    const readerCutpointPins = [
+      [
+        "7c49f87aaf1a0f1888fe4cfce4b43d1f211024f214955e57d0f7d4a4e6cefb2b",
+        "813e82db1b23ae523d7893516fff83fbaac630a5493aa6a241c26445f7566241"
+      ],
+      [
+        "3e19edd5ce6d933bb88d1da5f5d7dff18e80cdd059bba68a6ad3dacaa332632c",
+        "4929696d605e09d8b7d822cac6659c807fe16802484ef2f6f39101fbd1e4ead9"
+      ],
+      [
+        "f485cc34742522f07630a4a7ac04213f49067d06bfa091371c06586627c4d228",
+        "c7b092988915493c758c557a67e04dfb38c44d6c398e3b30aeefd5baf8eae7fe"
+      ],
+      [
+        "a4fed746ff05fc8ff490236a9be84d6c07347a185221f3cd0a40740374e15e24",
+        "3c8ee0dee57ee1babf14155d7e9c42ff5b582d7fb6fa8e15b6ba7ba3c9b20560"
+      ],
+      [
+        "efb74e988ece1a1b427cef2f93c50a353071a4f0f3a9f6a349c49973babd3502",
+        "a947ea499b28e2572fc3dce26c83db65bea687f0d0dccd741fba80572dd40d5d"
+      ]
+    ]
+    eq(candidateRecipe.changes.map(change => [sourceHash(change.from), sourceHash(change.to)]), readerCutpointPins,
+      'all five complete source/replacement cutpoints are frozen independently')
     let correctedCandidateReader = originalCandidateReader
     for (const change of candidateRecipe.changes) {
       eq(change.count, 1, 'each candidate correction replacement is single-occurrence fenced')
       eq(correctedCandidateReader.split(change.from).length - 1, 1, 'each exact candidate source anchor appears once')
       correctedCandidateReader = correctedCandidateReader.replace(change.from, change.to)
     }
-    eq(sourceHash(correctedCandidateReader), '7cf11dffab988f78a8b1fe9d7e394e03b3055058d8df687f4e6b2c21cc7c3605', 'complete corrected candidate reader is source-pinned')
+    eq(sourceHash(correctedCandidateReader), 'e68aa36870e00e923cc6509a398091712c1c659d3160f4ecb5ec2087e4ace027', 'complete invocation-local projection and fresh contributor reader is source-pinned')
     eq(sourceHash(candidateRecipe.changes[0].to), '813e82db1b23ae523d7893516fff83fbaac630a5493aa6a241c26445f7566241', 'complete candidate replacement including context guard is source-pinned')
     const effectiveMatches = [...candidateRecipe.changes[0].to.matchAll(/    with scope_inputs[\s\S]*?\) candidate;/g)]
     eq(effectiveMatches.length, 1, 'corrected recipe supplies one complete effective candidate query')
@@ -538,15 +597,41 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
     eq(sourceHash(effectiveCandidateQuery), 'c6e51a294080c9db3231cd714a5530f749434864a5ee44da4369367fee662998', 'effective standalone query changes only INTO and formal context references')
     const finalScopeMatches = [...candidateRecipe.changes[1].to.matchAll(/^  if exists\(([\s\S]*?)\) then/g)]
     eq(finalScopeMatches.length, 1, 'final guard has one exact emitted-product resolution and current-org query')
-    const finalCandidateScopeQuery = `select exists(${finalScopeMatches[0][1]})`
-      .replace('jsonb_array_elements(candidates)', 'jsonb_array_elements($2::jsonb)')
-      .replace('scoped_operator(c,current_org.organisation_id)', 'scoped_operator($1::jsonb,current_org.organisation_id)')
-    eq(sourceHash(finalCandidateScopeQuery), '9ec1bad87ded212865a9d88e1251e0d610a19d16ef6b52bca4027ca3e1d3f317', 'standalone final guard changes only its two formal inputs')
-    truth(candidateRecipe.changes[1].to.endsWith(candidateRecipe.changes[1].from), 'old final operating-context recheck is retained byte-for-byte after the new candidate recheck')
-    for (const clause of ['resolved_candidates as materialized', 'left join bx1_portal.products', 'left join bx1_portal.organisations',
-      'product_id is null or organisation_id is null', 'select distinct organisation_id from resolved_candidates',
-      'scoped_operator(c,current_org.organisation_id) is not true'])
-      truth(candidateRecipe.changes[1].to.includes(clause), `final candidate scope guard retains explicit fail-closed clause: ${clause}`)
+    const finalScopeSubstitutions = [
+      ['jsonb_array_elements(candidates)', 'jsonb_array_elements($2::jsonb)', 1],
+      ['jsonb_array_elements(manager_product_refs)', 'jsonb_array_elements($3::jsonb)', 2],
+      ['jsonb_array_elements(manager_organisation_refs)', 'jsonb_array_elements($4::jsonb)', 1],
+      ['jsonb_array_elements(products)', 'jsonb_array_elements($5::jsonb)', 1],
+      ["coalesce(result->'organisations','[]'::jsonb)", "coalesce(($6::jsonb)->'organisations','[]'::jsonb)", 1],
+      ['scoped_operator(c,current_org.organisation_id)', 'scoped_operator($1::jsonb,current_org.organisation_id)', 1],
+    ]
+    let finalCandidateScopeQuery = `select exists(${finalScopeMatches[0][1]})`
+    for (const [from, to, count] of finalScopeSubstitutions) {
+      eq(finalCandidateScopeQuery.split(from).length - 1, count, 'combined final fence parameterises each exact local reference')
+      finalCandidateScopeQuery = finalCandidateScopeQuery.replaceAll(from, to)
+    }
+    eq(sourceHash(finalCandidateScopeQuery), 'df37951501c63cfc18788b784a98837eca1c9b4edabea8b66335484af7f79a46', 'standalone combined fence changes only its six explicit formal inputs')
+    const projectionScopeCheck = (context, candidates, productRefs, organisationRefs, emittedProducts, emittedOrganisations) =>
+      scalar(finalCandidateScopeQuery, [context, candidates, productRefs, organisationRefs, emittedProducts,
+        { organisations: emittedOrganisations }].map(value => JSON.stringify(value)))
+    const candidateScopeCheck = (context, candidates, emittedProducts) => projectionScopeCheck(context, candidates,
+      emittedProducts.filter(product => candidates.some(candidate => candidate.product_id === product.id))
+        .map(product => ({ product_id: product.id, organisation_id: product.organisation_id })),
+      [], emittedProducts, [])
+    truth(candidateRecipe.changes[1].to.endsWith(candidateRecipe.changes[1].from), 'old final operating-context recheck is retained byte-for-byte after the combined current-scope fence')
+    for (const clause of ['resolved_candidates as materialized', 'resolved_products as materialized', 'resolved_organisations as materialized',
+      'left join bx1_portal.products', 'left join bx1_portal.organisations', 'product_id is null or organisation_id is null',
+      'organisation_id is distinct from captured_organisation_id', 'or not emitted_reference',
+      'contributing_organisations as materialized', 'union select organisation_id from resolved_products',
+      'union select organisation_id from resolved_organisations', 'scoped_operator(c,current_org.organisation_id) is not true'])
+      truth(candidateRecipe.changes[1].to.includes(clause), `combined final scope fence retains explicit fail-closed clause: ${clause}`)
+    for (const clause of ["manager_authority jsonb:='{}'::jsonb", "manager_product_refs jsonb:='[]'::jsonb",
+      "manager_organisation_refs jsonb:='[]'::jsonb"])
+      truth(candidateRecipe.changes[2].to.includes(clause), `local projection state starts anew in each invocation: ${clause}`)
+    truth(candidateRecipe.changes[3].to.includes('manager_allowed:=false;')
+      && candidateRecipe.changes[3].to.includes("if not (manager_authority ? manager_product.organisation_id::text) then"),
+    'product state resets and key presence distinguishes cached false from an unpopulated exact-org result')
+    eq(candidateRecipe.changes[4].to.split('manager_allowed:=false;').length - 1, 2, 'both ordered org passes reset local per-item state')
     // Exact inherited signature is perturbed only inside a rolled-back
     // savepoint. A drift-safe extension must reject rather than accept it.
     await isolated(async () => {
@@ -571,7 +656,7 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
     eq(await functions(), baselineFunctions, 'drift probe fully rolls back all function changes')
     await db.query(offeringSql)
     installedFunctions = await functions()
-    eq(normalizedBody(await scalar('select prosrc from pg_proc where oid=$1::regprocedure', [candidateRecipe.signature])), correctedCandidateReader, 'installed retained reader is exactly the source-derived two-replacement correction')
+    eq(normalizedBody(await scalar('select prosrc from pg_proc where oid=$1::regprocedure', [candidateRecipe.signature])), correctedCandidateReader, 'installed retained reader is exactly the source-derived five-replacement correction')
     eq(normalizedBody(await scalar('select prosrc from pg_proc where oid=$1::regprocedure', [admissionRecipe.signature])), correctedAdmissionProjection, 'installed marker equals the sole source-derived lazy-CASE filter replacement')
     eq(normalizedBody(await scalar('select prosrc from pg_proc where oid=$1::regprocedure', [admissionAuthoritySignature])), acceptedAdmissionAuthority, 'installer leaves the complete accepted current authority body byte-identical')
     // Kept explicit: broadening this list requires independent source review.
@@ -1013,19 +1098,36 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
       eq(standardRead.offering_access ?? null, null, 'STANDARD read does not advertise password-only offering exception')
       truth(standardRead.organisations.some(o => o.id === application.organisation_id), 'STANDARD read keeps exact globally authorised organisation visible')
       eq(standardRead.product_appointment_candidates, [], 'initial STANDARD directory has no product in the new exact manager scope')
+      const parentManagerCapabilities = ['create_product', 'save_product', 'submit_product', 'publish_product', 'read_orders']
+      const zeroProductOrganisation = standardRead.organisations.find(org => org.id === application.organisation_id)
+      eq(zeroProductOrganisation.capabilities, parentManagerCapabilities,
+        'zero-product organisation retains every exact inherited manager capability, including create_product')
+      const standardPublicOperation = async (asset, operation, run) => {
+        const started = performance.now()
+        let failure
+        try { return await run() }
+        catch (error) { failure = error; throw error }
+        finally {
+          console.log('BX1_STANDARD_PUBLIC_OPERATION_RECEIPT', JSON.stringify({ asset, operation,
+            outcome: failure ? 'FAILED' : 'RETURNED',
+            sqlstate: typeof failure?.code === 'string' && /^[0-9A-Z]{5}$/.test(failure.code) ? failure.code : null,
+            helper_elapsed_ms: Number((performance.now() - started).toFixed(3)),
+            timing_scope: 'CI-helper-including-claims-and-RPC-not-SQL-time-call-count-or-SLA' }))
+        }
+      }
       const standardProducts = []
       for (const asset of ['FUND', 'REAL_ESTATE']) {
         const name = `Fictional rollback-only STANDARD ${asset}`
         const originalTerms = typedTerms(asset, name)
-        const draft = (await command(1, manager, 'create_product', { organisation_id: application.organisation_id,
-          terms: originalTerms }, key(), assured)).products.find(p => p.terms.name === name)
+        const draft = (await standardPublicOperation(asset, 'create_product', () => command(1, manager, 'create_product',
+          { organisation_id: application.organisation_id, terms: originalTerms }, key(), assured))).products.find(p => p.terms.name === name)
         truth(draft?.id, `${asset} canonical existing create works through STANDARD route after cutover`)
         eq([draft.status, draft.terms], ['DRAFT', originalTerms], `${asset} STANDARD draft retains exact validated terms`)
         const revisedTerms = typedTerms(asset, `${name} revised`)
-        const saved = productFrom(await command(1, manager, 'save_product', { product_id: draft.id,
-          expected_revision: draft.revision, terms: revisedTerms }, key(), assured), draft.id)
+        const saved = productFrom(await standardPublicOperation(asset, 'save_product', () => command(1, manager, 'save_product',
+          { product_id: draft.id, expected_revision: draft.revision, terms: revisedTerms }, key(), assured)), draft.id)
         eq([saved.status, saved.revision, saved.terms], ['DRAFT', draft.revision + 1, revisedTerms], `${asset} canonical typed save retains STANDARD revision and terms`)
-        eq(productFrom(await read(1, manager, assured), draft.id).terms, revisedTerms, `${asset} STANDARD canonical read returns saved package draft`)
+        eq(productFrom(await standardPublicOperation(asset, 'read_scoped', () => read(1, manager, assured)), draft.id).terms, revisedTerms, `${asset} STANDARD canonical read returns saved package draft`)
         standardProducts.push(saved)
       }
       // Correction-specific cases start only AFTER the unchanged measured read
@@ -1067,15 +1169,66 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
           }))
         }
       }
-      const selectedDirectory = candidateRows(await directoryRead())
+      const selectedSnapshot = await directoryRead()
+      const selectedDirectory = candidateRows(selectedSnapshot)
       for (const p of standardProducts) for (const [actor, candidateRole] of [[2, 'ComplianceOfficer'], [3, 'IssuerFundManager']])
         truth(selectedDirectory.some(row => row.product_id === p.id && row.user_id === id(actor)
           && row.membership_id === id(400 + actor) && row.role === candidateRole), `${p.terms.asset_type}: directory retains exact current native ${candidateRole} input`)
       truth(selectedDirectory.every(row => standardProducts.some(p => p.id === row.product_id)
         && row.user_id !== id(1) && row.user_id !== id(6)), 'new manager sees both exact products, no self or wrong-scope staff directory')
+      await claims(1, assured); await fixtureOwner('STANDARD combined contributor fence inspection')
+      const selectedProductRefs = selectedSnapshot.products.filter(product =>
+        (product.allowed_actions ?? []).length || selectedDirectory.some(candidate => candidate.product_id === product.id))
+        .map(product => ({ product_id: product.id, organisation_id: product.organisation_id }))
+      const selectedOrganisationRefs = selectedSnapshot.organisations.filter(org =>
+        (org.capabilities ?? []).some(capability => ['create_product', 'reopen_offering_review', 'begin_offering_amendment'].includes(capability)))
+        .map(org => org.id)
+      eq(await projectionScopeCheck(manager, selectedDirectory, selectedProductRefs, selectedOrganisationRefs,
+        selectedSnapshot.products, selectedSnapshot.organisations), false, 'combined fresh fence accepts every actual candidate/action/capability contributor')
+      eq(await projectionScopeCheck(manager, [], [], [application.organisation_id], [], [zeroProductOrganisation]), false,
+        'zero-product inherited create capability contributes a fresh current organisation check')
+      eq(await projectionScopeCheck({ ...manager, organisationId: otherScope }, [], [], [application.organisation_id], [], [zeroProductOrganisation]), true,
+        'zero-product create contributor cannot retain authority from a different selected native organisation')
+      eq(await projectionScopeCheck(manager, selectedDirectory, [], [], selectedSnapshot.products, []), true,
+        'every candidate, including an empty-action product, requires its captured canonical association')
+      eq(await projectionScopeCheck(manager, selectedDirectory,
+        selectedProductRefs.map(ref => ({ ...ref, organisation_id: otherScope })), [], selectedSnapshot.products, []), true,
+        'candidate/action contributors reject a changed captured product organisation')
+      eq(await projectionScopeCheck(manager, [], [{ product_id: id(999999), organisation_id: application.organisation_id }],
+        [], [], []), true, 'action contributor rejects a missing canonical product')
+      eq(await projectionScopeCheck(manager, [], selectedProductRefs, [], [], []), true,
+        'action contributor rejects a missing emitted product even if the canonical product remains')
+      eq(await projectionScopeCheck(manager, [], [], [id(999999)], [], [{ id: id(999999) }]), true,
+        'capability contributor rejects a missing canonical organisation')
+      eq(await projectionScopeCheck(manager, [], [], [application.organisation_id], [], []), true,
+        'capability contributor rejects a missing emitted organisation')
+      eq(await scalar(`select jsonb_build_array('{"org":false}'::jsonb ? 'org',
+        ('{"org":false}'::jsonb->>'org')::boolean,'{}'::jsonb ? 'org')`), [true, false, false],
+      'invocation-local false is a populated boolean, not a missing-key retry')
+      for (const statuses of [['IN_REVIEW', 'DRAFT'], ['DRAFT', 'APPROVED']]) await isolated(async () => {
+        await fixtureOwner('STANDARD mixed per-product necessary-state fixture')
+        await db.query(`update bx1_portal.products set status=case id when $1 then $3 else $4 end
+          where id=any($2::uuid[])`, [standardProducts[0].id, standardProducts.map(product => product.id), ...statuses])
+        const snapshot = await directoryRead(baseDirectory, `mixed necessary states ${statuses.join('/')}`)
+        for (const [index, product] of standardProducts.entries()) {
+          const current = productFrom(snapshot, product.id)
+          eq(current.allowed_actions, statuses[index] === 'DRAFT' ? ['save_product', 'submit_product'] : [],
+            `${product.terms.asset_type}: per-item draft/action state resets in both iteration directions`)
+        }
+        eq(snapshot.organisations.find(org => org.id === application.organisation_id).capabilities, parentManagerCapabilities,
+          'in-review or bare approved status cannot fabricate immutable reopen/amend capability')
+        await fixtureOwner('STANDARD mixed-state original-helper inspection after authenticated read')
+        for (const product of standardProducts)
+          eq(await scalar(`select jsonb_build_array(bx1_portal.offering_review_reopenable($1),bx1_portal.offering_amendment_beginable($1))`,
+            [product.id]), [false, false], 'both original independent helpers deny drafts/in-review/bare approval without immutable decisions')
+        const refs = snapshot.products.filter(product => candidateRows(snapshot).some(candidate => candidate.product_id === product.id))
+          .map(product => ({ product_id: product.id, organisation_id: product.organisation_id }))
+        eq(await projectionScopeCheck(manager, candidateRows(snapshot), refs, [application.organisation_id],
+          snapshot.products, snapshot.organisations), false, 'empty-action in-review/approved candidates still resolve their captured canonical product/org')
+      })
       await claims(1, assured); await admin()
-      eq(await scalar(finalCandidateScopeQuery, [JSON.stringify(manager), JSON.stringify(selectedDirectory)]), false, 'source-derived final guard accepts all currently scoped emitted products')
-      eq(await scalar(finalCandidateScopeQuery, [JSON.stringify(manager), JSON.stringify([{ ...selectedDirectory[0], product_id: id(999999) }])]), true, 'final guard rejects a missing emitted product rather than silently inner-joining it away')
+      eq(await candidateScopeCheck(manager, selectedDirectory, selectedSnapshot.products), false, 'source-derived final guard accepts all currently scoped emitted products')
+      eq(await candidateScopeCheck(manager, [{ ...selectedDirectory[0], product_id: id(999999) }], selectedSnapshot.products), true, 'final guard rejects a missing emitted product rather than silently inner-joining it away')
       for (const context of [null, {}, { mode: 'APPLICANT' }, { ...manager, role: 'ComplianceOfficer' },
         { ...manager, organisationId: 'malformed' }, { ...manager, organisationId: otherScope }, { ...manager, extra: true }]) {
         await claims(1, assured); await admin()
@@ -1167,13 +1320,15 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
         ['revoked exact customer binding', "update bx1_portal.organisation_authority_bindings set status='REVOKED' where id=$1", [binding]],
         ['revoked exact customer mandate', `update bx1_portal.representative_mandates set status='REVOKED',revision=revision+1,
           revoked_at=clock_timestamp(),revoked_by_user_id=$2,revoke_reason='Fictional rollback-only STANDARD candidate mandate withdrawal.' where id=$1`, [mandate.id, id(2)]],
-        ['passively expired customer admission', "update bx1_portal.applications set reviewed_at=clock_timestamp()-interval '31 days',approved_until=clock_timestamp()-interval '1 day' where id=$1", [application.id]],
+        ['passively expired customer admission', "with expiry as materialized (select clock_timestamp()-interval '1 day' as at) update bx1_portal.applications a set reviewed_at=e.at-interval '30 days',approved_until=e.at from expiry e where a.id=$1", [application.id]],
       ]) await isolated(async () => {
         await fixtureOwner(`STANDARD ${label} fixture mutation`)
         await db.query(sql, values)
         await claims(1, assured); await admin()
         eq(await scalar(effectiveCandidateQuery, [JSON.stringify(manager)]), [], `${label}: current operator cannot emit cached candidate authority`)
-        eq(await scalar(finalCandidateScopeQuery, [JSON.stringify(manager), JSON.stringify(baseDirectory)]), true, `${label}: final emitted-org guard rejects earlier candidate output`)
+        eq(await candidateScopeCheck(manager, baseDirectory, selectedSnapshot.products), true, `${label}: final emitted-org guard rejects earlier candidate output`)
+        eq(await projectionScopeCheck(manager, [], [], [application.organisation_id], [], [zeroProductOrganisation]), true,
+          `${label}: final fresh inherited-create fence rejects absent/revoked/expired authority without any candidates`)
         await denied(`${label}: unchanged STANDARD parent context fails closed`, () => read(1, manager, assured))
       })
       await claims(1, assured); await admin()
@@ -1192,9 +1347,9 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
           from bx1_portal.products p cross join unnest($2::uuid[]) copied(id) where p.id=$1`, [standardProducts[0].id, extraIds])
         const expected = await expectedDirectory([application.organisation_id])
         eq(expected.length, 100, 'rollback-only cap inputs reach the original exact hundred-row boundary')
-        await directoryRead(expected, 'original total ordering and LIMIT100 across all selected products')
+        const cappedSnapshot = await directoryRead(expected, 'original total ordering and LIMIT100 across all selected products')
         await claims(1, assured); await admin()
-        eq(await scalar(finalCandidateScopeQuery, [JSON.stringify(manager), JSON.stringify(expected)]), false, 'capped output still resolves every emitted product and current organisation')
+        eq(await candidateScopeCheck(manager, expected, cappedSnapshot.products), false, 'capped output still resolves every emitted product and current organisation')
       })
       await directoryRead(baseDirectory, 'all correction cases restore the original two-product scope')
       eq(await standardEngineConfig(), standardEngineScoped, 'all added candidate cases keep exact original deadlines and planner settings')
@@ -1378,6 +1533,48 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
       products.push({ asset, name, p, issuerAppointment, complianceAppointment })
     }
 
+    // Reuse the SAME five rollback-only STANDARD identities/assurance, after
+    // genuine synthetic immutable approvals. No new approval or provider claim.
+    const beforeApprovedStandard = await state()
+    await isolated(async () => {
+      await fixtureOwner('approved STANDARD existing assurance/person fixture')
+      for (const n of [1, 2, 3, 4, 5]) {
+        await db.query("insert into bx1_private.persons(id,label,status,evidence_reference,bootstrap_receipt_id) values($1,$2,'TRUSTED','fictional:standard-package-parity-only',$3)", [id(800 + n), `Fictional STANDARD package person ${n}`, id(850 + n)])
+        await db.query("insert into bx1_private.person_principals(auth_user_id,person_id,status,evidence_reference,bootstrap_receipt_id) values($1,$2,'TRUSTED','fictional:standard-package-parity-only',$3)", [id(n), id(800 + n), id(870 + n)])
+      }
+      await db.query("insert into auth.mfa_factors(id,user_id,status,factor_type) values($1,$2,'verified','totp')", [id(201), id(1)])
+      await db.query("update auth.sessions set aal='aal2',factor_id=$1 where id=$2", [id(201), id(101)])
+      const assured = { aal: 'aal2', amr: [{ method: 'password', timestamp: Math.floor(Date.now() / 1000) },
+        { method: 'totp', timestamp: Math.floor(Date.now() / 1000) }] }
+      const approvedSnapshot = await read(1, manager, assured)
+      eq(approvedSnapshot.stage2_access.session_mode, 'STANDARD', 'approved projection uses the actual retained STANDARD reader, not password sibling')
+      eq(approvedSnapshot.stage2_access.allowed_commands, [], 'approved STANDARD manager acquires no admission commands')
+      await fixtureOwner('approved STANDARD independent original-helper inspection after public read')
+      const orgActions = []
+      for (const { asset, p: approved } of products) {
+        const predicates = await scalar(`select jsonb_build_array(bx1_portal.offering_review_reopenable($1),
+          bx1_portal.offering_amendment_beginable($1))`, [approved.id])
+        eq(predicates, [true, true], `${asset}: original independent helpers recognise the actual immutable synthetic approval pair`)
+        const expected = [predicates[0] && 'reopen_offering_review', predicates[1] && 'begin_offering_amendment'].filter(Boolean)
+        eq(productFrom(approvedSnapshot, approved.id).allowed_actions, expected,
+          `${asset}: retained manager product actions exactly match independent original current helper outcomes/order`)
+        for (const action of expected) if (!orgActions.includes(action)) orgActions.push(action)
+      }
+      eq(approvedSnapshot.organisations.find(org => org.id === application.organisation_id).capabilities,
+        ['create_product', 'save_product', 'submit_product', 'publish_product', 'read_orders', ...orgActions],
+      'approved manager organisation retains exact parent capabilities then independent reopen/amend ordering')
+      const candidates = approvedSnapshot.product_appointment_candidates
+      const refs = approvedSnapshot.products.filter(product => (product.allowed_actions ?? []).length
+        || candidates.some(candidate => candidate.product_id === product.id))
+        .map(product => ({ product_id: product.id, organisation_id: product.organisation_id }))
+      eq(await projectionScopeCheck(manager, candidates, refs, [application.organisation_id],
+        approvedSnapshot.products, approvedSnapshot.organisations), false,
+      'approved actions/capabilities and candidate associations pass the exact reconstructed combined fresh fence')
+    })
+    eq(await state(), beforeApprovedStandard, 'approved STANDARD check restores all exact assurance/person/session/business rows')
+    eq(await functions(), installedFunctions, 'approved STANDARD check preserves every installed/protected function and identity')
+    eq(await security(), baselineSecurity, 'approved STANDARD check preserves exact grants/RLS/owners/triggers')
+
     phase = 'current-native-authority-and-excluded-families'
     const fund = products[0].p
     const createAnother = () => command(1, manager, 'create_product', { organisation_id: application.organisation_id, terms: typedTerms('FUND', 'Fictional negative creation') })
@@ -1391,7 +1588,7 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
       ['revoked exact authority binding', "update bx1_portal.organisation_authority_bindings set status='REVOKED' where id=$1", [binding]],
       ['revoked exact organisation mandate', `update bx1_portal.representative_mandates set status='REVOKED',revision=revision+1,
         revoked_at=clock_timestamp(),revoked_by_user_id=$2,revoke_reason='Fictional isolated organisation mandate withdrawal.' where id=$1`, [mandate.id, id(2)]],
-      ['expired customer admission', "update bx1_portal.applications set reviewed_at=clock_timestamp()-interval '31 days',approved_until=clock_timestamp()-interval '1 day' where id=$1", [application.id]],
+      ['expired customer admission', "with expiry as materialized (select clock_timestamp()-interval '1 day' as at) update bx1_portal.applications a set reviewed_at=e.at-interval '30 days',approved_until=e.at from expiry e where a.id=$1", [application.id]],
       ['changed customer admission revision', 'update bx1_portal.applications set revision=revision+1 where id=$1', [application.id]],
       ['changed approved customer facts', "update bx1_portal.applications set details=jsonb_set(details,'{business_activities}',to_jsonb('Altered fictional unreviewed activities.'::text)) where id=$1", [application.id]],
       ['monitoring hold', "insert into bx1_portal.customer_monitoring_cases(application_id,state,revision,decided_at,decided_by,last_receipt_id) values($1,'ON_HOLD',1,clock_timestamp(),$2,$3)", [application.id, id(2), id(900)]],
@@ -1548,7 +1745,7 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
         +(select count(*) from bx1_portal.product_service_appointment_requests where actor_id=$1 and request_key=$2)`, [id(n), requestKey]), '0', `${label} rejected waiting call has no durable request`)
     }
     const originalApplication = await scalar('select to_jsonb(a) from bx1_portal.applications a where id=$1', [application.id])
-    await realWait('manager admission expires while create waits', "update bx1_portal.applications set approved_until=clock_timestamp()-interval '1 minute',reviewed_at=clock_timestamp()-interval '31 days' where id=$1", [application.id],
+    await realWait('manager admission expires while create waits', "with expiry as materialized (select clock_timestamp()-interval '1 minute' as at) update bx1_portal.applications a set approved_until=e.at,reviewed_at=e.at-interval '30 days' from expiry e where a.id=$1", [application.id],
       1, manager, 'create_product', { organisation_id: application.organisation_id, terms: typedTerms('FUND', 'Fictional waiting admission denial') }, '42501',
       () => db.query('update bx1_portal.applications set approved_until=$2,reviewed_at=$3 where id=$1', [application.id, originalApplication.approved_until, originalApplication.reviewed_at]))
     await realWait('manager live monitoring changes while create waits', "update bx1_portal.customer_monitoring_cases set state='ON_HOLD',revision=revision+1,decided_at=greatest(clock_timestamp(),decided_at+interval '1 microsecond') where application_id=$1", [application.id],
