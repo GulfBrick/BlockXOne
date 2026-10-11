@@ -219,7 +219,8 @@ export async function proveAdmissionDocumentReceipts(db, clients, featureSql) {
     truth(version >= 170000 && version < 180000, 'existing disposable PostgreSQL17 fixture')
     baselineRelations = await relations(); baselineRows = await rows(); baselineFunctions = await functions(); baselineSecurity = await security()
     truth(baselineFunctions.some(f => f.signature === 'bx1_portal.admission_password_session()'), 'unchanged parent admission feature remains installed')
-    truth(baselineFunctions.some(f => f.signature === 'public.bx1_investing_proposal_document_lookup(uuid,uuid,jsonb)'), 'unchanged representative feature remains installed')
+    truth(baselineFunctions.some(f => f.nspname === 'public' && f.proname === 'bx1_investing_proposal_document_lookup'
+      && f.signature === 'bx1_investing_proposal_document_lookup(uuid,uuid,jsonb)'), 'unchanged representative feature remains installed')
     eq(baselineFunctions.some(f => f.signature === explicit9 || f.signature === admissionHelper), false, 'new receipt signatures are not preinstalled')
     eq(baselineRows['bx1_private.document_lifecycle_policy'][0].mode, 'SCANNER_REQUIRED', 'inherited scanner lifecycle is retained as baseline')
     eq(baselineRows['bx1_private.document_receipt_policy'][0].enforced, true, 'inherited scanner-required lifecycle has enforced receipt policy')
