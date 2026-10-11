@@ -427,11 +427,16 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
         unaffected_order_equal: true }))
       return
     }
+    await db.query('savepoint offering_authority_read')
     let snapshot, code
-    try { snapshot = await read(actorNumber, context) } catch (error) { code = error?.code }
+    try { snapshot = await read(actorNumber, context) }
+    catch (error) { code = error?.code; if (!code) throw error }
+    finally { await db.query('rollback to savepoint offering_authority_read; release savepoint offering_authority_read') }
     await admin()
     if (code) eq(code, '42501', `${label} fails closed on read`)
     else truth(!(snapshot.products ?? []).some(p => productIds.has(p.id)), `${label} hides affected package records`)
+    console.log('BX1_GLOBAL_AUTHORITY_READ_RECEIPT', JSON.stringify({ label,
+      outcome: code ? 'DENIED' : 'RETURNED', sqlstate: code ?? null, recovered: true }))
   })
   const samePerson = async (actors, run, status = 'TRUSTED') => isolated(async () => {
     await db.query("insert into bx1_private.persons(id,label,status,evidence_reference,bootstrap_receipt_id) values($1,'Fictional package identity negative','TRUSTED','fictional:offering-negative',$2)", [id(700), id(701)])
