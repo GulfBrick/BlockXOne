@@ -79,13 +79,32 @@ reviewed against this exact feature before installation.
 
 ## Proof and remaining Stage 3 scope
 
-The existing cloud harness runs the retained rc32 admission and accepted Stage2
-representatives proofs first. New proofs cover both templates, the connected
+The existing cloud harness runs the retained admission and accepted Stage2
+representatives proofs first, followed by the unchanged accepted rc33 receipt
+proof. That proof restores its receipt functions on return; a separate,
+transactional inheritance helper therefore installs the exact accepted rc33
+receipt feature before Stage3 captures its protected baseline. It permits no
+row/relation/security drift and does not put receipt functions in the Stage3
+changed-function allowlist. A rollback-only nine-argument TEST receipt sample
+then proves the inherited runtime remains usable after the offering overlay;
+its metadata is fictional trusted-server attestation, not real private bytes.
+
+New proofs cover both templates, the connected
 appointment/package cycle, revision-bound decisions, actual two-connection
 waits, unknown-result continuity, expired/revoked authority, audit rollback and
 preservation of inherited records/roles/global definitions. The exact source
 push, all mandatory cloud jobs and branded build are recorded separately from
 hosted acceptance; no local runtime is used.
+
+The first STANDARD candidate read reproduced a 15-second timeout in both cloud
+configurations. The measured correction narrows necessary organisation binding
+inputs before expanding reviewer candidates, materialises current scoped
+authority per organisation, retains every existing membership/person predicate
+and output rule, and rechecks every returned product/organisation immediately
+before the final context guard. It does not extend the timeout, shrink fixtures,
+change global authority, or treat planning-only EXPLAIN as actual execution.
+Failed receipts remain in the native acceptance record; the rc34 source/cloud
+candidate is distinct from the accepted hosted rc33 baseline.
 
 This increment does **not** claim complete Stage3 acceptance. Current disclosure
 text digests are not authenticated supplier e-signature evidence. Actual offering
@@ -94,3 +113,11 @@ configuration and configuration-bound approvals remain named following work.
 Quarantined evidence does not become clean or approved because package review
 passed. Technical readiness and financial opening remain Stage4 work. MAIN stays
 unactivated and genuine provider/customer admission is not simulated as real.
+
+DocuSign's developer sandbox is the selected signing supplier. Supplier choice
+does not imply an account, credentials or a completed envelope. The integration
+must bind the original document hashes, immutable offering revision, person and
+active capacity; authenticate supplier evidence; and retain completed documents
+and certificate/audit evidence. A signing-page return parameter alone is not
+signature acceptance. No hosted signing credentials or envelope are created by
+this source/cloud increment.

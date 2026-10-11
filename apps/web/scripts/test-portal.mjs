@@ -12,6 +12,8 @@ import { proveSyntheticCompliance } from './test-synthetic-compliance.mjs'
 import { proveAdmissionWorkflow } from './test-admission-workflow.mjs'
 import { proveAccountRepresentatives } from './account-representatives-proof.mjs'
 import { proveOfferingWorkflow } from './offering-workflow-proof.mjs'
+import { proveAdmissionDocumentReceipts } from './admission-document-receipts-proof.mjs'
+import { installAcceptedAdmissionReceiptsBaseline } from './accepted-admission-receipts-baseline.mjs'
 import { proveOfferingFileQuarantine, proveOfferingFileProductIsolation } from './offering-file-quarantine-proof.mjs'
 
 // Exact disposable GitHub PostgreSQL17 service only. No local/project execution.
@@ -24,6 +26,7 @@ const options = { connectionString: expected, ssl: false, connectionTimeoutMilli
 const db = new pg.Client(options)
 let phase = 'initialise', checks = 0, begun = false, connected = false, keySequence = 0
 let committedFixture = false
+let acceptedReceiptBaseline, acceptedReceiptBaselineVerified = false
 const proofClients = []
 const uid = n => `e1000000-0000-4000-8000-${String(n).padStart(12, '0')}`
 const sid = n => `e2000000-0000-4000-8000-${String(n).padStart(12, '0')}`
@@ -2665,9 +2668,21 @@ try {
   checks += await proveAccountRepresentatives(db, proofClients,
     await source('../../../supabase/features/bx1_admission_workflow.sql'),
     await source('../../../supabase/features/bx1_account_representatives.sql'))
+  phase = 'admission-document-receipts-proof'
+  checks += await proveAdmissionDocumentReceipts(db, proofClients,
+    await source('../../../supabase/features/bx1_admission_document_receipts.sql'))
+  phase = 'accepted-admission-receipts-runtime-baseline'
+  acceptedReceiptBaseline = await installAcceptedAdmissionReceiptsBaseline(db, proofClients,
+    await source('../../../supabase/features/bx1_admission_document_receipts.sql'),
+    await source('../../../supabase/migrations/20261011084608_stage2_admission_document_receipts.sql'))
+  checks += acceptedReceiptBaseline.checks
   phase = 'normal-offering-workflow-proof'
   checks += await proveOfferingWorkflow(db, proofClients,
     await source('../../../supabase/features/bx1_offering_workflow.sql'))
+  phase = 'accepted-admission-receipts-post-overlay-parity'
+  checks += await acceptedReceiptBaseline.provePostOverlay()
+  checks += await acceptedReceiptBaseline.verifyInstalled()
+  acceptedReceiptBaselineVerified = true
   phase = 'cleanup-committed-disposable-fixture'
   await db.query('drop schema bx1_portal,bx1_private,storage,auth,public cascade; create schema public')
   committedFixture = false
@@ -2679,10 +2694,22 @@ try {
     && /^[a-z0-9-]{1,80}$/.test(error.accountRepresentativesPhase) ? error.accountRepresentativesPhase : 'unavailable'
   const offeringWorkflowPhase = typeof error?.offeringWorkflowPhase === 'string'
     && /^[a-z0-9-]{1,80}$/.test(error.offeringWorkflowPhase) ? error.offeringWorkflowPhase : 'unavailable'
-  console.error(`BX1_PORTAL_SQL_FAILED phase=${phase} accountRepresentativesPhase=${accountRepresentativesPhase} offeringWorkflowPhase=${offeringWorkflowPhase} line=${error?.fixtureLine ?? 'unknown'} code=${error?.code ?? 'assertion'} diagnostic=${JSON.stringify(diagnostic)}`)
+  const admissionDocumentReceiptsPhase = typeof error?.admissionDocumentReceiptsPhase === 'string'
+    && /^[a-z0-9-]{1,80}$/.test(error.admissionDocumentReceiptsPhase) ? error.admissionDocumentReceiptsPhase : 'unavailable'
+  const acceptedAdmissionReceiptsPhase = typeof error?.acceptedAdmissionReceiptsPhase === 'string'
+    && /^[a-z0-9-]{1,80}$/.test(error.acceptedAdmissionReceiptsPhase) ? error.acceptedAdmissionReceiptsPhase : 'unavailable'
+  console.error(`BX1_PORTAL_SQL_FAILED phase=${phase} accountRepresentativesPhase=${accountRepresentativesPhase} offeringWorkflowPhase=${offeringWorkflowPhase} admissionDocumentReceiptsPhase=${admissionDocumentReceiptsPhase} acceptedAdmissionReceiptsPhase=${acceptedAdmissionReceiptsPhase} line=${error?.fixtureLine ?? 'unknown'} code=${error?.code ?? 'assertion'} diagnostic=${JSON.stringify(diagnostic)}`)
   process.exitCode = 1
 } finally {
   if (begun) { try { await db.query('rollback') } catch {} }
+  if (acceptedReceiptBaseline && !acceptedReceiptBaselineVerified && connected) {
+    try { await acceptedReceiptBaseline.verifyInstalled() }
+    catch (error) {
+      const code = typeof error?.code === 'string' && /^[0-9A-Z]{5}$/.test(error.code) ? error.code : 'assertion'
+      console.error(`BX1_ACCEPTED_ADMISSION_RECEIPTS_INTEGRITY_FAILED code=${code} primary=preserved`)
+      process.exitCode = 1
+    }
+  }
   await Promise.all(proofClients.map(client => client.end().catch(() => {})))
   if (committedFixture && connected) {
     try { await db.query('reset role'); await db.query('drop schema bx1_portal,bx1_private,storage,auth,public cascade; create schema public') } catch { console.error('BX1_PORTAL_CLOUD_CLEANUP_FAILED disposable-service-will-be-destroyed-by-CI'); process.exitCode = 1 }

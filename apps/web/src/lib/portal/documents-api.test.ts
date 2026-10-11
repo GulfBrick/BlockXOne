@@ -6,7 +6,7 @@ const mocks = vi.hoisted(() => ({ read: vi.fn(), create: vi.fn() }))
 const receipts = vi.hoisted(() => ({ config: vi.fn(), id: vi.fn(), register: vi.fn() }))
 vi.mock('@/lib/supabase/server', async original => ({ ...await original<object>(), createRequestSupabaseClient: mocks.create }))
 vi.mock('./server', async original => ({ ...await original<object>(), readPortal: mocks.read }))
-vi.mock('./document-receipts', () => ({ documentReceiptDatabaseConfig: receipts.config, documentReceiptId: receipts.id, registerDocumentReceipt: receipts.register }))
+vi.mock('./document-receipts', async original => ({ ...await original<object>(), documentReceiptDatabaseConfig: receipts.config, documentReceiptId: receipts.id, registerDocumentReceipt: receipts.register }))
 import { GET, POST } from '@/app/api/portal/documents/route'
 const origin = 'https://block-x-one-documents-test.vercel.app'
 const id = '55555555-5555-4555-8555-555555555555'
@@ -297,8 +297,82 @@ describe('private evidence context continuity', () => {
     const response = await POST(uploadRequest())
     expect(response.status).toBe(201)
     expect((await response.json()).validation_state).toBe('SYNTHETIC_UNSCANNED')
-    expect(receipts.register).toHaveBeenCalledWith(actor, sessionId, expect.objectContaining({ id, storage_path: `${actor}/${id}`, kind: 'IDENTITY' }))
+    expect(receipts.register).toHaveBeenCalledWith(actor, sessionId, expect.objectContaining({ id, storage_path: `${actor}/${id}`, kind: 'IDENTITY' }), null)
     expect(download).toHaveBeenCalledWith(`${actor}/${id}`)
+  })
+  function attestedUpload(change: Record<string, unknown> = {}) {
+    const sessionId = '77777777-7777-4777-8777-777777777777'
+    const facts = { iss: 'https://fegnnnlseuejkrusbbkv.supabase.co/auth/v1', sub: actor, session_id: sessionId,
+      role: 'authenticated', aal: 'aal1', exp: Math.floor(Date.now() / 1000) + 3600, is_anonymous: false,
+      amr: [{ method: 'password', timestamp: Math.floor(Date.now() / 1000) - 5 }], ...change }
+    const token = `fixture.${Buffer.from(JSON.stringify({ ...facts, email: 'not-transported@example.invalid', user_metadata: { aal: 'aal2' } })).toString('base64url')}.not-a-real-signature`
+    const bytes = Buffer.from('%PDF-1.4\nfictional evidence')
+    const upload = vi.fn().mockResolvedValue({ error: null })
+    const download = vi.fn().mockResolvedValue({ error: null, data: new Blob([bytes], { type: 'application/pdf' }) })
+    const auth = { getSession: vi.fn().mockResolvedValue({ data: { session: { access_token: token } }, error: null }),
+      getUser: vi.fn().mockResolvedValue({ data: { user: { id: actor, user_metadata: { session_id: organisationId } } }, error: null }) }
+    mocks.create.mockReturnValue({
+      rpc: vi.fn((name: string) => ({ abortSignal: vi.fn().mockResolvedValue({ data: name === 'bx1_document_lifecycle_mode' ? 'SYNTHETIC_TEST_ONLY' : true, error: null }) })),
+      storage: { from: () => ({ upload, download }) }, auth,
+    })
+    mocks.read.mockResolvedValue({ user: { id: actor }, snapshot: { ...snapshot, operating_context: { mode: 'APPLICANT' },
+      stage2_access: { version: 1, environment: 'TESTNET', actor_id: actor, operating_context: { mode: 'APPLICANT' },
+        session_mode: 'TEST_PASSWORD', allowed_commands: ['submit_application'] } } })
+    receipts.config.mockReturnValue({})
+    return { facts, token, sessionId, upload, download, auth }
+  }
+  it('preserves no-factor STANDARD TEST AAL1 uploads when the password pause is off or the marker is absent', async () => {
+    for (const stage2_access of [undefined, { version: 1, environment: 'TESTNET', actor_id: actor,
+      operating_context: { mode: 'APPLICANT' }, session_mode: 'STANDARD', allowed_commands: ['submit_application'] }]) {
+      vi.clearAllMocks()
+      const installed = attestedUpload({ amr: [{ method: 'native-existing-method', timestamp: 1 }] })
+      mocks.read.mockResolvedValue({ user: { id: actor }, snapshot: { ...snapshot,
+        operating_context: { mode: 'APPLICANT' }, ...(stage2_access ? { stage2_access } : {}) } })
+      expect((await POST(uploadRequest())).status).toBe(201)
+      expect(installed.auth.getUser).toHaveBeenLastCalledWith(installed.token)
+      expect(receipts.register).toHaveBeenCalledExactlyOnceWith(actor, installed.sessionId, expect.objectContaining({ id }), null)
+    }
+  })
+  it('passes only getUser-verified current-token facts, not upload headers or user metadata', async () => {
+    const installed = attestedUpload()
+    const request = uploadRequest()
+    request.headers.set('x-bx1-receipt-attestation', JSON.stringify({ sub: organisationId, aal: 'aal2' }))
+    const response = await POST(request)
+    expect(response.status).toBe(201)
+    expect((await response.json()).validation_state).toBe('SYNTHETIC_UNSCANNED')
+    expect(installed.auth.getUser).toHaveBeenNthCalledWith(1, installed.token)
+    expect(installed.auth.getUser).toHaveBeenNthCalledWith(2, installed.token)
+    expect(receipts.register).toHaveBeenCalledExactlyOnceWith(actor, installed.sessionId,
+      expect.objectContaining({ sha256: createHash('sha256').update(Buffer.from('%PDF-1.4\nfictional evidence')).digest('hex') }), installed.facts)
+    expect(installed.upload).toHaveBeenCalledWith(`${actor}/${id}`, expect.any(Uint8Array),
+      expect.objectContaining({ upsert: false, metadata: { sha256: expect.any(String) } }))
+  })
+  it('does not mint a receipt after a token/session change during byte storage', async () => {
+    const installed = attestedUpload()
+    const changed = `fixture.${Buffer.from(JSON.stringify({ ...installed.facts, session_id: organisationId })).toString('base64url')}.not-a-real-signature`
+    installed.auth.getSession.mockResolvedValueOnce({ data: { session: { access_token: installed.token } }, error: null })
+      .mockResolvedValueOnce({ data: { session: { access_token: changed } }, error: null })
+    expect((await POST(uploadRequest())).status).toBe(403)
+    expect(installed.auth.getUser).toHaveBeenLastCalledWith(changed)
+    expect(receipts.register).not.toHaveBeenCalled()
+  })
+  it('revalidates the exact token at receipt time and rejects revoked or substituted accounts', async () => {
+    const installed = attestedUpload()
+    installed.auth.getUser.mockResolvedValueOnce({ data: { user: { id: actor } }, error: null })
+      .mockResolvedValueOnce({ data: { user: null }, error: { code: 'revoked' } })
+    expect((await POST(uploadRequest())).status).toBeGreaterThanOrEqual(400)
+    expect(receipts.register).not.toHaveBeenCalled()
+    const changed = attestedUpload()
+    changed.auth.getUser.mockResolvedValueOnce({ data: { user: { id: actor } }, error: null })
+      .mockResolvedValueOnce({ data: { user: { id: organisationId } }, error: null })
+    expect((await POST(uploadRequest())).status).toBeGreaterThanOrEqual(400)
+    expect(receipts.register).not.toHaveBeenCalled()
+  })
+  it.each([{ amr: [{ method: 'recovery', timestamp: 1 }] }, { amr: [{ method: 'oauth', timestamp: 1 }] },
+    { exp: 1 }, { is_anonymous: true }])('does not use TEST admission on non-current password evidence %j', async change => {
+    attestedUpload(change)
+    expect((await POST(uploadRequest())).status).toBeGreaterThanOrEqual(400)
+    expect(receipts.register).not.toHaveBeenCalled()
   })
   it('does not register a strict receipt for a different stored object', async () => {
     const upload = vi.fn().mockResolvedValue({ error: null })

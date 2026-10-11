@@ -24,6 +24,19 @@ function reviewer(persona: PortalApplication['persona'], details: PortalApplicat
 }
 
 describe('persona-specific application preparation', () => {
+  it.each(['INVESTOR', 'WEALTH_MANAGER'] as const)('connects the admitted %s draft to manual sandbox KYC without changing submission authority', persona => {
+    const application = entryApplication({ persona, review_route: 'AVAILABLE' })
+    const html = renderToStaticMarkup(createElement(OnboardingForm, {
+      application, environment: 'TESTNET', onSaved: save, handoff: entryHandoff(application),
+    }))
+    expect(html).toContain('KYC placeholder · manual sandbox review')
+    expect(html).toContain('View recorded provider evidence')
+    expect(html).not.toContain('Start sandbox identity check')
+    expect(html).toContain('fictional test data')
+    expect(html).toContain('An independent reviewer must make the decision')
+    expect(html).toContain('disabled=""')
+  })
+
   it('never counts a quarantined upload as an attachable document', () => {
     expect(classifyDocumentUpload(202, { document: documents[0], validation_state: 'QUARANTINED' })).toEqual({ kind: 'QUARANTINED', document: documents[0] })
     expect(classifyDocumentUpload(201, { document: documents[0], validation_state: 'SYNTHETIC_UNSCANNED' })).toEqual({ kind: 'ATTACHABLE', document: documents[0] })

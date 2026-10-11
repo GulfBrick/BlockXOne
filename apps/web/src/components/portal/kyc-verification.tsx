@@ -85,7 +85,7 @@ export function providerEvidenceLabel(events: ProviderEvent[], revision: number)
   return 'No provider evidence received yet'
 }
 
-function ProviderEvidenceDetails({ events, revision }: { events: ProviderEvent[]; revision: number }) {
+function ProviderEvidenceDetails({ events, revision, manualTestReview = false }: { events: ProviderEvent[]; revision: number; manualTestReview?: boolean }) {
   const latest = effectiveEvent(events, revision)
   const conflict = events.some(event => event.application_revision === revision && event.projection_state === 'CONFLICT')
   const next = conflict ? 'Contact the provider/reviewer to resolve conflicting events. A later unambiguous signed event is required; no completed clearance can be inferred.'
@@ -101,7 +101,7 @@ function ProviderEvidenceDetails({ events, revision }: { events: ProviderEvent[]
                 : latest.evidence_kind === 'COMPLETED_REVIEW' ? 'Await independent BlockXOne review of this submitted application; the provider result grants no admission or authority.'
                   : 'Continue the provider check or await provider progress. No completed review is recorded.'
   return <>
-    <p className={styles.muted}>{next}</p>
+    <p className={styles.muted}>{manualTestReview ? 'These recorded provider facts remain separate from the manual sandbox decision. Continue the fictional application and human review workflow; no provider event grants admission, eligibility or a role.' : next}</p>
     {latest ? <DetailList rows={[
       { label: 'Provider event', value: latest.event_type },
       { label: 'Qualified applicant type', value: latest.applicant_type ?? 'Legacy: not qualified' },
@@ -157,19 +157,21 @@ function presentationApplicantType(application: EntryApplication): 'individual' 
   return null
 }
 type Props = { application: EntryApplication; environment: PlatformEnvironment; actorId: string; sandboxEnabled?: boolean;
-  individualEnabled?: boolean; companyEnabled?: boolean }
+  individualEnabled?: boolean; companyEnabled?: boolean; manualTestReview?: boolean }
 type Session = { scope: string; token: string }
 type Evidence = { scope: string; events: ProviderEvent[] }
 
 export function KycVerification({ application, environment, actorId,
   sandboxEnabled = process.env.NEXT_PUBLIC_BLOCKXONE_SUMSUB_SANDBOX_ENABLED === 'true',
   individualEnabled = process.env.NEXT_PUBLIC_BLOCKXONE_SUMSUB_SANDBOX_INDIVIDUAL_ENABLED === 'true',
-  companyEnabled = process.env.NEXT_PUBLIC_BLOCKXONE_SUMSUB_SANDBOX_COMPANY_ENABLED === 'true' }: Props) {
+  companyEnabled = process.env.NEXT_PUBLIC_BLOCKXONE_SUMSUB_SANDBOX_COMPANY_ENABLED === 'true',
+  manualTestReview = false }: Props) {
   const operatingContext = usePortalOperatingContext(), liveActor = usePortalActorId()
   const applicantContext = operatingContext.mode === 'APPLICANT' && liveActor === actorId
   const applicantType = presentationApplicantType(application)
   const subjectEnabled = applicantType === 'individual' ? individualEnabled : applicantType === 'company' ? companyEnabled : false
-  const scope = `${environment}:${actorId}:${liveActor}:${portalContextKey(operatingContext)}:${application.id}:${application.revision}:${application.status}:${application.context_kind}:${application.admission_purpose}:${application.persona}:${application.submitted_at}:${application.details.investor_type ?? ''}:${application.details.details_version ?? ''}:${sandboxEnabled}:${individualEnabled}:${companyEnabled}`
+  const manualPlaceholder = environment === 'TESTNET' && manualTestReview
+  const scope = `${environment}:${actorId}:${liveActor}:${portalContextKey(operatingContext)}:${application.id}:${application.revision}:${application.status}:${application.context_kind}:${application.admission_purpose}:${application.persona}:${application.submitted_at}:${application.details.investor_type ?? ''}:${application.details.details_version ?? ''}:${sandboxEnabled}:${individualEnabled}:${companyEnabled}:${manualPlaceholder}`
   const activeScope = useRef(scope)
   activeScope.current = scope
   const evidenceRequest = useRef(0)
@@ -184,7 +186,7 @@ export function KycVerification({ application, environment, actorId,
   const [evidenceMessage, setEvidenceMessage] = useState('')
   const testnet = environment === 'TESTNET'
   const mayRead = testnet && applicantContext && Boolean(actorId)
-  const mayStart = mayRead && sandboxEnabled && subjectEnabled && application.context_kind === 'PERSONAL'
+  const mayStart = mayRead && !manualPlaceholder && sandboxEnabled && subjectEnabled && application.context_kind === 'PERSONAL'
     && application.status === 'SUBMITTED' && Boolean(application.submitted_at)
     && ['INVESTOR_ADMISSION', 'CUSTOMER_ORGANISATION_ADMISSION'].includes(application.admission_purpose)
 
@@ -215,9 +217,9 @@ export function KycVerification({ application, environment, actorId,
     setEvidence(null)
     setEvidenceMessage('')
     setEvidenceBusy(false)
-    if (mayRead) void refreshEvidence()
+    if (mayRead && !manualPlaceholder) void refreshEvidence()
     return () => { evidenceRequest.current += 1; sessionRequest.current += 1 }
-  }, [scope, mayRead, refreshEvidence])
+  }, [scope, mayRead, manualPlaceholder, refreshEvidence])
 
   // The SDK's iframe does not provide its own title. Add one for assistive technology.
   useEffect(() => {
@@ -286,11 +288,12 @@ export function KycVerification({ application, environment, actorId,
 
   const currentSession = mayStart && session?.scope === scope ? session : null
   const currentEvidence = evidence?.scope === scope ? evidence.events : null
-  return <Panel title="Identity verification evidence" description="A sandbox provider check and the BlockXOne admission decision are separate records.">
+  return <Panel title={manualPlaceholder ? 'KYC placeholder · manual sandbox review' : 'Identity verification evidence'} description={manualPlaceholder ? 'Sumsub is not required to complete this fictional sandbox application.' : 'A sandbox provider check and the BlockXOne admission decision are separate records.'}>
     {testnet ? <>
-      <Notice title="Sandbox: fictional identity information only">When enabled, the Sumsub check opens inside your application. Do not submit a real identity document here. A provider result is evidence for an independent reviewer; it never grants account, role, product eligibility or signing authority.</Notice>
-      {!sandboxEnabled ? <Notice title="Sandbox identity check not connected">The provider session is unavailable until the TEST sandbox credentials, webhook and evidence writer are verified. Your application and its recorded review state remain available.</Notice> : null}
-      {sandboxEnabled && applicantType && !subjectEnabled ? <Notice title={applicantType === 'company'
+      {manualPlaceholder ? <Notice title="Continue with fictional evidence and human review">Complete the required application facts and upload fictional supporting evidence, then submit for Compliance review. The reviewer can request information, review your resubmission and record a manual TEST decision. This placeholder is not completed KYC and does not grant eligibility, a role or signing authority. Do not upload real identity documents.</Notice>
+        : <Notice title="Sandbox: fictional identity information only">When enabled, the Sumsub check opens inside your application. Do not submit a real identity document here. A provider result is evidence for an independent reviewer; it never grants account, role, product eligibility or signing authority.</Notice>}
+      {!manualPlaceholder && !sandboxEnabled ? <Notice title="Sandbox identity check not connected">The provider session is unavailable until the TEST sandbox credentials, webhook and evidence writer are verified. Your application and its recorded review state remain available.</Notice> : null}
+      {!manualPlaceholder && sandboxEnabled && applicantType && !subjectEnabled ? <Notice title={applicantType === 'company'
         ? 'Company sandbox verification unavailable' : 'Individual sandbox verification unavailable'}>
         {applicantType === 'company'
           ? 'Company verification remains unavailable until sandbox KYB entitlement, the exact company level and its evidence connection are verified. An individual check cannot verify this company application.'
@@ -298,15 +301,15 @@ export function KycVerification({ application, environment, actorId,
         {' Your application and historical provider evidence remain available; no clearance is inferred.'}
       </Notice> : null}
       <div className={styles.sectionGap} role="status" aria-live="polite">
-        <strong>{currentEvidence ? providerEvidenceLabel(currentEvidence, application.revision) : evidenceBusy ? 'Checking provider evidence...' : 'Provider evidence has not been checked'}</strong>
-        {currentEvidence ? <ProviderEvidenceDetails events={currentEvidence} revision={application.revision} /> : null}
-        {evidenceMessage ? <p className={styles.fieldError}>{evidenceMessage}</p> : null}
+        <strong>{currentEvidence ? providerEvidenceLabel(currentEvidence, application.revision) : evidenceBusy ? 'Checking provider evidence...' : manualPlaceholder ? 'Recorded provider facts are optional evidence, not a submission requirement.' : 'Provider evidence has not been checked'}</strong>
+        {currentEvidence ? <ProviderEvidenceDetails events={currentEvidence} revision={application.revision} manualTestReview={manualPlaceholder} /> : null}
+        {evidenceMessage ? <p className={styles.fieldError}>{evidenceMessage}{manualPlaceholder ? ' Continue the manual sandbox application; this optional evidence read does not block submission.' : ''}</p> : null}
       </div>
       <div className={`${styles.actions} ${styles.sectionGap}`}>
         {mayStart ? <button type="button" className={styles.button} disabled={starting} onClick={() => void start()}>{starting ? 'Starting sandbox verification...' : currentSession ? 'Restart sandbox identity check' : 'Start sandbox identity check'}</button> : null}
-        <button type="button" className={styles.buttonSecondary} disabled={evidenceBusy || !mayRead} onClick={() => void refreshEvidence()}>{evidenceBusy ? 'Checking evidence...' : 'Refresh recorded evidence'}</button>
+        <button type="button" className={styles.buttonSecondary} disabled={evidenceBusy || !mayRead} onClick={() => void refreshEvidence()}>{evidenceBusy ? 'Checking evidence...' : manualPlaceholder ? 'View recorded provider evidence' : 'Refresh recorded evidence'}</button>
       </div>
-      {!mayStart ? <p className={`${styles.muted} ${styles.sectionGap}`}>{['DRAFT', 'CHANGES_REQUIRED'].includes(application.status)
+      {!mayStart && !manualPlaceholder ? <p className={`${styles.muted} ${styles.sectionGap}`}>{['DRAFT', 'CHANGES_REQUIRED'].includes(application.status)
         ? application.status === 'DRAFT' ? 'Submit the application for review first. Identity verification must use its immutable submitted revision.' : 'Update and resubmit the application first. Identity verification cannot use an editable changes-required revision.'
         : !applicantContext ? 'Return to this signed-in applicant context before starting verification. No result from another account or capacity is retained.'
           : 'A new provider session is not available for this application state or configuration. Historical evidence remains visible to authorised readers.'}</p> : null}
@@ -321,9 +324,10 @@ export function KycVerification({ application, environment, actorId,
 }
 
 /** Read-only provider material for the independently authorised Compliance reviewer. */
-export function ProviderEvidenceReview({ applicationId, revision, environment }: { applicationId: string; revision: number; environment?: PlatformEnvironment }) {
+export function ProviderEvidenceReview({ applicationId, revision, environment, manualTestReview = false }: { applicationId: string; revision: number; environment?: PlatformEnvironment; manualTestReview?: boolean }) {
   const operatingContext = usePortalOperatingContext(), actorId = usePortalActorId()
-  const scope = `${environment ?? 'UNAVAILABLE'}:${actorId}:${portalContextKey(operatingContext)}:${applicationId}:${revision}`
+  const manualPlaceholder = environment === 'TESTNET' && manualTestReview
+  const scope = `${environment ?? 'UNAVAILABLE'}:${actorId}:${portalContextKey(operatingContext)}:${applicationId}:${revision}:${manualPlaceholder}`
   const activeScope = useRef(scope)
   activeScope.current = scope
   const request = useRef(0)
@@ -346,20 +350,21 @@ export function ProviderEvidenceReview({ applicationId, revision, environment }:
   useEffect(() => {
     request.current += 1
     setEvidence(null); setMessage(''); setBusy(false)
-    if (testnet) void refresh()
+    if (testnet && !manualPlaceholder) void refresh()
     return () => { request.current += 1 }
-  }, [scope, testnet, refresh])
+  }, [scope, testnet, manualPlaceholder, refresh])
 
   const events = evidence?.scope === scope ? evidence.events : null
   return <Panel title="Provider identity evidence" description="Signed provider events are evidence for this exact customer case, not the BlockXOne admission decision.">
     {testnet ? <>
+      {manualPlaceholder ? <Notice title="KYC placeholder · manual sandbox review">Review the submitted fictional evidence and record your own checks and rationale. Sumsub is not a required step for this manual TEST case. Historical signed provider facts remain available separately; this is not production KYC or an automatic admission decision.</Notice> : null}
       <Notice title="Independent reviewer decision required">A Sumsub sandbox event, including a positive provider answer, does not tick the review checks, admit the customer, grant a role or establish product eligibility. Record your own decision and rationale against the submitted application revision.</Notice>
       <div className={styles.sectionGap} role="status" aria-live="polite">
-        <strong>{events ? providerEvidenceLabel(events, revision) : busy ? 'Checking provider evidence...' : 'Provider evidence has not been checked'}</strong>
-        {events ? <ProviderEvidenceDetails events={events} revision={revision} /> : null}
-        {message ? <p className={styles.fieldError}>{message} Do not infer a clear result while evidence is unavailable.</p> : null}
+        <strong>{events ? providerEvidenceLabel(events, revision) : busy ? 'Checking provider evidence...' : manualPlaceholder ? 'Recorded provider facts are optional evidence, not a review prerequisite.' : 'Provider evidence has not been checked'}</strong>
+        {events ? <ProviderEvidenceDetails events={events} revision={revision} manualTestReview={manualPlaceholder} /> : null}
+        {message ? <p className={styles.fieldError}>{message} Do not infer a clear result while evidence is unavailable.{manualPlaceholder ? ' The manual TEST decision remains separate and available to the authorised reviewer.' : ''}</p> : null}
       </div>
-      <button type="button" className={`${styles.buttonSecondary} ${styles.sectionGap}`} disabled={busy} onClick={() => void refresh()}>{busy ? 'Checking signed evidence...' : 'Refresh signed provider evidence'}</button>
+      <button type="button" className={`${styles.buttonSecondary} ${styles.sectionGap}`} disabled={busy} onClick={() => void refresh()}>{busy ? 'Checking signed evidence...' : manualPlaceholder ? 'View recorded provider evidence' : 'Refresh signed provider evidence'}</button>
     </> : <Notice title="Production provider not admitted">No live provider evidence is available in this environment. The customer admission workflow remains sealed until its provider and operating controls are approved.</Notice>}
   </Panel>
 }

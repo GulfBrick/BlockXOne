@@ -440,6 +440,52 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
     proofStartedAt = await scalar("select to_jsonb(clock_timestamp()) #>> '{}'")
     await begin()
     phase = 'drift-fenced-feature-install'
+    const sourceHash = text => createHash('sha256').update(text, 'utf8').digest('hex')
+    const normalizedBody = text => text.replaceAll('\r\n', '\n').trim()
+    const recipeMatches = [...offeringSql.matchAll(/\$offering_recipes\$([\s\S]*?)\$offering_recipes\$::jsonb/g)]
+    eq(recipeMatches.length, 1, 'offering installer has one exact recipe array')
+    const recipes = JSON.parse(recipeMatches[0][1])
+    eq(recipes.length, 13, 'cutover has exactly thirteen reviewed retained targets')
+    const candidateRecipes = recipes.filter(recipe => recipe.signature === 'bx1_portal.read_scoped_pre_handoff(jsonb)')
+    eq(candidateRecipes.length, 1, 'candidate correction targets only the installed retained inner reader')
+    const candidateRecipe = candidateRecipes[0]
+    eq(candidateRecipe.expected_sha256, '9b410b549291c11fc639ba1968ff6402601f175dc054496d1bfac0304881a37c', 'complete original candidate reader fence remains exact')
+    eq(candidateRecipe.changes.length, 2, 'candidate correction changes only its query and final candidate scope guard')
+    const candidateReaderSource = (await readFile(new URL('../../../supabase/migrations/20260928174847_stage3_product_service_appointments.sql', import.meta.url), 'utf8')).replaceAll('\r\n', '\n')
+    const readerMatches = [...candidateReaderSource.matchAll(/create function bx1_portal\.read_scoped\(c jsonb\) returns jsonb\nlanguage plpgsql volatile security definer set search_path='' as \$\$([\s\S]*?)\$\$;/g)]
+    eq(readerMatches.length, 1, 'retained migration supplies one complete candidate-bearing body')
+    const originalCandidateReader = normalizedBody(readerMatches[0][1])
+    eq(sourceHash(originalCandidateReader), candidateRecipe.expected_sha256, 'historical source reconstructs the exact original retained reader')
+    eq(normalizedBody(await scalar('select prosrc from pg_proc where oid=$1::regprocedure', [candidateRecipe.signature])), originalCandidateReader, 'current installed retained target matches the full historical source before cutover')
+    let correctedCandidateReader = originalCandidateReader
+    for (const change of candidateRecipe.changes) {
+      eq(change.count, 1, 'each candidate correction replacement is single-occurrence fenced')
+      eq(correctedCandidateReader.split(change.from).length - 1, 1, 'each exact candidate source anchor appears once')
+      correctedCandidateReader = correctedCandidateReader.replace(change.from, change.to)
+    }
+    eq(sourceHash(correctedCandidateReader), '7cf11dffab988f78a8b1fe9d7e394e03b3055058d8df687f4e6b2c21cc7c3605', 'complete corrected candidate reader is source-pinned')
+    eq(sourceHash(candidateRecipe.changes[0].to), '813e82db1b23ae523d7893516fff83fbaac630a5493aa6a241c26445f7566241', 'complete candidate replacement including context guard is source-pinned')
+    const effectiveMatches = [...candidateRecipe.changes[0].to.matchAll(/    with scope_inputs[\s\S]*?\) candidate;/g)]
+    eq(effectiveMatches.length, 1, 'corrected recipe supplies one complete effective candidate query')
+    const effectiveCandidateBody = effectiveMatches[0][0].trim()
+    eq(effectiveCandidateBody.split('into candidates from').length - 1, 1, 'effective query removes only one procedural INTO')
+    eq([...effectiveCandidateBody.matchAll(/\bc->>/g)].length, 3, 'effective query has exactly three static context scalar references')
+    eq(effectiveCandidateBody.split('scoped_operator(c,s.id)').length - 1, 1, 'effective query has one current operator call per materialized organisation')
+    const effectiveCandidateQuery = effectiveCandidateBody.replace('into candidates from', 'from')
+      .replace(/\bc->>/g, () => '($1::jsonb)->>')
+      .replace('scoped_operator(c,s.id)', 'scoped_operator($1::jsonb,s.id)')
+    eq(sourceHash(effectiveCandidateQuery), 'c6e51a294080c9db3231cd714a5530f749434864a5ee44da4369367fee662998', 'effective standalone query changes only INTO and formal context references')
+    const finalScopeMatches = [...candidateRecipe.changes[1].to.matchAll(/^  if exists\(([\s\S]*?)\) then/g)]
+    eq(finalScopeMatches.length, 1, 'final guard has one exact emitted-product resolution and current-org query')
+    const finalCandidateScopeQuery = `select exists(${finalScopeMatches[0][1]})`
+      .replace('jsonb_array_elements(candidates)', 'jsonb_array_elements($2::jsonb)')
+      .replace('scoped_operator(c,current_org.organisation_id)', 'scoped_operator($1::jsonb,current_org.organisation_id)')
+    eq(sourceHash(finalCandidateScopeQuery), '9ec1bad87ded212865a9d88e1251e0d610a19d16ef6b52bca4027ca3e1d3f317', 'standalone final guard changes only its two formal inputs')
+    truth(candidateRecipe.changes[1].to.endsWith(candidateRecipe.changes[1].from), 'old final operating-context recheck is retained byte-for-byte after the new candidate recheck')
+    for (const clause of ['resolved_candidates as materialized', 'left join bx1_portal.products', 'left join bx1_portal.organisations',
+      'product_id is null or organisation_id is null', 'select distinct organisation_id from resolved_candidates',
+      'scoped_operator(c,current_org.organisation_id) is not true'])
+      truth(candidateRecipe.changes[1].to.includes(clause), `final candidate scope guard retains explicit fail-closed clause: ${clause}`)
     // Exact inherited signature is perturbed only inside a rolled-back
     // savepoint. A drift-safe extension must reject rather than accept it.
     await isolated(async () => {
@@ -449,15 +495,23 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
       await db.query(definition.replace(/\bBEGIN\b/i, `${anchor}\n-- fictional drift-rejection sentinel`))
       await denied('feature refuses altered retained canonical writer', () => db.query(offeringSql), '55000')
     })
+    await isolated(async () => {
+      const definition = await scalar('select pg_get_functiondef($1::regprocedure)', [candidateRecipe.signature])
+      truth(/\bBEGIN\b/i.test(definition), 'retained inner candidate reader has a PL/pgSQL body')
+      await db.query(definition.replace(/\bBEGIN\b/i, 'BEGIN\n-- fictional retained-reader drift sentinel'))
+      await denied('feature refuses full-body drift in the exact retained candidate reader', () => db.query(offeringSql), '55000')
+    })
     eq(await functions(), baselineFunctions, 'drift probe fully rolls back all function changes')
     await db.query(offeringSql)
     installedFunctions = await functions()
+    eq(normalizedBody(await scalar('select prosrc from pg_proc where oid=$1::regprocedure', [candidateRecipe.signature])), correctedCandidateReader, 'installed retained reader is exactly the source-derived two-replacement correction')
     // Kept explicit: broadening this list requires independent source review.
     const changedFunctions = new Set([
       'bx1_portal.execute_scoped_pre_eligibility(jsonb,text,uuid,jsonb)',
       'bx1_portal.execute_command_pre_entry(text,uuid,jsonb)',
       'bx1_portal.execute_scoped_pre_monitoring(jsonb,text,uuid,jsonb)',
       'bx1_portal.execute_scoped(jsonb,text,uuid,jsonb)', 'bx1_portal.read_scoped(jsonb)',
+      'bx1_portal.read_scoped_pre_handoff(jsonb)',
       'bx1_portal.save_fund_v2_scoped(jsonb,uuid,jsonb)',
       'bx1_portal.save_real_estate_v2_scoped(jsonb,uuid,jsonb)',
       'bx1_portal.execute_product_service_appointment(jsonb,text,uuid,jsonb)',
@@ -466,6 +520,8 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
       'bx1_portal.execute_begin_offering_amendment(jsonb,uuid,jsonb)',
       'bx1_portal.execute_reopen_offering_review(jsonb,uuid,jsonb)',
     ])
+    eq(changedFunctions.size, 13, 'exact changed-signature allowlist adds only the retained candidate reader')
+    eq([...changedFunctions].sort(), recipes.map(recipe => recipe.signature).sort(), 'proof and installer share the same thirteen exact retained signatures')
     for (const original of baselineFunctions) {
       const current = installedFunctions.find(f => f.oid === original.oid)
       truth(current, `inherited ${original.signature} retains its exact OID`)
@@ -613,7 +669,8 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
     eq(standardEngineBefore.client_statement_timeout_ms, 15000, 'retained client startup config sets fifteen-second statement timeout')
     eq(standardEngineBefore.client_query_timeout_ms, 20000, 'STANDARD parity retains the actual pg twenty-second client deadline')
     let standardEngineScoped, initialStandardReadElapsedMs = null, initialStandardReadOutcome = 'NOT_STARTED'
-    // Diagnostic-only: retain the failed reproducer, original read and deadlines.
+    // Retain the original public read and deadlines. Old query plans below are
+    // labelled comparison-only; effective plans bind the corrected installed body.
     // Standalone planning estimates are NOT the nested SPI plan or call counts.
     const normalizeDiagnosticSource = text => text.replaceAll('\r\n', '\n')
     const diagnosticHash = text => createHash('sha256').update(text, 'utf8').digest('hex')
@@ -663,10 +720,17 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
     const measurement = { fixture: 'disposable-cloud-PostgreSQL17', source_pins: {
       candidate: diagnosticHash(appointmentSource), mandates: diagnosticHash(mandateSource), ownership: diagnosticHash(ownershipSource),
       candidate_body: diagnosticHash(candidateBody), candidate_query: diagnosticHash(candidateQuery),
+      candidate_reader_signature: candidateRecipe.signature,
+      original_candidate_reader_body: candidateRecipe.expected_sha256,
+      effective_candidate_reader_body: sourceHash(correctedCandidateReader),
+      effective_candidate_replacement: sourceHash(candidateRecipe.changes[0].to),
+      effective_candidate_query: sourceHash(effectiveCandidateQuery),
+      final_candidate_scope_query: sourceHash(finalCandidateScopeQuery),
+      offering_recipe_source: sourceHash(normalizeDiagnosticSource(offeringSql)),
       native_leaf: diagnosticHash(nativeLeaf), native_query: diagnosticHash(nativeQuery),
       representative_leaf: diagnosticHash(mandateLeaf), representative_query: diagnosticHash(mandateQuery),
     }, diagnostics: [], observer: [], cleanup: [], read: {}, interpretation: {
-      plans: 'standalone-non-ANALYZE-estimates-not-nested-SPI', authority_call_counts: 'NOT_MEASURED',
+      plans: 'standalone-non-ANALYZE-estimates-not-nested-SPI', legacy_candidate_plans: 'COMPARISON_ONLY_NOT_INSTALLED_QUERY', authority_call_counts: 'NOT_MEASURED',
       cumulative_statistics: 'may-be-cached-or-unflushed-use-current-transaction-counters',
       counters: 'include-diagnostic-table-accesses-not-isolated-read-or-function-call-counts',
       sampling: 'four-fixed-samples-cannot-rule-out-transient-waits', hosted_performance: 'NOT_MEASURED', cause: 'NOT_ESTABLISHED',
@@ -721,7 +785,13 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
           ...(failure || restorationFailure ? {} : { value }) })
         return failure || restorationFailure ? undefined : value
       }
-      const numericInputs = () => scalar(`select jsonb_build_object(
+      const numericInputs = () => scalar(`with static_scope as materialized (
+          select o.id,o.reviewer_scope from bx1_portal.organisations o
+          where ($1::jsonb)->>'mode'='ROLE' and ($1::jsonb)->>'role'='OfferingManager'
+            and exists(select 1 from bx1_portal.products p where p.organisation_id=o.id)
+            and exists(select 1 from bx1_portal.organisation_authority_bindings b where b.product_organisation_id=o.id
+              and b.native_organisation_id::text=($1::jsonb)->>'organisationId' and b.role='OfferingManager')
+        ) select jsonb_build_object(
         'products',(select count(*) from bx1_portal.products), 'organisations',(select count(*) from bx1_portal.organisations),
         'memberships',(select count(*) from public.bx1_memberships), 'profiles',(select count(*) from public.bx1_profiles), 'users',(select count(*) from auth.users),
         'product_organisation_join',(select count(*) from bx1_portal.products p join bx1_portal.organisations o on o.id=p.organisation_id),
@@ -729,7 +799,13 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
           join public.bx1_memberships m on m.organisation_id=o.reviewer_scope and m.role in ('IssuerFundManager','ComplianceOfficer')),
         'static_candidate_join',(select count(*) from bx1_portal.products p join bx1_portal.organisations o on o.id=p.organisation_id
           join public.bx1_memberships m on m.organisation_id=o.reviewer_scope and m.role in ('IssuerFundManager','ComplianceOfficer')
-          join public.bx1_profiles profile on profile.id=m.user_id join auth.users u on u.id=m.user_id and u.email is not null where profile.status='ACTIVE'))`)
+          join public.bx1_profiles profile on profile.id=m.user_id join auth.users u on u.id=m.user_id and u.email is not null where profile.status='ACTIVE'),
+        'static_scope_organisations',(select count(*) from static_scope),
+        'static_scope_products',(select count(*) from bx1_portal.products p join static_scope o on o.id=p.organisation_id),
+        'static_scoped_candidate_join',(select count(*) from bx1_portal.products p join static_scope o on o.id=p.organisation_id
+          join public.bx1_memberships m on m.organisation_id=o.reviewer_scope and m.role in ('IssuerFundManager','ComplianceOfficer')
+          join public.bx1_profiles profile on profile.id=m.user_id join auth.users u on u.id=m.user_id and u.email is not null
+          where profile.status='ACTIVE'))`, [JSON.stringify(manager)])
       const relationStatistics = () => scalar(`select jsonb_build_object('captured_at',clock_timestamp(),
         'relations',(select jsonb_agg(jsonb_build_object('relation',c.oid::regclass::text,'reltuples',c.reltuples,'relpages',c.relpages,
           'cumulative',jsonb_build_object('seq_scan',s.seq_scan,'seq_tup_read',s.seq_tup_read,'idx_scan',s.idx_scan,'idx_tup_fetch',s.idx_tup_fetch,
@@ -752,13 +828,24 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
         }
         return { exact_installed_bodies: true }
       })
+      await diagnosticQuery('source-matches-installed-effective-candidate-reader', async () => {
+        const installed = normalizedBody(await scalar('select prosrc from pg_proc where oid=$1::regprocedure', [candidateRecipe.signature]))
+        eq(installed, correctedCandidateReader, 'effective plan source is the complete actual installed retained reader, not its outer wrapper')
+        return { signature: candidateRecipe.signature, installed_body_sha256: sourceHash(installed),
+          source_recipe_sha256: sourceHash(normalizeDiagnosticSource(offeringSql)), effective_query_sha256: sourceHash(effectiveCandidateQuery) }
+      })
       const plan = async (query, values = [], generic = false) => {
         const result = (await db.query(`explain (format json, costs true, verbose true, settings true${generic ? ', generic_plan true' : ''}) ${query}`, values)).rows[0]['QUERY PLAN']
         truth(Buffer.byteLength(JSON.stringify(result), 'utf8') <= 32768, 'standalone planning receipt is bounded to32KiB')
         return result
       }
-      await diagnosticQuery('candidate-custom-plan', () => plan(candidateQuery, [JSON.stringify(manager)]))
-      await diagnosticQuery('candidate-generic-plan', () => plan(candidateQuery, [], true))
+      await diagnosticQuery('legacy-comparison-candidate-custom-plan', () => plan(candidateQuery, [JSON.stringify(manager)]))
+      await diagnosticQuery('legacy-comparison-candidate-generic-plan', () => plan(candidateQuery, [], true))
+      for (const generic of [false, true]) await diagnosticQuery(`effective-candidate-${generic ? 'generic' : 'custom'}-plan`, async () => {
+        eq(normalizedBody(await scalar('select prosrc from pg_proc where oid=$1::regprocedure', [candidateRecipe.signature])), correctedCandidateReader, 'each effective plan is pinned to the current installed full body')
+        return { signature: candidateRecipe.signature, installed_body_sha256: sourceHash(correctedCandidateReader),
+          query_sha256: sourceHash(effectiveCandidateQuery), plan: await plan(effectiveCandidateQuery, generic ? [] : [JSON.stringify(manager)], generic) }
+      })
       const leafInputs = await diagnosticQuery('leaf-plan-fixture-inputs', async () => {
         const value = await scalar(`select jsonb_build_object(
           'as_of',clock_timestamp(),'native_membership_id',m.native_membership_id)
@@ -836,6 +923,11 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
       if (!originalStandardReadFailure) await db.query("select set_config('request.jwt.claims',$1,true)", [beforeCaller.claims])
       await diagnosticQuery('after-numeric-inputs', numericInputs)
       await diagnosticQuery('after-relation-statistics', relationStatistics)
+      for (const generic of [false, true]) await diagnosticQuery(`post-read-effective-candidate-${generic ? 'generic' : 'custom'}-plan`, async () => {
+        eq(normalizedBody(await scalar('select prosrc from pg_proc where oid=$1::regprocedure', [candidateRecipe.signature])), correctedCandidateReader, 'post-read effective plan still binds the exact installed retained body')
+        return { signature: candidateRecipe.signature, installed_body_sha256: sourceHash(correctedCandidateReader),
+          query_sha256: sourceHash(effectiveCandidateQuery), plan: await plan(effectiveCandidateQuery, generic ? [] : [JSON.stringify(manager)], generic) }
+      })
       await diagnosticQuery('post-read-fixture-parity', async () => {
         eq(await state(), measurementState, 'measured read recovery leaves exact complete STANDARD fixture unchanged')
         eq(await functions(), measurementFunctions, 'measured read recovery leaves every function/owner/ACL unchanged')
@@ -847,6 +939,8 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
       eq(standardRead.stage2_access.session_mode, 'STANDARD', 'post-cutover public read retains STANDARD assurance marker')
       eq(standardRead.offering_access ?? null, null, 'STANDARD read does not advertise password-only offering exception')
       truth(standardRead.organisations.some(o => o.id === application.organisation_id), 'STANDARD read keeps exact globally authorised organisation visible')
+      eq(standardRead.product_appointment_candidates, [], 'initial STANDARD directory has no product in the new exact manager scope')
+      const standardProducts = []
       for (const asset of ['FUND', 'REAL_ESTATE']) {
         const name = `Fictional rollback-only STANDARD ${asset}`
         const originalTerms = typedTerms(asset, name)
@@ -859,7 +953,159 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
           expected_revision: draft.revision, terms: revisedTerms }, key(), assured), draft.id)
         eq([saved.status, saved.revision, saved.terms], ['DRAFT', draft.revision + 1, revisedTerms], `${asset} canonical typed save retains STANDARD revision and terms`)
         eq(productFrom(await read(1, manager, assured), draft.id).terms, revisedTerms, `${asset} STANDARD canonical read returns saved package draft`)
+        standardProducts.push(saved)
       }
+      // Correction-specific cases start only AFTER the unchanged measured read
+      // and original typed positives. Every added row/mutation is rolled back;
+      // no inherited fixture is removed and no authority guard is replaced.
+      const candidateRows = snapshot => snapshot.product_appointment_candidates
+      const expectedDirectory = async organisationIds => {
+        await claims(1, assured); await admin()
+        return scalar(`select coalesce(jsonb_agg(candidate.value order by candidate.product_id,
+            candidate.role,candidate.display_name,candidate.user_id),'[]'::jsonb) from (
+          select p.id product_id,m.role,profile.display_name,m.user_id,
+            jsonb_build_object('product_id',p.id,'role',m.role,'user_id',m.user_id,
+              'membership_id',m.id,'display_name',profile.display_name,'email',u.email) value
+          from bx1_portal.products p join bx1_portal.organisations o on o.id=p.organisation_id
+          join public.bx1_memberships m on m.organisation_id=o.reviewer_scope and m.role in ('IssuerFundManager','ComplianceOfficer')
+          join public.bx1_profiles profile on profile.id=m.user_id and profile.status='ACTIVE'
+          join auth.users u on u.id=m.user_id and u.email is not null
+          where p.organisation_id=any($1::uuid[]) and bx1_portal.native_membership_effective(m.id)
+            and bx1_portal.entity_people_independent(auth.uid(),m.user_id)
+          order by p.id,m.role,profile.display_name,m.user_id limit 100
+        ) candidate`, [organisationIds])
+      }
+      const baseDirectory = await expectedDirectory([application.organisation_id])
+      const directoryRead = async (expected = baseDirectory, label = 'selected native manager scope') => {
+        const snapshot = await read(1, manager, assured)
+        eq(candidateRows(snapshot), expected, `${label}: public directory retains exact tuples, ordering and cap`)
+        eq(new Set(expected.map(row => `${row.product_id}:${row.membership_id}`)).size, expected.length, `${label}: no binding fan-out duplicates`)
+        truth(expected.length <= 100, `${label}: original cap is retained`)
+        return snapshot
+      }
+      const selectedDirectory = candidateRows(await directoryRead())
+      for (const p of standardProducts) for (const [actor, candidateRole] of [[2, 'ComplianceOfficer'], [3, 'IssuerFundManager']])
+        truth(selectedDirectory.some(row => row.product_id === p.id && row.user_id === id(actor)
+          && row.membership_id === id(400 + actor) && row.role === candidateRole), `${p.terms.asset_type}: directory retains exact current native ${candidateRole} input`)
+      truth(selectedDirectory.every(row => standardProducts.some(p => p.id === row.product_id)
+        && row.user_id !== id(1) && row.user_id !== id(6)), 'new manager sees both exact products, no self or wrong-scope staff directory')
+      await claims(1, assured); await admin()
+      eq(await scalar(finalCandidateScopeQuery, [JSON.stringify(manager), JSON.stringify(selectedDirectory)]), false, 'source-derived final guard accepts all currently scoped emitted products')
+      eq(await scalar(finalCandidateScopeQuery, [JSON.stringify(manager), JSON.stringify([{ ...selectedDirectory[0], product_id: id(999999) }])]), true, 'final guard rejects a missing emitted product rather than silently inner-joining it away')
+      for (const context of [null, {}, { mode: 'APPLICANT' }, { ...manager, role: 'ComplianceOfficer' },
+        { ...manager, organisationId: 'malformed' }, { ...manager, organisationId: otherScope }, { ...manager, extra: true }]) {
+        await claims(1, assured); await admin()
+        eq(await scalar(effectiveCandidateQuery, [JSON.stringify(context)]), [], 'fixed query fails closed for null/malformed/wrong native or role context')
+      }
+      for (const context of [null, {}, { ...manager, organisationId: 'malformed' }, { ...manager, organisationId: otherScope }, { ...manager, extra: true }])
+        await denied('unchanged parent reader rejects null/malformed/wrong native context', () => read(1, context, assured))
+      for (const [label, sql, values, actor] of [
+        ['inactive native candidate membership', "update public.bx1_memberships set status='SUSPENDED' where id=$1", [id(402)], 2],
+        ['inactive candidate profile', "update public.bx1_profiles set status='SUSPENDED' where id=$1", [id(2)], 2],
+        ['null candidate email', 'update auth.users set email=null where id=$1', [id(2)], 2],
+        ['known revoked candidate person', "update bx1_private.person_principals set status='REVOKED' where auth_user_id=$1", [id(2)], 2],
+      ]) await isolated(async () => {
+        await db.query(sql, values)
+        await directoryRead(baseDirectory.filter(row => row.user_id !== id(actor)), label)
+      })
+      await isolated(async () => {
+        await db.query("insert into public.bx1_memberships(id,user_id,organisation_id,role) values($1,$2,$3,'ComplianceOfficer')", [id(9901), id(1), scope])
+        await directoryRead(baseDirectory, 'native self membership still fails person independence')
+      })
+      await isolated(async () => {
+        await db.query("insert into public.bx1_memberships(id,user_id,organisation_id,role) values($1,$2,$3,'ComplianceOfficer')", [id(9902), id(3), scope])
+        const expected = await expectedDirectory([application.organisation_id])
+        await directoryRead(expected, 'one native user with both roles retains both distinct membership tuples')
+        for (const p of standardProducts) eq(expected.filter(row => row.product_id === p.id && row.user_id === id(3)).map(row => row.role),
+          ['ComplianceOfficer', 'IssuerFundManager'], 'original role ordering and membership identity are not deduplicated by user')
+      })
+      const fixtureApplication = org => baselineRows['bx1_portal.applications'].find(a => a.id === org.application_id)
+      const historicalOrg = baselineRows['bx1_portal.organisations'].find(org => org.status === 'ACTIVE' && org.reviewer_scope === scope
+        && fixtureApplication(org)?.admission_purpose === 'LEGACY_REHEARSAL'
+        && fixtureApplication(org)?.status === 'APPROVED'
+        && Date.parse(fixtureApplication(org).approved_until) > Date.parse(proofStartedAt)
+        && !baselineRows['bx1_portal.customer_monitoring_cases'].some(row => row.application_id === org.application_id && row.state !== 'CURRENT')
+        && baselineRows['bx1_portal.products'].some(p => p.organisation_id === org.id))
+      truth(historicalOrg, 'retained fixture supplies an existing approved historical product organisation; no substitute fixture is fabricated')
+      const insertBinding = async (orgId, nativeScope, candidateRole, status, expired = false) => {
+        await admin()
+        return scalar(`insert into bx1_portal.organisation_authority_bindings(id,product_organisation_id,native_organisation_id,
+          role,status,valid_from,valid_until,evidence_reference,approval_receipt_id)
+          values($1,$2,$3,$4,$5,clock_timestamp()-interval '1 hour',
+            clock_timestamp()+case when $6 then interval '-1 minute' else interval '1 day' end,
+            'fictional:rollback-only-candidate-scope-correction',$7) returning id`,
+        [key(), orgId, nativeScope, candidateRole, status, expired, key()])
+      }
+      await isolated(async () => {
+        eq(await scalar('select bx1_portal.current_product_organisation($1)', [historicalOrg.id]), true, 'historical binding cases start from a current retained product organisation')
+        eq(await scalar("select count(*)::int from bx1_portal.organisation_authority_bindings where product_organisation_id=$1 and native_organisation_id=$2 and role='OfferingManager'",
+          [historicalOrg.id, manager.organisationId]), 0, 'new selected native scope has no pre-existing historical manager binding')
+        await directoryRead(baseDirectory, 'missing selected historical binding grants no candidates')
+        await insertBinding(historicalOrg.id, otherScope, 'OfferingManager', 'ACTIVE')
+        await directoryRead(baseDirectory, 'wrong-native binding grants no candidates')
+        await insertBinding(historicalOrg.id, manager.organisationId, 'ComplianceOfficer', 'ACTIVE')
+        await directoryRead(baseDirectory, 'wrong-role binding grants no candidates')
+        await insertBinding(historicalOrg.id, manager.organisationId, 'OfferingManager', 'ACTIVE', true)
+        await directoryRead(baseDirectory, 'expired historical binding remains denied by current operator')
+        await insertBinding(historicalOrg.id, manager.organisationId, 'OfferingManager', 'REVOKED')
+        await directoryRead(baseDirectory, 'revoked historical binding remains denied by current operator')
+        const activeBinding = await insertBinding(historicalOrg.id, manager.organisationId, 'OfferingManager', 'ACTIVE')
+        const historicalExpected = await expectedDirectory([application.organisation_id, historicalOrg.id])
+        const historicalRead = await directoryRead(historicalExpected, 'current historical native binding remains accepted')
+        truth(candidateRows(historicalRead).some(row => baselineRows['bx1_portal.products'].some(p => p.id === row.product_id
+          && p.organisation_id === historicalOrg.id)), 'correction includes in-scope historical products, not only the two UI drafts')
+        await insertBinding(historicalOrg.id, manager.organisationId, 'OfferingManager', 'ACTIVE')
+        await directoryRead(historicalExpected, 'duplicate active bindings cannot duplicate directory rows')
+        await db.query("update bx1_portal.organisation_authority_bindings set status='REVOKED' where id=$1", [activeBinding])
+        await directoryRead(historicalExpected, 'one revoked duplicate cannot negate a distinct current historical binding')
+      })
+      const otherCustomerOrg = baselineRows['bx1_portal.organisations'].find(org => org.status === 'ACTIVE' && org.reviewer_scope === scope
+        && fixtureApplication(org)?.admission_purpose === 'CUSTOMER_ORGANISATION_ADMISSION'
+        && fixtureApplication(org)?.status === 'APPROVED'
+        && Date.parse(fixtureApplication(org).approved_until) > Date.parse(proofStartedAt)
+        && !baselineRows['bx1_portal.customer_monitoring_cases'].some(row => row.application_id === org.application_id && row.state !== 'CURRENT')
+        && baselineRows['bx1_portal.products'].some(p => p.organisation_id === org.id))
+      truth(otherCustomerOrg, 'retained fixture supplies another customer product organisation for missing exact-mandate isolation')
+      await isolated(async () => {
+        eq(await scalar('select bx1_portal.current_product_organisation($1)', [otherCustomerOrg.id]), true, 'missing exact-mandate case starts from a current retained customer product organisation')
+        eq(await scalar('select count(*)::int from bx1_portal.representative_mandates where product_organisation_id=$1 and native_organisation_id=$2 and applicant_user_id=$3',
+          [otherCustomerOrg.id, manager.organisationId, id(1)]), 0, 'selected actor/native scope has no exact mandate for other customer')
+        await insertBinding(otherCustomerOrg.id, manager.organisationId, 'OfferingManager', 'ACTIVE')
+        await directoryRead(baseDirectory, 'static binding never replaces the missing exact customer mandate')
+      })
+      for (const [label, sql, values] of [
+        ['revoked exact customer binding', "update bx1_portal.organisation_authority_bindings set status='REVOKED' where id=$1", [binding]],
+        ['revoked exact customer mandate', `update bx1_portal.representative_mandates set status='REVOKED',revision=revision+1,
+          revoked_at=clock_timestamp(),revoked_by_user_id=$2,revoke_reason='Fictional rollback-only STANDARD candidate mandate withdrawal.' where id=$1`, [mandate.id, id(2)]],
+        ['passively expired customer admission', "update bx1_portal.applications set reviewed_at=clock_timestamp()-interval '31 days',approved_until=clock_timestamp()-interval '1 day' where id=$1", [application.id]],
+      ]) await isolated(async () => {
+        await db.query(sql, values)
+        await claims(1, assured); await admin()
+        eq(await scalar(effectiveCandidateQuery, [JSON.stringify(manager)]), [], `${label}: current operator cannot emit cached candidate authority`)
+        eq(await scalar(finalCandidateScopeQuery, [JSON.stringify(manager), JSON.stringify(baseDirectory)]), true, `${label}: final emitted-org guard rejects earlier candidate output`)
+        await denied(`${label}: unchanged STANDARD parent context fails closed`, () => read(1, manager, assured))
+      })
+      await claims(1, assured); await admin()
+      eq(await scalar(`select jsonb_build_object(
+        'mandate_at_expiry',bx1_portal.representative_mandate_effective_at(m.id,m.requested_until),
+        'native_at_expiry',bx1_portal.native_membership_effective_at(m.native_membership_id,m.requested_until))
+        from bx1_portal.representative_mandates m where m.id=$1`, [mandate.id]),
+      { mandate_at_expiry: false, native_at_expiry: false }, 'unchanged exact mandate/native leaves retain strict passive expiry boundary without clock or guard overrides')
+      await isolated(async () => {
+        const extraIds = Array.from({ length: 32 }, (_, n) => id(20000 + n))
+        // Three exact current native candidates (2/3/4) over the two original
+        // plus 32 rollback-only typed copies guarantee more than 100 inputs.
+        await db.query(`insert into bx1_portal.products(id,organisation_id,created_by,terms,terms_hash,cap_units,unit_price_minor,minimum_units)
+          select copied.id,p.organisation_id,p.created_by,p.terms,p.terms_hash,p.cap_units,p.unit_price_minor,p.minimum_units
+          from bx1_portal.products p cross join unnest($2::uuid[]) copied(id) where p.id=$1`, [standardProducts[0].id, extraIds])
+        const expected = await expectedDirectory([application.organisation_id])
+        eq(expected.length, 100, 'rollback-only cap inputs reach the original exact hundred-row boundary')
+        await directoryRead(expected, 'original total ordering and LIMIT100 across all selected products')
+        await claims(1, assured); await admin()
+        eq(await scalar(finalCandidateScopeQuery, [JSON.stringify(manager), JSON.stringify(expected)]), false, 'capped output still resolves every emitted product and current organisation')
+      })
+      await directoryRead(baseDirectory, 'all correction cases restore the original two-product scope')
+      eq(await standardEngineConfig(), standardEngineScoped, 'all added candidate cases keep exact original deadlines and planner settings')
     }).finally(async () => {
       try {
       const standardEngineRestored = await standardEngineConfig()
