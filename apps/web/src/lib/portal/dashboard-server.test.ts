@@ -9,7 +9,7 @@ vi.mock('./entry-server', () => ({ readEntry: mocks.entry }))
 vi.mock('@/lib/supabase/test-ordinary-entry', () => ({ testOrdinaryEntryMfaPaused: mocks.paused }))
 vi.mock('./synthetic-compliance', () => ({ readSyntheticCompliance: mocks.synthetic }))
 import { loadRoleDashboard } from './dashboard-server'
-import { PortalError } from './server'
+import { PackageReaderUnavailable, PortalError } from './server'
 import { APPLICANT_CONTEXT, type PortalOperatingContext } from './operating-context'
 
 const organisation = '33333333-3333-4333-8333-333333333333'
@@ -38,6 +38,69 @@ beforeEach(() => {
   mocks.paused.mockReturnValue(false)
 })
 afterEach(() => vi.unstubAllEnvs())
+
+describe('normal paused TEST package dashboard', () => {
+  function setup(role: 'OfferingManager' | 'IssuerFundManager') {
+    const selected = { mode: 'ROLE' as const, organisationId: organisation, role }
+    const entry = { ...ordinaryFor(role).entry, contexts: [{ context_key: organisation, organisation_id: organisation, name: 'Own organisation', roles: [role] }] }
+    const portal = { ...portalFor(selected), snapshot: { ...portalFor(selected).snapshot,
+      offering_access: { version: 1, environment: 'TESTNET', actor_id: actor.id, operating_context: selected, session_mode: 'TEST_PASSWORD', allowed_commands: role === 'OfferingManager' ? ['create_product'] : ['review_offering_issuer'] } } }
+    mocks.paused.mockReturnValue(true); mocks.sufficient.mockReturnValue(false)
+    mocks.entry.mockResolvedValue(entry); mocks.portal.mockResolvedValue(portal)
+    return { selected, entry, portal }
+  }
+  it.each(['OfferingManager', 'IssuerFundManager'] as const)('loads the exact %s package marker without requiring an invented Stage2 command', async role => {
+    const { selected, portal } = setup(role)
+    const result = await loadRoleDashboard({ organisation, role })
+    expect(result.kind).toBe('role'); expect(result.portal).toEqual(portal)
+    expect(mocks.portal).toHaveBeenCalledWith(mocks.client, selected)
+    expect(mocks.workspace).not.toHaveBeenCalled()
+  })
+  it.each(['OfferingManager', 'IssuerFundManager'] as const)('keeps only freshly verified ordinary entry for an older %s reader', async role => {
+    const { entry } = setup(role); mocks.portal.mockRejectedValue(new PackageReaderUnavailable())
+    const result = await loadRoleDashboard({ organisation, role })
+    expect(result.kind).toBe('ordinary-entry'); expect(result.portal).toBeUndefined()
+    if (result.kind === 'ordinary-entry') expect(result.entry).toEqual(entry)
+    expect(mocks.entry).toHaveBeenCalledTimes(2)
+    expect(mocks.current).toHaveBeenCalledOnce()
+  })
+  it('does not borrow package data from a successful unmarked reader', async () => {
+    const { selected } = setup('OfferingManager'); mocks.portal.mockResolvedValue(portalFor(selected))
+    const result = await loadRoleDashboard({ organisation, role: 'OfferingManager' })
+    expect(result.kind).toBe('ordinary-entry'); expect(result.portal).toBeUndefined()
+    expect(mocks.entry).toHaveBeenCalledTimes(2)
+  })
+  it.each([401, 403, 503])('never downgrades a generic package denial %s into ordinary entry', async status => {
+    setup('OfferingManager'); mocks.portal.mockRejectedValue(new PortalError('Current package authority denied', status))
+    await expect(loadRoleDashboard({ organisation, role: 'OfferingManager' })).rejects.toMatchObject({ status })
+    expect(mocks.entry).toHaveBeenCalledOnce()
+  })
+  it.each(['actor', 'role', 'organisation', 'session', 'entry-denial'])('rechecks %s before the exact compatibility fallback', async changed => {
+    const { entry } = setup('OfferingManager'); mocks.portal.mockRejectedValue(new PackageReaderUnavailable())
+    if (changed === 'actor') mocks.entry.mockResolvedValueOnce(entry).mockResolvedValue({ ...entry, actor: { ...actor, id: otherOrganisation } })
+    if (changed === 'role') mocks.entry.mockResolvedValueOnce(entry).mockResolvedValue({ ...entry, contexts: [{ ...entry.contexts[0], roles: ['IssuerFundManager'] }] })
+    if (changed === 'organisation') mocks.entry.mockResolvedValueOnce(entry).mockResolvedValue({ ...entry, contexts: [{ ...entry.contexts[0], organisation_id: otherOrganisation }] })
+    if (changed === 'session') mocks.current.mockResolvedValue(false)
+    if (changed === 'entry-denial') mocks.entry.mockResolvedValueOnce(entry).mockRejectedValue(new PortalError('Revoked entry', 403))
+    await expect(loadRoleDashboard({ organisation, role: 'OfferingManager' })).rejects.toMatchObject({ status: 403 })
+  })
+  it('rejects a mismatched package marker or current session after the read', async () => {
+    const { portal } = setup('OfferingManager')
+    mocks.portal.mockResolvedValue({ ...portal, snapshot: { ...portal.snapshot, offering_access: { ...portal.snapshot.offering_access, actor_id: otherOrganisation } } })
+    await expect(loadRoleDashboard({ organisation, role: 'OfferingManager' })).rejects.toMatchObject({ status: 403 })
+    mocks.portal.mockResolvedValue(portal); mocks.current.mockResolvedValue(false)
+    await expect(loadRoleDashboard({ organisation, role: 'OfferingManager' })).rejects.toMatchObject({ status: 403 })
+  })
+  it.each(['OfferingManager', 'IssuerFundManager'] as const)('preserves an assured %s read while the ordinary TEST pause is enabled', async role => {
+    const { selected } = setup(role); mocks.sufficient.mockReturnValue(true)
+    const standard = { ...portalFor(selected), snapshot: { ...portalFor(selected).snapshot,
+      stage2_access: { version: 1, environment: 'TESTNET', actor_id: actor.id, operating_context: selected, session_mode: 'STANDARD', allowed_commands: [] } } }
+    mocks.portal.mockResolvedValue(standard)
+    const result = await loadRoleDashboard({ organisation, role })
+    expect(result.kind).toBe('role'); expect(result.portal).toEqual(standard)
+    expect(mocks.entry).toHaveBeenCalledOnce(); expect(mocks.current).toHaveBeenCalledOnce()
+  })
+})
 
 describe('fresh dashboard authority and environment admission', () => {
   it('retains read-only non-admission roles during the temporary TEST password pause', async () => {

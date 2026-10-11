@@ -11,6 +11,7 @@ import { proveTestOrdinaryEntry } from './test-ordinary-entry-proof.mjs'
 import { proveSyntheticCompliance } from './test-synthetic-compliance.mjs'
 import { proveAdmissionWorkflow } from './test-admission-workflow.mjs'
 import { proveAccountRepresentatives } from './account-representatives-proof.mjs'
+import { proveOfferingWorkflow } from './offering-workflow-proof.mjs'
 import { proveOfferingFileQuarantine, proveOfferingFileProductIsolation } from './offering-file-quarantine-proof.mjs'
 
 // Exact disposable GitHub PostgreSQL17 service only. No local/project execution.
@@ -2664,6 +2665,9 @@ try {
   checks += await proveAccountRepresentatives(db, proofClients,
     await source('../../../supabase/features/bx1_admission_workflow.sql'),
     await source('../../../supabase/features/bx1_account_representatives.sql'))
+  phase = 'normal-offering-workflow-proof'
+  checks += await proveOfferingWorkflow(db, proofClients,
+    await source('../../../supabase/features/bx1_offering_workflow.sql'))
   phase = 'cleanup-committed-disposable-fixture'
   await db.query('drop schema bx1_portal,bx1_private,storage,auth,public cascade; create schema public')
   committedFixture = false
@@ -2673,7 +2677,9 @@ try {
   const diagnostic = typeof error?.message === 'string' ? error.message.split(/[\r\n]/, 1)[0].slice(0, 200).replace(/[^\x20-\x7e]/g, '?') : 'unavailable'
   const accountRepresentativesPhase = typeof error?.accountRepresentativesPhase === 'string'
     && /^[a-z0-9-]{1,80}$/.test(error.accountRepresentativesPhase) ? error.accountRepresentativesPhase : 'unavailable'
-  console.error(`BX1_PORTAL_SQL_FAILED phase=${phase} accountRepresentativesPhase=${accountRepresentativesPhase} line=${error?.fixtureLine ?? 'unknown'} code=${error?.code ?? 'assertion'} diagnostic=${JSON.stringify(diagnostic)}`)
+  const offeringWorkflowPhase = typeof error?.offeringWorkflowPhase === 'string'
+    && /^[a-z0-9-]{1,80}$/.test(error.offeringWorkflowPhase) ? error.offeringWorkflowPhase : 'unavailable'
+  console.error(`BX1_PORTAL_SQL_FAILED phase=${phase} accountRepresentativesPhase=${accountRepresentativesPhase} offeringWorkflowPhase=${offeringWorkflowPhase} line=${error?.fixtureLine ?? 'unknown'} code=${error?.code ?? 'assertion'} diagnostic=${JSON.stringify(diagnostic)}`)
   process.exitCode = 1
 } finally {
   if (begun) { try { await db.query('rollback') } catch {} }

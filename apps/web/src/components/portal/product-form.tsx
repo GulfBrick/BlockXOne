@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { FUND_V2_CANONICAL_REFERENCES, REAL_ESTATE_V2_CANONICAL_REFERENCES, containsLegacyDenomination, isFundTermsV2, isRealEstateTermsV2, productTermsSchema, type FundTermsV2, type LegacyProductTerms, type RealEstateTermsV2, type PortalOrganisation, type PortalProduct, type PortalSnapshot, type ProductTerms } from '@/lib/portal/contracts'
 import { portalScopeHref, type PortalOperatingContext } from '@/lib/portal/operating-context'
-import { CommandFeedback, usePortalCommand } from './portal-client'
+import { CommandFeedback, usePortalCommand, usePortalCommandAllowed } from './portal-client'
 import { Field, Notice, Panel, money } from './portal-primitives'
 import styles from './portal.module.css'
 
@@ -165,6 +165,7 @@ export function ProductForm({ organisations, product, onSaved, operatingContext 
   const [acknowledged, setAcknowledged] = useState(false)
   const [validationMessage, setValidationMessage] = useState('')
   const command = usePortalCommand(onSaved)
+  const commandAvailable = usePortalCommandAllowed(product ? 'save_product' : 'create_product')
   const typedFund = isFundTermsV2(terms) ? terms : null
   const typedProperty = isRealEstateTermsV2(terms) ? terms : null
   const typedPolicy = Boolean(typedFund || typedProperty)
@@ -187,7 +188,11 @@ export function ProductForm({ organisations, product, onSaved, operatingContext 
     setTerms(previous => previous.asset_type !== 'REAL_ESTATE' || isRealEstateTermsV2(previous) ? previous : upgradeLegacyDraftTerms(previous))
     setAcknowledged(false); setValidationMessage('')
   }
-  const locked = command.busy || command.unknown || !organisations.length
+  const selectedOrganisation = organisations.find(item => item.id === organisationId)
+  const recordAvailable = Boolean(selectedOrganisation && (!operatingContext || selectedOrganisation.capabilities?.includes(product ? 'save_product' : 'create_product'))
+    && (!product || ['DRAFT', 'CHANGES_REQUIRED'].includes(product.status) && product.allowed_actions?.includes('save_product')))
+  const locked = command.busy || command.unknown || !recordAvailable || !commandAvailable
+    || operatingContext?.mode === 'ROLE' && operatingContext.role !== 'OfferingManager'
   return <div className={styles.stack} id={product?.terms.asset_type === 'FUND' ? 'fund-draft-editor' : product?.terms.asset_type === 'REAL_ESTATE' ? 'property-draft-editor' : undefined}>
     <Notice title="Editable fictional example">The initial content is a clearly labelled test scenario, not a registered legal issuer or approved investment. Review every field before saving. Saving a draft does not publish the offering.</Notice>
     {legacyFundDraft ? <Notice title="Historical fund draft needs an explicit terms upgrade" tone="warning">This draft uses the old ZAR_TEST denomination. Upgrading replaces every editable field, including old prices, names, summary and disclosure text, with a fictional six-decimal TST template. Nothing is saved until you choose Save. Re-author and review the entire new package; no old promise or disclosure is copied across.<div className={styles.sectionGap}><button type="button" className={styles.buttonSecondary} onClick={upgradeLegacyFundDraft}>Upgrade this fund draft to v2 TST terms</button></div></Notice> : null}
@@ -197,7 +202,7 @@ export function ProductForm({ organisations, product, onSaved, operatingContext 
       {validationMessage ? <p className={styles.fieldError} role="alert">{validationMessage}</p> : null}
       <form className={styles.form} onSubmit={async event => {
         event.preventDefault()
-        if (!acknowledged || legacyFundDraft || legacyPropertyDraft || legacyReference) return
+        if (locked || !acknowledged || legacyFundDraft || legacyPropertyDraft || legacyReference) return
         const parsed = productTermsSchema.safeParse(terms)
         if (!parsed.success) { setValidationMessage(`Review the ${terms.asset_type === 'FUND' ? 'fund' : 'property'} package fields: ${parsed.error.issues[0]?.message ?? 'the terms are incomplete'}`); return }
         const saved = await command.submit(product ? 'save_product' : 'create_product', product ? { product_id: product.id, expected_revision: product.revision, terms: parsed.data } : { organisation_id: organisationId, terms: parsed.data })

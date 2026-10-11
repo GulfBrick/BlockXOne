@@ -5,13 +5,14 @@ import { readVerifiedUser, readWorkspace } from '@/lib/supabase/server'
 import { hasRequiredMfa, isMfaContextCurrent, readMfaContext } from '@/lib/supabase/mfa'
 import { testOrdinaryEntryMfaPaused } from '@/lib/supabase/test-ordinary-entry'
 import { dashboardProjection, dashboardScopes, selectDashboardScope, type DashboardQuery } from './dashboard'
-import { PortalError, readPortal } from './server'
+import { PackageReaderUnavailable, PortalError, readPortal } from './server'
 import type { PortalPageData } from './contracts'
 import { APPLICANT_CONTEXT, type PortalOperatingContext } from './operating-context'
 import { readEntry } from './entry-server'
 import { selectEntryApplication } from './entry-contracts'
 import { customerScopedReadAvailable } from './customer-handoff'
 import { validatedStage2Access } from './stage2-access'
+import { validatedOfferingAccess } from './offering-access'
 
 export async function loadRoleDashboard(query: DashboardQuery) {
   const release = platformRelease(process.env)
@@ -35,13 +36,37 @@ export async function loadRoleDashboard(query: DashboardQuery) {
     if (!applicant && !scope) throw new PortalError('This role or organisation is not assigned to you.', 403)
     if (query.application !== undefined && (!applicant || !selectEntryApplication(entry, query.application))) throw new PortalError('This application is not available to your signed-in account.', 403)
     const operatingContext: PortalOperatingContext = scope ? { mode: 'ROLE', organisationId: scope.organisationId, role: scope.role } : APPLICANT_CONTEXT
-    if (scope && !['ComplianceOfficer', 'SuperAdmin'].includes(scope.role) && (entry.stage2_access?.session_mode === 'TEST_PASSWORD' || !hasRequiredMfa(context))) {
+    const packageScope = scope && ['OfferingManager', 'IssuerFundManager'].includes(scope.role)
+      && (entry.stage2_access?.session_mode === 'TEST_PASSWORD' || !hasRequiredMfa(context))
+    const ordinaryPackageEntry = async () => {
+      if (!packageScope || !scope) throw new PortalError('This package context is unavailable.', 403)
+      const refreshed = await readEntry(client)
+      const refreshedScopes = refreshed.contexts.flatMap(item => item.roles.map(role => ({ organisationId: item.organisation_id, organisationName: item.name, role })))
+      const refreshedScope = refreshedScopes.find(item => item.organisationId === scope.organisationId && item.role === scope.role)
+      if (refreshed.actor.id !== user.id || !refreshedScope || !await isMfaContextCurrent(client, context)) throw new PortalError('Complete sign-in again.', 403)
+      return { kind: 'ordinary-entry' as const, entry: refreshed, user: refreshed.actor, release, scopes: refreshedScopes, scope: refreshedScope, chooseContext: false, operatingContext, portal: undefined }
+    }
+    if (scope && !['ComplianceOfficer', 'SuperAdmin'].includes(scope.role) && !packageScope && (entry.stage2_access?.session_mode === 'TEST_PASSWORD' || !hasRequiredMfa(context))) {
       if (!await isMfaContextCurrent(client, context)) throw new PortalError('Complete sign-in again.', 403)
       return { kind: 'ordinary-entry' as const, entry, user: entry.actor, release, scopes, scope, chooseContext, operatingContext, portal: undefined }
     }
-    const portal = await readPortal(client, operatingContext)
+    let portal: PortalPageData
+    try { portal = await readPortal(client, operatingContext) }
+    catch (error) {
+      if (!(error instanceof PackageReaderUnavailable) || !packageScope || !scope) throw error
+      // An old reader shares this error with invalid context/session. Refresh
+      // current guarded entry instead of assuming it is a deployment version.
+      return ordinaryPackageEntry()
+    }
+    const offering = validatedOfferingAccess(portal.snapshot, operatingContext, release.environment)
+    if (packageScope && portal.snapshot.offering_access === undefined) {
+      if (portal.user.id !== user.id || portal.snapshot.stage2_access !== undefined
+        && !validatedStage2Access(portal.snapshot, operatingContext, release.environment)) throw new PortalError('Complete sign-in again.', 403)
+      return ordinaryPackageEntry()
+    }
     const access = validatedStage2Access(portal.snapshot, operatingContext, release.environment)
-    if (portal.user.id !== user.id || !access || !await isMfaContextCurrent(client, context)) throw new PortalError('Complete sign-in again.', 403)
+    if (portal.user.id !== user.id || (packageScope ? !offering : !access)
+      || portal.snapshot.stage2_access !== undefined && !access || !await isMfaContextCurrent(client, context)) throw new PortalError('Complete sign-in again.', 403)
     if (applicant) return { kind: 'applicant' as const, entry, chooseContext, portal, release, operatingContext, scopes }
     if (!scope) throw new PortalError('No active role assignment is available.', 403)
     return { kind: 'role' as const, user: entry.actor, release, scope, operatingContext, portal, scopes, ...dashboardProjection(scope, release.environment, portal.snapshot) }

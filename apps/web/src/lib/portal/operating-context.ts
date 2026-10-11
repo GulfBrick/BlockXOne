@@ -1,7 +1,8 @@
 import { z } from 'zod'
 import { BX1_ROLES } from '@/lib/supabase/contracts'
 import type { PortalPath, PortalSnapshot } from './contracts'
-import { isTestPasswordAdmission, hasStage2CommandAccess, validatedStage2Access } from './stage2-access'
+import { hasStage2CommandAccess, validatedStage2Access } from './stage2-access'
+import { hasOfferingCommandAccess, isTestPasswordWorkflow, validatedOfferingAccess } from './offering-access'
 
 export const portalOperatingContextSchema = z.discriminatedUnion('mode', [
   z.object({ mode: z.literal('ROLE'), organisationId: z.string().uuid(), role: z.enum(BX1_ROLES) }).strict(),
@@ -71,19 +72,45 @@ function superAdminApplyDetailAllowed(context: PortalOperatingContext, snapshot:
     && (!applied || z.string().uuid().safeParse(item.native_organisation_id).success)
     && independent(item.applicant_user_id) && independent(item.reviewer_user_id)
 }
+/** Backend-scoped appointments, not a manufactured customer/native ID binding. */
+export function appointedIssuerProducts(snapshot: PortalSnapshot, context: PortalOperatingContext) {
+  if (context.mode !== 'ROLE' || context.role !== 'IssuerFundManager'
+    || !validatedOfferingAccess(snapshot, context)) return []
+  return snapshot.products.filter(product => snapshot.product_appointments?.some(appointment =>
+    appointment.product_id === product.id && appointment.appointee_user_id === snapshot.actor.id
+    && appointment.role === 'IssuerFundManager' && appointment.status === 'APPLIED' && appointment.effective === true
+    && Number.isFinite(Date.parse(appointment.requested_until)) && Date.parse(appointment.requested_until) > Date.now()))
+}
 export function portalViewAllowed(view: PortalPath, context: PortalOperatingContext, snapshot: PortalSnapshot, id?: string): boolean {
   if ('rehearsal' in snapshot) {
     return false
   }
   if (snapshot.stage2_access !== undefined && !validatedStage2Access(snapshot, context)) return false
-  if (isTestPasswordAdmission(snapshot)) {
+  if (snapshot.offering_access !== undefined && !validatedOfferingAccess(snapshot, context)) return false
+  if (isTestPasswordWorkflow(snapshot)) {
     if (view === '/portal' || view === '/portal/onboarding') return true
     if (view === '/portal/portfolio') return context.mode === 'APPLICANT'
     if (view === '/portal/compliance' || view === '/portal/compliance/detail') {
       if (context.mode !== 'ROLE') return false
       return context.role === 'ComplianceOfficer' && snapshot.actor.can_review
-        && hasStage2CommandAccess(snapshot, 'review_application', context)
+        && (hasStage2CommandAccess(snapshot, 'review_application', context)
+          || hasOfferingCommandAccess(snapshot, 'review_product', context)
+          || hasOfferingCommandAccess(snapshot, 'review_product_service_appointment', context))
         || view === '/portal/compliance/detail' && superAdminApplyDetailAllowed(context, snapshot, id)
+    }
+    if (view.startsWith('/portal/products')) {
+      if (context.mode !== 'ROLE' || !validatedOfferingAccess(snapshot, context)) return false
+      if (context.role === 'IssuerFundManager') {
+        const appointed = appointedIssuerProducts(snapshot, context)
+        return view === '/portal/products' ? appointed.length === snapshot.products.length
+          : view === '/portal/products/detail' && appointed.some(product => product.id === id)
+      }
+      if (context.role !== 'OfferingManager') return false
+      const organisations = snapshot.organisations.filter(org => org.status === 'ACTIVE'
+        && org.native_organisation_id === context.organisationId && org.authority_source === 'NATIVE_BINDING' && org.roles.includes('OfferingManager'))
+      if (view === '/portal/products/new') return organisations.length > 0 && hasOfferingCommandAccess(snapshot, 'create_product', context)
+      if (view === '/portal/products/detail') return snapshot.products.some(product => product.id === id && organisations.some(org => org.id === product.organisation_id))
+      return view === '/portal/products' && organisations.length > 0
     }
     return false
   }
@@ -96,6 +123,7 @@ export function portalViewAllowed(view: PortalPath, context: PortalOperatingCont
       && snapshot.organisations.some(org => org.status === 'ACTIVE' && org.native_organisation_id === context.organisationId && org.roles.includes(context.role))
   }
   if (view.startsWith('/portal/products')) {
+    if (view === '/portal/products/new' && context.mode === 'ROLE' && context.role !== 'OfferingManager') return false
     if (context.mode === 'ROLE' && !['OfferingManager', 'IssuerFundManager'].includes(context.role)) return false
     return snapshot.organisations.some(org => org.status === 'ACTIVE' && (context.mode === 'APPLICANT'
       ? org.authority_source === 'LEGACY_OWNER'

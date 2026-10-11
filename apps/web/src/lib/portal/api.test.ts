@@ -27,6 +27,50 @@ beforeEach(() => {
 })
 afterEach(() => vi.unstubAllEnvs())
 
+describe('package-only TEST password command boundary', () => {
+  const manager = { mode: 'ROLE' as const, organisationId: organisation, role: 'OfferingManager' as const }
+  const access = { version: 1, environment: 'TESTNET', actor_id: actor, operating_context: manager, session_mode: 'TEST_PASSWORD', allowed_commands: ['submit_product'] }
+  const marked = { ...snapshot, operating_context: manager, offering_access: access }
+  const submit = { command: 'submit_product', key: command.key, payload: { product_id: actor, expected_revision: 1 }, operating_context: manager }
+  function before(value: unknown = marked) { mocks.read.mockResolvedValue({ user: { id: actor, email: snapshot.actor.email }, snapshot: value }) }
+  function saved(value: unknown = marked, error: unknown = null) { mocks.rpc.mockReturnValue({ abortSignal: vi.fn().mockResolvedValue({ data: value, error }) }) }
+  it('forwards the exact allowed package request without admitting other command families', async () => {
+    before(); saved()
+    const response = await POST(request(submit))
+    expect(response.status).toBe(200)
+    expect(mocks.rpc).toHaveBeenCalledWith('bx1_portal_command_scoped', { command: 'submit_product', request_key: command.key, payload: submit.payload, operating_context: manager })
+    expect(await response.json()).toEqual({ snapshot: marked })
+  })
+  it.each([
+    { command: 'publish_product', payload: { product_id: actor, expected_revision: 1 } },
+    { command: 'cancel_subscription', payload: { subscription_id: actor } },
+    { command: 'revoke_product_service_appointment', payload: { appointment_id: actor, expected_revision: 1, reason: 'Fictional guarded revocation remains outside package password mode.' } },
+    { command: 'review_application', payload: { application_id: actor, expected_revision: 1, decision: 'APPROVED', notes: 'Fictional review is not manager authority.', checks: { identity: true, ownership: true, screening: true, suitability: true } } },
+  ])('denies excluded %s before the canonical command', async instruction => {
+    before(); saved()
+    expect((await POST(request({ ...instruction, key: command.key, operating_context: manager }))).status).toBe(403)
+    expect(mocks.rpc).not.toHaveBeenCalled()
+  })
+  it.each([{ actor_id: organisation }, { environment: 'MAINNET' }, { operating_context: { ...manager, organisationId: actor } },
+    { session_mode: 'STANDARD' }, { allowed_commands: ['review_product'] }])('rejects invalid package read projections before mutation %#', async change => {
+    before({ ...marked, offering_access: { ...access, ...change } }); saved()
+    expect((await POST(request(submit))).status).toBe(503)
+    expect(mocks.rpc).not.toHaveBeenCalled()
+  })
+  it.each([undefined, { ...access, actor_id: organisation }, { ...access, environment: 'MAINNET' }, { ...access, session_mode: 'STANDARD' },
+    { ...access, operating_context: { ...manager, organisationId: actor } }])('preserves unknown-result classification when saved package continuity fails %#', async value => {
+    before(); saved({ ...marked, offering_access: value })
+    expect((await POST(request(submit))).status).toBe(503)
+    expect(mocks.rpc).toHaveBeenCalledOnce()
+  })
+  it('keeps the same operation key for a genuinely uncertain result and exact retry', async () => {
+    before(); saved(null, { code: '57014' })
+    expect((await POST(request(submit))).status).toBe(503)
+    saved(); expect((await POST(request(submit))).status).toBe(200)
+    for (const call of mocks.rpc.mock.calls) expect(call[1].request_key).toBe(command.key)
+  })
+})
+
 describe('scoped portal command endpoint', () => {
   it('forwards the exact key, payload and operating context to scoped read and command only', async () => {
     const response = await POST(request())

@@ -3,6 +3,7 @@ import type { PortalOperatingContext } from './operating-context'
 import { fundingCommandOptions, type FundingSnapshot } from './funding-contracts'
 import fundV2LegacyCrossrefs from './fund-v2-legacy-crossrefs.json'
 import type { Stage2Access } from './stage2-access'
+import type { OfferingAccess } from './offering-access'
 
 /** One customer workflow; environment-specific providers never manufacture settlement. */
 export const PORTAL_PATHS = ['/portal', '/portal/onboarding', '/portal/products', '/portal/products/new', '/portal/products/detail', '/portal/compliance', '/portal/compliance/detail', '/portal/opportunities', '/portal/opportunities/detail', '/portal/portfolio', '/portal/orders/detail'] as const
@@ -256,6 +257,7 @@ export const customerMonitoringSnapshotSchema = z.array(z.object({
 })
 export type PortalSnapshot = {
   stage2_access?: Stage2Access;
+  offering_access?: OfferingAccess;
   rehearsal?: { version: 1; environment: 'TESTNET'; mode: 'SYNTHETIC_COMPLIANCE'; actor_id: string; operating_context: PortalOperatingContext };
   actor: { id: string; email: string; display_name: string | null; can_review: boolean };
   applications: PortalApplication[]; organisations: PortalOrganisation[];
