@@ -402,9 +402,31 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
     if (p.offering_package?.id) revisionIds.add(p.offering_package.id)
     return p
   }
-  const authorityMutation = async (label, sql, values, run, context = manager, actorNumber = 1) => isolated(async () => {
+  const authorityMutation = async (label, sql, values, run, context = manager, actorNumber = 1, affectedProductId = null) => isolated(async () => {
+    let targetBefore, unaffectedProductIds
+    if (affectedProductId !== null) {
+      truth(productIds.has(affectedProductId), `${label} targets the exact tracked product`)
+      const before = await read(actorNumber, context)
+      targetBefore = (before.products ?? []).some(p => p.id === affectedProductId)
+      truth(targetBefore, `${label} exact affected product is visible before mutation`)
+      unaffectedProductIds = (before.products ?? []).filter(p => p.id !== affectedProductId).map(p => p.id)
+      await fixtureOwner(`${label} product-local authority mutation`)
+    }
     await db.query(sql, values)
     await denied(`${label} denies canonical package writer`, run)
+    if (affectedProductId !== null) {
+      const snapshot = await read(actorNumber, context)
+      await admin()
+      const targetAfter = (snapshot.products ?? []).some(p => p.id === affectedProductId)
+      eq(targetAfter, false, `${label} hides only the exact affected product`)
+      const unaffectedAfter = (snapshot.products ?? []).filter(p => p.id !== affectedProductId).map(p => p.id)
+      eq(unaffectedAfter, unaffectedProductIds, `${label} preserves every unaffected visible product in its original order`)
+      console.log('BX1_PRODUCT_LOCAL_AUTHORITY_READ_RECEIPT', JSON.stringify({ label,
+        target_before: targetBefore, target_after: targetAfter,
+        unaffected_before_count: unaffectedProductIds.length, unaffected_after_count: unaffectedAfter.length,
+        unaffected_order_equal: true }))
+      return
+    }
     let snapshot, code
     try { snapshot = await read(actorNumber, context) } catch (error) { code = error?.code }
     await admin()
@@ -1589,7 +1611,7 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
       await denied(`${asset} stale Compliance revision`, () => command(2, reviewer, 'review_product', { ...complianceInput(p), expected_revision: p.revision + 1 }), '23514')
       await authorityMutation(`${asset} legal exact issuer appointment revoked`, `update bx1_portal.product_service_appointments set status='REVOKED',revision=revision+1,
         revoked_at=clock_timestamp(),revoked_by_user_id=$2,revoke_reason='Fictional isolated appointed issuer withdrawal.' where id=$1`, [issuerAppointment.id, id(5)],
-        () => command(3, issuer, 'review_offering_issuer', issuerInput(p)), issuer, 3)
+        () => command(3, issuer, 'review_offering_issuer', issuerInput(p)), issuer, 3, p.id)
       await isolated(async () => {
         await db.query('alter table bx1_portal.product_service_appointments disable trigger bx1_product_appointment_transition')
         await db.query("update bx1_portal.product_service_appointments set requested_until=clock_timestamp()-interval '1 minute' where id=$1", [issuerAppointment.id])
