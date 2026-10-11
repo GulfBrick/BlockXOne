@@ -1786,12 +1786,74 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
       console.log('BX1_CLAIMS_BOUNDARY_DIAGNOSTIC_RECEIPT', JSON.stringify({ label, outcome, sqlstate, error_kind: errorKind, guards, restored: true }))
     }
     if (hasUncodedClaimsError) throw firstUncodedClaimsError
-    for (const extra of [{ iss: 'https://oqkevkjbkpugjotihtda.supabase.co/auth/v1' }, { session_id: id(999) }, { sub: id(999) }, { role: 'anon' }, { exp: 1 }, { amr: [{ method: 'otp', timestamp: 1 }] }])
-      await denied('missing/mismatched MAIN actor/session marker denies package exception', () => command(1, manager, 'create_product', { organisation_id: application.organisation_id, terms: fund.terms }, key(), extra))
-    for (const sql of ["update bx1_portal.entry_configuration set manual_test_review=false where singleton",
-      "update bx1_portal.entry_configuration set test_ordinary_entry_enabled=false where singleton",
-      "update bx1_portal.entry_configuration set environment='MAINNET',manual_test_review=false,test_ordinary_entry_enabled=false where singleton"])
-      await isolated(async () => { await db.query(sql); await denied('MAIN/unadmitted configuration cannot use password package exception', createAnother) })
+    // Synthetic enrolled-factor control ONLY: native AAL1 is unchanged and STANDARD authority is unavailable.
+    await fixtureOwner('password-exception control baseline')
+    const exceptionRows = await state(), exceptionFunctions = await functions(), exceptionSecurity = await security()
+    const exceptionSession = await scalar('select to_jsonb(s) from auth.sessions s where s.id=$1 and s.user_id=$2', [id(101), id(1)])
+    const exceptionFactors = await scalar("select coalesce(jsonb_agg(to_jsonb(f) order by f.id),'[]'::jsonb) from auth.mfa_factors f where f.user_id=$1", [id(1)])
+    eq([exceptionSession.aal, exceptionSession.factor_id], ['aal1', null], 'password-exception control starts with the exact original native AAL1 session')
+    eq(await scalar('select count(*)::int from auth.mfa_factors where id=$1', [id(201)]), 0, 'reused synthetic factor is absent before isolated control')
+    let exceptionPositiveReturned = false, exceptionPositiveMode, exceptionNewDraftCount
+    await db.query('savepoint offering_password_exception_controls')
+    try {
+      await db.query("insert into auth.mfa_factors(id,user_id,status,factor_type) values($1,$2,'verified','totp')", [id(201), id(1)])
+      await claims(1)
+      await fixtureOwner('enrolled native AAL1 password-exception inspection')
+      eq(await scalar('select jsonb_build_array(bx1_portal.admission_password_session(),bx1_portal.offering_workflow_command_allowed($1::jsonb,\'create_product\'),bx1_portal.offering_workflow_context($1::jsonb),bx1_portal.offering_workflow_command_context($1::jsonb,\'create_product\'),bx1_portal.has_session(),bx1_portal.fresh_session(),bx1_portal.valid_operating_context($1::jsonb))', [JSON.stringify(manager)]),
+        [true, true, true, true, false, false, false], 'enrolled AAL1 control has current password authority but no STANDARD authority')
+      eq(await scalar('select to_jsonb(s) from auth.sessions s where s.id=$1 and s.user_id=$2', [id(101), id(1)]), exceptionSession,
+        'synthetic enrollment changes no native session field')
+      const enrolledRows = await state(), enrolledFunctions = await functions(), enrolledSecurity = await security()
+      const expectedFactor = { id: id(201), user_id: id(1), status: 'verified', factor_type: 'totp' }
+      eq(enrolledRows['auth.mfa_factors'].filter(f => f.id === id(201)), [expectedFactor], 'control adds exactly the intended four-column synthetic factor')
+      const withoutControlFactor = clone(enrolledRows)
+      withoutControlFactor['auth.mfa_factors'] = withoutControlFactor['auth.mfa_factors'].filter(f => f.id !== id(201))
+      eq(withoutControlFactor, exceptionRows, 'synthetic enrollment changes no other business or authority row')
+      eq(enrolledFunctions, exceptionFunctions, 'synthetic enrollment changes no function')
+      eq(enrolledSecurity, exceptionSecurity, 'synthetic enrollment changes no security manifest')
+      await db.query('savepoint offering_password_exception_positive')
+      try {
+        const snapshot = access(await createAnother(), 1, manager)
+        const existingProductIds = new Set(enrolledRows['bx1_portal.products'].map(p => p.id))
+        const created = snapshot.products.filter(p => !existingProductIds.has(p.id))
+        eq(created.length, 1, 'enrolled AAL1 public positive returns exactly one new product')
+        eq([created[0].status, created[0].terms], ['DRAFT', typedTerms('FUND', 'Fictional negative creation')],
+          'enrolled AAL1 public positive returns the exact original typed draft input')
+        exceptionPositiveMode = snapshot.offering_access.session_mode
+        exceptionNewDraftCount = created.length
+        exceptionPositiveReturned = true
+      } finally {
+        await db.query('rollback to savepoint offering_password_exception_positive; release savepoint offering_password_exception_positive')
+        await admin()
+      }
+      eq(await state(), enrolledRows, 'password positive rollback restores every enrolled-baseline row')
+      eq(await functions(), enrolledFunctions, 'password positive rollback restores every enrolled-baseline function')
+      eq(await security(), enrolledSecurity, 'password positive rollback restores every enrolled-baseline security field')
+      eq(await scalar('select to_jsonb(s) from auth.sessions s where s.id=$1 and s.user_id=$2', [id(101), id(1)]), exceptionSession,
+        'public password positive preserves every native AAL1 session field')
+      for (const extra of [{ iss: 'https://oqkevkjbkpugjotihtda.supabase.co/auth/v1' }, { session_id: id(999) }, { sub: id(999) }, { role: 'anon' }, { exp: 1 }, { amr: [{ method: 'otp', timestamp: 1 }] }])
+        await denied('missing/mismatched MAIN actor/session marker denies package exception', () => command(1, manager, 'create_product', { organisation_id: application.organisation_id, terms: fund.terms }, key(), extra))
+      for (const sql of ["update bx1_portal.entry_configuration set manual_test_review=false where singleton",
+        "update bx1_portal.entry_configuration set test_ordinary_entry_enabled=false where singleton",
+        "update bx1_portal.entry_configuration set environment='MAINNET',manual_test_review=false,test_ordinary_entry_enabled=false where singleton"])
+        await isolated(async () => { await db.query(sql); await denied('MAIN/unadmitted configuration cannot use password package exception', createAnother) })
+      eq(await state(), enrolledRows, 'all nine strict denials preserve every enrolled-baseline row')
+      eq(await functions(), enrolledFunctions, 'all nine strict denials preserve every enrolled-baseline function')
+      eq(await security(), enrolledSecurity, 'all nine strict denials preserve every enrolled-baseline security field')
+    } finally {
+      await db.query('rollback to savepoint offering_password_exception_controls; release savepoint offering_password_exception_controls')
+      await admin()
+      eq(await state(), exceptionRows, 'password-exception controls restore the complete original factorless row manifest')
+      eq(await functions(), exceptionFunctions, 'password-exception controls restore every original function')
+      eq(await security(), exceptionSecurity, 'password-exception controls restore every original security field')
+      eq(await scalar('select to_jsonb(s) from auth.sessions s where s.id=$1 and s.user_id=$2', [id(101), id(1)]), exceptionSession,
+        'password-exception controls restore every original native session field')
+      eq(await scalar("select coalesce(jsonb_agg(to_jsonb(f) order by f.id),'[]'::jsonb) from auth.mfa_factors f where f.user_id=$1", [id(1)]), exceptionFactors,
+        'password-exception controls restore the exact original factor rows')
+    }
+    console.log('BX1_PASSWORD_EXCEPTION_CONTROL_RECEIPT', JSON.stringify({ label: 'synthetic-enrolled-native-AAL1',
+      positive_returned: exceptionPositiveReturned, positive_session_mode: exceptionPositiveMode, new_draft_count: exceptionNewDraftCount,
+      strict_claims_denials: 6, strict_configuration_denials: 3, restored: true }))
     for (const [n, context] of [[1, manager], [2, reviewer], [3, issuer], [5, applier], [7, role('Investor')]]) {
       for (const action of ['publish_product', 'subscribe', 'review_product_eligibility', 'open_funding_obligation', 'propose_funding_route',
         'review_funding_obligation', 'revoke_product_service_appointment', 'revoke_representative_mandate', 'revoke_investing_representative_mandate', 'cancel_subscription'])
