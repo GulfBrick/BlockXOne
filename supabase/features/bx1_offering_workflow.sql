@@ -567,7 +567,7 @@ end $$;
 create function bx1_portal.offering_workflow_read_scoped(c jsonb) returns jsonb
 language plpgsql volatile security definer set search_path='' as $$
 declare result jsonb; visible_ids uuid[]; products_json jsonb; orgs_json jsonb;
-  appointments_json jsonb; candidates_json jsonb; p bx1_portal.products;
+  appointments_json jsonb; candidates_json jsonb; v_product bx1_portal.products;
   package jsonb; actions jsonb; shown jsonb;
 begin
   if bx1_portal.offering_workflow_context(c) is not true then
@@ -593,27 +593,27 @@ begin
   select coalesce(pg_catalog.array_agg(p.id order by p.id),'{}'::uuid[]) into visible_ids
     from bx1_portal.products p where bx1_portal.offering_workflow_product_visible(c,p.id);
   products_json:='[]'::jsonb;
-  for p in select * from bx1_portal.products where id=any(visible_ids)
+  for v_product in select * from bx1_portal.products where id=any(visible_ids)
     and c->>'role'<>'SuperAdmin' order by created_at,id loop
-    package:=bx1_portal.offering_workflow_package_projection(c,p.id); actions:='[]'::jsonb;
-    if c->>'role'='OfferingManager' and bx1_portal.offering_workflow_operator(c,p.organisation_id) then
-      if p.status in ('DRAFT','CHANGES_REQUIRED') then
+    package:=bx1_portal.offering_workflow_package_projection(c,v_product.id); actions:='[]'::jsonb;
+    if c->>'role'='OfferingManager' and bx1_portal.offering_workflow_operator(c,v_product.organisation_id) then
+      if v_product.status in ('DRAFT','CHANGES_REQUIRED') then
         actions:=actions||'["save_product"]'::jsonb;
         if not exists(select 1 from (select r.terms_hash from bx1_portal.offering_revisions r
-          where r.product_id=p.id and r.origin='SUBMITTED' order by r.package_number desc limit 1) latest
-          where latest.terms_hash=p.terms_hash) then actions:=actions||'["submit_product"]'::jsonb; end if;
+          where r.product_id=v_product.id and r.origin='SUBMITTED' order by r.package_number desc limit 1) latest
+          where latest.terms_hash=v_product.terms_hash) then actions:=actions||'["submit_product"]'::jsonb; end if;
       end if;
       actions:=actions||'["request_product_service_appointment"]'::jsonb;
-      if bx1_portal.offering_amendment_beginable(p.id) then actions:=actions||'["begin_offering_amendment"]'::jsonb; end if;
-      if bx1_portal.offering_review_reopenable(p.id) then actions:=actions||'["reopen_offering_review"]'::jsonb; end if;
+      if bx1_portal.offering_amendment_beginable(v_product.id) then actions:=actions||'["begin_offering_amendment"]'::jsonb; end if;
+      if bx1_portal.offering_review_reopenable(v_product.id) then actions:=actions||'["reopen_offering_review"]'::jsonb; end if;
     elsif c->>'role'='IssuerFundManager' and coalesce((package->>'can_review_issuer')::boolean,false) then
       actions:='["review_offering_issuer"]'::jsonb;
     elsif c->>'role'='ComplianceOfficer' and coalesce((package->>'can_review_compliance')::boolean,false) then
       actions:='["review_product"]'::jsonb;
     end if;
-    shown:=(pg_catalog.to_jsonb(p)-array['cap_units','minimum_units','unit_price_minor'])||
-      pg_catalog.jsonb_build_object('reserved_units',p.reserved_units::text,
-        'offering_package',package,'offering_history',bx1_portal.offering_history_projection(p.id),
+    shown:=(pg_catalog.to_jsonb(v_product)-array['cap_units','minimum_units','unit_price_minor'])||
+      pg_catalog.jsonb_build_object('reserved_units',v_product.reserved_units::text,
+        'offering_package',package,'offering_history',bx1_portal.offering_history_projection(v_product.id),
         'allowed_actions',actions);
     products_json:=products_json||pg_catalog.jsonb_build_array(shown);
   end loop;
