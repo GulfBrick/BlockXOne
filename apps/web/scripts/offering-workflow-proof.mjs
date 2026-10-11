@@ -155,6 +155,11 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
     return scalar('select public.bx1_entry_command($1,$2,$3::jsonb)', [action, requestKey, JSON.stringify(payload)])
   }
   const act = async (n, context, action, payload, requestKey = key()) => {
+    if (admissionCommands.includes(action)) {
+      await admin()
+      eq(await scalar('select jsonb_build_object(\'user_id\',s.user_id,\'aal\',s.aal::text,\'factor_id\',s.factor_id) from auth.sessions s where s.id=$1', [id(100 + n)]),
+        { user_id: id(n), aal: 'aal1', factor_id: null }, 'every public Stage2 positive command uses the original password-only native session, not receipt fixture assurance')
+    }
     // Intent is copied BEFORE the RPC. Observed rows never define expectation.
     const intent = clone({ actor_id: id(n), request_key: requestKey, command: action, payload, operating_context: context })
     inputs.push(intent)
@@ -306,10 +311,38 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
       storage_path: `${id(n)}/${id(documentBase + i)}`, sha256: 'c'.repeat(64), size: 100, mime_type: 'application/pdf',
     }))
     await admin()
-    for (const d of evidence) {
-      documents.push(d)
-      await db.query(`insert into storage.objects(bucket_id,name,owner_id,metadata) values('bx1-portal-documents',$1,$2,'{"size":100,"mimetype":"application/pdf"}')`, [d.storage_path, id(n)])
-      await scalar('select bx1_private.register_document_receipt($1,$2,$3,$4,$5,$6,$7,$8)', [id(n), id(100 + n), d.id, d.kind, d.title, d.sha256, d.size, d.mime_type])
+    const originalSession = await scalar('select to_jsonb(s) from auth.sessions s where s.id=$1 and s.user_id=$2', [id(100 + n), id(n)])
+    const originalFactors = await scalar("select coalesce(jsonb_agg(to_jsonb(f) order by f.id),'[]'::jsonb) from auth.mfa_factors f where f.user_id=$1", [id(n)])
+    eq([originalSession.aal, originalSession.factor_id], ['aal1', null], 'receipt setup begins with exact password-only fixture session')
+    await db.query('savepoint offering_receipt_assurance')
+    try {
+      if (n === 7) {
+        // Native CI fixture prerequisite ONLY for the private receipt writer.
+        // No MFA challenge, provider or actual-byte acceptance is represented.
+        eq(originalFactors.filter(f => f.id === id(207) && f.user_id === id(7) && f.status === 'verified').length, 1,
+          'receipt fixture binds the existing actor-seven verified own factor; no factor is removed or invented')
+        await db.query("update auth.sessions set aal='aal2',factor_id=$1 where id=$2 and user_id=$3", [id(207), id(107), id(7)])
+        eq(await scalar('select to_jsonb(s) from auth.sessions s where s.id=$1', [id(107)]),
+          { ...originalSession, aal: 'aal2', factor_id: id(207) }, 'private receipt setup changes only native assurance and exact own factor binding')
+      }
+      for (const d of evidence) {
+        documents.push(d)
+        await db.query(`insert into storage.objects(bucket_id,name,owner_id,metadata) values('bx1-portal-documents',$1,$2,'{"size":100,"mimetype":"application/pdf"}')`, [d.storage_path, id(n)])
+        await scalar('select bx1_private.register_document_receipt($1,$2,$3,$4,$5,$6,$7,$8)', [id(n), id(100 + n), d.id, d.kind, d.title, d.sha256, d.size, d.mime_type])
+      }
+    } catch (error) {
+      // Recover an aborted private receipt transaction before restoration;
+      // otherwise a cleanup query could mask the original receipt SQLSTATE.
+      await db.query('rollback to savepoint offering_receipt_assurance')
+      throw error
+    } finally {
+      if (n === 7) await db.query('update auth.sessions set aal=$1,factor_id=$2 where id=$3 and user_id=$4',
+        [originalSession.aal, originalSession.factor_id, id(107), id(7)])
+      eq(await scalar('select to_jsonb(s) from auth.sessions s where s.id=$1', [id(100 + n)]), originalSession,
+        'exact full native session is restored before any public submit/review/account/consent command')
+      eq(await scalar("select coalesce(jsonb_agg(to_jsonb(f) order by f.id),'[]'::jsonb) from auth.mfa_factors f where f.user_id=$1", [id(n)]), originalFactors,
+        'private receipt registration preserves every original own-factor field')
+      await db.query('release savepoint offering_receipt_assurance')
     }
     // Same accepted individual/entity detail contracts as the representatives
     // proof, but distinct document IDs from the manager admission above.
