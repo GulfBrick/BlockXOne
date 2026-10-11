@@ -322,8 +322,8 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
     eq(await scalar("select current_database()='bx1_demo_ci' and current_user='postgres'"), true, 'exact disposable cloud PostgreSQL owner')
     const version = Number(await scalar('show server_version_num'))
     truth(version >= 170000 && version < 180000, 'retained PostgreSQL17 fixture only')
-    truth(await scalar("select to_regprocedure('bx1_portal.account_representative_command(jsonb,text,uuid,jsonb)') is not null
-      and to_regprocedure('bx1_portal.admission_password_session()') is not null"), 'accepted admission/representatives prerequisite remains installed')
+    truth(await scalar(`select to_regprocedure('bx1_portal.account_representative_command(jsonb,text,uuid,jsonb)') is not null
+      and to_regprocedure('bx1_portal.admission_password_session()') is not null`), 'accepted admission/representatives prerequisite remains installed')
     truth(await scalar("select exists(select 1 from bx1_portal.investing_representative_mandates where proposal_hash is not null and consent_decision='ACCEPT')"), 'committed preceding representative consent fiction is retained')
     eq(await scalar("select to_regprocedure('bx1_portal.offering_workflow_context(jsonb)') is null"), true, 'offering extension has not been independently installed')
     const pids = await Promise.all([db, ...clients].map(client => scalar('select pg_backend_pid()', [], client)))

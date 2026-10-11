@@ -44,7 +44,7 @@ const requestKey = '00000000-0000-4000-8000-000000000004'
 const hash = 'ab'.repeat(32)
 const release: PlatformRelease = { version: 'mounted-package-fixture', environment: 'TESTNET', source: 'normal-package-workflow-fixture' }
 type Role = OfferingAccess['operating_context']['role']
-const context = (role: Role): PortalOperatingContext => ({ mode: 'ROLE', role, organisationId: role === 'OfferingManager' ? managerOrganisation : role === 'IssuerFundManager' ? issuerOrganisation : reviewOrganisation })
+const context = (role: Role): OfferingAccess['operating_context'] => ({ mode: 'ROLE', role, organisationId: role === 'OfferingManager' ? managerOrganisation : role === 'IssuerFundManager' ? issuerOrganisation : reviewOrganisation })
 const actorFor = (role: Role) => role === 'OfferingManager' ? manager : role === 'IssuerFundManager' ? issuer : role === 'SuperAdmin' ? admin : productReviewer
 const past = () => new Date(Date.now() - 60_000).toISOString()
 const expiry = () => new Date(Date.now() + 7 * 86_400_000).toISOString()
