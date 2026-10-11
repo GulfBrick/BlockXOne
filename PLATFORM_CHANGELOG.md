@@ -1,5 +1,36 @@
 # BlockXOne platform releases
 
+## 1.1.0-rc.28 — Connected Stage 2 handoff correction candidate
+
+- Continue the existing Stage 2 workflow from exact rc.27 source `0f749e2c8ca94309ffafe2cdcec115b51b668947`; no new platform or roadmap.
+- Correct the approved-mandate/appointment detail handoff for the scoped Super Admin without granting Compliance review access. Distinguish read-only sign-in security from a saved-records outage; privileged operations remain protected.
+- Overlap the independent own profile and membership reads, retaining subsequent current-authority checks. This removes one serial step; actual hosted latency improvement remains to be measured.
+- Require only the immutable application's selected Sumsub verification level through server configuration and the additive private binding replacement. Unused levels confer no availability; company KYB remains unadmitted without an actual company entitlement/level. Existing identity, provider and business history remain unchanged.
+- Require independent source review and exact-source cloud proof. Genuine provider events, document scanning/disposal, connected account/mandate acceptance, MFA recovery and both complete fund/property investment journeys remain incomplete. No roles, money, contracts or MAIN activation are changed by preparing this candidate.
+
+## 1.1.0-rc.27 — Temporary TEST ordinary-entry exception candidate
+
+- Retain the reviewed rc.26 source and Stage 2 evidence. No new platform, identity model, customer roles, provider activation, money or contracts.
+- Add a default-off, explicitly admitted TEST-only self-context read for enrolled AAL1 password sessions. The existing portal may show own identity, effective assignment labels and redacted application status without an authenticator challenge.
+- Preserve all factors, strict MFA/session helpers, RLS and privileged workflow readers/writers. This is restricted ordinary entry, not MFA-free approvals or financial operation. Existing no-factor/AAL2 flows and MAIN remain unchanged.
+- Require the additive TEST ordinary-entry feature, matching server/database switches, independent source review, exact-source cloud negatives and hosted proof before enabling. Both switches provide a reversible pause; the authenticator failure and recovery acceptance are not declared resolved by this exception.
+
+## 1.1.0-rc.26 — Entity-account eligibility handoff candidate
+
+- Extend exact rc.25 source `f579f4c5285b866284526bafb0f21569b4b6a283` in the same repository, application, shell and two existing environments. No live role grant, provider activation, financial movement or contract change.
+- Add an exact entity/representative/mandate/offering-bound request and independent product-appointed Compliance decision over the existing canonical eligibility cases and immutable receipts. Keep individual history and execution guards unchanged.
+- Connect entity account, offering eligibility and review queue screens; show legal holder, active representative, responsible owner, case/mandate/package revisions, information requests and recorded decisions. Entity approval cannot enable a subscription or create ownership.
+- Require additive `supabase/features/bx1_entity_eligibility.sql` on the current reviewed reader/command chain. MAIN business admission remains closed. TEST may lead MAIN as a recorded prerelease; this candidate is not a claim of paired release alignment.
+- Source/cloud/hosted acceptance remains pending. Isolated cloud technical-readiness fixtures are not deployment/finality proof. Genuine Sumsub KYC/KYB, private-document engine/disposal, remaining account/mandate acceptance and both complete investment journeys remain separate deliverables.
+
+## 1.1.0-rc.25 — Connected customer-admission handoff candidate
+
+- Extend rc.24 `fe877a6c06180453d3dd568ddec2d51c40c5f0d7` in the same application and existing TEST/MAIN projects. No login, role, wallet, contract or money change.
+- Add a pure-read, revision/person/environment/context-bound application handoff: actual next owner, monitoring/expiry blockers, account/mandate links and effective native-context destination. Missing or mismatched projections do not infer authority from approval.
+- Preserve rejected same-application resubmission with its recorded history; manager admission remains separate from Compliance mandate review and Super Admin application. Entity account existence remains separate from an investing representative's authority.
+- Require additive `supabase/features/bx1_customer_handoff.sql` on the current canonical migration chain before the dependent web release. Preserve function ownership, restricted helper grants and MAIN scoped RPC denial. Reads must leave business records unchanged.
+- Tests/builds execute only in the existing GitHub cloud acceptance workflow for both environments at the exact candidate commit. Independent source review, cloud evidence and branded hosted verification are required before release. Provider, document scanning/disposal and independent-human acceptance are separate outstanding gates; this increment does not close Stage 2 or either full lifecycle.
+
 ## 1.1.0-rc.10 — Application handoff correction candidate
 
 - Based on released rc.9 `0a77d8c1cef6fb206bfd268a8b3f31bbc3e4e5f4`. Preserve existing identities, application references, private evidence and financial history.

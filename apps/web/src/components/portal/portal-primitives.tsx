@@ -49,8 +49,11 @@ export function Field({ label, hint, children }: { label: string; hint?: string;
 export function money(minor: string, currency = 'ZAR_TEST'): string {
   if (!/^\d+$/.test(minor)) return 'Not available'
   const value = BigInt(minor)
-  const whole = (value / 100n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',')
-  return `${currency === 'ZAR_TEST' ? 'R' : `${currency} `}${whole}.${(value % 100n).toString().padStart(2, '0')}${currency === 'ZAR_TEST' ? ' test' : ''}`
+  const decimals = currency === 'TST' ? 6 : 2
+  const scale = 10n ** BigInt(decimals)
+  const whole = (value / scale).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',')
+  if (currency === 'TST') return `${whole}.${(value % scale).toString().padStart(decimals, '0')} TST`
+  return `${currency === 'ZAR_TEST' ? 'R' : `${currency} `}${whole}.${(value % scale).toString().padStart(decimals, '0')}${currency === 'ZAR_TEST' ? ' test' : ''}`
 }
 export function dateLabel(value: string | null | undefined): string {
   if (!value || Number.isNaN(Date.parse(value))) return 'Not recorded'

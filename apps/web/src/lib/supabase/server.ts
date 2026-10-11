@@ -74,15 +74,18 @@ export async function readWorkspace(client: SupabaseClient): Promise<Bx1Workspac
   try {
     const user = await readVerifiedUser(client)
     if (!user) return null
-    const { data: profile, error: profileError } = await client.from('bx1_profiles')
-      .select('id,platform_user_id,display_name,status').eq('id', user.id).eq('status', 'ACTIVE').maybeSingle()
+    // These own-record reads are independent. Do not cache their authority or
+    // start the effective-membership check until both live reads have finished.
+    const [{ data: profile, error: profileError }, { data: memberships, error: membershipError }] = await Promise.all([
+      client.from('bx1_profiles')
+        .select('id,platform_user_id,display_name,status').eq('id', user.id).eq('status', 'ACTIVE').maybeSingle(),
+      client.from('bx1_memberships')
+        .select('id,organisation_id,role,status').eq('user_id', user.id).eq('status', 'ACTIVE'),
+    ])
     if (profileError) throw new AuthUnavailableError()
+    if (membershipError) throw new AuthUnavailableError()
     if (!profile || profile.id !== user.id || profile.status !== 'ACTIVE') return null
     if (typeof profile.platform_user_id !== 'string' || !profile.platform_user_id) throw new AuthUnavailableError()
-
-    const { data: memberships, error: membershipError } = await client.from('bx1_memberships')
-      .select('id,organisation_id,role,status').eq('user_id', user.id).eq('status', 'ACTIVE')
-    if (membershipError) throw new AuthUnavailableError()
     if (!memberships?.length) return null
     for (const member of memberships) {
       if (!BX1_ROLES.includes(member.role as Bx1Role) || typeof member.id !== 'string' || !member.id

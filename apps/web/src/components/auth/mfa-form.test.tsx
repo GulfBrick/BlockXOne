@@ -7,6 +7,7 @@ const factorId = '11111111-1111-4111-8111-111111111111'
 const secondId = '22222222-2222-4222-8222-222222222222'
 const empty: MfaView = { state: 'unenrolled', factors: [], hasPendingTotp: false }
 const enrolled: MfaView = { state: 'challenge_required', factors: [{ id: factorId, status: 'verified', factorType: 'totp' }], hasPendingTotp: false }
+const verified: MfaView = { ...enrolled, state: 'verified' }
 const pending: MfaView = { state: 'unenrolled', factors: [{ id: factorId, status: 'unverified', factorType: 'totp' }], hasPendingTotp: true }
 const setup = { ok: true, factorId, secret: 'JBSWY3DPEHPK3PXP', qrCode: 'data:image/svg+xml;utf-8,<svg xmlns="http://www.w3.org/2000/svg"/>' }
 function fixture(view = empty, continuation: 'workspace' | 'setup' | 'security' = 'security') {
@@ -109,6 +110,23 @@ describe('MFA transient controller', () => {
     await f.controller.enroll()
     expect(f.post).not.toHaveBeenCalled()
   })
+  it('offers explicit backup enrollment to a verified security session only', async () => {
+    const allowed = fixture(verified)
+    await allowed.controller.enroll()
+    expect(allowed.post.mock.calls[0][0]).toBe('/auth/mfa-enroll')
+    const denied = fixture(verified, 'workspace')
+    await denied.controller.enroll()
+    expect(denied.post).not.toHaveBeenCalled()
+  })
+  it('keeps the current-factor challenge usable after a backup step-up prompt', async () => {
+    const f = fixture(verified)
+    f.post.mockResolvedValue({ ok: false, error: 'step_up_required' })
+    await f.controller.enroll()
+    expect(f.controller.getState()).toMatchObject({ error: 'step_up_required', reloadRequired: false })
+    f.post.mockResolvedValue({ ok: true, next: '/workspace/security' })
+    await f.controller.verify(factorId, '123456')
+    expect(f.navigate).toHaveBeenCalledWith('/workspace/security')
+  })
   it('preserves leading zeros, exact field list and safe fixed continuation', async () => {
     const f = fixture(enrolled, 'setup')
     f.post.mockResolvedValue({ ok: true, next: '/login?setup=1' })
@@ -145,6 +163,55 @@ describe('MFA transient controller', () => {
     expect(allowed.post).toHaveBeenCalledOnce()
     const denied = fixture(pending, 'workspace')
     await denied.controller.verify(factorId, '123456')
+    expect(denied.post).not.toHaveBeenCalled()
+  })
+  it('starts fresh setup only after the explicit user action and shows the returned QR', async () => {
+    const f = fixture({ ...pending, canRestartPendingSetup: true })
+    expect(f.post).not.toHaveBeenCalled()
+    await f.controller.restartUnfinishedSetup()
+    expect(f.post).toHaveBeenCalledExactlyOnceWith('/auth/mfa-restart-setup', expect.any(URLSearchParams), expect.any(AbortSignal))
+    expect(f.post.mock.calls[0][1].toString()).toBe('')
+    expect(f.controller.getState().setup).toEqual({ factorId, secret: setup.secret, qrCode: setup.qrCode })
+    expect(f.navigate).not.toHaveBeenCalled()
+    await f.controller.restartUnfinishedSetup()
+    expect(f.post).toHaveBeenCalledOnce()
+  })
+  it.each([pending, enrolled, verified, { ...verified, canRestartPendingSetup: true as const }])('does not restart an unapproved or verified view %j', async view => {
+    const f = fixture(view)
+    await f.controller.restartUnfinishedSetup()
+    expect(f.post).not.toHaveBeenCalled()
+  })
+  it('leaves unknown restart outcome for a fresh read and never automatically creates another factor', async () => {
+    const f = fixture({ ...pending, canRestartPendingSetup: true })
+    f.post.mockRejectedValue(new Error('private provider outcome'))
+    await f.controller.restartUnfinishedSetup()
+    expect(f.controller.getState()).toMatchObject({ error: 'unavailable', reloadRequired: true })
+    await f.controller.restartUnfinishedSetup()
+    expect(f.post).toHaveBeenCalledOnce()
+    expect(f.navigate).not.toHaveBeenCalled()
+  })
+  it('suppresses late restart success after disposal and simultaneous clicks', async () => {
+    const f = fixture({ ...pending, canRestartPendingSetup: true })
+    const d = deferred()
+    f.post.mockReturnValue(d.promise)
+    const request = f.controller.restartUnfinishedSetup()
+    await f.controller.restartUnfinishedSetup()
+    expect(f.post).toHaveBeenCalledOnce()
+    f.controller.dispose()
+    d.resolve(setup)
+    await request
+    expect(f.controller.getState().setup).toBeUndefined()
+    expect(f.navigate).not.toHaveBeenCalled()
+  })
+  it('allows only security continuation to finish an unverified backup', async () => {
+    const withBackup: MfaView = { ...verified, factors: [...verified.factors,
+      { id: secondId, status: 'unverified', factorType: 'totp' }], hasPendingTotp: true }
+    const allowed = fixture(withBackup)
+    allowed.post.mockResolvedValue({ ok: true, next: '/workspace/security' })
+    await allowed.controller.verify(secondId, '123456')
+    expect(allowed.post.mock.calls[0][1].get('factorId')).toBe(secondId)
+    const denied = fixture(withBackup, 'workspace')
+    await denied.controller.verify(secondId, '123456')
     expect(denied.post).not.toHaveBeenCalled()
   })
   it('suppresses duplicate submissions and stale responses after pagehide', async () => {
@@ -264,7 +331,7 @@ describe('MFA accessible markup', () => {
   it('states pending lost-secret guidance rather than starting another factor', () => {
     const html = renderToStaticMarkup(<MfaForm view={pending} continuation="security" />)
     expect(html).toContain('Authenticator setup is unfinished.')
-    expect(html).toContain('contact support before starting again')
+    expect(html).toContain('contact support')
     expect(html).toContain('Verify existing setup')
     expect(html).not.toContain('Set up authenticator')
   })
@@ -278,5 +345,22 @@ describe('MFA accessible markup', () => {
     const html = renderToStaticMarkup(<MfaForm view={{ ...enrolled, factors: [...enrolled.factors, { id: secondId, status: 'verified', factorType: 'totp' }] }} continuation="workspace" />)
     expect(html).toContain('<select')
     expect(html).toContain('Authenticator 2')
+  })
+  it('explains phone-generated codes and offers restart only for an eligible unfinished first setup', () => {
+    const html = renderToStaticMarkup(<MfaForm view={{ ...pending, canRestartPendingSetup: true }} continuation="security" />)
+    expect(html).toContain('does not email this code')
+    expect(html).toContain('Scan the new QR code')
+    expect(html).toContain('Start fresh authenticator setup')
+    expect(html).not.toContain('Set up authenticator')
+    const verifiedHtml = renderToStaticMarkup(<MfaForm view={{ ...verified, factors: [...verified.factors, ...pending.factors], hasPendingTotp: true }} continuation="security" />)
+    expect(verifiedHtml).not.toContain('Start fresh authenticator setup')
+    expect(verifiedHtml).toContain('Authentication code')
+  })
+  it('offers a separate-device backup without promising lost-all recovery or factor deletion', () => {
+    const html = renderToStaticMarkup(<MfaForm view={verified} continuation="security" />)
+    expect(html).toContain('Add backup authenticator')
+    expect(html).toContain('different device')
+    expect(html).toContain('Losing every verified factor still requires controlled support recovery')
+    expect(html).not.toMatch(/unenroll|Remove factor|Delete factor/)
   })
 })

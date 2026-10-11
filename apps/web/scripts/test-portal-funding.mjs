@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import pg from 'pg'
+import { proveCustomerMonitoringFunding } from './customer-monitoring-proof.mjs'
 
 // Never run locally or against Supabase. Provider facts below are deliberately
 // synthetic trusted-writer inputs, not a claim that an on-chain payment occurred.
@@ -167,6 +168,18 @@ try {
   const fund = await publish(orgId, 'FUND'), estate = await publish(orgId, 'REAL_ESTATE')
   await admin(); await sqlFile('../../../supabase/migrations/20260921160000_portal_authority_accounts.sql')
   await sqlFile('../../../supabase/tests/bx1_portal_authority_accounts.sql')
+  // The authority fixture has now created investor 3's canonical profile.
+  // Map that investor to a distinct trusted person before the synthetic
+  // hosted role loses private-schema write access.
+  await db.query(`insert into bx1_private.persons(id,label,status,evidence_reference,bootstrap_receipt_id)
+    values('e6000000-0000-4000-8000-000000000004',
+      'Synthetic test human investor 3','TRUSTED','synthetic:funding-investor-3',
+      'e7000000-0000-4000-8000-000000000001')`)
+  await db.query(`insert into bx1_private.person_principals
+    (auth_user_id,person_id,status,evidence_reference,bootstrap_receipt_id)
+    values($1,'e6000000-0000-4000-8000-000000000004','TRUSTED',
+      'synthetic:funding-investor-principal-3',
+      'e7000000-0000-4000-8000-000000000001')`, [uid(3)])
   phase = 'hosted-like-migration-role-boundary'
   // Preserve existing postgres-owned functions: demote the real fixture role
   // instead of assigning selected objects to an artificial privileged owner.
@@ -201,7 +214,17 @@ try {
   await denied('SELECT-only principals cannot be locked directly', () => db.query('select auth_user_id from bx1_private.person_principals for update'), '42501')
   await denied('SELECT-only persons cannot be a new foreign-key target', () => db.query('create table bx1_portal.synthetic_forbidden_person_reference (person_id uuid references bx1_private.persons(id))'), '42501')
   const originalAuthorityBoundary = await authorityBoundary()
+  // The full Stage 1 entry migration intentionally follows the historical
+  // funding fixture. Give this disposable install an explicit TEST admission;
+  // no missing configuration is allowed to mean TEST by default.
+  await db.query(`create table bx1_portal.entry_configuration
+    (singleton boolean primary key default true,environment text not null
+      check(environment in ('TESTNET','MAINNET')))`)
+  await db.query("insert into bx1_portal.entry_configuration(environment) values('TESTNET')")
   await sqlFile('../../../supabase/features/bx1_portal_funding.sql')
+  eq(await scalar("select has_function_privilege('authenticated','public.bx1_portal_command_scoped(text,uuid,jsonb,jsonb)','EXECUTE')"),
+    true, 'explicit TEST funding install grants the guarded scoped command')
+  await db.query('drop table bx1_portal.entry_configuration')
   phase = 'hosted-like-migration-preserves-private-boundary'
   await checkHostedRole()
   eq(await authorityBoundary(), originalAuthorityBoundary, 'funding migration restores exact authority membership and private schema/table ACLs')
@@ -401,6 +424,61 @@ try {
   eq([revoked.status, revoked.effective], ['REVOKED', false], 'funding-enabled subscription route sees the same revoked case')
   await denied('funding wrapper cannot bypass product-specific revocation', () => command(3, investor, 'subscribe', eligibilitySubscription), '42501')
   await admin(); eq(await scalar('select count(*)::int from bx1_portal.subscriptions'), historicalOrders + 1, 'funding wrapper adds no order after revocation')
+  phase = 'latest-offering-migration-over-funded-history'
+  await sqlFile('../../../supabase/migrations/20260923161500_stage2_application_document_history.sql')
+  await sqlFile('../../../supabase/migrations/20260923171126_stage2_entity_investment_accounts.sql')
+  await sqlFile('../../../supabase/migrations/20260923175822_stage2_superadmin_shell_mfa_boundary.sql')
+  const fundedHistory = await scalar(`select jsonb_build_object(
+    'products',(select count(*) from bx1_portal.products),
+    'subscriptions',(select count(*) from bx1_portal.subscriptions),
+    'routes',(select count(*) from bx1_portal.funding_routes),
+    'obligations',(select count(*) from bx1_portal.funding_obligations),
+    'journals',(select count(*) from bx1_portal.funding_journals))`)
+  await sqlFile('../../../supabase/migrations/20260923205519_stage3_immutable_offering_packages.sql')
+  eq(await scalar(`select jsonb_build_object(
+    'products',(select count(*) from bx1_portal.products),
+    'subscriptions',(select count(*) from bx1_portal.subscriptions),
+    'routes',(select count(*) from bx1_portal.funding_routes),
+    'obligations',(select count(*) from bx1_portal.funding_obligations),
+    'journals',(select count(*) from bx1_portal.funding_journals))`), fundedHistory,
+    'latest offering cutover retains all historical funding and journal references')
+  const preserved = (await read(3, investor)).subscriptions.find(s => s.id === raceOrder.subscription.id)
+  truth(preserved?.offering_revision_id, 'investor can still read historical funded order mapped to immutable legacy snapshot')
+  truth((await read(2, controller)).funding.obligations.some(o => o.id === raceOrder.obligation.id),
+    'controller can still read historical obligation for exception or recovery')
+  await admin(); await db.query("update auth.sessions set not_after=clock_timestamp()+interval '1 hour' where id=$1", [sid(5)])
+  const oldFinance = await read(5, treasury)
+  eq(oldFinance.products.find(p => p.id === fund.id)?.allowed_actions.includes('propose_funding_route'), false,
+    'Treasury is not offered a new funding route on historical published product')
+  eq((await read(2, controller)).funding.routes.some(r => r.allowed_actions.includes('approve_funding_route')),
+    false, 'Controller is not offered route approval without current package and readiness')
+  await denied('old funded product cannot accept a new route at the table boundary', async () => {
+    await admin(); await db.query(`insert into bx1_portal.funding_routes(product_id,organisation_id,product_revision,terms_hash,
+      token_address,token_runtime_hash,token_decimals,receiving_address,authority_reference,
+      code_review_reference,valid_until,proposed_by,proposed_person,proposed_context)
+      select product_id,organisation_id,product_revision,terms_hash,token_address,token_runtime_hash,
+        token_decimals,receiving_address,authority_reference,code_review_reference,
+        clock_timestamp()+interval '1 hour',proposed_by,proposed_person,proposed_context
+      from bx1_portal.funding_routes order by created_at,id limit 1`)
+  }, '23514')
+  await denied('old funded product cannot create another obligation at the table boundary', async () => {
+    await admin(); await db.query(`insert into bx1_portal.funding_obligations(subscription_id,investment_account_id,
+      investor_id,product_id,organisation_id,route_id,product_revision,terms_hash,amount_minor,
+      currency,token_amount_base_units,token_decimals)
+      select subscription_id,investment_account_id,investor_id,product_id,organisation_id,
+        route_id,product_revision,terms_hash,amount_minor,currency,token_amount_base_units,token_decimals
+      from bx1_portal.funding_obligations order by created_at,id limit 1`)
+  }, '23514')
+  phase = 'funding-monitoring-held-existing-obligation'
+  await admin()
+  await sqlFile('../../../supabase/migrations/20260924125627_stage2_customer_monitoring.sql')
+  checks += await proveCustomerMonitoringFunding(db, {
+    investorApplicationId: await scalar('select application_id from bx1_portal.investment_accounts where id=$1', [account3.id]),
+    heldObligationId: auditOrder.obligation.id,
+    reconciledObligationId: completed[1].o.obligation.id,
+    otherObligationId: duplicate.obligation.id,
+    unpostedReferenceId: auditRef.id,
+  })
   await db.query('commit'); begun = false
   phase = 'cleanup'
   await cleanupFixture()

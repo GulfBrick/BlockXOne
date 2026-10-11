@@ -1,12 +1,13 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { NextRequest, NextResponse } from 'next/server'
-import { applicationDocumentLookupSchema, applicationDocumentVersionsSchema, evidenceSchema } from '@/lib/portal/contracts'
+import { applicationDocumentLookupSchema, applicationDocumentVersionsSchema, evidenceSchema, investingProposalDocumentLookupSchema } from '@/lib/portal/contracts'
 import { PortalError, readPortal, requirePortalEnvironment } from '@/lib/portal/server'
 import { portalFailure, readPortalBody } from '@/lib/portal/http'
 import { hasCanonicalOrigin, privateResponse, responseCookieAdapter } from '@/lib/supabase/http'
 import { createRequestSupabaseClient } from '@/lib/supabase/server'
 import { portalOperatingContextSchema, portalScopeHref } from '@/lib/portal/operating-context'
 import { documentReceiptDatabaseConfig, documentReceiptId, registerDocumentReceipt } from '@/lib/portal/document-receipts'
+import { acceptScannerMessage, documentScannerConfig, DocumentLifecycleError, quarantineDocument } from '@/lib/portal/document-lifecycle'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -25,6 +26,15 @@ async function receiptPolicy(client: ReturnType<typeof createRequestSupabaseClie
   // may not have this RPC yet. All other failures are fail-closed.
   if (error?.code === 'PGRST202') return false
   if (error || typeof data !== 'boolean') throw new PortalError('Private evidence policy is temporarily unavailable.', 503)
+  return data
+}
+async function lifecycleMode(client: ReturnType<typeof createRequestSupabaseClient>): Promise<'SYNTHETIC_TEST_ONLY' | 'SCANNER_REQUIRED'> {
+  const { data, error } = await client.rpc('bx1_document_lifecycle_mode').abortSignal(AbortSignal.timeout(8000))
+  // Migration-first rollout must not change the existing TEST synthetic path.
+  if (error?.code === 'PGRST202') return 'SYNTHETIC_TEST_ONLY'
+  if (error || (data !== 'SYNTHETIC_TEST_ONLY' && data !== 'SCANNER_REQUIRED')) {
+    throw new PortalError('Private document lifecycle policy is unavailable.', 503)
+  }
   return data
 }
 async function currentSessionId(client: ReturnType<typeof createRequestSupabaseClient>, actorId: string): Promise<string> {
@@ -57,9 +67,12 @@ export async function POST(request: NextRequest) {
     const { user } = await readPortal(client, context.data)
     if (user.id !== expectedActor) throw new PortalError('The signed-in account changed. Reload before uploading.', 403)
     const strictReceipts = await receiptPolicy(client)
+    const mode = await lifecycleMode(client)
+    if (mode === 'SCANNER_REQUIRED' && !strictReceipts) throw new PortalError('Private document receipts are not enforced.', 503)
     // Check the server-only database credential before an irreversible Storage
     // upload. A missing credential never creates an unreceipted strict upload.
     if (strictReceipts) documentReceiptDatabaseConfig()
+    if (mode === 'SCANNER_REQUIRED') documentScannerConfig()
     const body = await readPortalBody(request, maxFile + 16384)
     let form: FormData
     try { form = await new Response(Buffer.from(body), { headers: { 'Content-Type': contentType } }).formData() } catch { throw new PortalError('Invalid document upload.', 400) }
@@ -76,6 +89,15 @@ export async function POST(request: NextRequest) {
     const document = evidenceSchema.safeParse({ id, kind, title, storage_path: `${user.id}/${id}`, sha256, size: bytes.length, mime_type: mime })
     if (!document.success) throw new PortalError('Check the document type and title.', 400)
     const uploadSessionId = strictReceipts ? await currentSessionId(client, user.id) : null
+    if (mode === 'SCANNER_REQUIRED') {
+      await quarantineDocument(user.id, uploadSessionId!, document.data, bytes)
+      if (await currentSessionId(client, user.id) !== uploadSessionId) {
+        throw new PortalError('The signed-in session changed while uploading.', 403)
+      }
+      return jar.finish(privateResponse(NextResponse.json({ document: document.data,
+        validation_state: 'QUARANTINED', next: 'Await an independently verified scanner result before submitting this evidence.' },
+      { status: 202 })))
+    }
     const uploaded = await client.storage.from(bucket).upload(document.data.storage_path, bytes, { contentType: mime, cacheControl: '0', upsert: false, metadata: { sha256: document.data.sha256 } })
     if (!strictReceipts && uploaded.error) throw new PortalError('The private document could not be saved. Your application has not been submitted.', 503)
     if (strictReceipts) {
@@ -91,7 +113,23 @@ export async function POST(request: NextRequest) {
       await registerDocumentReceipt(user.id, sessionId, document.data)
     }
     return jar.finish(privateResponse(NextResponse.json({ document: document.data, validation_state: strictReceipts ? 'SYNTHETIC_UNSCANNED' : 'LEGACY_UNVERIFIED' }, { status: uploaded.error ? 200 : 201 })))
-  } catch (error) { return jar.finish(portalFailure(error)) }
+  } catch (error) { return jar.finish(portalFailure(error instanceof DocumentLifecycleError
+    ? new PortalError(error.message, error.status) : error)) }
+}
+
+// Scanner adapters post a raw-body HMAC. This endpoint is not a browser action,
+// and never accepts a client-selected role or an unsigned clean verdict.
+export async function PATCH(request: NextRequest) {
+  try {
+    if (request.nextUrl.search || request.headers.get('content-type') !== 'application/json') {
+      throw new PortalError('Invalid scanner message.', 400)
+    }
+    const body = await readPortalBody(request, 4096)
+    const result = await acceptScannerMessage(body,
+      request.headers.get('x-bx1-scanner-timestamp'), request.headers.get('x-bx1-scanner-signature'))
+    return privateResponse(NextResponse.json(result))
+  } catch (error) { return portalFailure(error instanceof DocumentLifecycleError
+    ? new PortalError(error.message, error.status) : error) }
 }
 export async function GET(request: NextRequest) {
   const jar = responseCookieAdapter(request)
@@ -99,17 +137,48 @@ export async function GET(request: NextRequest) {
     requirePortalEnvironment()
     if (request.headers.get('sec-fetch-site') === 'cross-site') throw new PortalError('Open this document from your portal.', 403)
     const params = request.nextUrl.searchParams
-    const id = params.get('id') ?? '', applicationId = params.get('application_id') ?? ''
+    if (params.has('queue')) {
+      if (params.get('queue') !== '1' || [...params.keys()].length !== 1) {
+        throw new PortalError('Invalid document reference.', 400)
+      }
+      const client = createRequestSupabaseClient(jar.adapter)
+      await readPortal(client, { mode: 'APPLICANT' })
+      const { data, error } = await client.rpc('bx1_document_scan_queue').abortSignal(AbortSignal.timeout(8000))
+      if (error || !Array.isArray(data) || data.some(item => !item || typeof item.id !== 'string'
+        || typeof item.title !== 'string' || !['QUARANTINED','SCANNED_CLEAN','REJECTED'].includes(item.state))) {
+        throw new PortalError('Document scan queue is temporarily unavailable.', 503)
+      }
+      return jar.finish(privateResponse(NextResponse.json({ documents: data })))
+    }
+    if (params.has('status')) {
+      const statusId = params.get('status') ?? ''
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(statusId)
+        || [...params.keys()].length !== 1) throw new PortalError('Invalid document reference.', 400)
+      const client = createRequestSupabaseClient(jar.adapter)
+      await readPortal(client, { mode: 'APPLICANT' })
+      const { data, error } = await client.rpc('bx1_document_scan_status', { document_id: statusId })
+        .abortSignal(AbortSignal.timeout(8000))
+      if (error?.code === '42501' || error?.code === 'P0002') throw new PortalError('Document unavailable for this session.', 404)
+      if (error || !data || data.id !== statusId || !['QUARANTINED','SCANNED_CLEAN','REJECTED'].includes(data.state)) {
+        throw new PortalError('Document scan status is temporarily unavailable.', 503)
+      }
+      if (data.state === 'SCANNED_CLEAN' && !evidenceSchema.safeParse(data.document).success) {
+        throw new PortalError('Scanned document receipt could not be verified.', 503)
+      }
+      return jar.finish(privateResponse(NextResponse.json(data)))
+    }
+    const id = params.get('id') ?? '', applicationId = params.get('application_id') ?? '', mandateId = params.get('mandate_id') ?? ''
     const revisionText = params.get('revision') ?? ''
     const validId = (value: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)
-    const keys = ['id', 'application_id', 'revision', 'history', 'download', 'mode', 'organisation', 'role']
+    const keys = ['id', 'application_id', 'mandate_id', 'revision', 'history', 'download', 'mode', 'organisation', 'role']
     if ([...params.keys()].some(key => !keys.includes(key)) || keys.some(key => params.getAll(key).length > 1)
       || (params.has('download') && params.get('download') !== '1')
       || (params.has('history') && params.get('history') !== '1')) throw new PortalError('Invalid document reference.', 400)
-    const history = validId(applicationId) && params.has('history') && !params.has('revision') && !params.has('id') && !params.has('download')
-    const historicalDocument = validId(applicationId) && validId(id) && !params.has('history') && /^[1-9][0-9]{0,8}$/.test(revisionText)
-    const currentDocument = validId(id) && !params.has('application_id') && !params.has('revision') && !params.has('history')
-    if (!history && !historicalDocument && !currentDocument) throw new PortalError('Invalid document reference.', 400)
+    const history = validId(applicationId) && !params.has('mandate_id') && params.has('history') && !params.has('revision') && !params.has('id') && !params.has('download')
+    const historicalDocument = validId(applicationId) && validId(id) && !params.has('mandate_id') && !params.has('history') && /^[1-9][0-9]{0,8}$/.test(revisionText)
+    const currentDocument = validId(id) && !params.has('mandate_id') && !params.has('application_id') && !params.has('revision') && !params.has('history')
+    const proposalDocument = validId(id) && validId(mandateId) && !params.has('application_id') && !params.has('revision') && !params.has('history')
+    if (!history && !historicalDocument && !currentDocument && !proposalDocument) throw new PortalError('Invalid document reference.', 400)
     const context = portalOperatingContextSchema.safeParse(params.get('mode') === 'applicant' && !params.has('organisation') && !params.has('role') ? { mode: 'APPLICANT' } : !params.has('mode') ? { mode: 'ROLE', organisationId: params.get('organisation'), role: params.get('role') } : null)
     if (!context.success) throw new PortalError('Invalid operating context.', 403)
     const client = createRequestSupabaseClient(jar.adapter)
@@ -126,7 +195,27 @@ export async function GET(request: NextRequest) {
     }
     const revision = historicalDocument ? Number(revisionText) : undefined
     let document: { id: string; storage_path: string; sha256: string; size: number; mime_type: string } | undefined
-    if (historicalDocument) {
+    let proposalLookup: ReturnType<typeof investingProposalDocumentLookupSchema.parse> | undefined
+    if (proposalDocument) {
+      const mandate = snapshot.investing_representative_mandates?.find(item => item.id === mandateId)
+      if (context.data.mode !== 'APPLICANT' || !mandate || mandate.representative_user_id !== snapshot.actor.id
+        || mandate.applicant_user_id === snapshot.actor.id || mandate.appointment_document_id !== id || !mandate.proposal_hash) {
+        throw new PortalError('Document unavailable for this session.', 404)
+      }
+      const { data, error } = await client.rpc('bx1_investing_proposal_document_lookup', {
+        document_id: id, mandate_id: mandateId, operating_context: context.data,
+      }).abortSignal(AbortSignal.timeout(12000))
+      if (error?.code === '42501' || error?.code === 'P0002') throw new PortalError('Document unavailable for this session.', 404)
+      if (error) throw new PortalError('The saved appointment document is temporarily unavailable.', 503)
+      const lookup = investingProposalDocumentLookupSchema.safeParse(data)
+      if (!lookup.success || lookup.data.mandate_id !== mandateId || lookup.data.mandate_revision !== mandate.revision
+        || lookup.data.proposal_hash !== mandate.proposal_hash || lookup.data.applicant_user_id !== mandate.applicant_user_id
+        || lookup.data.document.id !== id || lookup.data.document.storage_path !== `${mandate.applicant_user_id}/${id}`) {
+        throw new PortalError('Appointment document lookup could not be verified. Refresh the proposal.', 503)
+      }
+      proposalLookup = lookup.data
+      document = lookup.data.document
+    } else if (historicalDocument) {
       const { data, error } = await client.rpc('bx1_application_document_lookup', { application_id: applicationId, revision, document_id: id, operating_context: context.data }).abortSignal(AbortSignal.timeout(12000))
       if (error?.code === '42501' || error?.code === 'P0002') throw new PortalError('Document unavailable for this session.', 404)
       if (error) throw new PortalError('The saved document is temporarily unavailable.', 503)
@@ -143,8 +232,9 @@ export async function GET(request: NextRequest) {
       || !document.storage_path.endsWith(`/${document.id}`)
       || (historicalDocument && document.storage_path.split('/')[0] !== visibleApplication?.user_id)) throw new PortalError('Document unavailable for this session.', 404)
     if (!params.has('download')) {
-      const target = historicalDocument ? `/api/portal/documents?application_id=${applicationId}&revision=${revision}&id=${id}&download=1` : `/api/portal/documents?id=${id}&download=1`
-      return jar.finish(privateResponse(NextResponse.json({ url: portalScopeHref(target, context.data) })))
+      const target = proposalDocument ? `/api/portal/documents?mandate_id=${mandateId}&id=${id}&download=1`
+        : historicalDocument ? `/api/portal/documents?application_id=${applicationId}&revision=${revision}&id=${id}&download=1` : `/api/portal/documents?id=${id}&download=1`
+      return jar.finish(privateResponse(NextResponse.json({ ...proposalLookup, url: portalScopeHref(target, context.data) })))
     }
     const downloaded = await client.storage.from(bucket).download(document.storage_path)
     if (downloaded.error || !downloaded.data || downloaded.data.size !== document.size || downloaded.data.size > maxFile) throw new PortalError('The saved document could not be verified.', 409)

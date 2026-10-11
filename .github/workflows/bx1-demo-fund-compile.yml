@@ -18,6 +18,7 @@ on:
       - apps/web/src/middleware*
       - apps/web/src/lib/supabase/middleware*
       - apps/web/src/lib/branded-entry*
+      - apps/web/src/lib/auth-mode*
       - apps/web/src/lib/auth-referrer-policy*
       - apps/web/src/lib/platform-release*
       - apps/web/src/lib/runtime-scope*
@@ -32,6 +33,21 @@ on:
       - apps/web/scripts/test-entry-mainnet.mjs
       - apps/web/scripts/test-application-admission.mjs
       - supabase/features/bx1_application_admission.sql
+      - supabase/features/bx1_customer_handoff.sql
+      - supabase/features/bx1_document_processing.sql
+      - apps/web/scripts/document-processing-proof.mjs
+      - apps/web/scripts/document-scanner-runner.mjs
+      - apps/web/scripts/document-scanner-runner.node-test.mjs
+      - apps/web/scripts/document-scanner-engine-proof.mjs
+      - supabase/features/bx1_provider_binding.sql
+      - supabase/features/bx1_provider_subject_availability.sql
+      - apps/web/scripts/provider-binding-proof.mjs
+      - supabase/features/bx1_entity_eligibility.sql
+      - apps/web/scripts/entity-eligibility-proof.mjs
+      - supabase/features/bx1_account_representatives.sql
+      - apps/web/scripts/account-representatives-proof.mjs
+      - supabase/features/bx1_offering_workflow.sql
+      - apps/web/scripts/offering-workflow-proof.mjs
       - supabase/features/bx1_entry.sql
       - supabase/features/bx1_entry_admission.sql
       - PLATFORM_RELEASE.json
@@ -41,6 +57,13 @@ on:
       - apps/web/src/app/api/portal/**
       - apps/web/src/app/register/**
       - apps/web/src/app/auth/**
+      - apps/web/src/app/workspace/staff-invite/**
+      - apps/web/src/app/workspace/administration/staff-invitations/**
+      - apps/web/src/components/auth/staff-invitation-accept.tsx
+      - apps/web/src/components/workspace/staff-invitations-panel.tsx
+      - apps/web/src/lib/administration/staff-invitations.ts
+      - apps/web/scripts/test-supabase-staff-invitations.mjs
+      - supabase/functions/bx1-staff-invite-dispatch/**
       - apps/web/scripts/test-portal.mjs
       - apps/web/scripts/test-portal-funding.mjs
       - apps/web/scripts/probe-amoy-funding.mjs
@@ -49,18 +72,8 @@ on:
       - supabase/tests/bx1_portal_funding.sql
       - supabase/functions/bx1-funding-verifier/**
       - supabase/features/bx1_portal.sql
-      - supabase/migrations/20260921160000_portal_authority_accounts.sql
-      - supabase/migrations/20260923134152_stage2_product_eligibility.sql
-      - supabase/tests/bx1_product_eligibility.sql
-      - supabase/migrations/20260923143713_stage2_customer_mandates.sql
-      - supabase/tests/bx1_customer_mandates.sql
-      - supabase/migrations/20260923144216_stage2_document_receipts.sql
-      - supabase/tests/bx1_document_receipts.sql
-      - supabase/migrations/20260923171126_stage2_entity_investment_accounts.sql
-      - supabase/migrations/20260923175822_stage2_superadmin_shell_mfa_boundary.sql
-      - supabase/tests/bx1_entity_investment_accounts.sql
-      - supabase/tests/bx1_portal_authority_accounts.sql
-      - supabase/tests/bx1_portal.sql
+      - supabase/migrations/**
+      - supabase/tests/**
       - contracts/demo/**
       - apps/web/src/lib/testnet-fund/**
       - apps/web/src/components/testnet-fund/**
@@ -75,6 +88,7 @@ on:
       - apps/web/src/middleware*
       - apps/web/src/lib/supabase/middleware*
       - apps/web/src/lib/branded-entry*
+      - apps/web/src/lib/auth-mode*
       - apps/web/src/lib/auth-referrer-policy*
       - apps/web/src/lib/platform-release*
       - apps/web/src/lib/runtime-scope*
@@ -89,6 +103,21 @@ on:
       - apps/web/scripts/test-entry-mainnet.mjs
       - apps/web/scripts/test-application-admission.mjs
       - supabase/features/bx1_application_admission.sql
+      - supabase/features/bx1_customer_handoff.sql
+      - supabase/features/bx1_document_processing.sql
+      - apps/web/scripts/document-processing-proof.mjs
+      - apps/web/scripts/document-scanner-runner.mjs
+      - apps/web/scripts/document-scanner-runner.node-test.mjs
+      - apps/web/scripts/document-scanner-engine-proof.mjs
+      - supabase/features/bx1_provider_binding.sql
+      - supabase/features/bx1_provider_subject_availability.sql
+      - apps/web/scripts/provider-binding-proof.mjs
+      - supabase/features/bx1_entity_eligibility.sql
+      - apps/web/scripts/entity-eligibility-proof.mjs
+      - supabase/features/bx1_account_representatives.sql
+      - apps/web/scripts/account-representatives-proof.mjs
+      - supabase/features/bx1_offering_workflow.sql
+      - apps/web/scripts/offering-workflow-proof.mjs
       - supabase/features/bx1_entry.sql
       - supabase/features/bx1_entry_admission.sql
       - PLATFORM_RELEASE.json
@@ -98,6 +127,13 @@ on:
       - apps/web/src/app/api/portal/**
       - apps/web/src/app/register/**
       - apps/web/src/app/auth/**
+      - apps/web/src/app/workspace/staff-invite/**
+      - apps/web/src/app/workspace/administration/staff-invitations/**
+      - apps/web/src/components/auth/staff-invitation-accept.tsx
+      - apps/web/src/components/workspace/staff-invitations-panel.tsx
+      - apps/web/src/lib/administration/staff-invitations.ts
+      - apps/web/scripts/test-supabase-staff-invitations.mjs
+      - supabase/functions/bx1-staff-invite-dispatch/**
       - apps/web/scripts/test-portal.mjs
       - apps/web/scripts/test-portal-funding.mjs
       - apps/web/scripts/probe-amoy-funding.mjs
@@ -106,18 +142,8 @@ on:
       - supabase/tests/bx1_portal_funding.sql
       - supabase/functions/bx1-funding-verifier/**
       - supabase/features/bx1_portal.sql
-      - supabase/migrations/20260921160000_portal_authority_accounts.sql
-      - supabase/migrations/20260923134152_stage2_product_eligibility.sql
-      - supabase/tests/bx1_product_eligibility.sql
-      - supabase/migrations/20260923143713_stage2_customer_mandates.sql
-      - supabase/tests/bx1_customer_mandates.sql
-      - supabase/migrations/20260923144216_stage2_document_receipts.sql
-      - supabase/tests/bx1_document_receipts.sql
-      - supabase/migrations/20260923171126_stage2_entity_investment_accounts.sql
-      - supabase/migrations/20260923175822_stage2_superadmin_shell_mfa_boundary.sql
-      - supabase/tests/bx1_entity_investment_accounts.sql
-      - supabase/tests/bx1_portal_authority_accounts.sql
-      - supabase/tests/bx1_portal.sql
+      - supabase/migrations/**
+      - supabase/tests/**
       - contracts/demo/**
       - apps/web/src/lib/testnet-fund/**
       - apps/web/src/components/testnet-fund/**
@@ -132,6 +158,47 @@ permissions:
   contents: read
 
 jobs:
+  document-scanner-engine:
+    name: Real scanner engine and bounded producer
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.mode != 'registration-browser-proof' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out exact scanner source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+          submodules: false
+          lfs: false
+      - name: Select pinned Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22.23.1'
+          check-latest: false
+          package-manager-cache: false
+      - name: Install cryptographically pinned official ClamAV in disposable cloud runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 2 --max-time 180 \
+            'https://github.com/Cisco-Talos/clamav/releases/download/clamav-1.4.6/clamav-1.4.6.linux.x86_64.deb' \
+            --output "$RUNNER_TEMP/bx1-clamav-1.4.6.deb"
+          printf '%s  %s\n' 'd3ee9e401974855a1edc1761b1425417d126de618d5f0c91cd51209f69f6fcc2' "$RUNNER_TEMP/bx1-clamav-1.4.6.deb" | sha256sum --check --strict
+          sudo dpkg --install "$RUNNER_TEMP/bx1-clamav-1.4.6.deb"
+          test -x /usr/local/bin/clamscan
+          printf '%s  %s\n' '08160a5c11103e1a7af3b783b25e947a52bb0a598c40102c7aaa6525e477f7bf' '/usr/local/bin/clamscan' | sha256sum --check --strict
+          /usr/local/bin/clamscan --version
+      - name: Prove producer protocol negatives without real customer data
+        shell: bash
+        run: node --test apps/web/scripts/document-scanner-runner.node-test.mjs
+      - name: Prove real benign and detection-fixture scans
+        shell: bash
+        env:
+          BX1_SCANNER_CLOUD_PROOF: github-clamav-1.4.6
+          BX1_SCANNER_CLOUD_ENGINE: /usr/local/bin/clamscan
+          BX1_SCANNER_PACKAGE_SHA256: d3ee9e401974855a1edc1761b1425417d126de618d5f0c91cd51209f69f6fcc2
+        run: node apps/web/scripts/document-scanner-engine-proof.mjs
   compile-and-build:
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.mode != 'registration-browser-proof' }}
     runs-on: ubuntu-24.04
@@ -142,7 +209,7 @@ jobs:
         target: [TESTNET, MAINNET]
     services:
       postgres:
-        image: postgres:17
+        image: public.ecr.aws/docker/library/postgres:17@sha256:2d2b8998d31037bf721cfdf764d76ba74171b4fab3431b7f72c27c56ddbdf9e3
         env:
           POSTGRES_DB: bx1_demo_ci
           POSTGRES_USER: postgres
@@ -268,6 +335,52 @@ jobs:
           cmp apps/web/src/lib/portal/funding-verifier.ts supabase/functions/bx1-funding-verifier/funding-verifier.ts
           cd supabase/functions/bx1-funding-verifier
           "$RUNNER_TEMP/bx1-deno/node_modules/.bin/deno" check --config deno.json index.ts funding-verifier.ts funding-claim.ts
+          cd ../bx1-staff-invite-dispatch
+          "$RUNNER_TEMP/bx1-deno/node_modules/.bin/deno" check --config deno.json index.ts
+
+  staff-invitation-sql-acceptance:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.mode != 'registration-browser-proof' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: public.ecr.aws/docker/library/postgres:17@sha256:2d2b8998d31037bf721cfdf764d76ba74171b4fab3431b7f72c27c56ddbdf9e3
+        env:
+          POSTGRES_DB: bx1_demo_ci
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: bx1-synthetic-ci-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d bx1_demo_ci"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Check out exact staff invitation source in an independent cloud fixture
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+          submodules: false
+          lfs: false
+      - name: Select pinned Node for staff invitation proof
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22.23.1'
+          check-latest: false
+          package-manager-cache: false
+      - name: Install locked dependencies in the disposable cloud runner
+        working-directory: apps/web
+        shell: bash
+        run: npm ci --no-audit --no-fund
+      - name: Prove scoped invite, verified-email binding and AAL1 denial on PostgreSQL 17
+        working-directory: apps/web
+        shell: bash
+        env:
+          BX1_STAFF_INVITE_CLOUD: github-postgres17
+          BX1_CI_POSTGRES_PASSWORD: bx1-synthetic-ci-only
+        run: node scripts/test-supabase-staff-invitations.mjs
 
   funding-sql-acceptance:
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.mode != 'registration-browser-proof' }}
@@ -275,7 +388,7 @@ jobs:
     timeout-minutes: 8
     services:
       postgres:
-        image: postgres:17
+        image: public.ecr.aws/docker/library/postgres:17@sha256:2d2b8998d31037bf721cfdf764d76ba74171b4fab3431b7f72c27c56ddbdf9e3
         env:
           POSTGRES_DB: bx1_demo_ci
           POSTGRES_USER: bx1_ci_bootstrap
@@ -329,7 +442,7 @@ jobs:
     timeout-minutes: 10
     services:
       postgres:
-        image: postgres:17
+        image: public.ecr.aws/docker/library/postgres:17@sha256:2d2b8998d31037bf721cfdf764d76ba74171b4fab3431b7f72c27c56ddbdf9e3
         env:
           POSTGRES_DB: bx1_demo_ci
           POSTGRES_USER: postgres
@@ -369,7 +482,7 @@ jobs:
     timeout-minutes: 10
     services:
       postgres:
-        image: postgres:17
+        image: public.ecr.aws/docker/library/postgres:17@sha256:2d2b8998d31037bf721cfdf764d76ba74171b4fab3431b7f72c27c56ddbdf9e3
         env:
           POSTGRES_DB: bx1_demo_ci
           POSTGRES_USER: postgres
@@ -409,7 +522,7 @@ jobs:
     timeout-minutes: 10
     services:
       postgres:
-        image: postgres:17
+        image: public.ecr.aws/docker/library/postgres:17@sha256:2d2b8998d31037bf721cfdf764d76ba74171b4fab3431b7f72c27c56ddbdf9e3
         env:
           POSTGRES_DB: bx1_demo_ci
           POSTGRES_USER: bx1_ci_bootstrap

@@ -3,19 +3,20 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import Link from 'next/link'
 import { ArrowRight, BriefcaseBusiness, ChartNoAxesCombined, Eye, EyeOff } from 'lucide-react'
-import { REGISTRATION_ERRORS, validateRegistrationForm, type RegistrationError, type RegistrationIntent } from '@/lib/portal/registration'
+import { REGISTRATION_ERRORS, registrationFailureReference, validateRegistrationForm, type RegistrationError, type RegistrationIntent } from '@/lib/portal/registration'
 
 const inputClass = 'mt-2 min-h-12 w-full rounded-lg border border-bxo-border-default bg-bxo-bg-primary px-4 py-3 text-base text-bxo-text-primary outline-none transition-colors focus-visible:border-bxo-accent-primary focus-visible:ring-2 focus-visible:ring-bxo-accent-primary disabled:opacity-60'
 const focusClass = 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bxo-accent-primary focus-visible:ring-offset-4 focus-visible:ring-offset-bxo-bg-primary'
 const errorFields: Partial<Record<RegistrationError, string>> = { email_invalid: 'email', intent_required: 'intent', password_length: 'password', password_mismatch: 'confirmPassword', password_rejected: 'password', consent_required: 'consent' }
 
-export function RegistrationForm({ initialIntent, error, environment = 'TESTNET' }: { initialIntent?: RegistrationIntent; error?: RegistrationError; environment?: 'TESTNET' | 'MAINNET' }) {
+export function RegistrationForm({ initialIntent, error, errorReference, environment = 'TESTNET' }: { initialIntent?: RegistrationIntent; error?: RegistrationError; errorReference?: string; environment?: 'TESTNET' | 'MAINNET' }) {
   const [intent, setIntent] = useState<RegistrationIntent | undefined>(initialIntent)
   const [pending, setPending] = useState(false)
   const [visible, setVisible] = useState(false)
   const [clientError, setClientError] = useState<RegistrationError>()
   const errorRef = useRef<HTMLParagraphElement>(null)
   const displayedError = clientError ?? error
+  const displayedReference = !clientError && !pending ? registrationFailureReference(displayedError, errorReference) : undefined
   useEffect(() => { if (error) errorRef.current?.focus() }, [error])
   useEffect(() => {
     const restore = (event: PageTransitionEvent) => { if (event.persisted) setPending(false) }
@@ -40,7 +41,7 @@ export function RegistrationForm({ initialIntent, error, environment = 'TESTNET'
   }
   const invalid = (name: string) => displayedError !== undefined && errorFields[displayedError] === name
   return <form action="/auth/register" method="post" onSubmit={submit} aria-busy={pending} className="space-y-7">
-    {displayedError ? <p id="registration-error" ref={errorRef} tabIndex={-1} role="alert" className="rounded-xl border border-bxo-danger-border bg-bxo-danger-soft p-4 text-sm leading-6 text-bxo-text-primary outline-none focus-visible:ring-2 focus-visible:ring-bxo-accent-primary">{REGISTRATION_ERRORS[displayedError]}</p> : null}
+    {displayedError ? <p id="registration-error" ref={errorRef} tabIndex={-1} role="alert" className="rounded-xl border border-bxo-danger-border bg-bxo-danger-soft p-4 text-sm leading-6 text-bxo-text-primary outline-none focus-visible:ring-2 focus-visible:ring-bxo-accent-primary">{REGISTRATION_ERRORS[displayedError]}{displayedReference ? <span className="mt-2 block break-all text-xs">Support reference: {displayedReference}</span> : null}</p> : null}
     <fieldset aria-describedby={invalid('intent') ? 'registration-error registration-path-help' : 'registration-path-help'} className="min-w-0">
       <legend className="text-sm font-semibold text-bxo-text-primary">How will you use BlockXOne? <span className="text-bxo-text-secondary">Required</span></legend>
       <div className="mt-3 grid gap-3 sm:grid-cols-2">

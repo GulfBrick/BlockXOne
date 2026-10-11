@@ -5,6 +5,8 @@ import { entryCommandSchema, entrySnapshotSchema } from '@/lib/portal/entry-cont
 import { readEntry, requireEntryEnvironment } from '@/lib/portal/entry-server'
 import { PortalError } from '@/lib/portal/server'
 import { portalFailure, readPortalBody } from '@/lib/portal/http'
+import { hasStage2CommandAccess, isTestPasswordAdmission, validatedStage2Access } from '@/lib/portal/stage2-access'
+import { APPLICANT_CONTEXT } from '@/lib/portal/operating-context'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -36,6 +38,7 @@ export async function POST(request: NextRequest) {
     const before = await readEntry(client)
     if (before.actor.id !== expectedActor) throw new PortalError('The signed-in account changed. Reload before saving.', 403)
     const { command, key, payload } = instruction.data
+    if (isTestPasswordAdmission(before) && !hasStage2CommandAccess(before, command, APPLICANT_CONTEXT)) throw new PortalError('This application action is not available in your current capacity.', 403)
     const { data, error } = await client.rpc('bx1_entry_command', { command, request_key: key, payload }).abortSignal(AbortSignal.timeout(15000))
     if (error) {
       if (error.code === '42501') throw new PortalError('You do not have current authority for this application.', 403)
@@ -53,6 +56,7 @@ export async function POST(request: NextRequest) {
       if (['22023', '23514', '23505', '40001', 'P0001'].includes(error.code)) throw new PortalError('The application state changed. Refresh before retrying.', 409)
       throw new PortalError('The result is uncertain. Retry only with the original request reference.', 503)
     }
+    if (data && typeof data === 'object' && 'rehearsal' in data) throw new PortalError('The saved result is not a normal admission record. Keep the original request reference.', 503)
     const saved = entrySnapshotSchema.safeParse(data)
     if (!saved.success || saved.data.actor.id !== expectedActor || saved.data.applications.some(application => application.user_id !== expectedActor)) throw new PortalError('The saved result could not be verified. Keep the original request reference.', 503)
     // Re-read live session/MFA after the command as well. A failed response may
@@ -60,6 +64,9 @@ export async function POST(request: NextRequest) {
     let current
     try { current = await readEntry(client) } catch { throw new PortalError('The command may have saved, but current access could not be revalidated. Keep the original request reference.', 503) }
     if (current.actor.id !== expectedActor) throw new PortalError('The account changed while saving.', 503)
+    const priorAccess = validatedStage2Access(before, APPLICANT_CONTEXT)
+    const currentAccess = validatedStage2Access(current, APPLICANT_CONTEXT)
+    if (priorAccess && (!currentAccess || currentAccess.environment !== priorAccess.environment || currentAccess.session_mode !== priorAccess.session_mode)) throw new PortalError('The admission context changed while saving. Keep the original request reference.', 503)
     return jar.finish(privateResponse(NextResponse.json({ snapshot: current })))
   } catch (error) { return jar.finish(portalFailure(error)) }
 }

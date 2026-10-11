@@ -6,17 +6,19 @@ import { validateSetupPassword } from '@/lib/supabase/password-setup'
 import { canonicalAppOrigin, createRequestSupabaseClient, readVerifiedUser, readWorkspace, secureCookieOptions } from '@/lib/supabase/server'
 import { hasCanonicalOrigin, InvalidAuthRequest, LOGIN_EMAIL_COOKIE, PENDING_INVITE_COOKIE, privateResponse, readAuthForm, responseCookieAdapter } from '@/lib/supabase/http'
 import { hasRequiredMfa, isMfaContextCurrent, readMfaContext } from '@/lib/supabase/mfa'
+import { readTestOrdinaryEntry, isTestOrdinaryEntryAllowed } from '@/lib/supabase/test-ordinary-entry'
 import { handleMfaAction, mfaErrorResponse } from '@/lib/supabase/mfa-actions'
 import { administrationErrorResponse, handleAdministrationAction } from '@/lib/administration/actions'
 import { identityEnvironmentEnabled, platformRelease } from '@/lib/platform-release'
 import { PortalError } from '@/lib/portal/server'
 import { readEntry } from '@/lib/portal/entry-server'
+import { beginStaffInvitation, pendingStaffInvitations } from '@/lib/administration/staff-invitations'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
 type Context = { params: Promise<{ action: string }> }
 type PendingInvite = { tokenHash: string; type: 'invite' | 'recovery' | 'signup'; expiresAt: number }
-const actions = new Set(['confirm', 'login', 'setup', 'logout', 'mfa-enroll', 'mfa-verify', 'admin-command'])
+const actions = new Set(['confirm', 'login', 'setup', 'logout', 'mfa-enroll', 'mfa-verify', 'mfa-restart-setup', 'admin-command'])
 const tokenPattern = /^[A-Za-z0-9_-]{32,512}$/
 function confirmationType(value: unknown): value is PendingInvite['type'] {
   return value === 'invite' || value === 'recovery' || (value === 'signup' && identityEnvironmentEnabled(process.env))
@@ -56,7 +58,7 @@ function readPending(value: string | undefined): PendingInvite | null {
 
 async function dispatch(request: NextRequest, context: Context): Promise<NextResponse> {
   const { action } = await context.params
-  const mfaAction = action === 'mfa-enroll' || action === 'mfa-verify'
+  const mfaAction = action === 'mfa-enroll' || action === 'mfa-verify' || action === 'mfa-restart-setup'
   const adminAction = action === 'admin-command'
   const mode = resolveAuthMode()
   if (adminAction && mode !== 'supabase') return administrationErrorResponse(mode === 'invalid' ? 'unavailable' : 'unauthorised', mode === 'invalid' ? 503 : 404)
@@ -120,6 +122,11 @@ async function dispatch(request: NextRequest, context: Context): Promise<NextRes
         if (mfa && !await isMfaContextCurrent(client, mfa)) return jar.finish(clearPending(errorResponse('unavailable', 503)))
         return jar.finish(clearPending(redirect('/portal/onboarding')))
       }
+      if (pending.type === 'invite' && await beginStaffInvitation(client)) {
+        // No organisation membership exists at this point. Password setup
+        // and a fresh verified authenticator precede role activation.
+        return jar.finish(clearPending(redirect('/login?setup=1')))
+      }
       return jar.finish(clearPending(redirect(mfa && !hasRequiredMfa(mfa) ? '/login/mfa?continue=setup' : '/login?setup=1')))
     }
     if (action === 'login') {
@@ -134,11 +141,22 @@ async function dispatch(request: NextRequest, context: Context): Promise<NextRes
         return jar.finish(response)
       }
       const mfa = await readMfaContext(client)
+      if (mfa && isTestOrdinaryEntryAllowed(mfa)) {
+        // An explicit TEST-only read exception, not a staff/password recovery
+        // continuation. Protected queues, commands and MFA factors are unchanged.
+        await readTestOrdinaryEntry(client, mfa)
+        const response = redirect('/portal')
+        response.cookies.set(LOGIN_EMAIL_COOKIE, '', secureCookieOptions({ maxAge: 0 }))
+        return jar.finish(response)
+      }
       let destination = !mfa ? '/workspace/access-denied' : '/login/mfa'
       const portalEnabled = identityEnvironmentEnabled(process.env)
+      const pendingStaff = mfa ? await pendingStaffInvitations(client) : []
+      if (pendingStaff.length) destination = !hasRequiredMfa(mfa!) ? '/login/mfa?continue=staff' : '/workspace/staff-invite'
       if (mfa && hasRequiredMfa(mfa)) {
         const workspace = await readWorkspace(client)
-        if (portalEnabled) {
+        if (pendingStaff.length && !workspace) destination = '/workspace/staff-invite'
+        else if (portalEnabled) {
           try { await readEntry(client); destination = workspace ? '/portal' : '/portal/onboarding' } catch (error) {
             if (error instanceof PortalError && [401, 403].includes(error.status)) destination = '/workspace/access-denied'
             else throw error
@@ -165,9 +183,12 @@ async function dispatch(request: NextRequest, context: Context): Promise<NextRes
       if (!mfa && !identityEnvironmentEnabled(process.env)) return jar.finish(errorResponse('access_denied', 403, true))
       if (mfa && !hasRequiredMfa(mfa)) return jar.finish(redirect('/login/mfa?continue=setup'))
       const existingWorkspace = mfa ? await readWorkspace(client) : null
+      const pendingStaff = mfa ? await pendingStaffInvitations(client) : []
       if (!existingWorkspace) {
-        if (!identityEnvironmentEnabled(process.env)) return jar.finish(errorResponse('access_denied', 403, true))
-        await readEntry(client)
+        if (!pendingStaff.length) {
+          if (!identityEnvironmentEnabled(process.env)) return jar.finish(errorResponse('access_denied', 403, true))
+          await readEntry(client)
+        }
       }
       if (mfa && !await isMfaContextCurrent(client, mfa)) return jar.finish(errorResponse('unavailable', 503, true))
       const { error } = await client.auth.updateUser({ password })
@@ -187,9 +208,9 @@ async function dispatch(request: NextRequest, context: Context): Promise<NextRes
       }
       if (!hasRequiredMfa(updated)) return jar.finish(redirect('/login/mfa?continue=setup'))
       const workspace = await readWorkspace(client)
-      if (!workspace && identityEnvironmentEnabled(process.env)) await readEntry(client)
+      if (!workspace && !pendingStaff.length && identityEnvironmentEnabled(process.env)) await readEntry(client)
       if (!await isMfaContextCurrent(client, updated)) return jar.finish(errorResponse('unavailable', 503, true))
-      return jar.finish(redirect(workspace ? (platformRelease(process.env) ? '/portal' : '/workspace') : identityEnvironmentEnabled(process.env) ? '/portal/onboarding' : '/workspace/access-denied'))
+      return jar.finish(redirect(workspace ? (platformRelease(process.env) ? '/portal' : '/workspace') : pendingStaff.length ? '/workspace/staff-invite' : identityEnvironmentEnabled(process.env) ? '/portal/onboarding' : '/workspace/access-denied'))
     }
     if (!await readVerifiedUser(client)) return jar.finish(errorResponse('access_denied', 401))
     const { error } = await client.auth.signOut({ scope: 'local' })

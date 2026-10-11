@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { BX1_ROLES, type Bx1Workspace } from '../supabase/contracts'
-import type { PortalSnapshot, PortalSubscription } from './contracts'
+import type { PortalProduct, PortalProductServiceAppointment, PortalSnapshot, PortalSubscription } from './contracts'
+import type { OfferingAccess } from './offering-access'
 import { dashboardProjection, dashboardScopes, dashboardScopeHref, selectDashboardScope } from './dashboard'
 
 const organisation = '33333333-3333-4333-8333-333333333333'
@@ -8,6 +9,59 @@ const otherOrganisation = '44444444-4444-4444-8444-444444444444'
 const productOrganisation = '55555555-5555-4555-8555-555555555555'
 const workspace: Bx1Workspace = { user: { id: 'actor', email: 'actor@example.invalid', platformUserId: 'person', displayName: null }, organisations: [{ id: organisation, name: 'Fund manager', roles: [...BX1_ROLES] }, { id: otherOrganisation, name: 'Property issuer', roles: ['Investor'] }] }
 const snapshot: PortalSnapshot = { actor: { id: 'actor', email: 'actor@example.invalid', display_name: null, can_review: false }, organisations: [], applications: [], products: [], subscriptions: [], events: [] }
+
+describe('normal sandbox package dashboard projection', () => {
+  const packageActor = '11111111-1111-4111-8111-111111111111'
+  const productId = '66666666-6666-4666-8666-666666666666'
+  function packageData(role: OfferingAccess['operating_context']['role']): PortalSnapshot {
+    const context = { mode: 'ROLE' as const, organisationId: organisation, role }
+    const commands: Record<typeof role, OfferingAccess['allowed_commands']> = { OfferingManager: ['create_product', 'save_product'], IssuerFundManager: ['review_offering_issuer'],
+      ComplianceOfficer: ['review_product'], SuperAdmin: ['apply_product_service_appointment'] }
+    return { ...snapshot, actor: { ...snapshot.actor, id: packageActor, can_review: role === 'ComplianceOfficer' }, operating_context: context,
+      offering_access: { version: 1, environment: 'TESTNET', actor_id: packageActor, operating_context: context, session_mode: 'TEST_PASSWORD', allowed_commands: commands[role] },
+      organisations: [{ id: productOrganisation, name: 'Synthetic manager', status: 'ACTIVE', roles: [role], native_organisation_id: organisation, authority_source: 'NATIVE_BINDING' }] }
+  }
+  it('uses the manager queue and create action only in the exact returned context', () => {
+    const data = packageData('OfferingManager'); const scope = { organisationId: organisation, organisationName: 'A', role: 'OfferingManager' as const }
+    const result = dashboardProjection(scope, 'TESTNET', data)
+    expect(result.availablePaths).toContain('/portal/products'); expect(result.availablePaths).toContain('/portal/products/new')
+    expect(result.queue.map(item => item.label)).toEqual(['Draft products', 'Products in review'])
+    expect(dashboardProjection({ ...scope, organisationId: otherOrganisation }, 'TESTNET', data).queue).toEqual([])
+    expect(dashboardProjection(scope, 'TESTNET', { ...data, offering_access: { ...data.offering_access!, allowed_commands: ['save_product'] } }).availablePaths).not.toContain('/portal/products/new')
+    expect(dashboardProjection(scope, 'MAINNET', data).queue).toEqual([])
+  })
+  it('retains issuer readback after review without an editor or fabricated organisation binding', () => {
+    const data = packageData('IssuerFundManager'); data.organisations = []
+    // Projection-only fixture; full typed terms and package UI are proved separately.
+    data.products = [{ id: productId, organisation_id: productOrganisation, status: 'IN_REVIEW', allowed_actions: ['review_offering_issuer'],
+      offering_package: { can_review_issuer: true } } as PortalProduct]
+    data.product_appointments = [{ product_id: productId, appointee_user_id: packageActor, role: 'IssuerFundManager', status: 'APPLIED',
+      effective: true, requested_until: '2099-01-01T00:00:00Z', reviewer_scope_organisation_id: otherOrganisation } as PortalProductServiceAppointment]
+    const scope = { organisationId: organisation, organisationName: 'A', role: 'IssuerFundManager' as const }
+    const result = dashboardProjection(scope, 'TESTNET', data)
+    expect(result.availablePaths).toContain('/portal/products'); expect(result.availablePaths).not.toContain('/portal/products/new')
+    expect(result.queue).toHaveLength(1); expect(result.queue[0].value).toBe(1)
+    data.products[0].allowed_actions = []; data.products[0].offering_package!.can_review_issuer = false
+    const terminal = dashboardProjection(scope, 'TESTNET', data)
+    expect(terminal.availablePaths).toContain('/portal/products'); expect(terminal.queue[0].value).toBe(0)
+    data.product_appointments[0].effective = false
+    expect(dashboardProjection(scope, 'TESTNET', data).queue[0].value).toBe(0)
+  })
+  it('denies package queues for malformed actor/command/context markers', () => {
+    const data = packageData('OfferingManager'); const scope = { organisationId: organisation, organisationName: 'A', role: 'OfferingManager' as const }
+    for (const marker of [{ ...data.offering_access!, actor_id: otherOrganisation }, { ...data.offering_access!, allowed_commands: ['publish_product'] },
+      { ...data.offering_access!, operating_context: { ...data.offering_access!.operating_context, organisationId: otherOrganisation } }]) {
+      const result = dashboardProjection(scope, 'TESTNET', { ...data, offering_access: marker } as PortalSnapshot)
+      expect(result.queue).toEqual([]); expect(result.availablePaths).not.toContain('/portal/products'); expect(result.availablePaths).not.toContain('/portal/products/new')
+    }
+  })
+  it('opens Compliance review but never gives Super Admin a blanket package/review queue', () => {
+    const reviewer = dashboardProjection({ organisationId: organisation, organisationName: 'A', role: 'ComplianceOfficer' }, 'TESTNET', packageData('ComplianceOfficer'))
+    expect(reviewer.availablePaths).toContain('/portal/compliance'); expect(reviewer.availablePaths).not.toContain('/portal/products/new')
+    const apply = dashboardProjection({ organisationId: organisation, organisationName: 'A', role: 'SuperAdmin' }, 'TESTNET', packageData('SuperAdmin'))
+    expect(apply.availablePaths).not.toContain('/portal/compliance'); expect(apply.availablePaths).not.toContain('/portal/products'); expect(apply.queue).toEqual([])
+  })
+})
 
 describe('role and organisation dashboard selection', () => {
   it.each(BX1_ROLES)('accepts only the actual %s assignment', role => {

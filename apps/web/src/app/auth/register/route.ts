@@ -1,15 +1,48 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { randomUUID } from 'node:crypto'
 import { identityEnvironmentEnabled, platformRelease } from '@/lib/platform-release'
-import { registrationMetadata, registrationProviderOutcome, validateRegistrationForm, type RegistrationError } from '@/lib/portal/registration'
+import { registrationFailureReference, registrationMetadata, registrationProviderDiagnostic, registrationProviderOutcome, validateRegistrationForm, type RegistrationError } from '@/lib/portal/registration'
 import { canonicalAppOrigin, createRequestSupabaseClient, readVerifiedUser } from '@/lib/supabase/server'
 import { hasCanonicalOrigin, InvalidAuthRequest, privateResponse, readAuthForm, responseCookieAdapter } from '@/lib/supabase/http'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
 
-function resultRedirect(outcome: 'check-email' | RegistrationError) {
+function resultRedirect(outcome: 'check-email' | RegistrationError, reference?: string) {
   const query = outcome === 'check-email' ? 'status=check-email' : `error=${outcome}`
-  return privateResponse(NextResponse.redirect(new URL(`/register?${query}`, canonicalAppOrigin()), 303))
+  const url = new URL(`/register?${query}`, canonicalAppOrigin())
+  const safeReference = registrationFailureReference(outcome, reference)
+  if (safeReference) url.searchParams.set('ref', safeReference)
+  return privateResponse(NextResponse.redirect(url, 303))
+}
+
+const failureCategories = {
+  request_read: 'request_read_failure',
+  client_init: 'client_initialization_failure',
+  session_lookup: 'session_lookup_failure',
+  response_finalization: 'response_cookie_failure',
+  unexpected_auto_confirm: 'unexpected_auto_confirm',
+} as const
+type RegistrationFailurePhase = keyof typeof failureCategories | 'provider_signup'
+
+function unavailableRedirect(phase: RegistrationFailurePhase, error?: unknown, finish?: (response: NextResponse) => NextResponse) {
+  const reference = randomUUID()
+  const response = resultRedirect('unavailable', reference)
+  // Finalize before logging: a cookie failure is reported once by the outer catch.
+  const finalized = finish ? finish(response) : response
+  try {
+    const release = platformRelease(process.env)
+    if (release) {
+      const diagnostic = registrationProviderDiagnostic(error)
+      console.error(JSON.stringify({
+        event: 'bx1.registration_unavailable', reference,
+        environment: release.environment, release: release.version, phase,
+        upstream_status: diagnostic.status,
+        category: phase === 'provider_signup' ? diagnostic.category : failureCategories[phase],
+      }))
+    }
+  } catch { /* An unavailable diagnostic sink must not change the auth response. */ }
+  return finalized
 }
 
 function reject(status: number) {
@@ -20,6 +53,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   // Registration creates a pending identity, never live investment admission.
   if (!identityEnvironmentEnabled(process.env)) return reject(404)
   const jar = responseCookieAdapter(request)
+  let phase: RegistrationFailurePhase = 'request_read'
   try {
     if (request.nextUrl.pathname !== '/auth/register' || request.nextUrl.search) return reject(400)
     if (!hasCanonicalOrigin(request) || (request.headers.has('sec-fetch-site') && request.headers.get('sec-fetch-site') !== 'same-origin')) return reject(403)
@@ -31,10 +65,16 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     }
     const validated = validateRegistrationForm(form)
     if (!validated.ok) return resultRedirect(validated.error)
+    phase = 'client_init'
     const client = createRequestSupabaseClient(jar.adapter)
     // A registration attempt must not replace or sign out an existing signed-in account.
-    if (await readVerifiedUser(client)) return jar.finish(privateResponse(NextResponse.redirect(new URL('/register', canonicalAppOrigin()), 303)))
+    phase = 'session_lookup'
+    if (await readVerifiedUser(client)) {
+      phase = 'response_finalization'
+      return jar.finish(privateResponse(NextResponse.redirect(new URL('/register', canonicalAppOrigin()), 303)))
+    }
     const { email, password, intent } = validated.value
+    phase = 'provider_signup'
     const { data, error } = await client.auth.signUp({
       email,
       password,
@@ -44,15 +84,19 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       // Email confirmation is required. Never emit an auto-confirmed session cookie
       // if hosted Auth configuration unexpectedly changes; do not expose SDK details.
       try { await client.auth.signOut({ scope: 'local' }) } catch { /* Discard all staged cookie writes below. */ }
-      return resultRedirect('unavailable')
+      return unavailableRedirect('unexpected_auto_confirm')
     }
     // Supabase enforces hosted Auth rate limits; no process-local counter pretends to be a distributed guard.
     // Duplicate addresses and a new unconfirmed registration have the same public response.
-    return jar.finish(resultRedirect(registrationProviderOutcome(error)))
-  } catch {
-    // No request body, password, email, token or provider text is logged or placed in a URL.
+    const outcome = registrationProviderOutcome(error)
+    phase = 'response_finalization'
+    if (outcome === 'unavailable') return unavailableRedirect('provider_signup', error, jar.finish)
+    return jar.finish(resultRedirect(outcome))
+  } catch (error) {
+    // Only an opaque reference and allowlisted diagnostics are logged. No PII,
+    // body, password, token, raw exception or provider text enters logs or URLs.
     // Unknown SDK outcomes do not emit possibly partial authentication cookies.
-    return resultRedirect('unavailable')
+    return unavailableRedirect(phase, error)
   }
 }
 

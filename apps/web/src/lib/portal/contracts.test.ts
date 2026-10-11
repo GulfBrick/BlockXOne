@@ -1,14 +1,50 @@
 import { describe, expect, it } from 'vitest'
-import { PORTAL_PATHS, applicationDetailsSchema, applicationDocumentLookupSchema, applicationDocumentVersionsSchema, applicationDraftDetailsSchema, isWealthManagerDetailsV2, evidenceSchema, formatTestMoney, portalCommandSchema, productTermsSchema, subscriptionQuote, type PortalProduct, type ProductTerms } from './contracts'
+import { FUND_V2_CANONICAL_REFERENCES, REAL_ESTATE_V2_CANONICAL_REFERENCES, PORTAL_PATHS, applicationDetailsSchema, applicationDocumentLookupSchema, applicationDocumentVersionsSchema, applicationDraftDetailsSchema, customerMonitoringSnapshotSchema, entityProductEligibilitySchema, validatedEntityProductEligibility, investingProposalDocumentLookupSchema, isRealEstateTermsV2, isWealthManagerDetailsV2, evidenceSchema, formatTestMoney, portalCommandSchema, productTermsSchema, subscriptionQuote, type FundTermsV2, type RealEstateTermsV2, type PortalProduct, type ProductTerms } from './contracts'
 import { isSupabaseWebPathAllowed } from '@/lib/auth-mode'
 import { isProductionWebPathBlocked } from '@/lib/release-policy'
 
 const id = 'd22789ee-7f73-4acf-a414-3de0b62ea801'
 const key = '113800c3-cf6e-437e-abdf-a3b09a03fcff'
 const terms: ProductTerms = { asset_type: 'FUND', name: 'Synthetic Balanced Fund', issuer_name: 'Fictional Fund Issuer', summary: 'A wholly synthetic investment product for testing.', strategy: 'A fictional diversified strategy with no real capital.', share_class: 'Class A', currency: 'ZAR_TEST', unit_price_minor: '12345678901234567890', cap_units: '100000', minimum_units: '10', pricing_basis: 'Fixed price for this test offering.', fees: 'No actual charges in this test environment.', redemption_terms: 'Synthetic redemption requires confirmed cancellation of units.', eligible_countries: ['ZA'], eligible_investor_types: ['INDIVIDUAL'], property_address: '', property_valuation_minor: '0', rental_income_policy: '', documents: { memorandum: 'Fictional test memorandum; this is not an actual investment offer.', risks: 'Test-only disclosure: no real money, asset ownership or returns exist.', subscription_terms: 'Acceptance only reserves synthetic units and never proves funding.' } }
-const product: PortalProduct = { id, organisation_id: id, created_by: id, revision: 4, status: 'PUBLISHED', terms, terms_hash: 'a'.repeat(64), reserved_units: '20', created_at: '2026-09-21T00:00:00Z', reviewer_id: null, review_notes: null, reviewed_at: null, published_at: null, review_checks: {} }
+const fundV2: FundTermsV2 = { ...terms, ...FUND_V2_CANONICAL_REFERENCES, asset_type: 'FUND', currency: 'TST', terms_version: 2, settlement_decimals: 6, unit_price_minor: '10000000', cap_units: '100', minimum_units: '1', fund: {
+  mandate: 'Synthetic diversified portfolio under a reviewed test mandate only.', class_rights: 'Each fictional class unit carries a pro-rata test entitlement under the fund register.',
+  nav: { valuation_method: 'Synthetic marked-to-model NAV with independent dated review.', frequency: 'MONTHLY', pricing_cutoff: 'Month-end 16:00 Africa/Johannesburg', correction_policy: 'Material NAV errors require a reviewed correction version and investor treatment.' },
+  dealing: { subscription_frequency: 'MONTHLY', redemption_frequency: 'MONTHLY', notice_days: 5, settlement_days: 5 },
+  fees: { management_bps: 0, performance_bps: 0, other_fees: 'No test fees are charged.' },
+  liquidity: { lockup_days: 0, gate_bps: 10000, suspension_policy: 'Suspend dealing when reviewed NAV or test liquidity is unavailable.' },
+  distributions: { frequency: 'NONE', policy: 'Accumulation class retains all fictional income in synthetic NAV.' },
+  redemption: { price_basis: 'NAV', conditions: 'A reviewed NAV, dealing date and protected units are required before payout.' },
+} }
+const oldProperty: ProductTerms = { ...terms, asset_type: 'REAL_ESTATE', property_address: 'Fictional Street 10, Test City', property_valuation_minor: '500000000', rental_income_policy: 'Fictional net rent after disclosed operating costs.' }
+const propertyV2: RealEstateTermsV2 = { ...oldProperty, ...REAL_ESTATE_V2_CANONICAL_REFERENCES, asset_type: 'REAL_ESTATE', currency: 'TST', terms_version: 2, settlement_decimals: 6, unit_price_minor: '100000000', cap_units: '20', minimum_units: '1', property_valuation_minor: '3000000000', real_estate: {
+  spv: { legal_name: 'Synthetic Property SPV', registration_reference: 'FICTIONAL-SPV-001', jurisdiction: 'ZA', interest_rights: 'Each class unit grants a stated claim against the fictional SPV but not direct title to its property.' },
+  property: { title_evidence_reference: 'FICTIONAL-TITLE-001', control_evidence_reference: 'FICTIONAL-CONTROL-001', valuation_method: 'Synthetic appraisal subject to dated independent review.', valuation_frequency: 'ANNUALLY', correction_policy: 'Material appraisal errors require a correction version and review of affected interests.' },
+  financing: { debt_policy: 'No real debt exists in this rehearsal; new debt requires an approved schedule.', lender_consent_policy: 'Required lender consents must be evidenced before changes to control or disposal.' },
+  cashflow: { rent_policy: 'Synthetic rent is recognised only after independent evidence review.', expense_policy: 'Property operating expenses and taxes reduce distributable income.', reserve_policy: 'Reviewed maintenance and contingency reserves are retained first.', distribution_policy: 'Approved net income and dated entitlements precede any payout.' },
+  governance: { consent_rights: 'Material disposals and financing changes require documented holder consent.', voting_policy: 'Votes use a dated holder snapshot and approved threshold.' },
+  exits: { eligible_transfer_policy: 'Eligible interest transfers settle consideration and change the holder while the product continues.', disposal_liquidation_policy: 'Disposal and liquidation apply an approved proceeds waterfall, payouts and reconciled supply closure.' },
+} }
+const product: PortalProduct = { id, organisation_id: id, created_by: id, revision: 4, status: 'PUBLISHED', terms, terms_hash: 'a'.repeat(64), reserved_units: '20', created_at: '2026-09-21T00:00:00Z', reviewer_id: null, review_notes: null, reviewed_at: null, published_at: null, review_checks: {}, offering_package: { id: key, package_number: 1, origin: 'SUBMITTED', terms_hash: 'a'.repeat(64), document_hashes: { memorandum: 'b'.repeat(64), risks: 'c'.repeat(64), subscription_terms: 'd'.repeat(64) }, submitted_at: '2026-09-21T00:00:00Z', issuer_status: 'APPROVED', compliance_status: 'APPROVED', technical_readiness_status: 'VERIFIED', publishable: false, subscribable: true, can_review_issuer: false } }
 
 describe('customer portal contracts', () => {
+  it('separates a guarded monitoring restriction from admission and rejects malformed scoped reads', () => {
+    const item = { application_id: id, application_revision: 3, state: 'ON_HOLD', case_revision: 1, admission_expires_at: '2026-10-01T00:00:00+00:00', renewal_due: false, new_actions_allowed: false }
+    expect(customerMonitoringSnapshotSchema.safeParse([item]).success).toBe(true)
+    expect(customerMonitoringSnapshotSchema.safeParse([{ ...item, admission_expires_at: null, renewal_due: null }]).success).toBe(true)
+    expect(customerMonitoringSnapshotSchema.safeParse([]).success).toBe(true)
+    for (const malformed of [[item, item], [{ ...item, state: 'APPROVED' }], [{ ...item, case_revision: -1 }], [{ ...item, new_actions_allowed: 'yes' }], [{ ...item, reviewer_role: 'ComplianceOfficer' }]]) {
+      expect(customerMonitoringSnapshotSchema.safeParse(malformed).success).toBe(false)
+    }
+  })
+  it('binds monitoring decisions to one saved case revision and cited evidence, without accepting client authority', () => {
+    const checks = { identity: true, ownership: true, screening: true, suitability: true }
+    const payload = { application_id: id, expected_revision: 1, state: 'CURRENT', evidence_reference: 'SYNTHETIC-REVIEW-2026-09-24-001', reason: 'All four synthetic review checks are current against the saved case.', checks }
+    expect(portalCommandSchema.safeParse({ command: 'set_customer_monitoring', key, payload }).success).toBe(true)
+    expect(portalCommandSchema.safeParse({ command: 'set_customer_monitoring', key, payload: { ...payload, expected_revision: 0, state: 'ON_HOLD', checks: { ...checks, screening: false } } }).success).toBe(true)
+    for (const change of [{ expected_revision: -1 }, { evidence_reference: 'short' }, { reason: 'short' }, { reviewer_id: id }, { checks: { ...checks, screening: false } }, { checks: { ...checks, provider_approved: true } }]) {
+      expect(portalCommandSchema.safeParse({ command: 'set_customer_monitoring', key, payload: { ...payload, ...change } }).success).toBe(false)
+    }
+  })
   const evidence = { id, kind: 'IDENTITY', title: 'Synthetic identity', storage_path: `${id}/${key}`, sha256: 'a'.repeat(64), size: 100, mime_type: 'application/pdf' }
   it('keeps historical document paths off browser metadata and requires exact lookup facts', () => {
     const historical = { id, kind: 'IDENTITY', title: 'Earlier synthetic evidence', claimed_sha256: 'a'.repeat(64), size: 100, mime_type: 'application/pdf' }
@@ -25,6 +61,32 @@ describe('customer portal contracts', () => {
     for (const extra of [{ investor_type: 'ENTITY' }, { source_of_funds: 'Old investment capital source facts.' }, { experience: 'Old investment objectives.' }, { details_version: 3 }, { approved: true }]) expect(applicationDetailsSchema.safeParse({ ...wm, ...extra }).success).toBe(false)
     for (const field of ['business_activities', 'representative_position', 'authority_basis']) expect(applicationDetailsSchema.safeParse({ ...wm, [field]: '' }).success).toBe(false)
   })
+  it('requires versioned ownership/control parties and linked evidence for new legal-entity disclosures', () => {
+    const boEvidence = { ...evidence, id: key, kind: 'BENEFICIAL_OWNERS', title: 'Synthetic ownership register' }
+    const relationship = { id, party_type: 'PERSON', legal_name: 'Synthetic Owner', registration_reference: '', country: 'ZA', relationship: 'DIRECT_OWNER', ownership_basis_points: 7500, control_basis: 'Fictional direct shareholding in the customer organisation.', effective_on: '2026-09-01', change_reason: 'Initial fictional disclosure for independent review.', evidence_document_id: key }
+    const managerV3 = { ...wm, details_version: 3, documents: [evidence, boEvidence], ownership_control: [relationship], ownership_change_reason: 'Initial fictional ownership disclosure.' }
+    expect(applicationDetailsSchema.safeParse(managerV3).success).toBe(true)
+    expect(isWealthManagerDetailsV2(managerV3)).toBe(true)
+    const investorV3 = { ...managerV3, investor_type: 'ENTITY', source_of_funds: 'Fictional company capital from retained earnings.', experience: 'Fictional long-term property investment strategy.' }
+    delete (investorV3 as Partial<typeof investorV3>).business_activities
+    delete (investorV3 as Partial<typeof investorV3>).representative_position
+    delete (investorV3 as Partial<typeof investorV3>).authority_basis
+    expect(applicationDetailsSchema.safeParse(investorV3).success).toBe(true)
+    expect(isWealthManagerDetailsV2(investorV3)).toBe(false)
+    for (const malformed of [
+      { ownership_control: [] },
+      { ownership_control: [{ ...relationship, evidence_document_id: id }] },
+      { ownership_control: [{ ...relationship, ownership_basis_points: 10001 }] },
+      { ownership_control: [{ ...relationship, relationship: 'DIRECT_OWNER', ownership_basis_points: 0 }] },
+      { ownership_control: [{ ...relationship, party_type: 'ENTITY', registration_reference: '' }] },
+      { ownership_control: [relationship, relationship] },
+      { ownership_control: [{ ...relationship, ownership_basis_points: 6000 }, { ...relationship, id: key, ownership_basis_points: 6000 }] },
+      { ownership_change_reason: 'short' },
+      { role: 'SuperAdmin' },
+    ]) expect(applicationDetailsSchema.safeParse({ ...managerV3, ...malformed }).success).toBe(false)
+    expect(applicationDetailsSchema.safeParse({ ...managerV3, investor_type: 'ENTITY' }).success).toBe(false)
+    expect(applicationDetailsSchema.safeParse({ ...investorV3, investor_type: 'INDIVIDUAL' }).success).toBe(false)
+  })
   it('keeps legacy evidence meanings and partial drafts without converting their fields', () => {
     const old = { full_name: 'Historical Applicant', country: 'ZA', investor_type: 'INDIVIDUAL', company_name: '', registration_reference: '', source_of_funds: 'Original investment capital source.', beneficial_owners: '', experience: 'Original investment objectives.', documents: [evidence], test_data_acknowledged: true }
     expect(applicationDetailsSchema.parse(old)).toEqual(old)
@@ -33,10 +95,53 @@ describe('customer portal contracts', () => {
     expect(applicationDraftDetailsSchema.parse({ details_version: 2, business_activities: wm.business_activities })).toEqual({ details_version: 2, business_activities: wm.business_activities })
     expect(applicationDetailsSchema.safeParse({ ...old, authority_basis: wm.authority_basis }).success).toBe(false)
   })
-  it('accepts complete typed fund terms', () => expect(productTermsSchema.safeParse(terms).success).toBe(true))
-  it('requires real-estate-specific terms', () => {
+  it('preserves historical fund terms for reading without treating them as a new writable package', () => {
+    expect(productTermsSchema.safeParse(terms).success).toBe(true)
+    expect(portalCommandSchema.safeParse({ command: 'create_product', key, payload: { organisation_id: id, terms } }).success).toBe(false)
+    expect(portalCommandSchema.safeParse({ command: 'save_product', key, payload: { product_id: id, expected_revision: 1, terms } }).success).toBe(false)
+  })
+  it('requires the complete six-decimal v2 fund contract for new fund writes', () => {
+    expect(productTermsSchema.safeParse(fundV2).success).toBe(true)
+    expect(portalCommandSchema.safeParse({ command: 'create_product', key, payload: { organisation_id: id, terms: fundV2 } }).success).toBe(true)
+    expect(portalCommandSchema.safeParse({ command: 'save_product', key, payload: { product_id: id, expected_revision: 1, terms: fundV2 } }).success).toBe(true)
+    for (const malformed of [
+      { currency: 'ZAR_TEST' }, { settlement_decimals: 2 }, { unit_price_minor: '10.000000' },
+      { fund: { ...fundV2.fund, extra_authority: 'self-approved' } },
+      { fund: { ...fundV2.fund, nav: { ...fundV2.fund.nav, frequency: 'ANNUALLY' } } },
+      { fund: { ...fundV2.fund, dealing: { ...fundV2.fund.dealing, notice_days: 1.5 } } },
+      { fund: { ...fundV2.fund, fees: { ...fundV2.fund.fees, management_bps: 10001 } } },
+      { strategy: 'An incompatible second mandate copied from an old fund.' },
+      { pricing_basis: 'A conflicting fixed price outside fund NAV rules.' },
+      { fees: 'A conflicting fee schedule outside fund.fees.' },
+      { redemption_terms: 'An incompatible instant redemption promise outside fund policies.' },
+      { fund: { ...fundV2.fund, mandate: 'A stale ZAR_TEST reference in the new mandate is invalid.' } },
+      { documents: { ...fundV2.documents, risks: `${fundV2.documents.risks} A stale ZAR_TEST disclosure.` } },
+    ]) expect(productTermsSchema.safeParse({ ...fundV2, ...malformed }).success).toBe(false)
+  })
+  it('preserves historical property terms for reading but rejects new legacy-denominated writes', () => {
     expect(productTermsSchema.safeParse({ ...terms, asset_type: 'REAL_ESTATE' }).success).toBe(false)
-    expect(productTermsSchema.safeParse({ ...terms, asset_type: 'REAL_ESTATE', property_address: 'Fictional Street 10, Test City', property_valuation_minor: '500000000', rental_income_policy: 'Fictional net rent after disclosed operating costs.' }).success).toBe(true)
+    expect(productTermsSchema.safeParse(oldProperty).success).toBe(true)
+    expect(portalCommandSchema.safeParse({ command: 'create_product', key, payload: { organisation_id: id, terms: oldProperty } }).success).toBe(false)
+    expect(portalCommandSchema.safeParse({ command: 'save_product', key, payload: { product_id: id, expected_revision: 1, terms: oldProperty } }).success).toBe(false)
+  })
+  it('requires complete six-decimal v2 property terms without converting valuation to offering cap', () => {
+    expect(productTermsSchema.safeParse(propertyV2).success).toBe(true)
+    expect(isRealEstateTermsV2(propertyV2)).toBe(true)
+    expect(portalCommandSchema.safeParse({ command: 'create_product', key, payload: { organisation_id: id, terms: propertyV2 } }).success).toBe(true)
+    expect(portalCommandSchema.safeParse({ command: 'save_product', key, payload: { product_id: id, expected_revision: 1, terms: propertyV2 } }).success).toBe(true)
+    expect(BigInt(propertyV2.property_valuation_minor)).not.toBe(BigInt(propertyV2.unit_price_minor) * BigInt(propertyV2.cap_units))
+    for (const malformed of [
+      { currency: 'ZAR_TEST' }, { settlement_decimals: 2 }, { property_valuation_minor: '0' },
+      { real_estate: { ...propertyV2.real_estate, privileged_signer: id } },
+      { real_estate: { ...propertyV2.real_estate, spv: { ...propertyV2.real_estate.spv, jurisdiction: 'South Africa' } } },
+      { real_estate: { ...propertyV2.real_estate, property: { ...propertyV2.real_estate.property, control_evidence_reference: '' } } },
+      { real_estate: { ...propertyV2.real_estate, cashflow: { ...propertyV2.real_estate.cashflow, reserve_policy: 'none' } } },
+      { real_estate: { ...propertyV2.real_estate, exits: { ...propertyV2.real_estate.exits, eligible_transfer_policy: 'instant liquidity' } } },
+      { real_estate: { ...propertyV2.real_estate, exits: { ...propertyV2.real_estate.exits, eligible_transfer_policy: propertyV2.real_estate.exits.disposal_liquidation_policy } } },
+      { strategy: 'A competing investment strategy outside real_estate.spv.' },
+      { rental_income_policy: 'A competing income schedule outside real_estate.cashflow.' },
+      { documents: { ...propertyV2.documents, risks: `${propertyV2.documents.risks} ZAR_TEST.` } },
+    ]) expect(productTermsSchema.safeParse({ ...propertyV2, ...malformed }).success).toBe(false)
   })
   it.each(['0', '-1', '1.1', '1e3', '+1', '01', ' 1', '999999999999999999999'])('rejects noncanonical financial quantity %s', unit_price_minor => expect(productTermsSchema.safeParse({ ...terms, unit_price_minor }).success).toBe(false))
   it('rejects live currency and arbitrary metadata', () => {
@@ -56,10 +161,22 @@ describe('customer portal contracts', () => {
     expect(subscriptionQuote(product, '99981')).toHaveProperty('error')
     expect(subscriptionQuote(product, '99980')).toHaveProperty('amount_minor')
   })
+  it('never treats historical status or an unverified package as subscription readiness', () => {
+    expect(subscriptionQuote({ ...product, offering_package: null }, '10')).toHaveProperty('error')
+    expect(subscriptionQuote({ ...product, offering_package: { ...product.offering_package!, technical_readiness_status: 'NOT_VERIFIED', subscribable: false } }, '10')).toHaveProperty('error')
+    expect(subscriptionQuote({ ...product, offering_package: { ...product.offering_package!, terms_hash: 'f'.repeat(64) } }, '10')).toHaveProperty('error')
+  })
   it('binds subscription commands to approved version/hash and explicit acceptance', () => {
-    const payload = { product_id: id, expected_revision: 4, terms_hash: 'a'.repeat(64), units: '10', accepted_documents: true, accepted_risks: true }
+    const payload = { product_id: id, offering_revision_id: key, expected_revision: 4, terms_hash: 'a'.repeat(64), units: '10', accepted_documents: true, accepted_risks: true }
     expect(portalCommandSchema.safeParse({ command: 'subscribe', key, payload }).success).toBe(true)
-    for (const change of [{ expected_revision: 0 }, { terms_hash: '' }, { accepted_documents: false }, { accepted_risks: false }, { investor_id: id }]) expect(portalCommandSchema.safeParse({ command: 'subscribe', key, payload: { ...payload, ...change } }).success).toBe(false)
+    for (const change of [{ offering_revision_id: '' }, { expected_revision: 0 }, { terms_hash: '' }, { accepted_documents: false }, { accepted_risks: false }, { investor_id: id }]) expect(portalCommandSchema.safeParse({ command: 'subscribe', key, payload: { ...payload, ...change } }).success).toBe(false)
+  })
+  it('requires exact immutable package identity for distinct issuer and Compliance decisions', () => {
+    const common = { product_id: id, offering_revision_id: key, expected_revision: 4, terms_hash: 'a'.repeat(64), decision: 'APPROVED', notes: 'Synthetic issuer authority and investor rights have been separately reviewed.' }
+    expect(portalCommandSchema.safeParse({ command: 'review_product', key, payload: { ...common, checks: { issuer: true, terms: true, disclosures: true, eligibility: true } } }).success).toBe(true)
+    expect(portalCommandSchema.safeParse({ command: 'review_offering_issuer', key, payload: { ...common, checks: { issuer_authority: true, terms: true, rights: true } } }).success).toBe(true)
+    expect(portalCommandSchema.safeParse({ command: 'review_offering_issuer', key, payload: { ...common, offering_revision_id: '', checks: { issuer_authority: true, terms: true, rights: true } } }).success).toBe(false)
+    expect(portalCommandSchema.safeParse({ command: 'review_product', key, payload: { ...common, terms_hash: '', checks: { issuer: true, terms: true, disclosures: true, eligibility: true } } }).success).toBe(false)
   })
   it('bounds product eligibility requests to one account, product and case revision', () => {
     const payload = { product_id: id, investment_account_id: key, expected_revision: 0, investor_statement: 'Synthetic investor objectives and product fit for this offering.' }
@@ -74,6 +191,109 @@ describe('customer portal contracts', () => {
     expect(portalCommandSchema.safeParse({ command: 'review_product_eligibility', key, payload }).success).toBe(true)
     for (const change of [{ expected_revision: 0 }, { notes: 'Too short' }, { reviewer_id: id }, { checks: { ...payload.checks, screening: true } }]) {
       expect(portalCommandSchema.safeParse({ command: 'review_product_eligibility', key, payload: { ...payload, ...change } }).success).toBe(false)
+    }
+  })
+  it('requires all entity mandate and exact offering bindings without changing individual requests', () => {
+    const payload = { product_id: id, investment_account_id: key, expected_revision: 0, investor_statement: 'Synthetic entity objectives and source of funds for the specific offering.' }
+    const binding = { representative_mandate_id: id, expected_mandate_revision: 4, expected_mandate_cycle: 2,
+      expected_product_revision: 7, offering_revision_id: key, terms_hash: 'a'.repeat(64) }
+    expect(portalCommandSchema.safeParse({ command: 'request_product_eligibility', key, payload }).success).toBe(true)
+    expect(portalCommandSchema.safeParse({ command: 'request_product_eligibility', key, payload: { ...payload, ...binding } }).success).toBe(true)
+    for (const field of Object.keys(binding) as (keyof typeof binding)[]) {
+      const partial = { ...binding }
+      delete (partial as Partial<typeof binding>)[field]
+      expect(portalCommandSchema.safeParse({ command: 'request_product_eligibility', key, payload: { ...payload, ...partial } }).success).toBe(false)
+    }
+    for (const change of [{ expected_mandate_cycle: 0 }, { expected_mandate_revision: 0 }, { expected_product_revision: -1 },
+      { offering_revision_id: 'unknown' }, { terms_hash: 'wrong' }, { role: 'ComplianceOfficer' }, { account_kind: 'ENTITY' }]) {
+      expect(portalCommandSchema.safeParse({ command: 'request_product_eligibility', key, payload: { ...payload, ...binding, ...change } }).success).toBe(false)
+    }
+  })
+  it('keeps the strict entity projection distinct from individual holders and missing evidence', () => {
+    const row = {
+      id, investment_account_id: key, product_id: id, organisation_id: key, account_kind: 'ENTITY', offering_revision_id: key,
+      application_revision: 3, product_revision: 7, terms_hash: 'a'.repeat(64), revision: 1, status: 'SUBMITTED',
+      investor_statement: 'Synthetic entity statement for the exact approved investment capacity.', submitted_at: '2026-10-09T12:00:00Z',
+      reviewed_at: null, reviewer_id: null, review_notes: null, review_checks: {}, approved_until: null,
+      effective: false, can_decide: false, can_approve: false, can_revoke: false,
+      entity_party_id: key, entity_name: 'Synthetic Entity', representative_user_id: id,
+      representative_mandate_id: key, mandate_cycle: 1, mandate_revision: 4,
+      decision_appointment_id: null, decision_appointment_revision: null, provider_mode: 'MANUAL_TEST_REVIEW',
+      next_owner: 'COMPLIANCE', can_request: false, blocked_reason: null, investor_application: null,
+    }
+    const parsed = entityProductEligibilitySchema.parse(row)
+    expect(validatedEntityProductEligibility({ entity_product_eligibility: [parsed] })).toEqual([parsed])
+    expect(validatedEntityProductEligibility({ entity_product_eligibility: [] })).toEqual([])
+    expect(validatedEntityProductEligibility({})).toBeUndefined()
+    expect(validatedEntityProductEligibility({ entity_product_eligibility: [parsed, parsed] })).toBeUndefined()
+    expect(validatedEntityProductEligibility({ entity_product_eligibility: [parsed, { ...parsed, id: '99999999-9999-4999-8999-999999999999' }] })).toBeUndefined()
+    for (const change of [{ account_kind: 'INDIVIDUAL' }, { holder_user_id: id }, { representative_mandate_id: undefined },
+      { decision_appointment_id: key }, { mandate_cycle: 0 }, { effective: true }, { provider_mode: 'LIVE_APPROVED' },
+      { next_owner: 'SUPER_ADMIN' }, { can_approve: undefined }, { status: 'APPROVED' }]) {
+      expect(entityProductEligibilitySchema.safeParse({ ...row, ...change }).success).toBe(false)
+    }
+    const reviewed = { ...row, reviewed_at: '2026-10-09T13:00:00Z', reviewer_id: key,
+      review_notes: 'Independently reviewed synthetic entity product qualification.',
+      decision_appointment_id: key, decision_appointment_revision: 4,
+      review_checks: { identity: true, product_fit: true, restrictions: true, source_of_funds: true } }
+    for (const status of ['CHANGES_REQUIRED', 'APPROVED', 'REJECTED', 'REVOKED']) {
+      const decision = { ...reviewed, status, approved_until: status === 'APPROVED' ? '2026-11-01T12:00:00Z' : null }
+      expect(entityProductEligibilitySchema.safeParse(decision).success).toBe(true)
+      for (const field of ['decision_appointment_id', 'decision_appointment_revision', 'reviewer_id', 'reviewed_at', 'review_notes']) {
+        expect(entityProductEligibilitySchema.safeParse({ ...decision, [field]: null }).success).toBe(false)
+      }
+    }
+    for (const field of ['decision_appointment_id', 'decision_appointment_revision', 'reviewer_id', 'reviewed_at', 'review_notes', 'review_checks']) {
+      expect(entityProductEligibilitySchema.safeParse({ ...row, [field]: reviewed[field as keyof typeof reviewed] }).success).toBe(false)
+    }
+    expect(entityProductEligibilitySchema.safeParse({ ...row, status: 'APPROVED', effective: true, approved_until: '2026-11-01T12:00:00Z',
+      reviewed_at: '2026-10-09T13:00:00Z', reviewer_id: key, review_notes: 'Independently reviewed synthetic entity product qualification.',
+      decision_appointment_id: key, decision_appointment_revision: 4,
+      review_checks: { identity: true, product_fit: true, restrictions: true, source_of_funds: true }, next_owner: 'NONE' }).success).toBe(true)
+  })
+  it('requires product-scoped appointments without accepting client-granted authority', () => {
+    const request = { product_id: id, role: 'IssuerFundManager', appointee_user_id: id,
+      native_membership_id: id, expected_product_revision: 3,
+      evidence_reference: 'SYNTHETIC-ISSUER-APPOINTMENT-2026-09-28', requested_until: '2026-10-28T12:00:00Z' }
+    expect(portalCommandSchema.safeParse({ command: 'request_product_service_appointment', key, payload: request }).success).toBe(true)
+    expect(portalCommandSchema.safeParse({ command: 'request_product_service_appointment', key,
+      payload: { ...request, role: 'ComplianceOfficer' } }).success).toBe(true)
+    for (const change of [{ role: 'TokenisationAgent' }, { expected_product_revision: 0 },
+      { evidence_reference: 'short' }, { requested_until: 'not-a-date' },
+      { authority_binding_id: id }, { signer: true }]) {
+      expect(portalCommandSchema.safeParse({ command: 'request_product_service_appointment', key,
+        payload: { ...request, ...change } }).success).toBe(false)
+    }
+    const review = { appointment_id: id, expected_revision: 1, decision: 'APPROVED',
+      notes: 'Independent synthetic review of appointment scope and cited evidence.',
+      checks: { appointment: true, evidence: true, scope: true } }
+    expect(portalCommandSchema.safeParse({ command: 'review_product_service_appointment', key, payload: review }).success).toBe(true)
+    expect(portalCommandSchema.safeParse({ command: 'review_product_service_appointment', key,
+      payload: { ...review, reviewer_user_id: id } }).success).toBe(false)
+    expect(portalCommandSchema.safeParse({ command: 'apply_product_service_appointment', key,
+      payload: { appointment_id: id, expected_revision: 2 } }).success).toBe(true)
+    expect(portalCommandSchema.safeParse({ command: 'revoke_product_service_appointment', key,
+      payload: { appointment_id: id, expected_revision: 3,
+        reason: 'Synthetic appointment revoked after the controlled review.' } }).success).toBe(true)
+  })
+  it('requires a reason and expected product revision for a fresh offering review', () => {
+    const payload = { product_id: id, expected_revision: 4,
+      reason: 'Appointed issuer authority expired; submit this unchanged package for fresh decisions.' }
+    expect(portalCommandSchema.safeParse({ command: 'reopen_offering_review', key, payload }).success).toBe(true)
+    for (const change of [{ expected_revision: 0 }, { reason: 'Too short' },
+      { approved_by_user_id: id }, { current_offering_revision_id: id }]) {
+      expect(portalCommandSchema.safeParse({ command: 'reopen_offering_review', key,
+        payload: { ...payload, ...change } }).success).toBe(false)
+    }
+  })
+  it('requires an explicit reason and revision before amending approved terms', () => {
+    const payload = { product_id: id, expected_revision: 4,
+      reason: 'Rework fictional class rights and resubmit for fresh issuer and Compliance decisions.' }
+    expect(portalCommandSchema.safeParse({ command: 'begin_offering_amendment', key, payload }).success).toBe(true)
+    for (const change of [{ expected_revision: 0 }, { reason: 'Too short' },
+      { accepted_orders: true }, { actor_role: 'OfferingManager' }]) {
+      expect(portalCommandSchema.safeParse({ command: 'begin_offering_amendment', key,
+        payload: { ...payload, ...change } }).success).toBe(false)
     }
   })
   it('requires the exact case revision and a recorded reason for eligibility revocation', () => {
@@ -114,6 +334,27 @@ describe('customer portal contracts', () => {
   it('never accepts financial completion or reviewer identity from the browser', () => {
     expect(portalCommandSchema.safeParse({ command: 'settle', key, payload: { subscription_id: id, paid: true } }).success).toBe(false)
     expect(portalCommandSchema.safeParse({ command: 'review_application', key, payload: { application_id: id, expected_revision: 1, decision: 'APPROVED', notes: 'Synthetic documents independently reviewed.', checks: { identity: true, ownership: true, screening: true, suitability: true }, reviewer_id: id } }).success).toBe(false)
+  })
+  it('accepts a named representative proposal without accepting client identity or authority', () => {
+    const payload = { investment_account_id: id, expected_revision: 0, evidence_reference: 'Fictional board appointment names the proposed representative.', appointment_document_id: key, requested_until: '2026-10-20T12:00:00Z' }
+    const parse = (change: object) => portalCommandSchema.safeParse({ command: 'request_investing_representative_mandate', key, payload: { ...payload, ...change } })
+    expect(parse({ representative_email: ' representative@example.invalid ' }).success).toBe(true)
+    expect(parse({}).success).toBe(true)
+    for (const change of [{ representative_email: '' }, { representative_email: 'unknown' }, { representative_user_id: key }, { representative_application_id: key }, { proposal_hash: 'a'.repeat(64) }, { scope: ['ACCOUNT_VIEW'] }, { approved: true }]) expect(parse(change).success).toBe(false)
+  })
+  it('binds acceptance and decline to the exact saved proposal, not a browser-selected account or role', () => {
+    const payload = { mandate_id: id, expected_revision: 1, proposal_hash: 'a'.repeat(64), decision: 'ACCEPT' }
+    const parse = (change: object) => portalCommandSchema.safeParse({ command: 'respond_investing_representative_proposal', key, payload: { ...payload, ...change } })
+    expect(parse({}).success).toBe(true)
+    expect(parse({ decision: 'DECLINE' }).success).toBe(true)
+    for (const change of [{ expected_revision: 0 }, { proposal_hash: 'forged' }, { proposal_hash: undefined }, { decision: 'APPROVED' }, { representative_user_id: key }, { investment_account_id: key }, { role: 'Investor' }]) expect(parse(change).success).toBe(false)
+  })
+  it('accepts only an exact COMPANY proposal document with truthful lifecycle state', () => {
+    const lookup = { mandate_id: id, mandate_revision: 1, proposal_hash: 'a'.repeat(64), applicant_user_id: key,
+      document: { id, kind: 'COMPANY', title: 'Synthetic appointment', storage_path: `${key}/${id}`, sha256: 'b'.repeat(64), size: 100, mime_type: 'application/pdf' }, validation_state: 'SYNTHETIC_UNSCANNED' }
+    expect(investingProposalDocumentLookupSchema.safeParse(lookup).success).toBe(true)
+    expect(investingProposalDocumentLookupSchema.safeParse({ ...lookup, validation_state: 'SCANNED_CLEAN' }).success).toBe(true)
+    for (const change of [{ mandate_revision: 0 }, { proposal_hash: 'forged' }, { validation_state: 'APPROVED' }, { provider_history: [] }, { document: { ...lookup.document, kind: 'IDENTITY' } }, { document: { ...lookup.document, public_url: 'https://example.invalid' } }]) expect(investingProposalDocumentLookupSchema.safeParse({ ...lookup, ...change }).success).toBe(false)
   })
   it('formats minor units without number coercion', () => {
     expect(formatTestMoney('1')).toBe('0.01 ZAR_TEST')

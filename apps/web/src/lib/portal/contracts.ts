@@ -1,6 +1,9 @@
 import { z } from 'zod'
 import type { PortalOperatingContext } from './operating-context'
 import { fundingCommandOptions, type FundingSnapshot } from './funding-contracts'
+import fundV2LegacyCrossrefs from './fund-v2-legacy-crossrefs.json'
+import type { Stage2Access } from './stage2-access'
+import type { OfferingAccess } from './offering-access'
 
 /** One customer workflow; environment-specific providers never manufacture settlement. */
 export const PORTAL_PATHS = ['/portal', '/portal/onboarding', '/portal/products', '/portal/products/new', '/portal/products/detail', '/portal/compliance', '/portal/compliance/detail', '/portal/opportunities', '/portal/opportunities/detail', '/portal/portfolio', '/portal/orders/detail'] as const
@@ -12,6 +15,13 @@ export type ProductStatus = (typeof productStatuses)[number]
 export type Persona = 'INVESTOR' | 'WEALTH_MANAGER'
 export type InvestorType = 'INDIVIDUAL' | 'ENTITY'
 export type EvidenceDocument = { id: string; kind: string; title: string; storage_path: string; sha256: string; size: number; mime_type: string }
+/** Disclosed legal/economic/control facts, never an operating or signing mandate. */
+export type OwnershipControlRelationship = {
+  id: string; party_type: 'PERSON' | 'ENTITY'; legal_name: string; registration_reference: string;
+  country: string; relationship: 'DIRECT_OWNER' | 'INDIRECT_OWNER' | 'CONTROLLER';
+  ownership_basis_points: number; control_basis: string; effective_on: string;
+  change_reason: string; evidence_document_id: string;
+}
 export type LegacyApplicationDetails = {
   full_name: string; country: string; investor_type: InvestorType; company_name: string;
   registration_reference: string; source_of_funds: string; beneficial_owners: string;
@@ -24,15 +34,23 @@ export type WealthManagerApplicationDetailsV2 = {
   representative_position: string; authority_basis: string; documents: EvidenceDocument[]; test_data_acknowledged: true;
   investor_type?: never; source_of_funds?: never; experience?: never;
 }
-export type ApplicationDetails = LegacyApplicationDetails | WealthManagerApplicationDetailsV2
-export type AdmissionPurpose = 'INVESTOR_ADMISSION' | 'CUSTOMER_ORGANISATION_ADMISSION' | 'LEGACY_REHEARSAL'
-export type RepresentativeMandateNextOwner = 'APPLICANT' | 'COMPLIANCE' | 'SUPER_ADMIN' | 'NONE'
-export function representativeMandateNextOwnerLabel(owner: RepresentativeMandateNextOwner): string {
-  return { APPLICANT: 'Customer applicant', COMPLIANCE: 'Independent BlockXOne Compliance Officer', SUPER_ADMIN: 'Authorised BlockXOne Super Admin', NONE: 'No current mandate action' }[owner]
+export type WealthManagerApplicationDetailsV3 = Omit<WealthManagerApplicationDetailsV2, 'details_version'> & {
+  details_version: 3; ownership_control: OwnershipControlRelationship[]; ownership_change_reason: string;
 }
-/** A version discriminator only; request/read schemas still validate complete evidence. */
-export function isWealthManagerDetailsV2(value: unknown): value is WealthManagerApplicationDetailsV2 {
-  return Boolean(value && typeof value === 'object' && !Array.isArray(value) && (value as { details_version?: unknown }).details_version === 2)
+export type EntityInvestorApplicationDetailsV3 = Omit<LegacyApplicationDetails, 'details_version' | 'investor_type'> & {
+  details_version: 3; investor_type: 'ENTITY'; ownership_control: OwnershipControlRelationship[]; ownership_change_reason: string;
+}
+export type ApplicationDetails = LegacyApplicationDetails | WealthManagerApplicationDetailsV2 | WealthManagerApplicationDetailsV3 | EntityInvestorApplicationDetailsV3
+export type AdmissionPurpose = 'INVESTOR_ADMISSION' | 'CUSTOMER_ORGANISATION_ADMISSION' | 'LEGACY_REHEARSAL'
+export type RepresentativeMandateNextOwner = 'APPLICANT' | 'REPRESENTATIVE' | 'COMPLIANCE' | 'SUPER_ADMIN' | 'NONE'
+export function representativeMandateNextOwnerLabel(owner: RepresentativeMandateNextOwner): string {
+  return { APPLICANT: 'Customer applicant', REPRESENTATIVE: 'Named representative', COMPLIANCE: 'Independent BlockXOne Compliance Officer', SUPER_ADMIN: 'Authorised BlockXOne Super Admin', NONE: 'No current mandate action' }[owner]
+}
+/** Compatibility guard used by existing manager views; v3 preserves every v2 manager fact. */
+export function isWealthManagerDetailsV2(value: unknown): value is WealthManagerApplicationDetailsV2 | WealthManagerApplicationDetailsV3 {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value)
+    && ([2, 3] as unknown[]).includes((value as { details_version?: unknown }).details_version)
+    && !('investor_type' in (value as object)))
 }
 export type PortalApplication = {
   id: string; user_id: string; persona: Persona; status: ApplicationStatus; revision: number;
@@ -41,7 +59,7 @@ export type PortalApplication = {
   review_checks: Record<string, boolean>; provider_mode: 'MANUAL_TEST_REVIEW'; approved_until: string | null;
   admission_purpose?: AdmissionPurpose; can_create_entity_account?: boolean;
 }
-export type PortalCapability = 'create_product' | 'save_product' | 'submit_product' | 'publish_product' | 'read_orders' | 'review_product'
+export type PortalCapability = 'create_product' | 'save_product' | 'submit_product' | 'reopen_offering_review' | 'begin_offering_amendment' | 'publish_product' | 'read_orders' | 'review_product' | 'review_offering_issuer'
   | 'propose_funding_route' | 'approve_funding_route' | 'revoke_funding_route' | 'open_funding_obligation' | 'propose_funding_acceptance' | 'reconcile_funding'
   | 'propose_funding_exception' | 'resolve_funding_exception' | 'propose_funding_reversal' | 'approve_funding_reversal'
 export type PortalOrganisation = {
@@ -59,13 +77,14 @@ export type PortalEntityInvestmentAccount = {
   registration_reference: string; country: string; kind: 'ENTITY'; status: 'ACTIVE' | 'SUSPENDED';
   created_at: string; admission_revision: number; admission_approved_until: string | null;
   can_request_mandate: boolean; can_view: boolean; can_request_eligibility: boolean;
+  can_propose_representative?: boolean;
 }
 export type PortalInvestingRepresentativeMandate = {
   id: string; investment_account_id: string; application_id: string; applicant_user_id: string;
   representative_user_id: string; entity_party_id: string; entity_name: string;
   reviewer_scope_organisation_id: string; admission_revision: number; admission_current_revision: number;
   admission_approved_until: string | null; cycle: number; revision: number;
-  status: 'SUBMITTED' | 'CHANGES_REQUIRED' | 'APPROVED' | 'REJECTED' | 'APPLIED' | 'REVOKED';
+  status: 'PROPOSED' | 'DECLINED' | 'SUBMITTED' | 'CHANGES_REQUIRED' | 'APPROVED' | 'REJECTED' | 'APPLIED' | 'REVOKED';
   scope: ('ACCOUNT_VIEW' | 'REQUEST_ELIGIBILITY')[]; transaction_limit_minor: '0';
   evidence_reference: string; appointment_document_id: string; requested_until: string;
   submitted_at: string; reviewed_at: string | null; reviewer_user_id: string | null;
@@ -74,16 +93,29 @@ export type PortalInvestingRepresentativeMandate = {
   revoked_at: string | null; revoke_reason: string | null; effective: boolean;
   next_owner: RepresentativeMandateNextOwner;
   can_request: boolean; can_review: boolean; can_apply: boolean; can_revoke: boolean;
+  representative_email?: string | null; representative_name?: string | null;
+  representative_application_id?: string | null; representative_application_revision?: number | null;
+  proposal_hash?: string | null; consent_decision?: 'ACCEPT' | 'DECLINE' | null;
+  consent_receipt_id?: string | null; responded_at?: string | null; can_respond?: boolean;
 }
 export type PortalProductEligibility = {
   id: string; investment_account_id: string; product_id: string; organisation_id: string;
-  product_revision: number; terms_hash: string; application_revision: number; revision: number;
+  product_revision: number; offering_revision_id?: string | null; terms_hash: string; application_revision: number; revision: number;
   status: 'SUBMITTED' | 'CHANGES_REQUIRED' | 'APPROVED' | 'REJECTED' | 'REVOKED';
   investor_statement: string; submitted_at: string; reviewed_at: string | null;
   reviewer_id: string | null; review_notes: string | null; review_checks: Record<string, boolean>;
   approved_until: string | null; effective: boolean; can_decide: boolean; can_approve: boolean; can_revoke: boolean;
   holder_user_id?: string; product_name?: string; account_kind?: string;
   investor_application?: Pick<PortalApplication, 'id' | 'revision' | 'status' | 'approved_until' | 'details'> | null;
+}
+/** Same canonical eligibility case; legal holder and acting person remain distinct. */
+export type PortalEntityProductEligibility = Omit<PortalProductEligibility, 'holder_user_id' | 'account_kind' | 'offering_revision_id'> & {
+  account_kind: 'ENTITY'; offering_revision_id: string;
+  entity_party_id: string; entity_name: string; representative_user_id: string;
+  representative_mandate_id: string; mandate_cycle: number; mandate_revision: number;
+  decision_appointment_id: string | null; decision_appointment_revision: number | null;
+  provider_mode: 'MANUAL_TEST_REVIEW'; next_owner: 'APPLICANT' | 'COMPLIANCE' | 'NONE';
+  can_request: boolean; blocked_reason: string | null;
 }
 export type PortalOrganisationMandate = {
   id: string; application_id: string; product_organisation_id: string; native_organisation_id: string | null;
@@ -95,13 +127,97 @@ export type PortalOrganisationMandate = {
   admission_purpose: AdmissionPurpose; effective: boolean; next_owner: RepresentativeMandateNextOwner;
   can_request: boolean; can_review: boolean; can_apply: boolean; can_revoke: boolean;
 }
-export type ProductTerms = {
-  asset_type: 'FUND' | 'REAL_ESTATE'; name: string; issuer_name: string; summary: string;
-  strategy: string; share_class: string; currency: 'ZAR_TEST'; unit_price_minor: string;
+/** Synthetic TEST service appointment for one product; never a wallet/signing mandate. */
+export type PortalProductServiceAppointment = {
+  id: string; product_id: string; product_organisation_id: string;
+  reviewer_scope_organisation_id: string; role: 'IssuerFundManager' | 'ComplianceOfficer';
+  appointee_user_id: string; native_membership_id: string;
+  requested_by_user_id: string; product_revision_at_request: number;
+  terms_hash_at_request: string; evidence_reference: string; requested_until: string;
+  status: 'SUBMITTED' | 'APPROVED' | 'CHANGES_REQUIRED' | 'REJECTED' | 'APPLIED' | 'REVOKED' | 'EXPIRED';
+  revision: number; requested_at: string; reviewed_at: string | null;
+  reviewed_by_user_id: string | null; review_notes: string | null;
+  approval_receipt_id: string | null; applied_at: string | null;
+  applied_by_user_id: string | null; revoked_at: string | null;
+  revoke_reason: string | null; effective: boolean;
+  next_owner: 'COMPLIANCE' | 'SUPER_ADMIN' | 'OFFERING_MANAGER' | 'NONE';
+  can_review: boolean; can_apply: boolean; can_revoke: boolean;
+}
+export type PortalProductAppointmentCandidate = {
+  product_id: string; role: 'IssuerFundManager' | 'ComplianceOfficer';
+  user_id: string; membership_id: string; display_name: string | null; email: string;
+}
+type ProductTermsBase = {
+  name: string; issuer_name: string; summary: string;
+  strategy: string; share_class: string; unit_price_minor: string;
   cap_units: string; minimum_units: string; pricing_basis: string; fees: string;
   redemption_terms: string; eligible_countries: string[]; eligible_investor_types: InvestorType[];
   property_address: string; property_valuation_minor: string; rental_income_policy: string;
   documents: { memorandum: string; risks: string; subscription_terms: string };
+}
+/** Historical denomination and package shape remain readable without reinterpretation. */
+export type LegacyProductTerms = ProductTermsBase & {
+  asset_type: 'FUND' | 'REAL_ESTATE'; currency: 'ZAR_TEST';
+  terms_version?: never; settlement_decimals?: never; fund?: never; real_estate?: never;
+}
+export type FundTermsV2 = ProductTermsBase & {
+  asset_type: 'FUND'; currency: 'TST'; terms_version: 2; settlement_decimals: 6;
+  fund: {
+    mandate: string; class_rights: string;
+    nav: { valuation_method: string; frequency: 'DAILY' | 'WEEKLY' | 'MONTHLY'; pricing_cutoff: string; correction_policy: string };
+    dealing: { subscription_frequency: 'DAILY' | 'WEEKLY' | 'MONTHLY'; redemption_frequency: 'DAILY' | 'WEEKLY' | 'MONTHLY' | 'QUARTERLY'; notice_days: number; settlement_days: number };
+    fees: { management_bps: number; performance_bps: number; other_fees: string };
+    liquidity: { lockup_days: number; gate_bps: number; suspension_policy: string };
+    distributions: { frequency: 'NONE' | 'MONTHLY' | 'QUARTERLY' | 'ANNUALLY'; policy: string };
+    redemption: { price_basis: 'NAV'; conditions: string };
+  };
+}
+export type RealEstateTermsV2 = ProductTermsBase & {
+  asset_type: 'REAL_ESTATE'; currency: 'TST'; terms_version: 2; settlement_decimals: 6;
+  real_estate: {
+    spv: { legal_name: string; registration_reference: string; jurisdiction: string; interest_rights: string };
+    property: { title_evidence_reference: string; control_evidence_reference: string; valuation_method: string; valuation_frequency: 'QUARTERLY' | 'ANNUALLY'; correction_policy: string };
+    financing: { debt_policy: string; lender_consent_policy: string };
+    cashflow: { rent_policy: string; expense_policy: string; reserve_policy: string; distribution_policy: string };
+    governance: { consent_rights: string; voting_policy: string };
+    exits: { eligible_transfer_policy: string; disposal_liquidation_policy: string };
+  };
+}
+export type ProductTerms = LegacyProductTerms | FundTermsV2 | RealEstateTermsV2
+/** v2 keeps the legacy keys for package compatibility; nested fund policies are authoritative. */
+export const FUND_V2_CANONICAL_REFERENCES = fundV2LegacyCrossrefs
+/** Property v2 retains the old package keys solely as fixed pointers to typed policies. */
+export const REAL_ESTATE_V2_CANONICAL_REFERENCES = {
+  strategy: 'The real_estate.spv and real_estate.property policies define the property interest and control for this package.',
+  pricing_basis: 'The real_estate.property valuation policy is the authoritative pricing basis for this package.',
+  fees: 'The real_estate.cashflow expense and reserve policies govern charges for this package.',
+  redemption_terms: 'The real_estate.exits policies distinguish eligible interest transfer from disposal and liquidation for this package.',
+  rental_income_policy: 'The real_estate.cashflow rent and distribution policies govern income for this package.',
+} as const
+export function containsLegacyDenomination(value: unknown): boolean {
+  if (typeof value === 'string') return /ZAR_TEST/i.test(value)
+  if (Array.isArray(value)) return value.some(containsLegacyDenomination)
+  if (value && typeof value === 'object') return Object.values(value).some(containsLegacyDenomination)
+  return false
+}
+export function isFundTermsV2(terms: ProductTerms): terms is FundTermsV2 {
+  return terms.asset_type === 'FUND' && terms.terms_version === 2 && terms.currency === 'TST'
+}
+export function isRealEstateTermsV2(terms: ProductTerms): terms is RealEstateTermsV2 {
+  return terms.asset_type === 'REAL_ESTATE' && terms.terms_version === 2 && terms.currency === 'TST'
+}
+export type PortalOfferingPackage = {
+  id: string; package_number: number; origin: 'SUBMITTED' | 'LEGACY_PRODUCT_SNAPSHOT' | 'LEGACY_ORDER_SNAPSHOT';
+  terms_hash: string; document_hashes: { memorandum: string; risks: string; subscription_terms: string };
+  submitted_at: string;
+  issuer_status: 'PENDING' | 'APPROVED' | 'CHANGES_REQUIRED' | 'UNVERIFIED_LEGACY';
+  compliance_status: 'PENDING' | 'APPROVED' | 'CHANGES_REQUIRED' | 'UNVERIFIED_LEGACY';
+  technical_readiness_status: 'NOT_VERIFIED' | 'VERIFIED';
+  status?: 'IN_REVIEW' | 'CHANGES_REQUIRED' | 'APPROVED_AWAITING_READINESS' | 'AUTHORITY_EXPIRED';
+  product_revision_at_submission?: number;
+  /** Scoped to operators/reviewers; absent from investor discovery. */
+  issuer_review_notes?: string | null; issuer_review_checks?: Record<string, boolean> | null;
+  publishable?: boolean; subscribable?: boolean; can_review_issuer?: boolean; can_review_compliance?: boolean;
 }
 export type PortalProduct = {
   id: string; organisation_id: string; created_by: string; revision: number; status: ProductStatus;
@@ -109,27 +225,54 @@ export type PortalProduct = {
   reviewer_id: string | null; review_notes: string | null; reviewed_at: string | null;
   published_at: string | null; review_checks: Record<string, boolean>;
   allowed_actions?: string[];
+  /** Absent on older deployments; null means no current submitted package. */
+  offering_package?: PortalOfferingPackage | null;
+  offering_history?: PortalOfferingPackage[];
 }
 export type PortalSubscription = {
   id: string; product_id: string; investor_id: string; product_name: string; organisation_id: string;
-  product_revision: number; terms_hash: string; units: string; amount_minor: string;
+  product_revision: number; offering_revision_id?: string | null; terms_hash: string; units: string; amount_minor: string;
   status: 'AWAITING_FUNDING' | 'CANCELLED'; created_at: string;
-  investment_account_id?: string | null; currency?: 'ZAR_TEST';
+  investment_account_id?: string | null; currency?: 'ZAR_TEST' | 'TST';
   can_cancel?: boolean; funding_obligation_id?: string | null;
   allowed_actions?: string[];
 }
 export type PortalEvent = { id: string; subject_id: string; kind: string; actor_id: string; created_at: string; summary: string }
+/** An extra ongoing-review restriction, never a replacement for admission or product eligibility. */
+export type PortalCustomerMonitoring = {
+  application_id: string; application_revision: number; state: 'CURRENT' | 'RENEWAL_REQUIRED' | 'ON_HOLD';
+  case_revision: number; admission_expires_at: string | null; renewal_due: boolean | null; new_actions_allowed: boolean;
+}
+export const customerMonitoringSnapshotSchema = z.array(z.object({
+  application_id: z.string().uuid(), application_revision: z.number().int().positive(),
+  state: z.enum(['CURRENT', 'RENEWAL_REQUIRED', 'ON_HOLD']), case_revision: z.number().int().min(0),
+  admission_expires_at: z.string().datetime({ offset: true }).nullable(),
+  renewal_due: z.boolean().nullable(), new_actions_allowed: z.boolean(),
+}).strict()).superRefine((items, ctx) => {
+  const seen = new Set<string>()
+  for (const [index, item] of items.entries()) {
+    if (seen.has(item.application_id)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: [index, 'application_id'], message: 'Duplicate monitoring case.' })
+    seen.add(item.application_id)
+  }
+})
 export type PortalSnapshot = {
+  stage2_access?: Stage2Access;
+  offering_access?: OfferingAccess;
+  rehearsal?: { version: 1; environment: 'TESTNET'; mode: 'SYNTHETIC_COMPLIANCE'; actor_id: string; operating_context: PortalOperatingContext };
   actor: { id: string; email: string; display_name: string | null; can_review: boolean };
   applications: PortalApplication[]; organisations: PortalOrganisation[];
   products: PortalProduct[]; subscriptions: PortalSubscription[]; events: PortalEvent[];
   requests?: { key: string; command: string }[];
   accounts?: PortalInvestmentAccount[]; entity_investment_accounts?: PortalEntityInvestmentAccount[];
   product_eligibility?: PortalProductEligibility[]; organisation_mandates?: PortalOrganisationMandate[];
+  entity_product_eligibility?: PortalEntityProductEligibility[];
+  product_appointments?: PortalProductServiceAppointment[];
+  product_appointment_candidates?: PortalProductAppointmentCandidate[];
   investing_representative_mandates?: PortalInvestingRepresentativeMandate[]; operating_context?: PortalOperatingContext;
   mandate_queue_available?: boolean; mandate_queue_blocked_reason?: 'MFA_REQUIRED' | 'NOT_ADMITTED' | null;
   entity_account_route_available?: boolean; entity_account_blocked_reason?: 'NOT_ADMITTED' | null;
   entity_mandate_queue_available?: boolean; entity_mandate_queue_blocked_reason?: 'MFA_REQUIRED' | 'NOT_ADMITTED' | null;
+  customer_monitoring?: PortalCustomerMonitoring[];
   funding?: FundingSnapshot;
 }
 export type PortalPageData = { user: { id: string; email: string }; snapshot: PortalSnapshot }
@@ -140,6 +283,32 @@ const positive = z.string().regex(/^[1-9][0-9]{0,19}$/)
 const country = z.string().regex(/^[A-Z]{2}$/)
 const hash = z.string().regex(/^[0-9a-f]{64}$/)
 export const evidenceSchema = z.object({ id, kind: z.enum(['IDENTITY', 'ADDRESS', 'COMPANY', 'BENEFICIAL_OWNERS']), title: text(1, 160), storage_path: text(1, 400), sha256: hash, size: z.number().int().min(1).max(4_194_304), mime_type: z.enum(['application/pdf', 'image/png', 'image/jpeg']) }).strict()
+export const ownershipControlRelationshipSchema = z.object({
+  id, party_type: z.enum(['PERSON', 'ENTITY']), legal_name: text(2, 160), registration_reference: text(0, 100),
+  country, relationship: z.enum(['DIRECT_OWNER', 'INDIRECT_OWNER', 'CONTROLLER']),
+  ownership_basis_points: z.number().int().min(0).max(10_000), control_basis: text(20, 1000),
+  effective_on: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(value => {
+    const date = new Date(`${value}T00:00:00.000Z`)
+    return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value && date.getTime() <= Date.now()
+  }),
+  change_reason: text(20, 500), evidence_document_id: id,
+}).strict().superRefine((value, ctx) => {
+  if (value.party_type === 'ENTITY' && value.registration_reference.length < 3) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['registration_reference'], message: 'An entity registration reference is required.' })
+  if (value.relationship !== 'CONTROLLER' && value.ownership_basis_points === 0) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['ownership_basis_points'], message: 'An ownership relationship needs a non-zero percentage.' })
+})
+const ownershipControlFields = z.object({
+  ownership_control: z.array(ownershipControlRelationshipSchema).min(1).max(20).superRefine((value, ctx) => {
+    const ids = new Set<string>()
+    let directBasisPoints = 0
+    for (const [index, relationship] of value.entries()) {
+      if (ids.has(relationship.id)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: [index, 'id'], message: 'Relationship IDs must be unique.' })
+      ids.add(relationship.id)
+      if (relationship.relationship === 'DIRECT_OWNER') directBasisPoints += relationship.ownership_basis_points
+    }
+    if (directBasisPoints > 10_000) ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Direct ownership cannot exceed 100%.' })
+  }),
+  ownership_change_reason: text(20, 500),
+})
 const historicalEvidenceSchema = evidenceSchema.omit({ storage_path: true, sha256: true }).extend({ claimed_sha256: hash }).strict()
 export const applicationDocumentVersionsSchema = z.object({
   application_id: id,
@@ -148,42 +317,175 @@ export const applicationDocumentVersionsSchema = z.object({
 export const applicationDocumentLookupSchema = historicalEvidenceSchema.extend({
   application_id: id, revision: z.number().int().positive(), storage_path: text(1, 400),
 }).strip()
+/** Exact proposal evidence only; not the entity's admission or provider history. */
+export const investingProposalDocumentLookupSchema = z.object({
+  mandate_id: id, mandate_revision: z.number().int().positive(), proposal_hash: hash,
+  applicant_user_id: id, document: evidenceSchema.extend({ kind: z.literal('COMPANY') }).strict(),
+  validation_state: z.enum(['SYNTHETIC_UNSCANNED', 'SCANNED_CLEAN']),
+}).strict()
 export type ApplicationDocumentVersions = z.infer<typeof applicationDocumentVersionsSchema>
 export type HistoricalEvidenceDocument = z.infer<typeof historicalEvidenceSchema>
 export const legacyApplicationDetailsSchema = z.object({ full_name: text(2, 120), country, investor_type: z.enum(['INDIVIDUAL', 'ENTITY']), company_name: text(0, 160), registration_reference: text(0, 100), source_of_funds: text(20, 2000), beneficial_owners: text(0, 2000), experience: text(10, 2000), documents: z.array(evidenceSchema).min(1).max(8), test_data_acknowledged: z.literal(true), details_version: z.never().optional(), business_activities: z.never().optional(), representative_position: z.never().optional(), authority_basis: z.never().optional() }).strict()
 export const wealthManagerApplicationDetailsV2Schema = z.object({ details_version: z.literal(2), full_name: text(2, 120), country, company_name: text(3, 160), registration_reference: text(3, 100), beneficial_owners: text(20, 2000), business_activities: text(20, 2000), representative_position: text(2, 160), authority_basis: text(20, 2000), documents: z.array(evidenceSchema).min(1).max(8), test_data_acknowledged: z.literal(true), investor_type: z.never().optional(), source_of_funds: z.never().optional(), experience: z.never().optional() }).strict()
-export const applicationDetailsSchema = z.union([legacyApplicationDetailsSchema, wealthManagerApplicationDetailsV2Schema])
-export const applicationDraftDetailsSchema = z.union([legacyApplicationDetailsSchema.partial(), wealthManagerApplicationDetailsV2Schema.partial()])
-export const productTermsSchema = z.object({ asset_type: z.enum(['FUND', 'REAL_ESTATE']), name: text(3, 120), issuer_name: text(3, 160), summary: text(30, 600), strategy: text(30, 4000), share_class: text(1, 80), currency: z.literal('ZAR_TEST'), unit_price_minor: positive, cap_units: positive, minimum_units: positive, pricing_basis: text(10, 1200), fees: text(10, 1200), redemption_terms: text(20, 2400), eligible_countries: z.array(country).min(1).max(30), eligible_investor_types: z.array(z.enum(['INDIVIDUAL', 'ENTITY'])).min(1).max(2), property_address: text(0, 300), property_valuation_minor: z.string().regex(/^(0|[1-9][0-9]{0,19})$/), rental_income_policy: text(0, 2000), documents: z.object({ memorandum: text(50, 12000), risks: text(50, 12000), subscription_terms: text(50, 12000) }).strict() }).strict().superRefine((v, ctx) => {
-  if (/^[1-9][0-9]{0,19}$/.test(v.minimum_units) && /^[1-9][0-9]{0,19}$/.test(v.cap_units) && BigInt(v.minimum_units) > BigInt(v.cap_units)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['minimum_units'], message: 'Minimum subscription must fit within the fund capacity.' })
+function ownershipEvidenceMatches(value: { ownership_control: OwnershipControlRelationship[]; documents: EvidenceDocument[] }, ctx: z.RefinementCtx) {
+  const evidenceIds = new Set(value.documents.filter(document => document.kind === 'BENEFICIAL_OWNERS').map(document => document.id))
+  for (const [index, relationship] of value.ownership_control.entries()) {
+    if (!evidenceIds.has(relationship.evidence_document_id)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['ownership_control', index, 'evidence_document_id'], message: 'Reference a selected beneficial-ownership evidence file.' })
+  }
+}
+export const wealthManagerApplicationDetailsV3Schema = wealthManagerApplicationDetailsV2Schema.omit({ details_version: true }).extend({ details_version: z.literal(3), ...ownershipControlFields.shape }).strict().superRefine(ownershipEvidenceMatches)
+export const entityInvestorApplicationDetailsV3Schema = legacyApplicationDetailsSchema.omit({ details_version: true, investor_type: true }).extend({ details_version: z.literal(3), investor_type: z.literal('ENTITY'), ...ownershipControlFields.shape }).strict().superRefine(ownershipEvidenceMatches)
+export const applicationDetailsSchema = z.union([legacyApplicationDetailsSchema, wealthManagerApplicationDetailsV2Schema, wealthManagerApplicationDetailsV3Schema, entityInvestorApplicationDetailsV3Schema])
+export const applicationDraftDetailsSchema = z.union([legacyApplicationDetailsSchema.partial(), wealthManagerApplicationDetailsV2Schema.partial(), wealthManagerApplicationDetailsV3Schema.innerType().partial(), entityInvestorApplicationDetailsV3Schema.innerType().partial()])
+const productTermsBaseSchema = z.object({ name: text(3, 120), issuer_name: text(3, 160), summary: text(30, 600), strategy: text(30, 4000), share_class: text(1, 80), unit_price_minor: positive, cap_units: positive, minimum_units: positive, pricing_basis: text(10, 1200), fees: text(10, 1200), redemption_terms: text(20, 2400), eligible_countries: z.array(country).min(1).max(30), eligible_investor_types: z.array(z.enum(['INDIVIDUAL', 'ENTITY'])).min(1).max(2), property_address: text(0, 300), property_valuation_minor: z.string().regex(/^(0|[1-9][0-9]{0,19})$/), rental_income_policy: text(0, 2000), documents: z.object({ memorandum: text(50, 12000), risks: text(50, 12000), subscription_terms: text(50, 12000) }).strict() })
+const legacyProductTermsSchema = productTermsBaseSchema.extend({ asset_type: z.enum(['FUND', 'REAL_ESTATE']), currency: z.literal('ZAR_TEST') }).strict()
+const fundTermsV2Schema = productTermsBaseSchema.extend({
+  asset_type: z.literal('FUND'), currency: z.literal('TST'), terms_version: z.literal(2), settlement_decimals: z.literal(6),
+  fund: z.object({
+    mandate: text(30, 4000), class_rights: text(20, 2400),
+    nav: z.object({ valuation_method: text(20, 2000), frequency: z.enum(['DAILY', 'WEEKLY', 'MONTHLY']), pricing_cutoff: text(10, 300), correction_policy: text(20, 2000) }).strict(),
+    dealing: z.object({ subscription_frequency: z.enum(['DAILY', 'WEEKLY', 'MONTHLY']), redemption_frequency: z.enum(['DAILY', 'WEEKLY', 'MONTHLY', 'QUARTERLY']), notice_days: z.number().int().min(0).max(365), settlement_days: z.number().int().min(0).max(30) }).strict(),
+    fees: z.object({ management_bps: z.number().int().min(0).max(10_000), performance_bps: z.number().int().min(0).max(10_000), other_fees: text(10, 2000) }).strict(),
+    liquidity: z.object({ lockup_days: z.number().int().min(0).max(3650), gate_bps: z.number().int().min(0).max(10_000), suspension_policy: text(20, 2000) }).strict(),
+    distributions: z.object({ frequency: z.enum(['NONE', 'MONTHLY', 'QUARTERLY', 'ANNUALLY']), policy: text(20, 2000) }).strict(),
+    redemption: z.object({ price_basis: z.literal('NAV'), conditions: text(20, 2400) }).strict(),
+  }).strict(),
+}).strict()
+const realEstateTermsV2Schema = productTermsBaseSchema.extend({
+  asset_type: z.literal('REAL_ESTATE'), currency: z.literal('TST'), terms_version: z.literal(2), settlement_decimals: z.literal(6),
+  real_estate: z.object({
+    spv: z.object({ legal_name: text(3, 160), registration_reference: text(3, 100), jurisdiction: country, interest_rights: text(20, 2400) }).strict(),
+    property: z.object({ title_evidence_reference: text(10, 400), control_evidence_reference: text(10, 400), valuation_method: text(20, 2000), valuation_frequency: z.enum(['QUARTERLY', 'ANNUALLY']), correction_policy: text(20, 2000) }).strict(),
+    financing: z.object({ debt_policy: text(20, 2000), lender_consent_policy: text(20, 2000) }).strict(),
+    cashflow: z.object({ rent_policy: text(20, 2000), expense_policy: text(20, 2000), reserve_policy: text(20, 2000), distribution_policy: text(20, 2000) }).strict(),
+    governance: z.object({ consent_rights: text(20, 2000), voting_policy: text(20, 2000) }).strict(),
+    exits: z.object({ eligible_transfer_policy: text(20, 2400), disposal_liquidation_policy: text(20, 2400) }).strict(),
+  }).strict(),
+}).strict()
+export const productTermsSchema = z.union([legacyProductTermsSchema, fundTermsV2Schema, realEstateTermsV2Schema]).superRefine((v, ctx) => {
+  if (/^[1-9][0-9]{0,19}$/.test(v.minimum_units) && /^[1-9][0-9]{0,19}$/.test(v.cap_units) && BigInt(v.minimum_units) > BigInt(v.cap_units)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['minimum_units'], message: 'Minimum subscription must fit within the offering capacity.' })
   if (v.asset_type === 'REAL_ESTATE' && (v.property_address.length < 10 || !/^[1-9][0-9]{0,19}$/.test(v.property_valuation_minor) || v.rental_income_policy.length < 20)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['property_address'], message: 'Provide property, valuation and rental-income terms.' })
+  if (v.asset_type === 'FUND' && v.currency === 'TST') {
+    for (const field of ['strategy', 'pricing_basis', 'fees', 'redemption_terms'] as const) {
+      if (v[field] !== FUND_V2_CANONICAL_REFERENCES[field]) ctx.addIssue({ code: z.ZodIssueCode.custom, path: [field], message: 'The authoritative fund policy reference must not be edited.' })
+    }
+    if (containsLegacyDenomination(v)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['fund'], message: 'A v2 fund package cannot retain ZAR_TEST references.' })
+  }
+  if (v.asset_type === 'REAL_ESTATE' && v.currency === 'TST') {
+    for (const field of ['strategy', 'pricing_basis', 'fees', 'redemption_terms', 'rental_income_policy'] as const) {
+      if (v[field] !== REAL_ESTATE_V2_CANONICAL_REFERENCES[field]) ctx.addIssue({ code: z.ZodIssueCode.custom, path: [field], message: 'The authoritative property policy reference must not be edited.' })
+    }
+    if (containsLegacyDenomination(v)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['real_estate'], message: 'A v2 property package cannot retain ZAR_TEST references.' })
+    if (v.real_estate.exits.eligible_transfer_policy === v.real_estate.exits.disposal_liquidation_policy) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['real_estate', 'exits'], message: 'Interest transfer and property liquidation must describe different outcomes.' })
+  }
+})
+/** Historical v1 records remain readable; all new product writes use typed TST packages. */
+export const writableProductTermsSchema = productTermsSchema.refine(v => v.asset_type === 'FUND' ? isFundTermsV2(v as ProductTerms) : isRealEstateTermsV2(v as ProductTerms), {
+  message: 'Upgrade this historical draft to a typed six-decimal TST package before saving or submitting.',
 })
 export const reviewChecks = z.object({ identity: z.boolean(), ownership: z.boolean(), screening: z.boolean(), suitability: z.boolean() }).strict()
 export const offeringChecks = z.object({ issuer: z.boolean(), terms: z.boolean(), disclosures: z.boolean(), eligibility: z.boolean() }).strict()
 export const productEligibilityChecks = z.object({ identity: z.boolean(), product_fit: z.boolean(), restrictions: z.boolean(), source_of_funds: z.boolean() }).strict()
+export const entityProductEligibilitySchema = z.object({
+  id, investment_account_id: id, product_id: id, organisation_id: id,
+  account_kind: z.literal('ENTITY'), offering_revision_id: id,
+  application_revision: z.number().int().positive(), product_revision: z.number().int().positive(),
+  terms_hash: hash, revision: z.number().int().positive(),
+  status: z.enum(['SUBMITTED', 'CHANGES_REQUIRED', 'APPROVED', 'REJECTED', 'REVOKED']),
+  investor_statement: text(20, 2000), submitted_at: z.string().datetime({ offset: true }),
+  reviewed_at: z.string().datetime({ offset: true }).nullable(), reviewer_id: id.nullable(),
+  review_notes: text(20, 3000).nullable(), review_checks: productEligibilityChecks.partial(),
+  approved_until: z.string().datetime({ offset: true }).nullable(),
+  effective: z.boolean(), can_decide: z.boolean(), can_approve: z.boolean(), can_revoke: z.boolean(),
+  entity_party_id: id, entity_name: text(3, 160), representative_user_id: id,
+  representative_mandate_id: id, mandate_cycle: z.number().int().positive(), mandate_revision: z.number().int().positive(),
+  decision_appointment_id: id.nullable(), decision_appointment_revision: z.number().int().positive().nullable(),
+  provider_mode: z.literal('MANUAL_TEST_REVIEW'), next_owner: z.enum(['APPLICANT', 'COMPLIANCE', 'NONE']),
+  can_request: z.boolean(), blocked_reason: text(1, 120).nullable(), product_name: text(1, 160).optional(),
+  investor_application: z.object({
+    id, revision: z.number().int().positive(), status: z.enum(['DRAFT', 'SUBMITTED', 'CHANGES_REQUIRED', 'APPROVED', 'REJECTED']),
+    approved_until: z.string().datetime({ offset: true }).nullable(), details: applicationDetailsSchema,
+  }).strict().nullable().optional(),
+}).strict().superRefine((value, ctx) => {
+  if ((value.decision_appointment_id === null) !== (value.decision_appointment_revision === null)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['decision_appointment_id'], message: 'The decision appointment must have both identity and revision.' })
+  }
+  if (value.status !== 'SUBMITTED' && (!value.decision_appointment_id || !value.decision_appointment_revision
+    || !value.reviewer_id || !value.reviewed_at || !value.review_notes)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['status'], message: 'A reviewed entity case requires its appointment, reviewer, time and reason.' })
+  }
+  if (value.status === 'SUBMITTED' && (value.decision_appointment_id !== null || value.decision_appointment_revision !== null
+    || value.reviewer_id !== null || value.reviewed_at !== null || value.review_notes !== null || value.approved_until !== null
+    || Object.keys(value.review_checks).length !== 0)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['status'], message: 'A submitted entity case cannot carry an earlier decision.' })
+  }
+  if (value.status === 'APPROVED' && (!value.approved_until || !value.decision_appointment_id
+    || !value.reviewer_id || !(['identity', 'product_fit', 'restrictions', 'source_of_funds'] as const).every(field => value.review_checks[field] === true)
+    || Object.keys(value.review_checks).length !== 4)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['status'], message: 'An approved entity decision requires its complete review and appointment evidence.' })
+  }
+  if (value.effective && value.status !== 'APPROVED') {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['effective'], message: 'Only an approved decision can be current.' })
+  }
+  if (value.investor_application && (isWealthManagerDetailsV2(value.investor_application.details)
+    || value.investor_application.details.investor_type !== 'ENTITY')) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['investor_application'], message: 'An entity case cannot contain another admission capacity.' })
+  }
+})
+/** Missing, malformed or duplicate records are unavailable, not an empty authorised queue. */
+export function validatedEntityProductEligibility(snapshot: Pick<PortalSnapshot, 'entity_product_eligibility'>): PortalEntityProductEligibility[] | undefined {
+  const parsed = z.array(entityProductEligibilitySchema).safeParse(snapshot.entity_product_eligibility)
+  if (!parsed.success || new Set(parsed.data.map(item => item.id)).size !== parsed.data.length
+    || new Set(parsed.data.map(item => `${item.investment_account_id}:${item.product_id}`)).size !== parsed.data.length) return undefined
+  return parsed.data
+}
+const productEligibilityRequestSchema = z.object({
+  product_id: id, investment_account_id: id, expected_revision: z.number().int().min(0), investor_statement: text(20, 2000),
+  representative_mandate_id: id.optional(), expected_mandate_revision: z.number().int().positive().optional(),
+  expected_mandate_cycle: z.number().int().positive().optional(), expected_product_revision: z.number().int().positive().optional(),
+  offering_revision_id: id.optional(), terms_hash: hash.optional(),
+}).strict().superRefine((value, ctx) => {
+  const fields = ['representative_mandate_id', 'expected_mandate_revision', 'expected_mandate_cycle', 'expected_product_revision', 'offering_revision_id', 'terms_hash'] as const
+  const supplied = fields.filter(field => value[field] !== undefined)
+  if (supplied.length !== 0 && supplied.length !== fields.length) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['representative_mandate_id'], message: 'An entity request requires every mandate and offering binding.' })
+  }
+})
 export const representativeMandateChecks = z.object({ appointment: z.boolean(), evidence: z.boolean(), scope: z.boolean() }).strict()
 export const investingRepresentativeChecks = z.object({ appointment: z.boolean(), legal_entity: z.boolean(), scope: z.boolean() }).strict()
+export const productServiceAppointmentChecks = z.object({ appointment: z.boolean(), evidence: z.boolean(), scope: z.boolean() }).strict()
 export const portalCommandSchema = z.discriminatedUnion('command', [
   z.object({ command: z.literal('submit_application'), key: id, payload: z.object({ persona: z.enum(['INVESTOR', 'WEALTH_MANAGER']), expected_revision: z.number().int().min(0), details: applicationDetailsSchema }).strict() }).strict(),
   z.object({ command: z.literal('review_application'), key: id, payload: z.object({ application_id: id, expected_revision: z.number().int().positive(), decision: z.enum(['APPROVED', 'CHANGES_REQUIRED', 'REJECTED']), notes: text(20, 3000), checks: reviewChecks }).strict() }).strict(),
+  z.object({ command: z.literal('set_customer_monitoring'), key: id, payload: z.object({ application_id: id, expected_revision: z.number().int().min(0), state: z.enum(['CURRENT', 'RENEWAL_REQUIRED', 'ON_HOLD']), evidence_reference: text(20, 400), reason: text(20, 2000), checks: reviewChecks }).strict().superRefine((value, ctx) => {
+    if (value.state === 'CURRENT' && !Object.values(value.checks).every(Boolean)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['checks'], message: 'All four checks require current evidence before removing a restriction.' })
+  }) }).strict(),
   z.object({ command: z.literal('create_investment_account'), key: id, payload: z.object({ application_id: id }).strict() }).strict(),
   z.object({ command: z.literal('create_entity_investment_account'), key: id, payload: z.object({ application_id: id }).strict() }).strict(),
-  z.object({ command: z.literal('request_investing_representative_mandate'), key: id, payload: z.object({ investment_account_id: id, expected_revision: z.number().int().min(0), evidence_reference: text(20, 400), appointment_document_id: id, requested_until: z.string().datetime({ offset: false }).regex(/Z$/) }).strict() }).strict(),
+  z.object({ command: z.literal('request_investing_representative_mandate'), key: id, payload: z.object({ investment_account_id: id, expected_revision: z.number().int().min(0), evidence_reference: text(20, 400), appointment_document_id: id, requested_until: z.string().datetime({ offset: false }).regex(/Z$/), representative_email: z.string().trim().email().max(254).optional() }).strict() }).strict(),
+  z.object({ command: z.literal('respond_investing_representative_proposal'), key: id, payload: z.object({ mandate_id: id, expected_revision: z.number().int().positive(), proposal_hash: hash, decision: z.enum(['ACCEPT', 'DECLINE']) }).strict() }).strict(),
   z.object({ command: z.literal('review_investing_representative_mandate'), key: id, payload: z.object({ mandate_id: id, expected_revision: z.number().int().positive(), decision: z.enum(['APPROVED', 'CHANGES_REQUIRED', 'REJECTED']), notes: text(20, 3000), checks: investingRepresentativeChecks }).strict() }).strict(),
   z.object({ command: z.literal('apply_investing_representative_mandate'), key: id, payload: z.object({ mandate_id: id, expected_revision: z.number().int().positive() }).strict() }).strict(),
   z.object({ command: z.literal('revoke_investing_representative_mandate'), key: id, payload: z.object({ mandate_id: id, expected_revision: z.number().int().positive(), reason: text(20, 1000) }).strict() }).strict(),
-  z.object({ command: z.literal('request_product_eligibility'), key: id, payload: z.object({ product_id: id, investment_account_id: id, expected_revision: z.number().int().min(0), investor_statement: text(20, 2000) }).strict() }).strict(),
+  z.object({ command: z.literal('request_product_eligibility'), key: id, payload: productEligibilityRequestSchema }).strict(),
   z.object({ command: z.literal('review_product_eligibility'), key: id, payload: z.object({ eligibility_case_id: id, expected_revision: z.number().int().positive(), decision: z.enum(['APPROVED', 'CHANGES_REQUIRED', 'REJECTED']), notes: text(20, 3000), checks: productEligibilityChecks }).strict() }).strict(),
   z.object({ command: z.literal('revoke_product_eligibility'), key: id, payload: z.object({ eligibility_case_id: id, expected_revision: z.number().int().positive(), reason: text(20, 2000) }).strict() }).strict(),
+  z.object({ command: z.literal('request_product_service_appointment'), key: id, payload: z.object({ product_id: id, role: z.enum(['IssuerFundManager', 'ComplianceOfficer']), appointee_user_id: id, native_membership_id: id, expected_product_revision: z.number().int().positive(), evidence_reference: text(20, 400), requested_until: z.string().datetime({ offset: false }).regex(/Z$/) }).strict() }).strict(),
+  z.object({ command: z.literal('review_product_service_appointment'), key: id, payload: z.object({ appointment_id: id, expected_revision: z.number().int().positive(), decision: z.enum(['APPROVED', 'CHANGES_REQUIRED', 'REJECTED']), notes: text(20, 3000), checks: productServiceAppointmentChecks }).strict() }).strict(),
+  z.object({ command: z.literal('apply_product_service_appointment'), key: id, payload: z.object({ appointment_id: id, expected_revision: z.number().int().positive() }).strict() }).strict(),
+  z.object({ command: z.literal('revoke_product_service_appointment'), key: id, payload: z.object({ appointment_id: id, expected_revision: z.number().int().positive(), reason: text(20, 1000) }).strict() }).strict(),
   z.object({ command: z.literal('review_representative_mandate'), key: id, payload: z.object({ mandate_id: id, expected_revision: z.number().int().positive(), decision: z.enum(['APPROVED', 'CHANGES_REQUIRED', 'REJECTED']), notes: text(20, 3000), checks: representativeMandateChecks }).strict() }).strict(),
   z.object({ command: z.literal('apply_representative_mandate'), key: id, payload: z.object({ mandate_id: id, expected_revision: z.number().int().positive() }).strict() }).strict(),
   z.object({ command: z.literal('revoke_representative_mandate'), key: id, payload: z.object({ mandate_id: id, expected_revision: z.number().int().positive(), reason: text(20, 1000) }).strict() }).strict(),
-  z.object({ command: z.literal('create_product'), key: id, payload: z.object({ organisation_id: id, terms: productTermsSchema }).strict() }).strict(),
-  z.object({ command: z.literal('save_product'), key: id, payload: z.object({ product_id: id, expected_revision: z.number().int().positive(), terms: productTermsSchema }).strict() }).strict(),
+  z.object({ command: z.literal('create_product'), key: id, payload: z.object({ organisation_id: id, terms: writableProductTermsSchema }).strict() }).strict(),
+  z.object({ command: z.literal('save_product'), key: id, payload: z.object({ product_id: id, expected_revision: z.number().int().positive(), terms: writableProductTermsSchema }).strict() }).strict(),
   z.object({ command: z.literal('submit_product'), key: id, payload: z.object({ product_id: id, expected_revision: z.number().int().positive() }).strict() }).strict(),
-  z.object({ command: z.literal('review_product'), key: id, payload: z.object({ product_id: id, expected_revision: z.number().int().positive(), decision: z.enum(['APPROVED', 'CHANGES_REQUIRED']), notes: text(20, 3000), checks: offeringChecks }).strict() }).strict(),
+  z.object({ command: z.literal('reopen_offering_review'), key: id, payload: z.object({ product_id: id, expected_revision: z.number().int().positive(), reason: text(20, 1000) }).strict() }).strict(),
+  z.object({ command: z.literal('begin_offering_amendment'), key: id, payload: z.object({ product_id: id, expected_revision: z.number().int().positive(), reason: text(20, 1000) }).strict() }).strict(),
+  z.object({ command: z.literal('review_product'), key: id, payload: z.object({ product_id: id, offering_revision_id: id, expected_revision: z.number().int().positive(), terms_hash: hash, decision: z.enum(['APPROVED', 'CHANGES_REQUIRED']), notes: text(20, 3000), checks: offeringChecks }).strict() }).strict(),
+  z.object({ command: z.literal('review_offering_issuer'), key: id, payload: z.object({ product_id: id, offering_revision_id: id, expected_revision: z.number().int().positive(), terms_hash: hash, decision: z.enum(['APPROVED', 'CHANGES_REQUIRED']), notes: text(20, 3000), checks: z.object({ issuer_authority: z.boolean(), terms: z.boolean(), rights: z.boolean() }).strict() }).strict() }).strict(),
   z.object({ command: z.literal('publish_product'), key: id, payload: z.object({ product_id: id, expected_revision: z.number().int().positive() }).strict() }).strict(),
-  z.object({ command: z.literal('subscribe'), key: id, payload: z.object({ product_id: id, investment_account_id: id.optional(), expected_revision: z.number().int().positive(), terms_hash: hash, units: positive, accepted_documents: z.literal(true), accepted_risks: z.literal(true) }).strict() }).strict(),
+  z.object({ command: z.literal('subscribe'), key: id, payload: z.object({ product_id: id, offering_revision_id: id, investment_account_id: id.optional(), expected_revision: z.number().int().positive(), terms_hash: hash, units: positive, accepted_documents: z.literal(true), accepted_risks: z.literal(true) }).strict() }).strict(),
   z.object({ command: z.literal('cancel_subscription'), key: id, payload: z.object({ subscription_id: id }).strict() }).strict(),
   ...fundingCommandOptions,
 ])
@@ -193,9 +495,16 @@ export function formatTestMoney(minor: string): string {
   const amount = BigInt(minor)
   return `${(amount / 100n).toLocaleString('en-ZA')}.${(amount % 100n).toString().padStart(2, '0')} ZAR_TEST`
 }
+export function isOfferingSubscribable(product: PortalProduct): boolean {
+  const pkg = product.offering_package
+  return product.status === 'PUBLISHED' && pkg?.origin === 'SUBMITTED' && pkg.subscribable === true
+    && pkg.technical_readiness_status === 'VERIFIED' && pkg.issuer_status === 'APPROVED'
+    && pkg.compliance_status === 'APPROVED' && pkg.terms_hash === product.terms_hash
+}
 export function subscriptionQuote(product: PortalProduct, units: string): { amount_minor: string } | { error: string } {
   if (!/^[1-9][0-9]{0,19}$/.test(units)) return { error: 'Enter a positive whole-unit quantity.' }
   if (product.status !== 'PUBLISHED') return { error: 'This offering is not open for subscriptions.' }
+  if (!isOfferingSubscribable(product)) return { error: 'This offering lacks a current approved package and independently verified technical readiness; subscriptions are unavailable.' }
   const quantity = BigInt(units)
   if (quantity < BigInt(product.terms.minimum_units)) return { error: 'The requested quantity is below the minimum subscription.' }
   if (quantity + BigInt(product.reserved_units) > BigInt(product.terms.cap_units)) return { error: 'The requested quantity exceeds the remaining capacity.' }
