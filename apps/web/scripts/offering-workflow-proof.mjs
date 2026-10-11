@@ -2113,6 +2113,18 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
         begin_offering_amendment: 'Synthetic TEST approved package opened for a governed terms amendment. Prior decisions remain immutable; no order, funding or ownership changed.',
         reopen_offering_review: 'Synthetic TEST approved offering reopened for fresh issuer and Compliance review. Prior decisions preserved; no publication, order or funding created.',
       }[input.command]
+      if (eventSummary && !isDeepStrictEqual(event.summary, eventSummary)) {
+        const auditCommand = [...admissionCommands, ...allCommands].includes(input.command) ? input.command : 'OTHER'
+        const auditAsset = products.find(item => item.p.id === input.subject_id || item.p.id === input.payload.product_id)?.asset
+        const auditFingerprint = value => typeof value === 'string'
+          ? { category: 'STRING', sha256: createHash('sha256').update(value, 'utf8').digest('hex'), bytes: Buffer.byteLength(value, 'utf8') }
+          : { category: value === null ? 'NULL' : value === undefined ? 'MISSING' : 'OTHER', sha256: null, bytes: null }
+        console.log('BX1_OFFERING_AUDIT_MISMATCH_RECEIPT', JSON.stringify({
+          command: auditCommand,
+          asset: ['FUND', 'REAL_ESTATE'].includes(auditAsset) ? auditAsset : 'NOT_PRODUCT',
+          actual: auditFingerprint(event.summary), expected: auditFingerprint(eventSummary),
+        }))
+      }
       if (eventSummary) eq(event.summary, eventSummary, 'event retains exact canonical mandatory audit summary')
       else {
         const a = added['bx1_portal.product_service_appointments'].find(value => value.id === input.subject_id)
