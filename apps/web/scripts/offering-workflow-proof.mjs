@@ -446,7 +446,7 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
     phase = 'drift-fenced-feature-install'
     const sourceHash = text => createHash('sha256').update(text, 'utf8').digest('hex')
     const normalizedBody = text => text.replaceAll('\r\n', '\n').trim()
-    const mandateLeafSignature = 'bx1_portal.representative_mandate_effective_at(uuid,timestamptz)'
+    const mandateLeafSignature = 'bx1_portal.representative_mandate_effective_at(uuid,timestamp with time zone)'
     const mandateLeafCatalog = () => scalar('select to_jsonb(p) from pg_proc p where p.oid=$1::regprocedure', [mandateLeafSignature])
     const originalMandateLeafCatalog = await mandateLeafCatalog()
     eq(sourceHash(normalizedBody(originalMandateLeafCatalog.prosrc)), '934f86f41419d13fa60ddc71f18efb8f2c3eedb21b5d9ae789a0c6903d830c1c', 'shared leaf has the exact effective original SQL body before cutover')
