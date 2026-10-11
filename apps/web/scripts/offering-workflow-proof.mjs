@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { isDeepStrictEqual } from 'node:util'
+import { createHash } from 'node:crypto'
 
 // Invoked only by the retained disposable GitHub PostgreSQL fixture, AFTER
 // admission795 and the committed representatives proof. No parent reinstall.
@@ -612,7 +613,69 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
     eq(standardEngineBefore.client_statement_timeout_ms, 15000, 'retained client startup config sets fifteen-second statement timeout')
     eq(standardEngineBefore.client_query_timeout_ms, 20000, 'STANDARD parity retains the actual pg twenty-second client deadline')
     let standardEngineScoped, initialStandardReadElapsedMs = null, initialStandardReadOutcome = 'NOT_STARTED'
-    await isolated(async () => {
+    // Diagnostic-only: retain the failed reproducer, original read and deadlines.
+    // Standalone planning estimates are NOT the nested SPI plan or call counts.
+    const normalizeDiagnosticSource = text => text.replaceAll('\r\n', '\n')
+    const diagnosticHash = text => createHash('sha256').update(text, 'utf8').digest('hex')
+    const appointmentSource = normalizeDiagnosticSource(await readFile(new URL('../../../supabase/migrations/20260928174847_stage3_product_service_appointments.sql', import.meta.url), 'utf8'))
+    const mandateSource = normalizeDiagnosticSource(await readFile(new URL('../../../supabase/migrations/20260923143713_stage2_customer_mandates.sql', import.meta.url), 'utf8'))
+    const ownershipSource = normalizeDiagnosticSource(await readFile(new URL('../../../supabase/migrations/20260924110922_stage2_beneficial_ownership_control.sql', import.meta.url), 'utf8'))
+    eq(diagnosticHash(appointmentSource), '02a37f7360196d34f5690f750ab9b1969aec8cebe6e54ba2fa7fdfbbd8382cd1', 'candidate migration is source-pinned')
+    eq(diagnosticHash(mandateSource), '026b010723bdfbf1a106dc3c91de7acb3266d520d53e1fb225b79eb41adbedb2', 'authority leaf migration is source-pinned')
+    eq(diagnosticHash(ownershipSource), '82f337301c92b060e933663620afdb517a947691ca5e0414a25cfc20db7116ad', 'retained ownership transformation is source-pinned')
+    const candidateMatches = [...appointmentSource.matchAll(/  select coalesce\(pg_catalog\.jsonb_agg\(candidate\.value[\s\S]*?\) candidate;/g)]
+    eq(candidateMatches.length, 1, 'retained STANDARD candidate SELECT has one exact source location')
+    const candidateBody = candidateMatches[0][0].trim()
+    eq(diagnosticHash(candidateBody), '01f62649ed1c14baba2bdaaea2b451f8fee9f0e412a7fde13d106d3fb5d906a8', 'complete candidate body is pinned before transformation')
+    eq(candidateBody.split('into candidates from').length - 1, 1, 'remove only one procedural INTO')
+    eq([...candidateBody.matchAll(/\bc->>/g)].length, 2, 'exactly two candidate context scalar references')
+    eq(candidateBody.split('scoped_operator(c,p.organisation_id)').length - 1, 1, 'exactly one candidate context authority argument')
+    const candidateQuery = candidateBody.replace('into candidates from', 'from')
+      .replace(/\bc->>/g, () => '($1::jsonb)->>')
+      .replace('scoped_operator(c,p.organisation_id)', 'scoped_operator($1::jsonb,p.organisation_id)')
+    eq(diagnosticHash(candidateQuery), '79b0fadb87d7d18ebcc1bbd1a2e2dfebac38df7c17f5b482a9b022041fd3cebe', 'candidate joins/predicates/order/limit remain exact')
+    const authorityLeaf = name => {
+      const matches = [...mandateSource.matchAll(new RegExp(`create function bx1_portal\\.${name}\\([^\\n]+\\) returns boolean\\nlanguage sql volatile security definer set search_path='' as \\$\\$([\\s\\S]*?)\\$\\$;`, 'g'))]
+      eq(matches.length, 1, `${name}: exact retained SQL body/header appears once`)
+      return matches[0][1].trim()
+    }
+    const nativeLeaf = authorityLeaf('native_membership_effective_at')
+    eq(diagnosticHash(nativeLeaf), '7b7b3bd3dc807bf89c2fdc6d93522036c5bad509e487e862d95475d2e492a04f', 'native membership complete leaf body pinned')
+    const originalMandateLeaf = authorityLeaf('representative_mandate_effective_at')
+    eq(diagnosticHash(originalMandateLeaf), 'fcf98a8996afbbb6aee5e7a7d245beba0a5615a8cfe4a3a056d59ea10b2a55bd', 'original representative complete leaf body pinned')
+    const ownershipNeedle = "a.details->'details_version'='2'::jsonb"
+    truth(ownershipSource.includes("needle:='a.details->''details_version''=''2''::jsonb';")
+      && ownershipSource.includes("replacement:='bx1_portal.customer_admission_package_current(a.id)';"), 'retained ownership migration supplies the exact leaf replacement')
+    eq(originalMandateLeaf.split(ownershipNeedle).length - 1, 1, 'retained ownership leaf replacement occurs once')
+    const mandateLeaf = originalMandateLeaf.replace(ownershipNeedle, 'bx1_portal.customer_admission_package_current(a.id)')
+    eq(diagnosticHash(mandateLeaf), '934f86f41419d13fa60ddc71f18efb8f2c3eedb21b5d9ae789a0c6903d830c1c', 'effective representative leaf includes unchanged retained ownership predicate')
+    eq([...nativeLeaf.matchAll(/\btarget_membership\b/g)].length, 1, 'native leaf has one membership formal parameter')
+    eq([...nativeLeaf.matchAll(/\bas_of\b/g)].length, 1, 'native leaf has one time formal parameter')
+    eq([...mandateLeaf.matchAll(/\btarget_mandate\b/g)].length, 1, 'representative leaf has one mandate formal parameter')
+    eq([...mandateLeaf.matchAll(/\bas_of\b/g)].length, 4, 'representative leaf has four time formal references')
+    const nativeQuery = nativeLeaf.replace(/\btarget_membership\b/g, () => '$1::uuid').replace(/\bas_of\b/g, () => '$2::timestamptz')
+    const mandateQuery = mandateLeaf.replace(/\btarget_mandate\b/g, () => '$1::uuid').replace(/\bas_of\b/g, () => '$2::timestamptz')
+    eq(diagnosticHash(nativeQuery), '7151bcee1779dc3b50750125b98f9e9454d88e47b24e04956ee1b454ece2cfa4', 'native leaf query changes only two formal parameters')
+    eq(diagnosticHash(mandateQuery), '4a242c8abb8a3cd0ac49635fc3f4647e61fd42035784d256e612162ac92f27b8', 'representative leaf query changes only two formal parameters')
+    const diagnosticRelations = ['bx1_portal.products', 'bx1_portal.organisations', 'public.bx1_memberships', 'public.bx1_profiles', 'auth.users',
+      'bx1_portal.representative_mandates', 'bx1_portal.applications', 'bx1_portal.organisation_authority_bindings',
+      'public.bx1_organisations', 'bx1_private.person_principals', 'bx1_private.persons', 'auth.sessions', 'auth.mfa_factors']
+    const measurement = { fixture: 'disposable-cloud-PostgreSQL17', source_pins: {
+      candidate: diagnosticHash(appointmentSource), mandates: diagnosticHash(mandateSource), ownership: diagnosticHash(ownershipSource),
+      candidate_body: diagnosticHash(candidateBody), candidate_query: diagnosticHash(candidateQuery),
+      native_leaf: diagnosticHash(nativeLeaf), native_query: diagnosticHash(nativeQuery),
+      representative_leaf: diagnosticHash(mandateLeaf), representative_query: diagnosticHash(mandateQuery),
+    }, diagnostics: [], observer: [], cleanup: [], read: {}, interpretation: {
+      plans: 'standalone-non-ANALYZE-estimates-not-nested-SPI', authority_call_counts: 'NOT_MEASURED',
+      cumulative_statistics: 'may-be-cached-or-unflushed-use-current-transaction-counters',
+      counters: 'include-diagnostic-table-accesses-not-isolated-read-or-function-call-counts',
+      sampling: 'four-fixed-samples-cannot-rule-out-transient-waits', hosted_performance: 'NOT_MEASURED', cause: 'NOT_ESTABLISHED',
+    } }
+    const diagnosticCode = error => error?.code === 'ERR_ASSERTION' ? 'assertion'
+      : typeof error?.code === 'string' && /^[0-9A-Z]{5}$/.test(error.code) ? error.code : 'unavailable'
+    let originalStandardReadFailure = null
+    const recordDiagnosticFailure = (label, error) => measurement.cleanup.push({ label, outcome: 'FAILED', code: diagnosticCode(error) })
+    try { await isolated(async () => {
       // Observed hosted TEST/MAIN engine parity only, not a diagnosed JIT cause.
       // This is the sole setting change and rollback must restore its baseline.
       await db.query('set local jit=off')
@@ -639,15 +702,147 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
       eq(await scalar('select bx1_portal.representative_mandate_effective($1)', [mandate.id]), true, 'STANDARD fixture keeps unchanged global mandate authority effective')
       eq(await scalar('select bx1_portal.scoped_operator($1::jsonb,$2)', [JSON.stringify(manager), application.organisation_id]), true, 'STANDARD fixture passes unchanged scoped operator guard')
       eq(await scalar('select bx1_portal.is_operator($1)', [application.organisation_id]), true, 'STANDARD fixture passes unchanged core operator guard')
+      const measurementState = await state(), measurementFunctions = await functions(), measurementSecurity = await security()
+      const callerState = () => scalar("select jsonb_build_object('role',current_user,'claims',current_setting('request.jwt.claims',true))")
+      const beforeCaller = await callerState() // memory-only comparison; NEVER emitted.
+      const diagnosticQuery = async (label, run) => {
+        await db.query('savepoint offering_measurement_diagnostic')
+        let value, failure, restorationFailure
+        try { value = await run() } catch (error) { failure = error }
+        finally {
+          try {
+            await db.query('rollback to savepoint offering_measurement_diagnostic; release savepoint offering_measurement_diagnostic')
+            eq(await callerState(), beforeCaller, `${label}: exact owner/caller state restored`)
+            eq(await standardEngineConfig(), standardEngineScoped, `${label}: all engine/deadline settings unchanged`)
+          } catch (error) { restorationFailure = error; recordDiagnosticFailure(`${label}-restore`, error) }
+        }
+        measurement.diagnostics.push({ label, outcome: failure || restorationFailure ? 'FAILED' : 'RETURNED',
+          code: failure ? diagnosticCode(failure) : restorationFailure ? diagnosticCode(restorationFailure) : null,
+          ...(failure || restorationFailure ? {} : { value }) })
+        return failure || restorationFailure ? undefined : value
+      }
+      const numericInputs = () => scalar(`select jsonb_build_object(
+        'products',(select count(*) from bx1_portal.products), 'organisations',(select count(*) from bx1_portal.organisations),
+        'memberships',(select count(*) from public.bx1_memberships), 'profiles',(select count(*) from public.bx1_profiles), 'users',(select count(*) from auth.users),
+        'product_organisation_join',(select count(*) from bx1_portal.products p join bx1_portal.organisations o on o.id=p.organisation_id),
+        'role_membership_join',(select count(*) from bx1_portal.products p join bx1_portal.organisations o on o.id=p.organisation_id
+          join public.bx1_memberships m on m.organisation_id=o.reviewer_scope and m.role in ('IssuerFundManager','ComplianceOfficer')),
+        'static_candidate_join',(select count(*) from bx1_portal.products p join bx1_portal.organisations o on o.id=p.organisation_id
+          join public.bx1_memberships m on m.organisation_id=o.reviewer_scope and m.role in ('IssuerFundManager','ComplianceOfficer')
+          join public.bx1_profiles profile on profile.id=m.user_id join auth.users u on u.id=m.user_id and u.email is not null where profile.status='ACTIVE'))`)
+      const relationStatistics = () => scalar(`select jsonb_build_object('captured_at',clock_timestamp(),
+        'relations',(select jsonb_agg(jsonb_build_object('relation',c.oid::regclass::text,'reltuples',c.reltuples,'relpages',c.relpages,
+          'cumulative',jsonb_build_object('seq_scan',s.seq_scan,'seq_tup_read',s.seq_tup_read,'idx_scan',s.idx_scan,'idx_tup_fetch',s.idx_tup_fetch,
+            'n_live_tup',s.n_live_tup,'n_dead_tup',s.n_dead_tup,'n_mod_since_analyze',s.n_mod_since_analyze,'last_analyze',s.last_analyze,'last_autoanalyze',s.last_autoanalyze),
+          'transaction',jsonb_build_object('seq_scan',x.seq_scan,'seq_tup_read',x.seq_tup_read,'idx_scan',x.idx_scan,'idx_tup_fetch',x.idx_tup_fetch,
+            'n_tup_ins',x.n_tup_ins,'n_tup_upd',x.n_tup_upd,'n_tup_del',x.n_tup_del)) order by c.oid)
+          from pg_class c left join pg_stat_all_tables s on s.relid=c.oid left join pg_stat_xact_all_tables x on x.relid=c.oid
+          where c.oid=any($1::regclass[])),
+        'indexes',(select coalesce(jsonb_agg(jsonb_build_object('relation',i.indrelid::regclass::text,'index',i.indexrelid::regclass::text,
+          'valid',i.indisvalid,'ready',i.indisready,'definition',pg_get_indexdef(i.indexrelid),
+          'idx_scan',s.idx_scan,'idx_tup_read',s.idx_tup_read,'idx_tup_fetch',s.idx_tup_fetch) order by i.indexrelid),'[]'::jsonb)
+          from pg_index i left join pg_stat_all_indexes s on s.indexrelid=i.indexrelid where i.indrelid=any($1::regclass[])))`, [diagnosticRelations])
+      await diagnosticQuery('before-numeric-inputs', numericInputs)
+      await diagnosticQuery('before-relation-statistics', relationStatistics)
+      await diagnosticQuery('source-matches-installed-authority-leaves', async () => {
+        for (const [signature, expected] of [['bx1_portal.native_membership_effective_at(uuid,timestamptz)', nativeLeaf],
+          ['bx1_portal.representative_mandate_effective_at(uuid,timestamptz)', mandateLeaf]]) {
+          const installed = await scalar('select prosrc from pg_proc where oid=$1::regprocedure', [signature])
+          eq(normalizeDiagnosticSource(installed).trim(), expected, `${signature}: source-derived full leaf equals installed body`)
+        }
+        return { exact_installed_bodies: true }
+      })
+      const plan = async (query, values = [], generic = false) => {
+        const result = (await db.query(`explain (format json, costs true, verbose true, settings true${generic ? ', generic_plan true' : ''}) ${query}`, values)).rows[0]['QUERY PLAN']
+        truth(Buffer.byteLength(JSON.stringify(result), 'utf8') <= 32768, 'standalone planning receipt is bounded to32KiB')
+        return result
+      }
+      await diagnosticQuery('candidate-custom-plan', () => plan(candidateQuery, [JSON.stringify(manager)]))
+      await diagnosticQuery('candidate-generic-plan', () => plan(candidateQuery, [], true))
+      const leafInputs = await diagnosticQuery('leaf-plan-fixture-inputs', async () => {
+        const value = await scalar(`select jsonb_build_object(
+          'as_of',clock_timestamp(),'native_membership_id',m.native_membership_id)
+          from bx1_portal.representative_mandates m where m.id=$1`, [mandate.id])
+        eq(value?.native_membership_id, membership, 'leaf plans bind the exact original fixture membership')
+        truth(typeof value?.as_of === 'string' && value.as_of.length > 0, 'leaf plans bind the actual captured fixture time')
+        return value
+      })
+      await diagnosticQuery('native-membership-leaf-plan', () => {
+        truth(leafInputs, 'native leaf cannot substitute fabricated/null inputs after capture failure')
+        return plan(nativeQuery, [leafInputs.native_membership_id, leafInputs.as_of])
+      })
+      await diagnosticQuery('representative-mandate-leaf-plan', () => {
+        truth(leafInputs, 'representative leaf cannot substitute fabricated/null inputs after capture failure')
+        return plan(mandateQuery, [mandate.id, leafInputs.as_of])
+      })
+      await diagnosticQuery('pre-read-fixture-parity', async () => {
+        eq(await state(), measurementState, 'pre-read diagnostics change no exact fixture row')
+        eq(await functions(), measurementFunctions, 'pre-read diagnostics change no exact function/owner/ACL')
+        eq(await security(), measurementSecurity, 'pre-read diagnostics change no exact security object')
+        return { rows_functions_security_unchanged: true }
+      })
+      const observer = clients[1]
+      await admin(observer)
+      eq(await scalar('select pg_backend_pid()', [], observer), pids[2], 'diagnostic observer is the already-verified independent backend')
+      truth(pids[2] !== pids[0], 'diagnostic observer never queues behind read on the busy connection')
+      await db.query('savepoint offering_measured_public_read')
       const initialStandardReadStarted = performance.now()
-      let standardRead
+      let standardRead, stopped = false, timer, wake, inFlight
+      const snapshots = [1000, 3000, 6000, 10000].map(target_ms => ({ target_ms, outcome: 'PENDING' }))
+      const observerTask = (async () => {
+        for (const snapshot of snapshots) {
+          const delay = snapshot.target_ms - (performance.now() - initialStandardReadStarted)
+          if (!stopped && delay > 0) await new Promise(resolve => { wake = resolve; timer = setTimeout(resolve, delay) })
+          timer = undefined; wake = undefined
+          if (stopped) { snapshot.outcome = 'SKIPPED_SHORT_READ'; continue }
+          snapshot.sample_started_ms = performance.now() - initialStandardReadStarted
+          try {
+            inFlight = observer.query(`select jsonb_build_object('pid',a.pid,'state',a.state,'wait_event_type',a.wait_event_type,
+              'wait_event',a.wait_event,'blocker_pids',pg_blocking_pids(a.pid),
+              'locks',(select coalesce(jsonb_agg(to_jsonb(l) order by l.locktype,l.mode,l.relation,l.granted),'[]'::jsonb) from (
+                select locktype,mode,granted,database,relation,page,tuple,virtualxid,transactionid,classid,objid,objsubid
+                from pg_locks where pid=a.pid order by locktype,mode,relation,granted limit 32) l)) value
+              from pg_stat_activity a where a.pid=$1`, [pids[0]])
+            const result = await inFlight
+            snapshot.value = result.rows[0]?.value ?? null
+            snapshot.outcome = 'RETURNED'
+          } catch (error) { snapshot.outcome = 'FAILED'; snapshot.code = diagnosticCode(error) }
+          finally { inFlight = undefined }
+        }
+      })()
       try {
         standardRead = await read(1, manager, assured)
         initialStandardReadOutcome = 'RETURNED'
+      } catch (error) {
+        originalStandardReadFailure = error
+        initialStandardReadOutcome = 'FAILED'
       } finally {
         initialStandardReadElapsedMs = performance.now() - initialStandardReadStarted
         if (initialStandardReadOutcome === 'NOT_STARTED') initialStandardReadOutcome = 'FAILED'
+        stopped = true; if (timer) clearTimeout(timer); if (wake) wake()
+        await observerTask // includes any in-flight query; no abandoned work/timers.
+        measurement.observer = snapshots
+        measurement.read = { outcome: initialStandardReadOutcome, code: originalStandardReadFailure ? diagnosticCode(originalStandardReadFailure) : null,
+          helper_elapsed_ms: initialStandardReadElapsedMs, timing_scope: 'CI-helper-not-SQL-time-or-SLA', observer_closed: true, pending_observer_query: Boolean(inFlight) }
       }
+      try {
+        if (originalStandardReadFailure) await db.query('rollback to savepoint offering_measured_public_read')
+        await db.query('release savepoint offering_measured_public_read')
+      }
+      catch (error) { recordDiagnosticFailure('measured-read-savepoint-recovery', error); throw originalStandardReadFailure ?? error }
+      await admin()
+      // Success is not rolled back here: post-read checks must detect mutations.
+      // Restore only the exact memory-held pre-read fictional caller, never log it.
+      if (!originalStandardReadFailure) await db.query("select set_config('request.jwt.claims',$1,true)", [beforeCaller.claims])
+      await diagnosticQuery('after-numeric-inputs', numericInputs)
+      await diagnosticQuery('after-relation-statistics', relationStatistics)
+      await diagnosticQuery('post-read-fixture-parity', async () => {
+        eq(await state(), measurementState, 'measured read recovery leaves exact complete STANDARD fixture unchanged')
+        eq(await functions(), measurementFunctions, 'measured read recovery leaves every function/owner/ACL unchanged')
+        eq(await security(), measurementSecurity, 'measured read recovery leaves exact security objects unchanged')
+        return { rows_functions_security_unchanged: true }
+      })
+      if (originalStandardReadFailure) throw originalStandardReadFailure
       eq(standardRead.operating_context, manager, 'STANDARD read retains exact native manager context')
       eq(standardRead.stage2_access.session_mode, 'STANDARD', 'post-cutover public read retains STANDARD assurance marker')
       eq(standardRead.offering_access ?? null, null, 'STANDARD read does not advertise password-only offering exception')
@@ -666,6 +861,7 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
         eq(productFrom(await read(1, manager, assured), draft.id).terms, revisedTerms, `${asset} STANDARD canonical read returns saved package draft`)
       }
     }).finally(async () => {
+      try {
       const standardEngineRestored = await standardEngineConfig()
       eq(standardEngineRestored, standardEngineBefore, 'STANDARD savepoint rollback restores exact prior JIT, planner settings and both deadlines even on failure')
       console.log('BX1_STANDARD_ENGINE_PARITY_RECEIPT', JSON.stringify({
@@ -676,10 +872,24 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
         timing_scope: 'CI-helper-wall-clock-including-claims-and-RPC-not-SQL-time-or-SLA',
         jit_causality: 'NOT_ESTABLISHED', hosted_performance: 'NOT_MEASURED',
       }))
-    })
+      } catch (error) { recordDiagnosticFailure('outer-isolation-engine-restoration', error); throw error }
+      finally { console.log('BX1_STANDARD_CANDIDATE_MEASUREMENT_RECEIPT', JSON.stringify(measurement)) }
+    }) } catch (error) {
+      if (originalStandardReadFailure && error !== originalStandardReadFailure) recordDiagnosticFailure('outer-isolation-cleanup', error)
+      if (originalStandardReadFailure) {
+        console.log('BX1_STANDARD_MEASUREMENT_PRIMARY_ERROR', JSON.stringify({ code: diagnosticCode(originalStandardReadFailure), cleanup: measurement.cleanup }))
+        throw originalStandardReadFailure
+      }
+      throw error
+    }
     eq(await state(), beforeStandard, 'STANDARD parity rollback removes every temporary factor, mapping, session upgrade, draft, journal and audit row')
     eq(await functions(), installedFunctions, 'STANDARD parity changes no original or installed authority function')
     eq(await security(), baselineSecurity, 'STANDARD parity changes no ACL, RLS, owner, role or trigger security')
+    eq(measurement.observer.map(value => value.target_ms), [1000, 3000, 6000, 10000], 'measurement retains four exact observer targets')
+    eq(measurement.read.pending_observer_query, false, 'measurement awaits all observer work before leaving STANDARD proof')
+    truth(measurement.diagnostics.every(value => value.outcome === 'RETURNED')
+      && measurement.observer.every(value => value.outcome === 'RETURNED' || value.outcome === 'SKIPPED_SHORT_READ')
+      && measurement.cleanup.length === 0, 'successful unchanged read still requires complete diagnostic/observer/restoration evidence')
 
     phase = 'both-typed-immutable-package-handoffs'
     for (const asset of ['FUND', 'REAL_ESTATE']) {
