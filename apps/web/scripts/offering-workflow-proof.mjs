@@ -1527,6 +1527,44 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
       eq(productFrom(access(await command(1, manager, 'create_product', createBody, createKey), 1, manager), p.id).revision, p.revision, `${asset} durable unknown-result retry returns the same draft`)
       eq(await state(), afterCreate, `${asset} identical retry writes no second row/event/request`)
       await denied(`${asset} conflicting create reuse`, () => command(1, manager, 'create_product', { ...createBody, terms: typedTerms(asset, `${name} conflicting`) }, createKey), '23505')
+      // Owner-only compilation/lock probes retain the ordinary manager's AAL1 identity; public authority tests remain separate.
+      const lockProbeRows = await state(), lockProbeFunctions = await functions(), lockProbeSecurity = await security()
+      await isolated(async () => {
+        await claims(1)
+        await fixtureOwner(`${asset} AAL1 private lock-helper probes`)
+        eq(await scalar('select auth.uid()'), id(1), `${asset} private probes retain the exact synthetic manager`)
+        eq(await scalar("select jsonb_build_object('aal',current_setting('request.jwt.claims',true)::jsonb->>'aal','session_id',current_setting('request.jwt.claims',true)::jsonb->>'session_id')"),
+          { aal: 'aal1', session_id: id(101) }, `${asset} private probes retain the original AAL1 JWT/session binding`)
+        eq(await scalar("select jsonb_build_object('user_id',s.user_id,'aal',s.aal::text,'factor_id',s.factor_id) from auth.sessions s where s.id=$1", [id(101)]),
+          { user_id: id(1), aal: 'aal1', factor_id: null }, `${asset} private probes retain the original password-only native session`)
+        eq(await scalar('select bx1_portal.admission_password_session()'), true, `${asset} private probes enter the password-session branch`)
+        eq(await scalar('select bx1_portal.offering_workflow_context($1::jsonb)', [JSON.stringify(manager)]), true,
+          `${asset} private probes use the current manager context`)
+        for (const [helper, sql, values] of [
+          ['offering_workflow_lock_product', 'select bx1_portal.offering_workflow_lock_product($1::jsonb,$2::uuid)', [JSON.stringify(manager), p.id]],
+          ['offering_workflow_lock_people', 'select bx1_portal.offering_workflow_lock_people($1::uuid[])', [[id(1)]]],
+        ]) {
+          const started = performance.now()
+          let failure, helperElapsedMs
+          try {
+            const result = await db.query(sql, values)
+            helperElapsedMs = Number((performance.now() - started).toFixed(3))
+            eq(result.rowCount, 1, `${asset} ${helper} returns its single void result row`)
+          } catch (error) { failure = error; throw error }
+          finally {
+            console.log('BX1_AAL1_PRIVATE_LOCK_HELPER_RECEIPT', JSON.stringify({ asset, helper,
+              outcome: failure ? 'FAILED' : 'RETURNED',
+              sqlstate: typeof failure?.code === 'string' && /^[0-9A-Z]{5}$/.test(failure.code) ? failure.code : null,
+              helper_elapsed_ms: helperElapsedMs ?? Number((performance.now() - started).toFixed(3)) }))
+          }
+          eq(await state(), lockProbeRows, `${asset} ${helper} changes no row inside rollback isolation`)
+          eq(await functions(), lockProbeFunctions, `${asset} ${helper} changes no function inside rollback isolation`)
+          eq(await security(), lockProbeSecurity, `${asset} ${helper} changes no security manifest inside rollback isolation`)
+        }
+      })
+      eq(await state(), lockProbeRows, `${asset} private lock-helper rollback preserves every row`)
+      eq(await functions(), lockProbeFunctions, `${asset} private lock-helper rollback preserves every function`)
+      eq(await security(), lockProbeSecurity, `${asset} private lock-helper rollback preserves every security manifest`)
       await denied(`${asset} stale save revision`, () => command(1, manager, 'save_product', { product_id: p.id, expected_revision: p.revision + 1, terms: p.terms }), '23514')
       const saveBody = { product_id: p.id, expected_revision: p.revision, terms: typedTerms(asset, `${name} reviewed draft`) }
       await auditFailure(1, manager, 'save_product', saveBody)

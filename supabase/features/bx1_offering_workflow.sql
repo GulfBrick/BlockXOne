@@ -139,7 +139,7 @@ begin
     union select a.reviewed_by_user_id from bx1_portal.product_service_appointments a where a.product_id=p.id
     union select a.applied_by_user_id from bx1_portal.product_service_appointments a where a.product_id=p.id) x
     where u is not null;
-  perform id from auth.users where id=any(users) order by id for share;
+  perform au.id from auth.users as au where au.id=any(users) order by au.id for share;
   perform id from public.bx1_profiles where id=any(users) order by id for share;
   perform id from public.bx1_memberships where user_id=any(users)
     and role in ('OfferingManager','IssuerFundManager','ComplianceOfficer','SuperAdmin') order by id for share;
@@ -222,7 +222,7 @@ create function bx1_portal.offering_workflow_lock_people(users uuid[]) returns v
 language plpgsql volatile security definer set search_path='' as $$
 begin
   if bx1_portal.admission_password_session() then
-    perform id from auth.users where id=any(users) order by id for share;
+    perform au.id from auth.users as au where au.id=any(users) order by au.id for share;
     perform id from public.bx1_profiles where id=any(users) order by id for share;
     perform bx1_portal.admission_lock_people(users);
   else perform bx1_portal.lock_entity_people(users); end if;
