@@ -1875,6 +1875,7 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
     for (const item of products) {
       let p = item.p
       const originalPackage = p.offering_package.id
+      await fixtureOwner(`${item.asset} immutable decision baseline`)
       const originalDecisionRows = await scalar('select jsonb_agg(to_jsonb(d) order by d.id) from bx1_portal.offering_decisions d where offering_revision_id=$1', [originalPackage])
       const body = { product_id: p.id, expected_revision: p.revision, reason: 'Fictional approved package opened for governed corrected terms with fresh immutable review lineage.' }, requestKey = key()
       await auditFailure(1, manager, 'begin_offering_amendment', body)
