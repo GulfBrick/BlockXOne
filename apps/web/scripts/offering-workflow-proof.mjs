@@ -2097,7 +2097,7 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
       truth(timestamp(event.created_at) >= timestamp(window.start) && timestamp(event.created_at) <= timestamp(window.end), 'event timestamp is inside database proof window')
       const eventSummary = {
         start_application: 'Additional unapproved application capacity created; no role or eligibility granted.',
-        submit_application: 'Exact personal application submitted to the admitted synthetic manual-review route.',
+        submit_application: 'Exact application evidence submitted to an independently staffed synthetic review function; no operational authority granted.',
         review_application: 'Manual TEST_ONLY onboarding decision: APPROVED. Approval, when given, expires after 30 days and is not provider verification.',
         create_investment_account: 'Individual investment account opened from current reviewed application. No holding or funding created.',
         create_entity_investment_account: 'Reviewed synthetic entity investment account opened. No representative, order, holding, wallet or funding authority granted.',
