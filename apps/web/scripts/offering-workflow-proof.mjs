@@ -133,6 +133,10 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
   const truth = (actual, label) => { assert.ok(actual, label); checks++ }
   const scalar = async (sql, values = [], client = db) => Object.values((await client.query(sql, values)).rows[0])[0]
   const admin = (client = db) => client.query('reset role')
+  const fixtureOwner = async label => {
+    await admin()
+    eq(await scalar('select current_user'), 'postgres', `${label}: exact fixture owner before owner-only SQL`)
+  }
   const begin = async () => { await admin(); await db.query('begin'); begun = true }
   const commit = async () => { await db.query('commit'); begun = false; await admin() }
   const claims = async (n, extra = {}, client = db) => {
@@ -445,7 +449,64 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
     const recipeMatches = [...offeringSql.matchAll(/\$offering_recipes\$([\s\S]*?)\$offering_recipes\$::jsonb/g)]
     eq(recipeMatches.length, 1, 'offering installer has one exact recipe array')
     const recipes = JSON.parse(recipeMatches[0][1])
-    eq(recipes.length, 13, 'cutover has exactly thirteen reviewed retained targets')
+    eq(recipes.length, 14, 'cutover has exactly fourteen reviewed retained targets')
+    const admissionRecipeSeparator = ',\n  {\n    "signature": "bx1_portal.admission_access(jsonb)"'
+    const recipeText = normalizedBody(recipeMatches[0][1])
+    const admissionRecipeOffset = recipeText.lastIndexOf(admissionRecipeSeparator)
+    truth(admissionRecipeOffset > 0, 'only the final fourteenth recipe targets the admission marker')
+    eq(sourceHash(`${recipeText.slice(0, admissionRecipeOffset)}\n]`),
+      '3ca96cdf193693c1f1887f025aca2ccc41fe349b6655dd63b3f7888e11880358', 'original thirteen recipe entries remain byte-exact after line-ending normalization')
+    const admissionRecipes = recipes.filter(recipe => recipe.signature === 'bx1_portal.admission_access(jsonb)')
+    eq(admissionRecipes.length, 1, 'projection correction adds only one exact admission marker signature')
+    const admissionRecipe = admissionRecipes[0]
+    eq(admissionRecipe, recipes[13], 'admission marker is exactly the fourteenth recipe')
+    eq(admissionRecipe.expected_sha256, '092f3e6825cc278903c75c22425dacf35f53617e35e3a89533db185954a5ad28', 'accepted complete twelve-action marker body is fenced')
+    eq(admissionRecipe.changes.length, 1, 'projection correction replaces only one filter expression')
+    eq(admissionRecipe.changes[0].from, 'bx1_portal.admission_command_allowed(c,action)', 'only the original per-action authority filter is replaced')
+    eq(admissionRecipe.changes[0].count, 1, 'projection correction has one exact filter occurrence')
+    const admissionSource = (await readFile(new URL('../../../supabase/features/bx1_admission_workflow.sql', import.meta.url), 'utf8')).replaceAll('\r\n', '\n')
+    const representativeSource = (await readFile(new URL('../../../supabase/features/bx1_account_representatives.sql', import.meta.url), 'utf8')).replaceAll('\r\n', '\n')
+    eq(sourceHash(admissionSource), '173f0f7562120ec9c1b8ad99aa3cf302d285165363e5207e5c314d8730e7b779', 'immutable accepted admission source remains exact')
+    eq(sourceHash(representativeSource), '1b7eca59131344c269b23e6d522f4b4592025204745eb5a5ac8556d58ce793d4', 'immutable accepted representatives source remains exact')
+    const representativeRecipeMatches = [...representativeSource.matchAll(/\$cutovers\$([\s\S]*?)\$cutovers\$::jsonb/g)]
+    eq(representativeRecipeMatches.length, 1, 'accepted representatives has one exact retained recipe array')
+    const representativeRecipes = JSON.parse(representativeRecipeMatches[0][1])
+    const acceptedAdmissionBody = (name, result, signature, change) => {
+      const matches = [...admissionSource.matchAll(new RegExp(`create function bx1_portal\\.${name}\\([^\\n]+\\) returns ${result}\\nlanguage plpgsql volatile security definer set search_path='' as \\$\\$([\\s\\S]*?)\\$\\$;`, 'g'))]
+      eq(matches.length, 1, `${signature}: one complete immutable original body`)
+      const original = normalizedBody(matches[0][1])
+      const acceptedRecipes = representativeRecipes.filter(recipe => recipe.signature === signature)
+      eq(acceptedRecipes.length, 1, `${signature}: one exact accepted representatives transformation`)
+      eq(sourceHash(original), acceptedRecipes[0].hash, `${signature}: original complete body matches accepted representative fence`)
+      eq(acceptedRecipes[0].changes, [change], `${signature}: accepted transformation is the original single ordinal/family addition`)
+      eq(original.split(change.from).length - 1, 1, `${signature}: accepted source anchor appears exactly once`)
+      return original.replace(change.from, change.to)
+    }
+    const acceptedAdmissionProjection = acceptedAdmissionBody('admission_access', 'jsonb', admissionRecipe.signature, {
+      from: "'apply_investing_representative_mandate']) with ordinality",
+      to: "'apply_investing_representative_mandate','respond_investing_representative_proposal']) with ordinality", count: 1,
+    })
+    const admissionAuthoritySignature = 'bx1_portal.admission_command_allowed(jsonb,text)'
+    const acceptedAdmissionAuthority = acceptedAdmissionBody('admission_command_allowed', 'boolean', admissionAuthoritySignature, {
+      from: "'request_investing_representative_mandate']),false);",
+      to: "'request_investing_representative_mandate','respond_investing_representative_proposal']),false);", count: 1,
+    })
+    eq(sourceHash(acceptedAdmissionProjection), admissionRecipe.expected_sha256, 'accepted ordinal reconstructs the complete installed pre-correction marker')
+    eq(sourceHash(acceptedAdmissionAuthority), 'f30143f864299f2edfa1fa7630167125212327c030aa7a35b3474625a9a57ea2', 'unchanged current authority reconstructs its full accepted body')
+    for (const [signature, expected] of [[admissionRecipe.signature, acceptedAdmissionProjection], [admissionAuthoritySignature, acceptedAdmissionAuthority]])
+      eq(normalizedBody(await scalar('select prosrc from pg_proc where oid=$1::regprocedure', [signature])), expected, `${signature}: installed pre-cutover full body equals immutable accepted source`)
+    eq(acceptedAdmissionProjection.split(admissionRecipe.changes[0].from).length - 1, 1, 'marker has only one original authority-filter callsite')
+    const correctedAdmissionProjection = acceptedAdmissionProjection.replace(admissionRecipe.changes[0].from, admissionRecipe.changes[0].to)
+    eq(sourceHash(correctedAdmissionProjection), '90c18122c1a2410568c6c65b7be9e0a89cfa872941658991b5a2f285a3bdd658', 'complete lazy-CASE projection body is pinned')
+    const originalActionQueries = [...acceptedAdmissionProjection.matchAll(/  select coalesce\(pg_catalog\.jsonb_agg\(action order by ordinal\)[\s\S]*?;/g)]
+    eq(originalActionQueries.length, 1, 'accepted marker supplies one exact ordered twelve-action authority query')
+    eq(originalActionQueries[0][0].split('into actions').length - 1, 1, 'original marker query has one procedural target')
+    eq(originalActionQueries[0][0].split("env='TESTNET'").length - 1, 1, 'original marker query has one environment formal')
+    eq(originalActionQueries[0][0].split('admission_command_allowed(c,action)').length - 1, 1, 'original marker query retains one unchanged current authority call per action')
+    const originalAdmissionActionsQuery = originalActionQueries[0][0].replace('into actions', '')
+      .replace("env='TESTNET'", "(select environment from bx1_portal.entry_configuration where singleton)='TESTNET'")
+      .replace('admission_command_allowed(c,action)', 'admission_command_allowed($1::jsonb,action)')
+    eq(sourceHash(originalAdmissionActionsQuery), '68e843eacbd8f5ec01b070b897dca6ae65f200f174e4b06be4a5e8692d601324', 'ordered original twelve-action comparison changes only procedural target and formal inputs')
     const candidateRecipes = recipes.filter(recipe => recipe.signature === 'bx1_portal.read_scoped_pre_handoff(jsonb)')
     eq(candidateRecipes.length, 1, 'candidate correction targets only the installed retained inner reader')
     const candidateRecipe = candidateRecipes[0]
@@ -501,10 +562,18 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
       await db.query(definition.replace(/\bBEGIN\b/i, 'BEGIN\n-- fictional retained-reader drift sentinel'))
       await denied('feature refuses full-body drift in the exact retained candidate reader', () => db.query(offeringSql), '55000')
     })
+    for (const signature of [admissionRecipe.signature, admissionAuthoritySignature]) await isolated(async () => {
+      const definition = await scalar('select pg_get_functiondef($1::regprocedure)', [signature])
+      truth(/\bBEGIN\b/i.test(definition), `${signature}: accepted full-body drift probe has a PL/pgSQL body`)
+      await db.query(definition.replace(/\bBEGIN\b/i, 'BEGIN\n-- fictional admission projection/authority drift sentinel'))
+      await denied(`${signature}: feature refuses full-body drift before a projection cutover`, () => db.query(offeringSql), '55000')
+    })
     eq(await functions(), baselineFunctions, 'drift probe fully rolls back all function changes')
     await db.query(offeringSql)
     installedFunctions = await functions()
     eq(normalizedBody(await scalar('select prosrc from pg_proc where oid=$1::regprocedure', [candidateRecipe.signature])), correctedCandidateReader, 'installed retained reader is exactly the source-derived two-replacement correction')
+    eq(normalizedBody(await scalar('select prosrc from pg_proc where oid=$1::regprocedure', [admissionRecipe.signature])), correctedAdmissionProjection, 'installed marker equals the sole source-derived lazy-CASE filter replacement')
+    eq(normalizedBody(await scalar('select prosrc from pg_proc where oid=$1::regprocedure', [admissionAuthoritySignature])), acceptedAdmissionAuthority, 'installer leaves the complete accepted current authority body byte-identical')
     // Kept explicit: broadening this list requires independent source review.
     const changedFunctions = new Set([
       'bx1_portal.execute_scoped_pre_eligibility(jsonb,text,uuid,jsonb)',
@@ -512,6 +581,7 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
       'bx1_portal.execute_scoped_pre_monitoring(jsonb,text,uuid,jsonb)',
       'bx1_portal.execute_scoped(jsonb,text,uuid,jsonb)', 'bx1_portal.read_scoped(jsonb)',
       'bx1_portal.read_scoped_pre_handoff(jsonb)',
+      'bx1_portal.admission_access(jsonb)',
       'bx1_portal.save_fund_v2_scoped(jsonb,uuid,jsonb)',
       'bx1_portal.save_real_estate_v2_scoped(jsonb,uuid,jsonb)',
       'bx1_portal.execute_product_service_appointment(jsonb,text,uuid,jsonb)',
@@ -520,8 +590,8 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
       'bx1_portal.execute_begin_offering_amendment(jsonb,uuid,jsonb)',
       'bx1_portal.execute_reopen_offering_review(jsonb,uuid,jsonb)',
     ])
-    eq(changedFunctions.size, 13, 'exact changed-signature allowlist adds only the retained candidate reader')
-    eq([...changedFunctions].sort(), recipes.map(recipe => recipe.signature).sort(), 'proof and installer share the same thirteen exact retained signatures')
+    eq(changedFunctions.size, 14, 'final correction expands the exact changed-signature allowlist only by admission_access')
+    eq([...changedFunctions].sort(), recipes.map(recipe => recipe.signature).sort(), 'proof and installer share the same fourteen exact retained signatures')
     for (const original of baselineFunctions) {
       const current = installedFunctions.find(f => f.oid === original.oid)
       truth(current, `inherited ${original.signature} retains its exact OID`)
@@ -748,6 +818,7 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
       // Retained CI fixture pattern only: stored AAL2 plus a verified own factor,
       // matching token assurance and distinct mapped fictional people. This is
       // not an actual MFA challenge or independently verified-human acceptance.
+      await fixtureOwner('STANDARD native fixture setup')
       for (const n of [1, 2, 3, 4, 5]) {
         await db.query("insert into bx1_private.persons(id,label,status,evidence_reference,bootstrap_receipt_id) values($1,$2,'TRUSTED','fictional:standard-package-parity-only',$3)", [id(800 + n), `Fictional STANDARD package person ${n}`, id(850 + n)])
         await db.query("insert into bx1_private.person_principals(auth_user_id,person_id,status,evidence_reference,bootstrap_receipt_id) values($1,$2,'TRUSTED','fictional:standard-package-parity-only',$3)", [id(n), id(800 + n), id(870 + n)])
@@ -937,6 +1008,8 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
       if (originalStandardReadFailure) throw originalStandardReadFailure
       eq(standardRead.operating_context, manager, 'STANDARD read retains exact native manager context')
       eq(standardRead.stage2_access.session_mode, 'STANDARD', 'post-cutover public read retains STANDARD assurance marker')
+      eq(standardRead.stage2_access, { version: 1, environment: 'TESTNET', actor_id: id(1), operating_context: manager,
+        session_mode: 'STANDARD', allowed_commands: [] }, 'valid STANDARD manager keeps the exact empty admission marker, not null or a grant')
       eq(standardRead.offering_access ?? null, null, 'STANDARD read does not advertise password-only offering exception')
       truth(standardRead.organisations.some(o => o.id === application.organisation_id), 'STANDARD read keeps exact globally authorised organisation visible')
       eq(standardRead.product_appointment_candidates, [], 'initial STANDARD directory has no product in the new exact manager scope')
@@ -960,7 +1033,7 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
       // no inherited fixture is removed and no authority guard is replaced.
       const candidateRows = snapshot => snapshot.product_appointment_candidates
       const expectedDirectory = async organisationIds => {
-        await claims(1, assured); await admin()
+        await claims(1, assured); await fixtureOwner('STANDARD expected directory owner inspection')
         return scalar(`select coalesce(jsonb_agg(candidate.value order by candidate.product_id,
             candidate.role,candidate.display_name,candidate.user_id),'[]'::jsonb) from (
           select p.id product_id,m.role,profile.display_name,m.user_id,
@@ -977,11 +1050,22 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
       }
       const baseDirectory = await expectedDirectory([application.organisation_id])
       const directoryRead = async (expected = baseDirectory, label = 'selected native manager scope') => {
-        const snapshot = await read(1, manager, assured)
-        eq(candidateRows(snapshot), expected, `${label}: public directory retains exact tuples, ordering and cap`)
-        eq(new Set(expected.map(row => `${row.product_id}:${row.membership_id}`)).size, expected.length, `${label}: no binding fan-out duplicates`)
-        truth(expected.length <= 100, `${label}: original cap is retained`)
-        return snapshot
+        const started = performance.now()
+        let failure
+        try {
+          const snapshot = await read(1, manager, assured)
+          eq(candidateRows(snapshot), expected, `${label}: public directory retains exact tuples, ordering and cap`)
+          eq(new Set(expected.map(row => `${row.product_id}:${row.membership_id}`)).size, expected.length, `${label}: no binding fan-out duplicates`)
+          truth(expected.length <= 100, `${label}: original cap is retained`)
+          return snapshot
+        } catch (error) { failure = error; throw error }
+        finally {
+          console.log('BX1_STANDARD_DIRECTORY_CASE_RECEIPT', JSON.stringify({ label,
+            outcome: failure ? 'FAILED' : 'RETURNED', sqlstate: typeof failure?.code === 'string' && /^[0-9A-Z]{5}$/.test(failure.code) ? failure.code : null,
+            failure_kind: failure ? diagnosticCode(failure) : null, helper_elapsed_ms: Number((performance.now() - started).toFixed(3)),
+            timing_scope: 'CI-helper-including-claims-RPC-and-assertions-not-SQL-time-or-SLA',
+          }))
+        }
       }
       const selectedDirectory = candidateRows(await directoryRead())
       for (const p of standardProducts) for (const [actor, candidateRole] of [[2, 'ComplianceOfficer'], [3, 'IssuerFundManager']])
@@ -1005,14 +1089,17 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
         ['null candidate email', 'update auth.users set email=null where id=$1', [id(2)], 2],
         ['known revoked candidate person', "update bx1_private.person_principals set status='REVOKED' where auth_user_id=$1", [id(2)], 2],
       ]) await isolated(async () => {
+        await fixtureOwner(`STANDARD ${label} fixture mutation`)
         await db.query(sql, values)
         await directoryRead(baseDirectory.filter(row => row.user_id !== id(actor)), label)
       })
       await isolated(async () => {
+        await fixtureOwner('STANDARD self native membership fixture mutation')
         await db.query("insert into public.bx1_memberships(id,user_id,organisation_id,role) values($1,$2,$3,'ComplianceOfficer')", [id(9901), id(1), scope])
         await directoryRead(baseDirectory, 'native self membership still fails person independence')
       })
       await isolated(async () => {
+        await fixtureOwner('STANDARD distinct-role native membership fixture mutation')
         await db.query("insert into public.bx1_memberships(id,user_id,organisation_id,role) values($1,$2,$3,'ComplianceOfficer')", [id(9902), id(3), scope])
         const expected = await expectedDirectory([application.organisation_id])
         await directoryRead(expected, 'one native user with both roles retains both distinct membership tuples')
@@ -1028,7 +1115,7 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
         && baselineRows['bx1_portal.products'].some(p => p.organisation_id === org.id))
       truth(historicalOrg, 'retained fixture supplies an existing approved historical product organisation; no substitute fixture is fabricated')
       const insertBinding = async (orgId, nativeScope, candidateRole, status, expired = false) => {
-        await admin()
+        await fixtureOwner('STANDARD historical binding fixture insert')
         return scalar(`insert into bx1_portal.organisation_authority_bindings(id,product_organisation_id,native_organisation_id,
           role,status,valid_from,valid_until,evidence_reference,approval_receipt_id)
           values($1,$2,$3,$4,$5,clock_timestamp()-interval '1 hour',
@@ -1037,6 +1124,7 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
         [key(), orgId, nativeScope, candidateRole, status, expired, key()])
       }
       await isolated(async () => {
+        await fixtureOwner('STANDARD historical binding owner inspection')
         eq(await scalar('select bx1_portal.current_product_organisation($1)', [historicalOrg.id]), true, 'historical binding cases start from a current retained product organisation')
         eq(await scalar("select count(*)::int from bx1_portal.organisation_authority_bindings where product_organisation_id=$1 and native_organisation_id=$2 and role='OfferingManager'",
           [historicalOrg.id, manager.organisationId]), 0, 'new selected native scope has no pre-existing historical manager binding')
@@ -1056,6 +1144,7 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
           && p.organisation_id === historicalOrg.id)), 'correction includes in-scope historical products, not only the two UI drafts')
         await insertBinding(historicalOrg.id, manager.organisationId, 'OfferingManager', 'ACTIVE')
         await directoryRead(historicalExpected, 'duplicate active bindings cannot duplicate directory rows')
+        await fixtureOwner('STANDARD one historical duplicate binding fixture revocation after authenticated read')
         await db.query("update bx1_portal.organisation_authority_bindings set status='REVOKED' where id=$1", [activeBinding])
         await directoryRead(historicalExpected, 'one revoked duplicate cannot negate a distinct current historical binding')
       })
@@ -1067,6 +1156,7 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
         && baselineRows['bx1_portal.products'].some(p => p.organisation_id === org.id))
       truth(otherCustomerOrg, 'retained fixture supplies another customer product organisation for missing exact-mandate isolation')
       await isolated(async () => {
+        await fixtureOwner('STANDARD missing exact customer mandate owner inspection')
         eq(await scalar('select bx1_portal.current_product_organisation($1)', [otherCustomerOrg.id]), true, 'missing exact-mandate case starts from a current retained customer product organisation')
         eq(await scalar('select count(*)::int from bx1_portal.representative_mandates where product_organisation_id=$1 and native_organisation_id=$2 and applicant_user_id=$3',
           [otherCustomerOrg.id, manager.organisationId, id(1)]), 0, 'selected actor/native scope has no exact mandate for other customer')
@@ -1079,6 +1169,7 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
           revoked_at=clock_timestamp(),revoked_by_user_id=$2,revoke_reason='Fictional rollback-only STANDARD candidate mandate withdrawal.' where id=$1`, [mandate.id, id(2)]],
         ['passively expired customer admission', "update bx1_portal.applications set reviewed_at=clock_timestamp()-interval '31 days',approved_until=clock_timestamp()-interval '1 day' where id=$1", [application.id]],
       ]) await isolated(async () => {
+        await fixtureOwner(`STANDARD ${label} fixture mutation`)
         await db.query(sql, values)
         await claims(1, assured); await admin()
         eq(await scalar(effectiveCandidateQuery, [JSON.stringify(manager)]), [], `${label}: current operator cannot emit cached candidate authority`)
@@ -1092,6 +1183,7 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
         from bx1_portal.representative_mandates m where m.id=$1`, [mandate.id]),
       { mandate_at_expiry: false, native_at_expiry: false }, 'unchanged exact mandate/native leaves retain strict passive expiry boundary without clock or guard overrides')
       await isolated(async () => {
+        await fixtureOwner('STANDARD LIMIT100 typed-copy fixture insert')
         const extraIds = Array.from({ length: 32 }, (_, n) => id(20000 + n))
         // Three exact current native candidates (2/3/4) over the two original
         // plus 32 rollback-only typed copies guarantee more than 100 inputs.
@@ -1136,6 +1228,82 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
     truth(measurement.diagnostics.every(value => value.outcome === 'RETURNED')
       && measurement.observer.every(value => value.outcome === 'RETURNED' || value.outcome === 'SKIPPED_SHORT_READ')
       && measurement.cleanup.length === 0, 'successful unchanged read still requires complete diagnostic/observer/restoration evidence')
+
+    // No authority-query warm-up before the original measured STANDARD read.
+    // These are ordinary TEST marker comparisons only; all twelve real public
+    // commands above and the STANDARD positives remain separate requirements.
+    phase = 'source-derived-ordered-admission-projection-equivalence'
+    const beforeProjectionCases = await state()
+    const markerEquivalent = async (n, context, label, expectedCommands, extra = {}) => {
+      await claims(n, extra)
+      eq(await scalar('select current_user'), 'authenticated', `${label}: original ordinary TEST caller is established`)
+      await fixtureOwner(`${label} private projection evidence`)
+      const valid = await scalar('select bx1_portal.admission_context($1::jsonb)', [JSON.stringify(context)])
+      let original = null
+      if (valid === true) {
+        const environment = await scalar('select environment from bx1_portal.entry_configuration where singleton')
+        const allowed = await scalar(originalAdmissionActionsQuery, [JSON.stringify(context)])
+        const password = await scalar('select bx1_portal.admission_password_session()')
+        original = { version: 1, environment, actor_id: id(n), operating_context: context,
+          session_mode: password ? 'TEST_PASSWORD' : 'STANDARD', allowed_commands: allowed }
+      }
+      const projected = await scalar('select bx1_portal.admission_access($1::jsonb)', [JSON.stringify(context)])
+      eq(projected, original, `${label}: full projected marker equals original twelve-action current-authority query and null guard`)
+      if (expectedCommands === null) eq(projected, null, `${label}: original invalid context retains a null marker`)
+      else if (expectedCommands !== undefined) {
+        truth(projected, `${label}: valid context keeps the marker rather than null`)
+        eq(projected.allowed_commands, expectedCommands, `${label}: exact ordered action family is unchanged`)
+        eq(projected.session_mode, 'TEST_PASSWORD', `${label}: original native password session is not upgraded`)
+      }
+      const kind = value => value === null ? 'NULL' : value.allowed_commands.length === 0 ? 'EMPTY' : 'ROLE_BEARING'
+      console.log('BX1_ADMISSION_PROJECTION_EQUIVALENCE_RECEIPT', JSON.stringify({ label,
+        original_marker_kind: kind(original), projected_marker_kind: kind(projected),
+        original_allowed_count: original?.allowed_commands.length ?? null, projected_allowed_count: projected?.allowed_commands.length ?? null,
+        ordered_full_marker_equal: true, source_authority_sha256: sourceHash(acceptedAdmissionAuthority),
+        source_original_projection_sha256: sourceHash(acceptedAdmissionProjection), installed_projection_sha256: sourceHash(correctedAdmissionProjection),
+      }))
+    }
+    for (const [n, context, label, expected] of [
+      [1, applicant, 'ordinary exact applicant seven', stage2Applicant.allowed_commands],
+      [2, reviewer, 'ordinary Compliance three', admissionBefore.allowed_commands],
+      [5, applier, 'ordinary SuperAdmin two', stage2Admin.allowed_commands],
+      [1, manager, 'ordinary OfferingManager empty marker', []],
+      [3, issuer, 'ordinary IssuerFundManager empty marker', []],
+      [7, role('Investor'), 'ordinary Investor empty marker', []],
+      [6, role('ComplianceOfficer', otherScope), 'current Compliance membership outside configured review scope has no commands', []],
+    ]) await markerEquivalent(n, context, label, expected)
+    for (const [label, context] of [
+      ['SQL null context', undefined], ['JSON null context', null], ['empty context', {}], ['array context', []],
+      ['strict applicant rejects extra key', { ...applicant, extra: true }],
+      ['missing native organisation field', { mode: 'ROLE', role: 'ComplianceOfficer' }],
+      ['malformed native organisation field', { ...reviewer, organisationId: 'malformed' }],
+      ['missing native organisation', { ...reviewer, organisationId: id(999999) }],
+      ['wrong actor role', issuer], ['wrong native scope', { ...reviewer, organisationId: otherScope }],
+      ['strict role rejects extra key', { ...reviewer, extra: true }],
+    ]) await markerEquivalent(2, context, label, null)
+    for (const [label, extra] of [
+      ['missing native session claim', { session_id: id(999) }], ['expired native token', { exp: 1 }],
+    ]) await markerEquivalent(2, reviewer, label, null, extra)
+    for (const [label, sql, values, n, context] of [
+      ['revoked native session row', 'delete from auth.sessions where id=$1', [id(102)], 2, reviewer],
+      ['expired native session row', "update auth.sessions set not_after=clock_timestamp()-interval '1 minute' where id=$1", [id(102)], 2, reviewer],
+      ['inactive native actor profile', "update public.bx1_profiles set status='SUSPENDED' where id=$1", [id(2)], 2, reviewer],
+      ['inactive exact native Compliance membership', "update public.bx1_memberships set status='SUSPENDED' where id=$1", [id(402)], 2, reviewer],
+      ['revoked exact manager binding', "update bx1_portal.organisation_authority_bindings set status='REVOKED' where id=$1", [binding], 1, manager],
+      ['revoked exact manager mandate', `update bx1_portal.representative_mandates set status='REVOKED',revision=revision+1,
+        revoked_at=clock_timestamp(),revoked_by_user_id=$2,revoke_reason='Fictional rollback-only projection equivalence withdrawal.' where id=$1`, [mandate.id, id(2)], 1, manager],
+    ]) await isolated(async () => {
+      await fixtureOwner(`${label} fixture mutation`)
+      await db.query(sql, values)
+      await markerEquivalent(n, context, label, null)
+    })
+    // Ordinary admission's original marker does not impose a new person-trust
+    // predicate. Compare its exact original result, without inventing denial;
+    // the retained package tests below separately deny revoked known identities.
+    await samePerson([2], () => markerEquivalent(2, reviewer, 'known revoked person preserves original admission-marker semantics'), 'REVOKED')
+    eq(await state(), beforeProjectionCases, 'every added projection case restores exact native sessions/memberships/persons/mandates and all inherited rows')
+    eq(await functions(), installedFunctions, 'projection cases leave every accepted authority/global/receipt body and identity unchanged')
+    eq(await security(), baselineSecurity, 'projection cases add no grant, role, policy or trigger waiver')
 
     phase = 'both-typed-immutable-package-handoffs'
     for (const asset of ['FUND', 'REAL_ESTATE']) {
@@ -1233,6 +1401,7 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
       await db.query('alter table bx1_portal.representative_mandates disable trigger bx1_representative_mandate_guard')
       await db.query("update bx1_portal.representative_mandates set requested_until=clock_timestamp()-interval '1 minute' where id=$1", [mandate.id])
       await db.query('alter table bx1_portal.representative_mandates enable trigger bx1_representative_mandate_guard')
+      await markerEquivalent(1, manager, 'expired exact manager mandate preserves original null admission marker', null)
       await denied('expired exact organisation mandate denies creation', createAnother)
       let expiredRead, code
       try { expiredRead = await read(1, manager) } catch (error) { code = error?.code }

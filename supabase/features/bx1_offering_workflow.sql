@@ -806,11 +806,29 @@ begin
 end $$;
 
 -- Whole-body fingerprints derive from retained migrations, entry alias qualifier rewrite,
--- and the exact accepted rc32 admission recipes. Representatives does not alter these targets.
+-- and exact accepted admission/representatives recipes. The original thirteen targets
+-- remain unchanged; only the fourteenth projection recipe uses the representatives ordinal.
 do $offering_cutover$
 declare spec jsonb; change jsonb; target oid; source_body text; next_body text;
   definition text; before_meta jsonb; after_meta jsonb; occurrences integer;
 begin
+  -- Static marker families are necessary-only. Their unchanged current authority
+  -- must match the accepted complete body before any retained recipe is installed.
+  target:=pg_catalog.to_regprocedure('bx1_portal.admission_command_allowed(jsonb,text)');
+  if target is null then raise exception 'offering_workflow_admission_authority_missing' using errcode='55000'; end if;
+  select p.prosrc,pg_catalog.jsonb_build_object('owner',p.proowner,'security_definer',p.prosecdef,
+    'configuration',p.proconfig,'kind',p.prokind,'language',p.prolang,'volatility',p.provolatile)
+    into source_body,before_meta from pg_catalog.pg_proc p where p.oid=target;
+  if before_meta->>'owner' is distinct from ('postgres'::regrole::oid)::text
+    or before_meta->>'security_definer' is distinct from 'true'
+    or before_meta->'configuration' is distinct from '["search_path=\"\""]'::jsonb
+    or before_meta->>'kind' is distinct from 'f'
+    or before_meta->>'language' is distinct from (select oid::text from pg_catalog.pg_language where lanname='plpgsql')
+    or before_meta->>'volatility' is distinct from 'v'
+    or pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(
+      pg_catalog.btrim(pg_catalog.replace(source_body,E'\r\n',E'\n'),E' \n\t'),'UTF8')),'hex')
+      is distinct from 'f30143f864299f2edfa1fa7630167125212327c030aa7a35b3474625a9a57ea2' then
+    raise exception 'offering_workflow_admission_authority_changed' using errcode='55000'; end if;
   for spec in select value from pg_catalog.jsonb_array_elements($offering_recipes$
 [
   {
@@ -1207,6 +1225,17 @@ begin
       {
         "from": "bx1_portal.offering_lineage_independent",
         "to": "bx1_portal.offering_workflow_lineage_independent",
+        "count": 1
+      }
+    ]
+  },
+  {
+    "signature": "bx1_portal.admission_access(jsonb)",
+    "expected_sha256": "092f3e6825cc278903c75c22425dacf35f53617e35e3a89533db185954a5ad28",
+    "changes": [
+      {
+        "from": "bx1_portal.admission_command_allowed(c,action)",
+        "to": "case\n      when c='{\"mode\":\"APPLICANT\"}'::jsonb and action=any(array['start_application','submit_application','create_investment_account',\n        'create_entity_investment_account','request_representative_mandate','request_investing_representative_mandate',\n        'respond_investing_representative_proposal']) then bx1_portal.admission_command_allowed(c,action)\n      when c->>'mode'='ROLE' and c->>'role'='ComplianceOfficer'\n        and action=any(array['review_application','review_representative_mandate','review_investing_representative_mandate'])\n        then bx1_portal.admission_command_allowed(c,action)\n      when c->>'mode'='ROLE' and c->>'role'='SuperAdmin'\n        and action=any(array['apply_representative_mandate','apply_investing_representative_mandate'])\n        then bx1_portal.admission_command_allowed(c,action)\n      else false end",
         "count": 1
       }
     ]
