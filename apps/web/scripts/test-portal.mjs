@@ -2671,7 +2671,9 @@ try {
   console.log(`BX1_PORTAL_SQL_PASS assertions=${checks} fixture=synthetic-cloud-PostgreSQL17 exactAmounts=proven scopedAuthority=proven sameRecordBothAssets=proven auditRollback=proven authProvider=not-proven documentBytes=not-proven concurrency=two-connection-capacity-retry-and-expiry-wait settlement=not-implemented cleanup=synthetic-schemas-removed`)
 } catch (error) {
   const diagnostic = typeof error?.message === 'string' ? error.message.split(/[\r\n]/, 1)[0].slice(0, 200).replace(/[^\x20-\x7e]/g, '?') : 'unavailable'
-  console.error(`BX1_PORTAL_SQL_FAILED phase=${phase} line=${error?.fixtureLine ?? 'unknown'} code=${error?.code ?? 'assertion'} diagnostic=${JSON.stringify(diagnostic)}`)
+  const accountRepresentativesPhase = typeof error?.accountRepresentativesPhase === 'string'
+    && /^[a-z0-9-]{1,80}$/.test(error.accountRepresentativesPhase) ? error.accountRepresentativesPhase : 'unavailable'
+  console.error(`BX1_PORTAL_SQL_FAILED phase=${phase} accountRepresentativesPhase=${accountRepresentativesPhase} line=${error?.fixtureLine ?? 'unknown'} code=${error?.code ?? 'assertion'} diagnostic=${JSON.stringify(diagnostic)}`)
   process.exitCode = 1
 } finally {
   if (begun) { try { await db.query('rollback') } catch {} }

@@ -471,7 +471,9 @@ export async function proveAccountRepresentatives(db, clients, admissionSql, rep
     try { await waitOn(waitingPid, blockerPid) }
     finally { await commit() }
     const replayResult = await responseOutcome
-    await admin(clients[0]); await clients[0].query(replayResult.code ? 'rollback' : 'commit')
+    // A captured SQL denial leaves the transaction aborted: terminate it
+    // before RESET ROLE so cleanup cannot replace its original error code.
+    await clients[0].query(replayResult.code ? 'rollback' : 'commit'); await admin(clients[0])
     eq(replayResult.code, undefined, 'simultaneous exact consent retry succeeds only after actual original commit')
     eq(mandateFrom(replayResult.snapshot, accepted.id), accepted, 'simultaneous response returns same exact consent receipt/state')
     await begin(); await admin()
@@ -570,7 +572,7 @@ export async function proveAccountRepresentatives(db, clients, admissionSql, rep
     try { await waitOn(pids[1], pids[0]) }
     finally { await commit() }
     const proposalResult = await proposalOutcome
-    await admin(clients[0]); await clients[0].query('rollback')
+    await clients[0].query('rollback'); await admin(clients[0])
     truth(['23514', '42501'].includes(proposalResult.code), 'simultaneous separate-key proposal cannot duplicate a live account/target cycle')
     await begin(); await admin()
     eq(await scalar('select count(*)::int from bx1_portal.investing_representative_mandates where investment_account_id=$1 and representative_user_id=$2 and cycle=$3', [account.id, id(3), concurrent.cycle]), 1, 'real proposal race creates exactly one immutable cycle')
