@@ -2,6 +2,90 @@ import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 
+// Reconcile only the three input-derived canonical admission decisions. Other
+// representative commands deliberately have scoped receipts/events, but never
+// get an exception for the legacy request journal.
+function validateReviewFootprint({ intents, baseline, current, window, actorId, operatingContext }) {
+  const exactKeys = (value, fields, label) => {
+    assert.ok(value && typeof value === 'object' && !Array.isArray(value), label)
+    assert.deepEqual(Object.keys(value).sort(), [...fields].sort(), `${label}: exact fields`)
+  }
+  const uuid = value => {
+    assert.equal(typeof value, 'string', 'journal identity is a UUID string')
+    assert.match(value, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
+  }
+  const timestamp = value => {
+    assert.equal(typeof value, 'string', 'journal timestamp is a string')
+    const parts = value.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$/)
+    assert.ok(parts, 'journal timestamp has exact ISO/date-offset form')
+    const [year, month, day, hour, minute, second] = parts.slice(1).map(Number)
+    assert.ok(month >= 1 && month <= 12 && day >= 1 && day <= new Date(Date.UTC(year, month, 0)).getUTCDate()
+      && hour < 24 && minute < 60 && second < 60, 'journal timestamp has valid calendar/time components')
+    const result = Date.parse(value)
+    assert.ok(Number.isFinite(result), 'journal timestamp is valid')
+    return result
+  }
+  const start = timestamp(window.start), end = timestamp(window.end)
+  assert.ok(start <= end, 'database proof window is ordered')
+  const inWindow = value => assert.ok(timestamp(value) >= start && timestamp(value) <= end, 'journal timestamp is inside database proof window')
+  const fields = {
+    requests: ['actor_id', 'request_key', 'command', 'payload', 'created_at'],
+    scoped_requests: ['actor_id', 'request_key', 'operating_context', 'command', 'payload', 'created_at'],
+    events: ['id', 'subject_id', 'application_id', 'organisation_id', 'investor_id', 'kind', 'actor_id', 'created_at', 'summary'],
+  }
+  const identity = (name, row) => name === 'events' ? row.id : `${row.actor_id}/${row.request_key}`
+  const added = {}
+  for (const name of Object.keys(fields)) {
+    assert.ok(Array.isArray(baseline[name]) && Array.isArray(current[name]), `${name}: row arrays`)
+    const before = new Map(), after = new Map()
+    for (const [values, indexed] of [[baseline[name], before], [current[name], after]]) for (const row of values) {
+      exactKeys(row, fields[name], name)
+      uuid(row.actor_id); if (name === 'events') uuid(row.id); else uuid(row.request_key)
+      const key = identity(name, row)
+      assert.ok(!indexed.has(key), `${name}: no duplicate row identity`)
+      indexed.set(key, row)
+    }
+    for (const [key, row] of before) assert.deepEqual(after.get(key), row, `${name}: every inherited row remains exact`)
+    added[name] = [...after].filter(([key]) => !before.has(key)).map(([, row]) => row)
+  }
+  assert.equal(intents.length, 3, 'exactly three captured review inputs')
+  const keys = new Set(), applications = new Set()
+  for (const intent of intents) {
+    exactKeys(intent, ['actor_id', 'request_key', 'command', 'payload', 'operating_context'], 'review input')
+    exactKeys(intent.payload, ['application_id', 'expected_revision', 'decision', 'notes', 'checks'], 'review input payload')
+    uuid(intent.request_key); uuid(intent.payload.application_id)
+    assert.equal(intent.actor_id, actorId, 'review input uses exact fictional Compliance actor')
+    assert.equal(intent.command, 'review_application', 'review input uses canonical admission action')
+    assert.deepEqual(intent.operating_context, operatingContext, 'review input uses exact selected ROLE context')
+    assert.ok(Number.isSafeInteger(intent.payload.expected_revision) && intent.payload.expected_revision > 0, 'review input revision is exact')
+    assert.equal(intent.payload.decision, 'APPROVED', 'only the intended fixture approval is reconciled')
+    assert.equal(intent.payload.notes, 'Fictional cloud functional admission only; not provider/scanner or independent-human acceptance.')
+    assert.deepEqual(intent.payload.checks, { identity: true, ownership: true, screening: true, suitability: true })
+    assert.ok(!keys.has(identity('requests', intent)) && !applications.has(intent.payload.application_id), 'review inputs have distinct keys and applications')
+    keys.add(identity('requests', intent)); applications.add(intent.payload.application_id)
+  }
+  const scoped = added.scoped_requests.filter(row => row.command === 'review_application')
+  const events = added.events.filter(row => row.kind === 'review_application')
+  assert.equal(added.requests.length, 3, 'legacy journal adds only the three captured decisions')
+  assert.equal(scoped.length, 3, 'scoped journal adds exactly three review counterparts, no extra review')
+  assert.equal(events.length, 3, 'event journal adds exactly three review counterparts, no extra review')
+  for (const intent of intents) {
+    const request = added.requests.find(row => identity('requests', row) === identity('requests', intent))
+    const receipt = scoped.find(row => identity('scoped_requests', row) === identity('scoped_requests', intent))
+    const audit = events.filter(row => row.application_id === intent.payload.application_id)
+    assert.ok(request && receipt, 'each input has its exact legacy and scoped counterpart')
+    assert.equal(audit.length, 1, 'each input has one distinct canonical review event')
+    const { operating_context, ...legacy } = intent
+    assert.deepEqual(request, { ...legacy, created_at: request.created_at }, 'legacy request matches captured input exactly')
+    assert.deepEqual(receipt, { ...intent, created_at: receipt.created_at }, 'scoped receipt matches captured input/context exactly')
+    assert.deepEqual(audit[0], { id: audit[0].id, subject_id: intent.payload.application_id, application_id: intent.payload.application_id,
+      organisation_id: null, investor_id: null, kind: 'review_application', actor_id: actorId, created_at: audit[0].created_at,
+      summary: 'Manual TEST_ONLY onboarding decision: APPROVED. Approval, when given, expires after 30 days and is not provider verification.' },
+    'review event matches canonical INVESTOR decision exactly')
+    for (const row of [request, receipt, audit[0]]) inWindow(row.created_at)
+  }
+}
+
 // Called only AFTER the unchanged rc.32 proof, before test-portal's existing
 // exact-schema cleanup. Committed fictional rows make independent backend
 // waits observable. This is functional SQL evidence, never hosted acceptance,
@@ -20,6 +104,7 @@ export async function proveAccountRepresentatives(db, clients, admissionSql, rep
   const applicant = { mode: 'APPLICANT' }
   const role = (name, organisationId = scope) => ({ mode: 'ROLE', organisationId, role: name })
   const reviewer = role('ComplianceOfficer'), applier = role('SuperAdmin')
+  const reviewIntents = [], clone = value => JSON.parse(JSON.stringify(value))
   const requestAction = 'request_investing_representative_mandate'
   const responseAction = 'respond_investing_representative_proposal'
   const eq = (actual, expected, label) => { assert.deepEqual(actual, expected, label); checks++ }
@@ -162,7 +247,12 @@ export async function proveAccountRepresentatives(db, clients, admissionSql, rep
     const applicationDetails = await details(n, kind)
     application = applicationFrom(await entry(n, 'submit_application', { application_id: application.id,
       expected_revision: application.revision, details: applicationDetails }), application.id)
-    application = applicationFrom(await command(4, reviewer, 'review_application', reviewApplication(application)), application.id)
+    // These expected tuples come from inputs BEFORE the canonical RPC, never
+    // from observed journal rows. Entry start/submit have only entry_requests.
+    const reviewKey = key(), reviewBody = reviewApplication(application)
+    reviewIntents.push(clone({ actor_id: id(4), request_key: reviewKey, command: 'review_application',
+      payload: reviewBody, operating_context: reviewer }))
+    application = applicationFrom(await command(4, reviewer, 'review_application', reviewBody, reviewKey), application.id)
     eq(application.status, 'APPROVED', `actor ${n} current ${kind} admission comes from canonical commands`)
     return { application, details: applicationDetails }
   }
@@ -176,7 +266,7 @@ export async function proveAccountRepresentatives(db, clients, admissionSql, rep
     }
     throw new Error('Account representatives proof did not observe required independent-backend lock wait')
   }
-  let baselineFunctions, parentFunctions, baselineSecurity, baselineRelations, baselineRows, installedFunctions
+  let baselineFunctions, parentFunctions, baselineSecurity, baselineRelations, baselineRows, installedFunctions, proofStartedAt
   let entity, targetB, targetC, account, ownMandate, accepted, declined, lifecycleMode
   const request = (n, overrides = {}) => ({ investment_account_id: account.id, expected_revision: 0,
     evidence_reference: 'Fictional board appointment of the named target in the already-reviewed COMPANY evidence.',
@@ -214,6 +304,9 @@ export async function proveAccountRepresentatives(db, clients, admissionSql, rep
     const pids = await Promise.all([db, ...clients].map(client => scalar('select pg_backend_pid()', [], client)))
     eq(new Set(pids).size, 3, 'proof has three distinct actual backend PIDs')
     baselineFunctions = await functions(); baselineSecurity = await security(); baselineRelations = await relations(); baselineRows = await rows(baselineRelations)
+    // requests/events use transaction-start now(), scoped_requests uses
+    // clock_timestamp(). Start the database window BEFORE any proof BEGIN.
+    proofStartedAt = await scalar("select to_jsonb(clock_timestamp()) #>> '{}'")
     await begin()
     phase = 'exact-parent-prerequisite-and-install'
     if (await scalar("select to_regprocedure('bx1_private.lock_funding_person(uuid,uuid)') is null")) {
@@ -715,6 +808,80 @@ export async function proveAccountRepresentatives(db, clients, admissionSql, rep
     await db.query('update bx1_portal.entry_configuration set test_ordinary_entry_enabled=$1 where singleton', [originalConfiguration.test_ordinary_entry_enabled])
     await db.query('update bx1_private.document_receipt_policy set enforced=$1 where singleton', [originalReceiptPolicy.enforced])
     const finalRows = await rows(baselineRelations)
+    const footprint = {
+      intents: clone(reviewIntents), actorId: id(4), operatingContext: clone(reviewer),
+      window: { start: proofStartedAt, end: await scalar("select to_jsonb(clock_timestamp()) #>> '{}'") },
+      baseline: Object.fromEntries(['requests', 'scoped_requests', 'events'].map(name => [name, baselineRows[`bx1_portal.${name}`]])),
+      current: Object.fromEntries(['requests', 'scoped_requests', 'events'].map(name => [name, finalRows[`bx1_portal.${name}`]])),
+    }
+    // Pure negatives use only intended fictional inputs and a memory-only
+    // inherited sentinel, not copied output or adversarial database inserts.
+    const memory = { intents: clone(reviewIntents), actorId: id(4), operatingContext: clone(reviewer),
+      window: clone(footprint.window), baseline: {}, current: {} }
+    for (const name of ['requests', 'scoped_requests', 'events']) memory.baseline[name] = []
+    for (const [index, intent] of memory.intents.entries()) {
+      const { operating_context, ...legacy } = intent
+      memory.current.requests ??= []; memory.current.scoped_requests ??= []; memory.current.events ??= []
+      memory.current.requests.push({ ...clone(legacy), created_at: memory.window.start })
+      memory.current.scoped_requests.push({ ...clone(intent), created_at: memory.window.end })
+      memory.current.events.push({ id: id(960 + index), subject_id: intent.payload.application_id, application_id: intent.payload.application_id,
+        organisation_id: null, investor_id: null, kind: 'review_application', actor_id: id(4), created_at: memory.window.start,
+        summary: 'Manual TEST_ONLY onboarding decision: APPROVED. Approval, when given, expires after 30 days and is not provider verification.' })
+    }
+    for (const name of ['requests', 'scoped_requests', 'events']) {
+      const inherited = clone(memory.current[name][0])
+      if (name === 'events') { inherited.id = id(970); inherited.kind = 'fictional_inherited_sentinel' }
+      else { inherited.request_key = id(970); inherited.command = 'fictional_inherited_sentinel' }
+      memory.baseline[name].push(clone(inherited)); memory.current[name].push(inherited)
+    }
+    validateReviewFootprint(memory); checks++
+    const negatives = [
+      ['missing intended legacy request', value => value.current.requests.shift()],
+      ['duplicate legacy request', value => value.current.requests.push(clone(value.current.requests[0]))],
+      ['extra unrelated legacy request', value => value.current.requests.push({ ...clone(value.current.requests[0]), request_key: id(971), command: 'subscribe' })],
+      ['changed actor', value => { value.current.requests[0].actor_id = id(3) }],
+      ['changed request key', value => { value.current.requests[0].request_key = id(971) }],
+      ['changed action', value => { value.current.requests[0].command = 'subscribe' }],
+      ['changed application', value => { value.current.requests[0].payload.application_id = id(971) }],
+      ['changed revision', value => { value.current.requests[0].payload.expected_revision++ }],
+      ['changed decision', value => { value.current.requests[0].payload.decision = 'REJECTED' }],
+      ['changed notes', value => { value.current.requests[0].payload.notes = 'Altered fictional input.' }],
+      ['changed checks', value => { value.current.requests[0].payload.checks.identity = false }],
+      ['extra payload field', value => { value.current.requests[0].payload.unrelated = true }],
+      ['missing payload field', value => { delete value.current.requests[0].payload.notes }],
+      ['extra legacy field', value => { value.current.requests[0].unrelated = true }],
+      ['missing legacy field', value => { delete value.current.requests[0].command }],
+      ['missing captured intent', value => value.intents.pop()],
+      ['missing scoped review', value => value.current.scoped_requests.shift()],
+      ['extra scoped review', value => value.current.scoped_requests.push({ ...clone(value.current.scoped_requests[0]), request_key: id(971) })],
+      ['changed scoped context', value => { value.current.scoped_requests[0].operating_context.organisationId = otherScope }],
+      ['changed scoped actor', value => { value.current.scoped_requests[0].actor_id = id(3) }],
+      ['changed scoped key', value => { value.current.scoped_requests[0].request_key = id(971) }],
+      ['changed scoped action', value => { value.current.scoped_requests[0].command = 'subscribe' }],
+      ['changed scoped payload', value => { value.current.scoped_requests[0].payload.checks.ownership = false }],
+      ['extra scoped field', value => { value.current.scoped_requests[0].unrelated = true }],
+      ['missing review event', value => value.current.events.shift()],
+      ['duplicate event identity', value => value.current.events.push(clone(value.current.events[0]))],
+      ['extra review event', value => value.current.events.push({ ...clone(value.current.events[0]), id: id(971) })],
+      ['changed event actor', value => { value.current.events[0].actor_id = id(3) }],
+      ['changed event application', value => { value.current.events[0].application_id = id(971) }],
+      ['changed event subject', value => { value.current.events[0].subject_id = id(971) }],
+      ['changed event organisation', value => { value.current.events[0].organisation_id = scope }],
+      ['changed event investor', value => { value.current.events[0].investor_id = id(1) }],
+      ['changed event kind', value => { value.current.events[0].kind = 'subscribe' }],
+      ['changed event summary', value => { value.current.events[0].summary = 'Altered fictional summary.' }],
+      ['extra event field', value => { value.current.events[0].unrelated = true }],
+      ['invalid timestamp', value => { value.current.requests[0].created_at = 'not-a-timestamp' }],
+      ['invalid calendar date', value => { value.current.requests[0].created_at = '2026-02-30T00:00:00Z' }],
+      ['legacy timestamp before window', value => { value.current.requests[0].created_at = new Date(Date.parse(value.window.start) - 1000).toISOString() }],
+      ['scoped timestamp after window', value => { value.current.scoped_requests[0].created_at = new Date(Date.parse(value.window.end) + 1000).toISOString() }],
+      ['event timestamp after window', value => { value.current.events[0].created_at = new Date(Date.parse(value.window.end) + 1000).toISOString() }],
+      ...['requests', 'scoped_requests', 'events'].map(name => [`changed inherited ${name}`, value => { value.current[name].at(-1).created_at = value.window.end + 'changed' }]),
+    ]
+    for (const [label, mutate] of negatives) {
+      const value = clone(memory); mutate(value)
+      assert.throws(() => validateReviewFootprint(value), { code: 'ERR_ASSERTION' }, `strict review footprint rejects ${label}`); checks++
+    }
     for (const spec of baselineRelations) {
       const name = `${spec.nspname}.${spec.relname}`
       const original = baselineRows[name], current = finalRows[name]
@@ -727,7 +894,8 @@ export async function proveAccountRepresentatives(db, clients, admissionSql, rep
         'bx1_portal.applications', 'bx1_portal.entry_requests', 'bx1_portal.application_detail_versions', 'bx1_portal.customer_monitoring_cases',
         'bx1_portal.application_ownership_control_versions', 'bx1_portal.legal_entity_parties', 'bx1_portal.investment_accounts',
         'bx1_portal.investing_representative_mandates', 'bx1_portal.investing_representative_receipts', 'bx1_portal.scoped_requests', 'bx1_portal.events'])
-      if (!permittedFixture.has(name)) eq(current, original, `all out-of-scope ${name} financial/provider/scanner/wallet/person rows remain exact`)
+      if (name === 'bx1_portal.requests') { validateReviewFootprint(footprint); checks++ }
+      else if (!permittedFixture.has(name)) eq(current, original, `all out-of-scope ${name} financial/provider/scanner/wallet/person rows remain exact`)
     }
     await commit()
     console.log(`BX1_ACCOUNT_REPRESENTATIVES_PASS assertions=${checks} fixture=synthetic-cloud-PostgreSQL17 parent=rc32-original-proof-first account=one proposer=original-entity-applicant target=current-individual-admission consent=immutable-accept-decline documents=exact-proposal-only validation=synthetic-unscanned auditRollback=proven replay=proven concurrency=real-response-proposal-and-both-subject-admission-monitoring-waits hostedPrivilegeParity=non-super-lock-document-owner passiveExpiry=real-clock-new-consent-required delegation=denied financialExecution=denied inheritedRows=preserved globalGuards=preserved cleanup=caller-exact-schema-required hostedAcceptance=not-proven documentBytes=not-proven independentHumans=not-proven`)
