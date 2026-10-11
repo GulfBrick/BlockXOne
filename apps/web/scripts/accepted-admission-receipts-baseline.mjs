@@ -30,7 +30,7 @@ export async function installAcceptedAdmissionReceiptsBaseline(db, clients, feat
       encode(sha256(convert_to(pg_get_functiondef(p.oid),'UTF8')),'hex') definition_hash,
       encode(sha256(convert_to(btrim(replace(p.prosrc,E'\\r\\n',E'\\n'),E' \\n\\t'),'UTF8')),'hex') source_hash,
       p.proowner::text owner,p.proacl::text acl,p.prosecdef,p.proconfig,p.provolatile,p.proparallel,
-      p.proleakproof,p.prostrict,p.proretset,p.prorettype::text,p.prolang::text,p.procost,p.prorows,
+      p.proleakproof,p.proisstrict,p.proretset,p.prorettype::text,p.prolang::text,p.procost,p.prorows,
       p.pronargs,p.pronargdefaults,p.proargtypes::text,p.proallargtypes::text,p.proargmodes,p.proargnames,
       p.proargdefaults::text,p.prosupport::text,p.probin,p.prosqlbody::text
       from pg_proc p join pg_namespace n on n.oid=p.pronamespace
