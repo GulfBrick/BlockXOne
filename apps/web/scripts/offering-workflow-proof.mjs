@@ -1727,6 +1727,65 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
     await samePerson([1], () => denied('known revoked manager identity denies package creation', createAnother), 'REVOKED')
     for (const context of [applicant, role('Investor'), role('SuperAdmin'), role('OfferingManager', otherScope), { ...manager, extra: true }, { mode: 'ROLE', role: 'OfferingManager' }])
       await denied('invented/malformed/wrong-role context cannot create package', () => command(1, context, 'create_product', { organisation_id: application.organisation_id, terms: typedTerms('FUND', 'Fictional denied context') }))
+    // Bounded six-case claims diagnostics; the original strict denials remain unchanged below.
+    const claimsDiagnosticCases = [
+      ['issuer-main', { iss: 'https://oqkevkjbkpugjotihtda.supabase.co/auth/v1' }],
+      ['session-missing', { session_id: id(999) }],
+      ['actor-missing', { sub: id(999) }],
+      ['jwt-role-anon', { role: 'anon' }],
+      ['jwt-expired', { exp: 1 }],
+      ['amr-nonpassword', { amr: [{ method: 'otp', timestamp: 1 }] }],
+    ]
+    let firstUncodedClaimsError, hasUncodedClaimsError = false
+    for (const [label, extra] of claimsDiagnosticCases) {
+      await fixtureOwner(`${label} claims diagnostic baseline`)
+      const beforeRows = await state(), beforeFunctions = await functions(), beforeSecurity = await security()
+      let outcome = 'RETURNED', sqlstate = null, commandError, guards
+      await db.query('savepoint offering_claims_case')
+      try {
+        await claims(1, extra)
+        const attemptedClaims = await scalar('select auth.jwt()')
+        eq(await scalar('select current_user'), 'authenticated', `${label} diagnostic public RPC retains authenticated SQL role`)
+        await db.query('savepoint offering_claims_rpc')
+        try {
+          await scalar('select public.bx1_portal_command_scoped($1,$2,$3::jsonb,$4::jsonb)',
+            ['create_product', key(), JSON.stringify({ organisation_id: application.organisation_id, terms: fund.terms }), JSON.stringify(manager)])
+        } catch (error) {
+          commandError = error
+          const coded = typeof error?.code === 'string' && /^[0-9A-Z]{5}$/.test(error.code)
+          outcome = coded ? 'SQL_ERROR' : 'UNCODED_ERROR'
+          sqlstate = coded ? error.code : null
+          if (!coded && !hasUncodedClaimsError) { firstUncodedClaimsError = error; hasUncodedClaimsError = true }
+        } finally {
+          await db.query('rollback to savepoint offering_claims_rpc; release savepoint offering_claims_rpc')
+        }
+        await fixtureOwner(`${label} claims diagnostic private guard inspection`)
+        eq(await scalar('select auth.jwt()=$1::jsonb', [JSON.stringify(attemptedClaims)]), true,
+          `${label} recovered diagnostic retains the exact attempted claims without exposing them`)
+        guards = await scalar(`select jsonb_build_object(
+          'admission_password_session',bx1_portal.admission_password_session(),
+          'has_session',bx1_portal.has_session(),
+          'fresh_session',bx1_portal.fresh_session(),
+          'valid_operating_context',bx1_portal.valid_operating_context($1::jsonb),
+          'offering_command_allowed',bx1_portal.offering_workflow_command_allowed($1::jsonb,'create_product'),
+          'offering_command_context',bx1_portal.offering_workflow_command_context($1::jsonb,'create_product'),
+          'manager_verified_factor_present',exists(select 1 from auth.mfa_factors where user_id=$2::uuid and status::text='verified'))`,
+          [JSON.stringify(manager), id(1)])
+        eq(await state(), beforeRows, `${label} claims diagnostic changes no row inside isolation`)
+        eq(await functions(), beforeFunctions, `${label} claims diagnostic changes no function inside isolation`)
+        eq(await security(), beforeSecurity, `${label} claims diagnostic changes no security manifest inside isolation`)
+      } finally {
+        await db.query('rollback to savepoint offering_claims_case; release savepoint offering_claims_case')
+        await admin()
+      }
+      eq(await state(), beforeRows, `${label} claims diagnostic rollback restores every row`)
+      eq(await functions(), beforeFunctions, `${label} claims diagnostic rollback restores every function`)
+      eq(await security(), beforeSecurity, `${label} claims diagnostic rollback restores every security manifest`)
+      const errorKind = outcome === 'RETURNED' ? null : outcome === 'SQL_ERROR' ? 'SQL_ERROR'
+        : ['Error', 'TypeError', 'RangeError', 'AbortError'].includes(commandError?.name) ? commandError.name : 'OTHER_UNCODED_ERROR'
+      console.log('BX1_CLAIMS_BOUNDARY_DIAGNOSTIC_RECEIPT', JSON.stringify({ label, outcome, sqlstate, error_kind: errorKind, guards, restored: true }))
+    }
+    if (hasUncodedClaimsError) throw firstUncodedClaimsError
     for (const extra of [{ iss: 'https://oqkevkjbkpugjotihtda.supabase.co/auth/v1' }, { session_id: id(999) }, { sub: id(999) }, { role: 'anon' }, { exp: 1 }, { amr: [{ method: 'otp', timestamp: 1 }] }])
       await denied('missing/mismatched MAIN actor/session marker denies package exception', () => command(1, manager, 'create_product', { organisation_id: application.organisation_id, terms: fund.terms }, key(), extra))
     for (const sql of ["update bx1_portal.entry_configuration set manual_test_review=false where singleton",
