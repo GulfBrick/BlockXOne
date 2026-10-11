@@ -31,4 +31,17 @@ describe('normal admission projection', () => {
       expect(stage2AccessSchema.safeParse({ ...value, allowed_commands: ['submit_application'] }).success).toBe(false)
     }
   })
+  it('keeps proposal responses applicant-scoped and backward compatible without opening other actions', () => {
+    const projected = { ...access, allowed_commands: ['respond_investing_representative_proposal'] }
+    expect(stage2AccessSchema.safeParse(projected).success).toBe(true)
+    expect(hasStage2CommandAccess({ ...snapshot(), stage2_access: projected }, 'respond_investing_representative_proposal', context)).toBe(true)
+    expect(stage2AccessSchema.safeParse(access).success).toBe(true)
+    for (const role of ['ComplianceOfficer', 'SuperAdmin', 'OfferingManager', 'Investor'] as const) {
+      expect(stage2AccessSchema.safeParse({ ...projected, operating_context: { mode: 'ROLE', organisationId: other, role } }).success).toBe(false)
+    }
+    for (const command of ['subscribe', 'publish_product', 'revoke_investing_representative_mandate', 'reconcile_funding']) {
+      expect(stage2AccessSchema.safeParse({ ...projected, allowed_commands: [command] }).success).toBe(false)
+    }
+    expect(validatedStage2Access({ ...snapshot(), actor: { id: other }, stage2_access: projected })).toBeNull()
+  })
 })

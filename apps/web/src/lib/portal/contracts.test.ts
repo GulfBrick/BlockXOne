@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { FUND_V2_CANONICAL_REFERENCES, REAL_ESTATE_V2_CANONICAL_REFERENCES, PORTAL_PATHS, applicationDetailsSchema, applicationDocumentLookupSchema, applicationDocumentVersionsSchema, applicationDraftDetailsSchema, customerMonitoringSnapshotSchema, entityProductEligibilitySchema, validatedEntityProductEligibility, isRealEstateTermsV2, isWealthManagerDetailsV2, evidenceSchema, formatTestMoney, portalCommandSchema, productTermsSchema, subscriptionQuote, type FundTermsV2, type RealEstateTermsV2, type PortalProduct, type ProductTerms } from './contracts'
+import { FUND_V2_CANONICAL_REFERENCES, REAL_ESTATE_V2_CANONICAL_REFERENCES, PORTAL_PATHS, applicationDetailsSchema, applicationDocumentLookupSchema, applicationDocumentVersionsSchema, applicationDraftDetailsSchema, customerMonitoringSnapshotSchema, entityProductEligibilitySchema, validatedEntityProductEligibility, investingProposalDocumentLookupSchema, isRealEstateTermsV2, isWealthManagerDetailsV2, evidenceSchema, formatTestMoney, portalCommandSchema, productTermsSchema, subscriptionQuote, type FundTermsV2, type RealEstateTermsV2, type PortalProduct, type ProductTerms } from './contracts'
 import { isSupabaseWebPathAllowed } from '@/lib/auth-mode'
 import { isProductionWebPathBlocked } from '@/lib/release-policy'
 
@@ -334,6 +334,27 @@ describe('customer portal contracts', () => {
   it('never accepts financial completion or reviewer identity from the browser', () => {
     expect(portalCommandSchema.safeParse({ command: 'settle', key, payload: { subscription_id: id, paid: true } }).success).toBe(false)
     expect(portalCommandSchema.safeParse({ command: 'review_application', key, payload: { application_id: id, expected_revision: 1, decision: 'APPROVED', notes: 'Synthetic documents independently reviewed.', checks: { identity: true, ownership: true, screening: true, suitability: true }, reviewer_id: id } }).success).toBe(false)
+  })
+  it('accepts a named representative proposal without accepting client identity or authority', () => {
+    const payload = { investment_account_id: id, expected_revision: 0, evidence_reference: 'Fictional board appointment names the proposed representative.', appointment_document_id: key, requested_until: '2026-10-20T12:00:00Z' }
+    const parse = (change: object) => portalCommandSchema.safeParse({ command: 'request_investing_representative_mandate', key, payload: { ...payload, ...change } })
+    expect(parse({ representative_email: ' representative@example.invalid ' }).success).toBe(true)
+    expect(parse({}).success).toBe(true)
+    for (const change of [{ representative_email: '' }, { representative_email: 'unknown' }, { representative_user_id: key }, { representative_application_id: key }, { proposal_hash: 'a'.repeat(64) }, { scope: ['ACCOUNT_VIEW'] }, { approved: true }]) expect(parse(change).success).toBe(false)
+  })
+  it('binds acceptance and decline to the exact saved proposal, not a browser-selected account or role', () => {
+    const payload = { mandate_id: id, expected_revision: 1, proposal_hash: 'a'.repeat(64), decision: 'ACCEPT' }
+    const parse = (change: object) => portalCommandSchema.safeParse({ command: 'respond_investing_representative_proposal', key, payload: { ...payload, ...change } })
+    expect(parse({}).success).toBe(true)
+    expect(parse({ decision: 'DECLINE' }).success).toBe(true)
+    for (const change of [{ expected_revision: 0 }, { proposal_hash: 'forged' }, { proposal_hash: undefined }, { decision: 'APPROVED' }, { representative_user_id: key }, { investment_account_id: key }, { role: 'Investor' }]) expect(parse(change).success).toBe(false)
+  })
+  it('accepts only an exact COMPANY proposal document with truthful lifecycle state', () => {
+    const lookup = { mandate_id: id, mandate_revision: 1, proposal_hash: 'a'.repeat(64), applicant_user_id: key,
+      document: { id, kind: 'COMPANY', title: 'Synthetic appointment', storage_path: `${key}/${id}`, sha256: 'b'.repeat(64), size: 100, mime_type: 'application/pdf' }, validation_state: 'SYNTHETIC_UNSCANNED' }
+    expect(investingProposalDocumentLookupSchema.safeParse(lookup).success).toBe(true)
+    expect(investingProposalDocumentLookupSchema.safeParse({ ...lookup, validation_state: 'SCANNED_CLEAN' }).success).toBe(true)
+    for (const change of [{ mandate_revision: 0 }, { proposal_hash: 'forged' }, { validation_state: 'APPROVED' }, { provider_history: [] }, { document: { ...lookup.document, kind: 'IDENTITY' } }, { document: { ...lookup.document, public_url: 'https://example.invalid' } }]) expect(investingProposalDocumentLookupSchema.safeParse({ ...lookup, ...change }).success).toBe(false)
   })
   it('formats minor units without number coercion', () => {
     expect(formatTestMoney('1')).toBe('0.01 ZAR_TEST')

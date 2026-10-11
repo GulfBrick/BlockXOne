@@ -1,10 +1,10 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import type { PlatformEnvironment } from '@/lib/platform-release'
-import { applicationDetailsSchema, isFundTermsV2, isRealEstateTermsV2, isOfferingSubscribable, isWealthManagerDetailsV2, subscriptionQuote, validatedEntityProductEligibility, type LegacyApplicationDetails, type PortalApplication, type PortalEntityInvestmentAccount, type PortalEntityProductEligibility, type PortalInvestmentAccount, type PortalInvestingRepresentativeMandate, type PortalProduct, type PortalProductEligibility, type PortalSnapshot } from '@/lib/portal/contracts'
-import { portalScopeHref, type PortalOperatingContext } from '@/lib/portal/operating-context'
+import { applicationDetailsSchema, investingProposalDocumentLookupSchema, isFundTermsV2, isRealEstateTermsV2, isOfferingSubscribable, isWealthManagerDetailsV2, subscriptionQuote, validatedEntityProductEligibility, type LegacyApplicationDetails, type PortalApplication, type PortalEntityInvestmentAccount, type PortalEntityProductEligibility, type PortalInvestmentAccount, type PortalInvestingRepresentativeMandate, type PortalProduct, type PortalProductEligibility, type PortalSnapshot } from '@/lib/portal/contracts'
+import { portalContextKey, portalScopeHref, type PortalOperatingContext } from '@/lib/portal/operating-context'
 import { hasStage2CommandAccess, isTestPasswordAdmission, validatedStage2Access } from '@/lib/portal/stage2-access'
 import { CommandFeedback, usePortalCommand } from './portal-client'
 import { ApplicationDetailsSummary, ApplicationDocumentHistory, PrivateDocument } from './onboarding-form'
@@ -71,7 +71,106 @@ function IndividualInvestmentAccountPanel({ snapshot, onSaved, operatingContext 
 }
 
 function entityMandateNextOwner(mandate: PortalInvestingRepresentativeMandate): string {
-  return { APPLICANT: 'Investing representative', COMPLIANCE: 'Independent BlockXOne Compliance Officer', SUPER_ADMIN: 'Authorised BlockXOne Super Admin', NONE: 'No pending mandate action' }[mandate.next_owner]
+  return { APPLICANT: 'Entity applicant', REPRESENTATIVE: 'Named representative', COMPLIANCE: 'Independent BlockXOne Compliance Officer', SUPER_ADMIN: 'Authorised BlockXOne Super Admin', NONE: 'No pending mandate action' }[mandate.next_owner]
+}
+
+export function investingRepresentativeLabel(mandate: PortalInvestingRepresentativeMandate): string {
+  return [mandate.representative_name, mandate.representative_email].filter(Boolean).join(' · ') || mandate.representative_user_id
+}
+
+export function representativeAppointmentIdentity(mandate: PortalInvestingRepresentativeMandate, context: PortalOperatingContext): string {
+  return JSON.stringify([mandate.id, mandate.revision, mandate.proposal_hash, mandate.applicant_user_id, mandate.representative_user_id,
+    mandate.representative_application_id, mandate.representative_application_revision, mandate.appointment_document_id, portalContextKey(context)])
+}
+
+/** Read only the exact proposal document; an entity application is not needed or exposed. */
+export function RepresentativeAppointmentEvidence({ mandate, operatingContext, onVerified }: {
+  mandate: PortalInvestingRepresentativeMandate; operatingContext: PortalOperatingContext; onVerified?: (identity: string | null) => void;
+}) {
+  const [receipt, setReceipt] = useState<{ document: LegacyApplicationDetails['documents'][number]; validationState: 'SYNTHETIC_UNSCANNED' | 'SCANNED_CLEAN'; url: string; identity: string }>()
+  const [state, setState] = useState<'loading' | 'ready' | 'unavailable'>('loading')
+  const [reload, setReload] = useState(0)
+  const href = portalScopeHref(`/api/portal/documents?mandate_id=${mandate.id}&id=${mandate.appointment_document_id}`, operatingContext)
+  const downloadHref = portalScopeHref(`/api/portal/documents?mandate_id=${mandate.id}&id=${mandate.appointment_document_id}&download=1`, operatingContext)
+  const identity = representativeAppointmentIdentity(mandate, operatingContext)
+  useEffect(() => {
+    let current = true
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 8000)
+    setReceipt(undefined); setState('loading'); onVerified?.(null)
+    async function read() {
+      try {
+        const response = await fetch(href, { credentials: 'same-origin', cache: 'no-store', redirect: 'error', signal: controller.signal })
+        if (!response.ok || !response.headers.get('content-type')?.startsWith('application/json')) throw new Error()
+        const raw = await response.text()
+        if (raw.length > 16_384) throw new Error()
+        const data: unknown = JSON.parse(raw)
+        if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error()
+        const value = data as Record<string, unknown>
+        const { url, ...envelope } = value
+        const lookup = investingProposalDocumentLookupSchema.safeParse(envelope)
+        if (!lookup.success || lookup.data.mandate_id !== mandate.id || lookup.data.mandate_revision !== mandate.revision || lookup.data.proposal_hash !== mandate.proposal_hash
+          || lookup.data.applicant_user_id !== mandate.applicant_user_id || lookup.data.document.id !== mandate.appointment_document_id
+          || lookup.data.document.storage_path !== `${mandate.applicant_user_id}/${mandate.appointment_document_id}` || url !== downloadHref) throw new Error()
+        if (current) {
+          setReceipt({ document: lookup.data.document, validationState: lookup.data.validation_state, url: downloadHref, identity })
+          setState('ready'); onVerified?.(identity)
+        }
+      } catch { if (current) { setState('unavailable'); onVerified?.(null) } }
+      finally { clearTimeout(timeout) }
+    }
+    void read()
+    return () => { current = false; clearTimeout(timeout); controller.abort() }
+  }, [href, downloadHref, identity, mandate.id, mandate.revision, mandate.proposal_hash, mandate.applicant_user_id, mandate.appointment_document_id, onVerified, reload])
+  return <section className={styles.stack} aria-label="Bound appointment document">
+    {state === 'loading' || state === 'ready' && receipt?.identity !== identity ? <p className={styles.muted} role="status">Checking the exact appointment document…</p>
+      : state === 'ready' && receipt?.identity === identity ? <><DetailList rows={[{ label: 'Appointment document', value: receipt.document.title }, { label: 'Document fingerprint', value: <span className={styles.mono}>{receipt.document.sha256}</span> }, { label: 'Document processing', value: receipt.validationState === 'SCANNED_CLEAN' ? 'Recorded clean scan' : 'Synthetic TEST evidence · not scanned' }]} /><a href={receipt.url} className={styles.textLink}>Download bound appointment document</a>{receipt.validationState === 'SYNTHETIC_UNSCANNED' ? <p className={styles.muted}>This synthetic evidence has no malware-scan acceptance. It is not a live appointment or provider approval.</p> : null}</>
+        : <Notice title="Appointment document unavailable" tone="warning">The exact current proposal and document could not be verified. Acceptance is unavailable; you may decline a current proposal. <button type="button" className={styles.buttonSecondary} onClick={() => setReload(value => value + 1)}>Retry appointment document read</button></Notice>}
+  </section>
+}
+
+function RepresentativeProposalCase({ mandate, snapshot, operatingContext, onSaved }: {
+  mandate: PortalInvestingRepresentativeMandate; snapshot: PortalSnapshot; operatingContext: PortalOperatingContext; onSaved: (snapshot: PortalSnapshot) => void;
+}) {
+  const command = usePortalCommand(onSaved)
+  const [evidenceIdentity, setEvidenceIdentity] = useState<string | null>(null)
+  const current = mandate.representative_user_id === snapshot.actor.id && mandate.applicant_user_id !== snapshot.actor.id
+    && typeof mandate.proposal_hash === 'string' && /^[0-9a-f]{64}$/.test(mandate.proposal_hash)
+    && Number.isInteger(mandate.revision) && mandate.revision > 0
+    && typeof mandate.representative_application_id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(mandate.representative_application_id)
+    && typeof mandate.representative_application_revision === 'number' && Number.isInteger(mandate.representative_application_revision) && mandate.representative_application_revision > 1
+    && Boolean(mandate.admission_approved_until) && Date.parse(mandate.admission_approved_until!) > Date.now()
+    && Date.parse(mandate.requested_until) > Date.now()
+  const canRespond = current && mandate.status === 'PROPOSED' && mandate.can_respond === true
+    && !mandate.consent_decision && !mandate.consent_receipt_id
+    && (!isTestPasswordAdmission(snapshot) || hasStage2CommandAccess(snapshot, 'respond_investing_representative_proposal', operatingContext))
+  const canAccept = canRespond && evidenceIdentity === representativeAppointmentIdentity(mandate, operatingContext)
+  function respond(decision: 'ACCEPT' | 'DECLINE') {
+    if (!canRespond || decision === 'ACCEPT' && !canAccept || command.busy || command.unknown) return
+    void command.submit('respond_investing_representative_proposal', { mandate_id: mandate.id, expected_revision: mandate.revision, proposal_hash: mandate.proposal_hash, decision })
+  }
+  return <section className={styles.stack} aria-label={`${mandate.entity_name} representative proposal`}>
+    <DetailList rows={[{ label: 'Legal holder', value: mandate.entity_name }, { label: 'Proposal reference', value: <span className={styles.mono}>{mandate.id}</span> }, { label: 'Proposal revision', value: mandate.revision }, { label: 'Proposed by', value: <span className={styles.mono}>{mandate.applicant_user_id}</span> }, { label: 'Named representative', value: investingRepresentativeLabel(mandate) }, { label: 'Proposal state', value: <StatusBadge status={mandate.status} /> }, { label: 'Limited scope', value: 'Account view and guarded eligibility requests; zero transaction authority' }, { label: 'Requested expiry', value: dateLabel(mandate.requested_until) }, { label: 'Next responsible owner', value: entityMandateNextOwner(mandate) }, { label: 'Your response', value: mandate.consent_decision ?? 'Not yet recorded' }, ...(mandate.consent_receipt_id ? [{ label: 'Consent receipt', value: <span className={styles.mono}>{mandate.consent_receipt_id}</span> }] : [])]} />
+    <p className={styles.copy}>{mandate.evidence_reference}</p>
+    {current ? <RepresentativeAppointmentEvidence mandate={mandate} operatingContext={operatingContext} onVerified={setEvidenceIdentity} /> : null}
+    <CommandFeedback command={command} />
+    {canRespond ? <><p className={styles.copy}>Inspect the bound appointment before accepting. Acceptance sends this exact proposal to Compliance; it does not activate account access, a platform role, funding or signing authority. Decline closes this proposal even if its document read is unavailable.</p>{!canAccept ? <p className={styles.muted} role="status">Acceptance is disabled until the exact appointment document is verified.</p> : null}<div className={styles.actions}><button type="button" className={styles.button} disabled={!canAccept || command.busy || command.unknown} onClick={() => respond('ACCEPT')}>Accept representative proposal</button><button type="button" className={styles.buttonSecondary} disabled={command.busy || command.unknown} onClick={() => respond('DECLINE')}>Decline representative proposal</button></div></>
+      : <Notice title={mandate.status === 'PROPOSED' ? 'Proposal response unavailable' : 'Representative response recorded'}>{mandate.status === 'PROPOSED' ? 'Current admissions, exact appointment evidence and returned consent authority are required. Refresh saved state if the proposal has changed.' : mandate.status === 'DECLINED' ? 'This proposal is closed. A revised appointment requires a new proposal and consent.' : mandate.effective ? 'A separately approved limited mandate is effective. Other representatives remain separate.' : `No account access is granted by your response. Next owner: ${entityMandateNextOwner(mandate)}.`}</Notice>}
+  </section>
+}
+
+export function RepresentativeProposalInbox({ snapshot, onSaved, operatingContext }: {
+  snapshot: PortalSnapshot; onSaved: (snapshot: PortalSnapshot) => void; operatingContext?: PortalOperatingContext;
+}) {
+  const context = operatingContext ?? snapshot.operating_context
+  if (context?.mode !== 'APPLICANT' || !Array.isArray(snapshot.investing_representative_mandates)) return null
+  const proposals = snapshot.investing_representative_mandates.filter(item => item.representative_user_id === snapshot.actor.id
+    && item.applicant_user_id !== snapshot.actor.id && Boolean(item.proposal_hash))
+  if (!proposals.length) return null
+  return <Panel title="Your representative proposals" description="An entity applicant has named you. Your own sign-in records consent; no entity application or other representative’s case is exposed.">
+    {new Set(proposals.map(item => item.id)).size !== proposals.length ? <Notice title="Representative proposals unavailable" tone="warning">The saved proposal references are inconsistent. Refresh before responding.</Notice>
+      : <div className={styles.stack}>{proposals.map(mandate => <RepresentativeProposalCase key={`${mandate.id}:${mandate.revision}`} mandate={mandate} snapshot={snapshot} operatingContext={context} onSaved={onSaved} />)}</div>}
+  </Panel>
 }
 
 function EntityInvestmentAccountPanel({ snapshot, onSaved, operatingContext }: { snapshot: PortalSnapshot; onSaved: (snapshot: PortalSnapshot) => void; operatingContext?: PortalOperatingContext }) {
@@ -139,7 +238,48 @@ function EntityAccountCase({ snapshot, account, mandates, actorId, application, 
         <button type="submit" className={styles.button} disabled={!selectedDocumentId || evidenceReference.trim().length < 20 || !validUntil}>Submit representative mandate for review</button>
       </fieldset>
     </form> : null}
+    {application?.user_id === actorId ? <AdditionalRepresentativeProposal snapshot={snapshot} account={account} application={application} onSaved={onSaved} /> : null}
+    {application?.user_id === actorId && mandates.some(item => item.investment_account_id === account.id && item.representative_user_id !== actorId && item.proposal_hash) ? <Panel title="Named representative handoffs" description="Each person has a separate immutable proposal, consent and review cycle. Your own mandate does not appoint them.">
+      <div className={styles.stack}>{mandates.filter(item => item.investment_account_id === account.id && item.representative_user_id !== actorId && item.proposal_hash).map(item => <section key={item.id} aria-label={`${investingRepresentativeLabel(item)} appointment handoff`}><DetailList rows={[{ label: 'Named representative', value: investingRepresentativeLabel(item) }, { label: 'Proposal reference', value: <span className={styles.mono}>{item.id}</span> }, { label: 'Cycle / revision', value: `${item.cycle} / ${item.revision}` }, { label: 'Status', value: <StatusBadge status={item.status} /> }, { label: 'Consent', value: item.consent_decision ?? 'Awaiting named representative' }, { label: 'Next responsible owner', value: entityMandateNextOwner(item) }, { label: 'Expiry', value: dateLabel(item.requested_until) }, { label: 'Effective mandate', value: item.effective ? 'Limited mandate active' : 'No account authority from this proposal' }]} />{item.review_notes ? <p className={styles.copy}>{item.review_notes}</p> : null}</section>)}</div>
+    </Panel> : null}
   </section>
+}
+
+function AdditionalRepresentativeProposal({ snapshot, account, application, onSaved }: {
+  snapshot: PortalSnapshot; account: PortalEntityInvestmentAccount; application: PortalApplication & { details: LegacyApplicationDetails }; onSaved: (snapshot: PortalSnapshot) => void;
+}) {
+  const [email, setEmail] = useState('')
+  const [documentId, setDocumentId] = useState('')
+  const [reference, setReference] = useState('')
+  const [until, setUntil] = useState('')
+  const command = usePortalCommand(onSaved)
+  const documents = application.details.documents.filter(item => item.kind === 'COMPANY')
+  const selectedId = documents.some(item => item.id === documentId) ? documentId : documents[0]?.id ?? ''
+  const expiresAt = Date.parse(until)
+  const validUntil = Number.isFinite(expiresAt) && expiresAt > Date.now() && expiresAt <= Date.now() + 30 * 86_400_000
+    && Boolean(application.approved_until) && expiresAt <= Date.parse(application.approved_until!)
+  const validEmail = email.trim().length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())
+  const mayPropose = account.can_propose_representative === true && account.status === 'ACTIVE'
+    && application.user_id === snapshot.actor.id && application.status === 'APPROVED' && application.revision === account.admission_revision
+    && Boolean(application.approved_until) && Date.parse(application.approved_until!) > Date.now() && documents.length > 0
+    && (!isTestPasswordAdmission(snapshot) || hasStage2CommandAccess(snapshot, 'request_investing_representative_mandate', snapshot.operating_context))
+  if (!mayPropose) return null
+  return <Panel title="Propose another representative" description="Only the original entity applicant can propose a named person. That person must consent, Compliance must review, and a different Super Admin must apply the limited mandate.">
+    <CommandFeedback command={command} />
+    <form className={styles.form} onSubmit={event => {
+      event.preventDefault()
+      if (command.busy || command.unknown || !validEmail || !selectedId || !validUntil || reference.trim().length < 20) return
+      void command.submit('request_investing_representative_mandate', { investment_account_id: account.id, expected_revision: 0, representative_email: email.trim(), appointment_document_id: selectedId, evidence_reference: reference.trim(), requested_until: new Date(until).toISOString() })
+    }}><fieldset className={styles.fieldset} disabled={command.busy || command.unknown}><legend>Named representative proposal</legend>
+      <Field label="Representative email" hint="Use their own registered, email-confirmed login with a current individual investor admission. There is no applicant directory."><input type="email" required maxLength={254} autoComplete="off" value={email} onChange={event => setEmail(event.target.value)} /></Field>
+      <Field label="Proposal appointment document" hint="Only COMPANY evidence in the exact approved entity submission is available."><select required value={selectedId} onChange={event => setDocumentId(event.target.value)}>{documents.map(item => <option key={item.id} value={item.id}>{item.title}</option>)}</select></Field>
+      <Field label="Proposal evidence reference" hint="20 to 400 characters identifying the named appointment reflected in this document."><textarea required minLength={20} maxLength={400} value={reference} onChange={event => setReference(event.target.value)} /></Field>
+      <Field label="Proposal end date and time" hint="Within 30 days and both admissions’ expiries. The server checks the named person's current admission without exposing it."><input type="datetime-local" required value={until} onChange={event => setUntil(event.target.value)} /></Field>
+      {until && !validUntil ? <p role="alert" className={styles.fieldError}>Choose a future time within 30 days and before the entity admission expires.</p> : null}
+      <p className={styles.muted}>A new or amended appointment document needs a separately reviewed admission rebind; it cannot replace already-approved evidence here. Existing account-view representatives cannot delegate. A declined or changed proposal requires a new cycle and new consent.</p>
+      <button type="submit" className={styles.button} disabled={!validEmail || !selectedId || !validUntil || reference.trim().length < 20}>Send representative proposal</button>
+    </fieldset></form>
+  </Panel>
 }
 
 export function entityEligibilityNextOwner(item: PortalEntityProductEligibility): string {

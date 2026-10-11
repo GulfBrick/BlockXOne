@@ -41,9 +41,9 @@ export type EntityInvestorApplicationDetailsV3 = Omit<LegacyApplicationDetails, 
 }
 export type ApplicationDetails = LegacyApplicationDetails | WealthManagerApplicationDetailsV2 | WealthManagerApplicationDetailsV3 | EntityInvestorApplicationDetailsV3
 export type AdmissionPurpose = 'INVESTOR_ADMISSION' | 'CUSTOMER_ORGANISATION_ADMISSION' | 'LEGACY_REHEARSAL'
-export type RepresentativeMandateNextOwner = 'APPLICANT' | 'COMPLIANCE' | 'SUPER_ADMIN' | 'NONE'
+export type RepresentativeMandateNextOwner = 'APPLICANT' | 'REPRESENTATIVE' | 'COMPLIANCE' | 'SUPER_ADMIN' | 'NONE'
 export function representativeMandateNextOwnerLabel(owner: RepresentativeMandateNextOwner): string {
-  return { APPLICANT: 'Customer applicant', COMPLIANCE: 'Independent BlockXOne Compliance Officer', SUPER_ADMIN: 'Authorised BlockXOne Super Admin', NONE: 'No current mandate action' }[owner]
+  return { APPLICANT: 'Customer applicant', REPRESENTATIVE: 'Named representative', COMPLIANCE: 'Independent BlockXOne Compliance Officer', SUPER_ADMIN: 'Authorised BlockXOne Super Admin', NONE: 'No current mandate action' }[owner]
 }
 /** Compatibility guard used by existing manager views; v3 preserves every v2 manager fact. */
 export function isWealthManagerDetailsV2(value: unknown): value is WealthManagerApplicationDetailsV2 | WealthManagerApplicationDetailsV3 {
@@ -76,13 +76,14 @@ export type PortalEntityInvestmentAccount = {
   registration_reference: string; country: string; kind: 'ENTITY'; status: 'ACTIVE' | 'SUSPENDED';
   created_at: string; admission_revision: number; admission_approved_until: string | null;
   can_request_mandate: boolean; can_view: boolean; can_request_eligibility: boolean;
+  can_propose_representative?: boolean;
 }
 export type PortalInvestingRepresentativeMandate = {
   id: string; investment_account_id: string; application_id: string; applicant_user_id: string;
   representative_user_id: string; entity_party_id: string; entity_name: string;
   reviewer_scope_organisation_id: string; admission_revision: number; admission_current_revision: number;
   admission_approved_until: string | null; cycle: number; revision: number;
-  status: 'SUBMITTED' | 'CHANGES_REQUIRED' | 'APPROVED' | 'REJECTED' | 'APPLIED' | 'REVOKED';
+  status: 'PROPOSED' | 'DECLINED' | 'SUBMITTED' | 'CHANGES_REQUIRED' | 'APPROVED' | 'REJECTED' | 'APPLIED' | 'REVOKED';
   scope: ('ACCOUNT_VIEW' | 'REQUEST_ELIGIBILITY')[]; transaction_limit_minor: '0';
   evidence_reference: string; appointment_document_id: string; requested_until: string;
   submitted_at: string; reviewed_at: string | null; reviewer_user_id: string | null;
@@ -91,6 +92,10 @@ export type PortalInvestingRepresentativeMandate = {
   revoked_at: string | null; revoke_reason: string | null; effective: boolean;
   next_owner: RepresentativeMandateNextOwner;
   can_request: boolean; can_review: boolean; can_apply: boolean; can_revoke: boolean;
+  representative_email?: string | null; representative_name?: string | null;
+  representative_application_id?: string | null; representative_application_revision?: number | null;
+  proposal_hash?: string | null; consent_decision?: 'ACCEPT' | 'DECLINE' | null;
+  consent_receipt_id?: string | null; responded_at?: string | null; can_respond?: boolean;
 }
 export type PortalProductEligibility = {
   id: string; investment_account_id: string; product_id: string; organisation_id: string;
@@ -310,6 +315,12 @@ export const applicationDocumentVersionsSchema = z.object({
 export const applicationDocumentLookupSchema = historicalEvidenceSchema.extend({
   application_id: id, revision: z.number().int().positive(), storage_path: text(1, 400),
 }).strip()
+/** Exact proposal evidence only; not the entity's admission or provider history. */
+export const investingProposalDocumentLookupSchema = z.object({
+  mandate_id: id, mandate_revision: z.number().int().positive(), proposal_hash: hash,
+  applicant_user_id: id, document: evidenceSchema.extend({ kind: z.literal('COMPANY') }).strict(),
+  validation_state: z.enum(['SYNTHETIC_UNSCANNED', 'SCANNED_CLEAN']),
+}).strict()
 export type ApplicationDocumentVersions = z.infer<typeof applicationDocumentVersionsSchema>
 export type HistoricalEvidenceDocument = z.infer<typeof historicalEvidenceSchema>
 export const legacyApplicationDetailsSchema = z.object({ full_name: text(2, 120), country, investor_type: z.enum(['INDIVIDUAL', 'ENTITY']), company_name: text(0, 160), registration_reference: text(0, 100), source_of_funds: text(20, 2000), beneficial_owners: text(0, 2000), experience: text(10, 2000), documents: z.array(evidenceSchema).min(1).max(8), test_data_acknowledged: z.literal(true), details_version: z.never().optional(), business_activities: z.never().optional(), representative_position: z.never().optional(), authority_basis: z.never().optional() }).strict()
@@ -449,7 +460,8 @@ export const portalCommandSchema = z.discriminatedUnion('command', [
   }) }).strict(),
   z.object({ command: z.literal('create_investment_account'), key: id, payload: z.object({ application_id: id }).strict() }).strict(),
   z.object({ command: z.literal('create_entity_investment_account'), key: id, payload: z.object({ application_id: id }).strict() }).strict(),
-  z.object({ command: z.literal('request_investing_representative_mandate'), key: id, payload: z.object({ investment_account_id: id, expected_revision: z.number().int().min(0), evidence_reference: text(20, 400), appointment_document_id: id, requested_until: z.string().datetime({ offset: false }).regex(/Z$/) }).strict() }).strict(),
+  z.object({ command: z.literal('request_investing_representative_mandate'), key: id, payload: z.object({ investment_account_id: id, expected_revision: z.number().int().min(0), evidence_reference: text(20, 400), appointment_document_id: id, requested_until: z.string().datetime({ offset: false }).regex(/Z$/), representative_email: z.string().trim().email().max(254).optional() }).strict() }).strict(),
+  z.object({ command: z.literal('respond_investing_representative_proposal'), key: id, payload: z.object({ mandate_id: id, expected_revision: z.number().int().positive(), proposal_hash: hash, decision: z.enum(['ACCEPT', 'DECLINE']) }).strict() }).strict(),
   z.object({ command: z.literal('review_investing_representative_mandate'), key: id, payload: z.object({ mandate_id: id, expected_revision: z.number().int().positive(), decision: z.enum(['APPROVED', 'CHANGES_REQUIRED', 'REJECTED']), notes: text(20, 3000), checks: investingRepresentativeChecks }).strict() }).strict(),
   z.object({ command: z.literal('apply_investing_representative_mandate'), key: id, payload: z.object({ mandate_id: id, expected_revision: z.number().int().positive() }).strict() }).strict(),
   z.object({ command: z.literal('revoke_investing_representative_mandate'), key: id, payload: z.object({ mandate_id: id, expected_revision: z.number().int().positive(), reason: text(20, 1000) }).strict() }).strict(),

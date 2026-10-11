@@ -23,6 +23,89 @@ beforeEach(() => {
   receipts.id.mockReturnValue(id)
 })
 afterEach(() => vi.unstubAllEnvs())
+describe('named representative appointment evidence', () => {
+  const mandateId = '88888888-8888-4888-8888-888888888888'
+  const proposer = '99999999-9999-4999-8999-999999999999'
+  const proposalHash = 'b'.repeat(64)
+  const bytes = Buffer.from('%PDF-1.4\nfictional named appointment')
+  const appointment = { ...document, kind: 'COMPANY', title: 'Fictional board appointment', storage_path: `${proposer}/${id}`,
+    sha256: createHash('sha256').update(bytes).digest('hex'), size: bytes.length }
+  const mandate = { id: mandateId, revision: 1, representative_user_id: actor, applicant_user_id: proposer,
+    appointment_document_id: id, proposal_hash: proposalHash }
+  const envelope = { mandate_id: mandateId, mandate_revision: 1, proposal_hash: proposalHash, applicant_user_id: proposer,
+    document: appointment, validation_state: 'SYNTHETIC_UNSCANNED' }
+  const target = `${origin}/api/portal/documents?mandate_id=${mandateId}&id=${id}&mode=applicant`
+  function install(data: unknown = envelope, error: unknown = null) {
+    const rpc = vi.fn().mockReturnValue({ abortSignal: vi.fn().mockResolvedValue({ data, error }) })
+    const download = vi.fn().mockResolvedValue({ error: null, data: new Blob([bytes], { type: 'application/pdf' }) })
+    mocks.create.mockReturnValue({ rpc, storage: { from: () => ({ download }) } })
+    mocks.read.mockResolvedValue({ user: { id: actor }, snapshot: { ...snapshot, applications: [], investing_representative_mandates: [mandate] } })
+    return { rpc, download }
+  }
+  it('shows only the bound appointment and continues within the same authenticated proposal scope', async () => {
+    const { rpc, download } = install()
+    const response = await GET(new NextRequest(target))
+    expect(response.status).toBe(200)
+    const body = await response.json()
+    expect(body).toMatchObject(envelope)
+    expect(body.url).toContain(`mandate_id=${mandateId}`)
+    expect(body.url).toContain('mode=applicant')
+    expect(body.url).toContain('download=1')
+    expect(body.applications).toBeUndefined()
+    expect(download).not.toHaveBeenCalled()
+    expect(rpc).toHaveBeenCalledWith('bx1_investing_proposal_document_lookup', { document_id: id, mandate_id: mandateId, operating_context: { mode: 'APPLICANT' } })
+    expect(response.headers.get('cache-control')).toContain('no-store')
+    const result = await GET(new NextRequest(new URL(body.url, origin)))
+    expect(result.status).toBe(200)
+    expect(Buffer.from(await result.arrayBuffer())).toEqual(bytes)
+    expect(download).toHaveBeenCalledWith(`${proposer}/${id}`)
+    expect(rpc).toHaveBeenCalledTimes(2)
+  })
+  it('rejects mixing proposal, current-history and duplicate parameters before reading authority', async () => {
+    const { rpc, download } = install()
+    for (const query of [`&application_id=${applicationId}`, '&revision=1', '&history=1', `&mandate_id=${mandateId}`]) {
+      expect((await GET(new NextRequest(target + query))).status).toBe(400)
+    }
+    expect(mocks.read).not.toHaveBeenCalled()
+    expect(rpc).not.toHaveBeenCalled()
+    expect(download).not.toHaveBeenCalled()
+  })
+  it('denies absent, foreign, self and role-selected proposals without calling the lookup', async () => {
+    const { rpc, download } = install()
+    for (const item of [undefined, { ...mandate, representative_user_id: proposer }, { ...mandate, applicant_user_id: actor }, { ...mandate, appointment_document_id: applicationId }, { ...mandate, proposal_hash: null }]) {
+      mocks.read.mockResolvedValue({ user: { id: actor }, snapshot: { ...snapshot, applications: [], investing_representative_mandates: item ? [item] : [] } })
+      expect((await GET(new NextRequest(target))).status).toBe(404)
+    }
+    const roleAttempt = install()
+    expect((await GET(new NextRequest(`${origin}/api/portal/documents?mandate_id=${mandateId}&id=${id}&organisation=${organisationId}&role=ComplianceOfficer`))).status).toBe(404)
+    expect(rpc).not.toHaveBeenCalled()
+    expect(download).not.toHaveBeenCalled()
+    expect(roleAttempt.rpc).not.toHaveBeenCalled()
+    expect(roleAttempt.download).not.toHaveBeenCalled()
+  })
+  it('fails closed on backend denial and exact binding or manifest substitutions', async () => {
+    let installed = install(null, { code: '42501' })
+    expect((await GET(new NextRequest(target + '&download=1'))).status).toBe(404)
+    expect(installed.download).not.toHaveBeenCalled()
+    for (const change of [{ mandate_id: applicationId }, { mandate_revision: 2 }, { proposal_hash: 'c'.repeat(64) }, { applicant_user_id: actor },
+      { document: { ...appointment, id: applicationId } }, { document: { ...appointment, storage_path: `${actor}/${id}` } },
+      { document: { ...appointment, kind: 'IDENTITY' } }, { validation_state: 'APPROVED' }, { provider_history: [] }]) {
+      installed = install({ ...envelope, ...change })
+      expect((await GET(new NextRequest(target + '&download=1'))).status).toBe(503)
+      expect(installed.download).not.toHaveBeenCalled()
+    }
+  })
+  it('rechecks current proposal state at download and denies changed or mismatched bytes', async () => {
+    const { rpc, download } = install()
+    expect((await GET(new NextRequest(target))).status).toBe(200)
+    rpc.mockReturnValue({ abortSignal: vi.fn().mockResolvedValue({ data: null, error: { code: '42501' } }) })
+    expect((await GET(new NextRequest(target + '&download=1'))).status).toBe(404)
+    expect(download).not.toHaveBeenCalled()
+    rpc.mockReturnValue({ abortSignal: vi.fn().mockResolvedValue({ data: envelope, error: null }) })
+    download.mockResolvedValue({ error: null, data: new Blob([Buffer.from('%PDF-1.4\naltered named appointment')], { type: 'application/pdf' }) })
+    expect((await GET(new NextRequest(target + '&download=1'))).status).toBe(409)
+  })
+})
 describe('private evidence context continuity', () => {
   it('preserves historical document access alongside a new empty capacity draft', async () => {
     mocks.read.mockResolvedValue({ user: { id: actor }, snapshot: { ...snapshot, applications: [{ details: {} }, ...snapshot.applications] } })

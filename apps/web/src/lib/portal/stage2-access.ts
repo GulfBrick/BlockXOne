@@ -8,13 +8,14 @@ export const STAGE2_COMMANDS = [
   'create_investment_account', 'create_entity_investment_account',
   'request_representative_mandate', 'review_representative_mandate', 'apply_representative_mandate',
   'request_investing_representative_mandate', 'review_investing_representative_mandate', 'apply_investing_representative_mandate',
+  'respond_investing_representative_proposal',
 ] as const
 export type Stage2Command = typeof STAGE2_COMMANDS[number]
 const contextSchema = z.discriminatedUnion('mode', [
   z.object({ mode: z.literal('APPLICANT') }).strict(),
   z.object({ mode: z.literal('ROLE'), organisationId: z.string().uuid(), role: z.enum(BX1_ROLES) }).strict(),
 ])
-const applicantCommands: readonly Stage2Command[] = ['start_application', 'submit_application', 'create_investment_account', 'create_entity_investment_account', 'request_representative_mandate', 'request_investing_representative_mandate']
+const applicantCommands: readonly Stage2Command[] = ['start_application', 'submit_application', 'create_investment_account', 'create_entity_investment_account', 'request_representative_mandate', 'request_investing_representative_mandate', 'respond_investing_representative_proposal']
 const reviewCommands: readonly Stage2Command[] = ['review_application', 'review_representative_mandate', 'review_investing_representative_mandate']
 const applyCommands: readonly Stage2Command[] = ['apply_representative_mandate', 'apply_investing_representative_mandate']
 export const stage2AccessSchema = z.object({
