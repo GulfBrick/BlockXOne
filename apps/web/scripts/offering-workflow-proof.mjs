@@ -446,6 +446,11 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
     phase = 'drift-fenced-feature-install'
     const sourceHash = text => createHash('sha256').update(text, 'utf8').digest('hex')
     const normalizedBody = text => text.replaceAll('\r\n', '\n').trim()
+    const mandateLeafSignature = 'bx1_portal.representative_mandate_effective_at(uuid,timestamptz)'
+    const mandateLeafCatalog = () => scalar('select to_jsonb(p) from pg_proc p where p.oid=$1::regprocedure', [mandateLeafSignature])
+    const originalMandateLeafCatalog = await mandateLeafCatalog()
+    eq(sourceHash(normalizedBody(originalMandateLeafCatalog.prosrc)), '934f86f41419d13fa60ddc71f18efb8f2c3eedb21b5d9ae789a0c6903d830c1c', 'shared leaf has the exact effective original SQL body before cutover')
+    eq(await scalar('select lanname from pg_language where oid=$1', [originalMandateLeafCatalog.prolang]), 'sql', 'shared leaf starts in its retained SQL language')
     const recipeMatches = [...offeringSql.matchAll(/\$offering_recipes\$([\s\S]*?)\$offering_recipes\$::jsonb/g)]
     eq(recipeMatches.length, 1, 'offering installer has one exact recipe array')
     const recipes = JSON.parse(recipeMatches[0][1])
@@ -467,6 +472,7 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
       "bx1_portal.admission_access(jsonb)"
     ], 'all fourteen installed recipes preserve their exact signature order')
     const recipeText = normalizedBody(recipeMatches[0][1])
+    eq(sourceHash(recipeText), '6aaa19028da284cebd4582f1b71b54d8b26ed55aad5a45d5c67b7eca9b16a2f3', 'all fourteen ordered recipe entries remain byte-exact before the separate shared-leaf cutover')
     const wholeRecipeEntries = [...recipeText.matchAll(/  \{\n    "signature":[\s\S]*?\n  \}/g)].map(match => match[0])
     eq(wholeRecipeEntries.length, 14, 'each ordered retained recipe has one complete source entry')
     const protectedRecipeText = `[\n${wholeRecipeEntries.filter(entry =>
@@ -653,12 +659,22 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
       await db.query(definition.replace(/\bBEGIN\b/i, 'BEGIN\n-- fictional admission projection/authority drift sentinel'))
       await denied(`${signature}: feature refuses full-body drift before a projection cutover`, () => db.query(offeringSql), '55000')
     })
+    await isolated(async () => {
+      const definition = await scalar('select pg_get_functiondef($1::regprocedure)', [mandateLeafSignature])
+      eq(definition.split('select exists(').length - 1, 1, 'shared-leaf drift probe changes one original SQL body anchor')
+      await db.query(definition.replace('select exists(', 'select /* fictional shared-leaf drift sentinel */ exists('))
+      await denied('dedicated cutover refuses shared mandate leaf full-body drift', () => db.query(offeringSql), '55000')
+    })
     eq(await functions(), baselineFunctions, 'drift probe fully rolls back all function changes')
     await db.query(offeringSql)
     installedFunctions = await functions()
     eq(normalizedBody(await scalar('select prosrc from pg_proc where oid=$1::regprocedure', [candidateRecipe.signature])), correctedCandidateReader, 'installed retained reader is exactly the source-derived five-replacement correction')
     eq(normalizedBody(await scalar('select prosrc from pg_proc where oid=$1::regprocedure', [admissionRecipe.signature])), correctedAdmissionProjection, 'installed marker equals the sole source-derived lazy-CASE filter replacement')
     eq(normalizedBody(await scalar('select prosrc from pg_proc where oid=$1::regprocedure', [admissionAuthoritySignature])), acceptedAdmissionAuthority, 'installer leaves the complete accepted current authority body byte-identical')
+    const installedMandateLeafCatalog = await mandateLeafCatalog()
+    eq({ ...installedMandateLeafCatalog, prolang: originalMandateLeafCatalog.prolang, prosrc: originalMandateLeafCatalog.prosrc }, originalMandateLeafCatalog, 'shared-leaf cutover preserves every pg_proc field except its exact language/body')
+    eq(await scalar('select lanname from pg_language where oid=$1', [installedMandateLeafCatalog.prolang]), 'plpgsql', 'only the dedicated existing shared leaf changes SQL to PL/pgSQL')
+    eq(sourceHash(normalizedBody(installedMandateLeafCatalog.prosrc)), 'd0eaa7a7589711c812cc1ad5a5b2ef387a5db3e7abaa51093ce056da4ea2896f', 'installed shared leaf has only the reviewed BEGIN RETURN END wrapper')
     // Kept explicit: broadening this list requires independent source review.
     const changedFunctions = new Set([
       'bx1_portal.execute_scoped_pre_eligibility(jsonb,text,uuid,jsonb)',
@@ -674,9 +690,10 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
       'bx1_portal.execute_appointed_compliance_decision(jsonb,uuid,jsonb)',
       'bx1_portal.execute_begin_offering_amendment(jsonb,uuid,jsonb)',
       'bx1_portal.execute_reopen_offering_review(jsonb,uuid,jsonb)',
+      mandateLeafSignature,
     ])
-    eq(changedFunctions.size, 14, 'final correction expands the exact changed-signature allowlist only by admission_access')
-    eq([...changedFunctions].sort(), recipes.map(recipe => recipe.signature).sort(), 'proof and installer share the same fourteen exact retained signatures')
+    eq(changedFunctions.size, 15, 'execution-shape correction adds only the one existing shared mandate leaf')
+    eq([...changedFunctions].sort(), [...recipes.map(recipe => recipe.signature), mandateLeafSignature].sort(), 'proof preserves fourteen exact recipe targets plus one dedicated leaf target')
     for (const original of baselineFunctions) {
       const current = installedFunctions.find(f => f.oid === original.oid)
       truth(current, `inherited ${original.signature} retains its exact OID`)
@@ -861,6 +878,12 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
     eq(originalMandateLeaf.split(ownershipNeedle).length - 1, 1, 'retained ownership leaf replacement occurs once')
     const mandateLeaf = originalMandateLeaf.replace(ownershipNeedle, 'bx1_portal.customer_admission_package_current(a.id)')
     eq(diagnosticHash(mandateLeaf), '934f86f41419d13fa60ddc71f18efb8f2c3eedb21b5d9ae789a0c6903d830c1c', 'effective representative leaf includes unchanged retained ownership predicate')
+    eq(normalizedBody(originalMandateLeafCatalog.prosrc), mandateLeaf, 'captured original shared leaf reconstructs from both pinned historical sources')
+    eq(mandateLeaf.slice(0, 7), 'select ', 'wrapper removes only the original outer SELECT prefix')
+    truth(mandateLeaf.endsWith(');'), 'original EXISTS retains its terminating semicolon')
+    const wrappedMandateLeaf = `begin\n  return ${mandateLeaf.slice(7)}\nend;`
+    eq(diagnosticHash(wrappedMandateLeaf), 'd0eaa7a7589711c812cc1ad5a5b2ef387a5db3e7abaa51093ce056da4ea2896f', 'full wrapped leaf derives deterministically without changing its EXISTS expression')
+    eq(normalizedBody(installedMandateLeafCatalog.prosrc), wrappedMandateLeaf, 'installed shared leaf equals the exact source-derived execution wrapper')
     eq([...nativeLeaf.matchAll(/\btarget_membership\b/g)].length, 1, 'native leaf has one membership formal parameter')
     eq([...nativeLeaf.matchAll(/\bas_of\b/g)].length, 1, 'native leaf has one time formal parameter')
     eq([...mandateLeaf.matchAll(/\btarget_mandate\b/g)].length, 1, 'representative leaf has one mandate formal parameter')
@@ -884,6 +907,7 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
       offering_recipe_source: sourceHash(normalizeDiagnosticSource(offeringSql)),
       native_leaf: diagnosticHash(nativeLeaf), native_query: diagnosticHash(nativeQuery),
       representative_leaf: diagnosticHash(mandateLeaf), representative_query: diagnosticHash(mandateQuery),
+      representative_wrapped_leaf: diagnosticHash(wrappedMandateLeaf), representative_installed_language: 'plpgsql',
     }, diagnostics: [], observer: [], cleanup: [], read: {}, interpretation: {
       plans: 'standalone-non-ANALYZE-estimates-not-nested-SPI', legacy_candidate_plans: 'COMPARISON_ONLY_NOT_INSTALLED_QUERY', authority_call_counts: 'NOT_MEASURED',
       cumulative_statistics: 'may-be-cached-or-unflushed-use-current-transaction-counters',
@@ -978,10 +1002,11 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
       await diagnosticQuery('before-relation-statistics', relationStatistics)
       await diagnosticQuery('source-matches-installed-authority-leaves', async () => {
         for (const [signature, expected] of [['bx1_portal.native_membership_effective_at(uuid,timestamptz)', nativeLeaf],
-          ['bx1_portal.representative_mandate_effective_at(uuid,timestamptz)', mandateLeaf]]) {
+          [mandateLeafSignature, wrappedMandateLeaf]]) {
           const installed = await scalar('select prosrc from pg_proc where oid=$1::regprocedure', [signature])
           eq(normalizeDiagnosticSource(installed).trim(), expected, `${signature}: source-derived full leaf equals installed body`)
         }
+        eq(await mandateLeafCatalog(), installedMandateLeafCatalog, 'diagnostic shared leaf retains its exact reviewed full catalog row')
         return { exact_installed_bodies: true }
       })
       await diagnosticQuery('source-matches-installed-effective-candidate-reader', async () => {
@@ -1352,6 +1377,35 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
         eq(await candidateScopeCheck(manager, expected, cappedSnapshot.products), false, 'capped output still resolves every emitted product and current organisation')
       })
       await directoryRead(baseDirectory, 'all correction cases restore the original two-product scope')
+      // Extra authority execution occurs only after the original measured read,
+      // six STANDARD operations and the complete unchanged directory block.
+      await fixtureOwner('shared mandate leaf boundary parity')
+      const boundary = await scalar(`select jsonb_build_object(
+        'before',m.requested_until-interval '1 microsecond','at',m.requested_until,
+        'after',m.requested_until+interval '1 microsecond')
+        from bx1_portal.representative_mandates m where m.id=$1`, [mandate.id])
+      truth(boundary && Object.values(boundary).every(value => typeof value === 'string'), 'shared-leaf parity uses the exact fixed synthetic mandate expiry')
+      eq(await scalar('select exists(select 1 from bx1_portal.representative_mandates where id=$1)', [id(999999)]), false, 'missing leaf target is not a new mandate fixture')
+      const leafCases = [
+        ['just-before-expiry', mandate.id, boundary.before, true],
+        ['at-expiry', mandate.id, boundary.at, false],
+        ['just-after-expiry', mandate.id, boundary.after, false],
+        ['null-time', mandate.id, null, false],
+        ['null-target', null, boundary.before, false],
+        ['missing-target', id(999999), boundary.before, false],
+      ]
+      for (const [label, target, asOf, expected] of leafCases) {
+        const value = await scalar(`select jsonb_build_object('original',(${mandateQuery.slice(0, -1)}),
+          'installed',bx1_portal.representative_mandate_effective_at($1::uuid,$2::timestamptz))`, [target, asOf])
+        eq(value.original, expected, `${label}: retained source query has the exact authority boundary`)
+        eq(value.installed, value.original, `${label}: wrapped helper preserves the original query result including NULL inputs`)
+      }
+      eq(await mandateLeafCatalog(), installedMandateLeafCatalog, 'boundary parity changes no shared-leaf catalog field')
+      console.log('BX1_STANDARD_MANDATE_LEAF_PARITY_RECEIPT', JSON.stringify({
+        fixture: 'disposable-cloud-PostgreSQL17', signature: mandateLeafSignature,
+        original_sql_body_sha256: diagnosticHash(mandateLeaf), wrapped_body_sha256: diagnosticHash(wrappedMandateLeaf),
+        unchanged_query_sha256: diagnosticHash(mandateQuery), cases: leafCases.map(([label]) => ({ label, outcome: 'MATCHED' })),
+      }))
       eq(await standardEngineConfig(), standardEngineScoped, 'all added candidate cases keep exact original deadlines and planner settings')
     }).finally(async () => {
       try {

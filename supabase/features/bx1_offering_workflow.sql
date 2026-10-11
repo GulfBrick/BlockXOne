@@ -1292,6 +1292,47 @@ $offering_recipes$::jsonb) loop
   end loop;
 end $offering_cutover$;
 
+-- One existing shared leaf changes execution language, not its authority query.
+-- Keep this outside the fourteen body-only recipes and their strict metadata gate.
+do $offering_mandate_leaf_cutover$
+declare target oid; source_body text; next_body text; definition text;
+  before_row jsonb; after_row jsonb; sql_language oid; plpgsql_language oid;
+begin
+  target:=pg_catalog.to_regprocedure('bx1_portal.representative_mandate_effective_at(uuid,timestamptz)');
+  select oid into sql_language from pg_catalog.pg_language where lanname='sql';
+  select oid into plpgsql_language from pg_catalog.pg_language where lanname='plpgsql';
+  if target is null or sql_language is null or plpgsql_language is null then
+    raise exception 'offering_mandate_leaf_missing' using errcode='55000'; end if;
+  select p.prosrc,pg_catalog.to_jsonb(p) into source_body,before_row
+    from pg_catalog.pg_proc p where p.oid=target;
+  next_body:=pg_catalog.btrim(pg_catalog.replace(source_body,E'\r\n',E'\n'),E' \n\t');
+  if before_row->>'prolang' is distinct from sql_language::text
+    or before_row->>'proowner' is distinct from ('postgres'::regrole::oid)::text
+    or before_row->>'prosecdef' is distinct from 'true'
+    or before_row->>'provolatile' is distinct from 'v'
+    or before_row->'proconfig' is distinct from '["search_path=\"\""]'::jsonb
+    or pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(next_body,'UTF8')),'hex')
+      is distinct from '934f86f41419d13fa60ddc71f18efb8f2c3eedb21b5d9ae789a0c6903d830c1c'
+    or pg_catalog.left(next_body,14)<>'select exists(' or pg_catalog.right(next_body,2)<>');' then
+    raise exception 'offering_mandate_leaf_definition_changed' using errcode='55000'; end if;
+  next_body:=E'begin\n  return '||pg_catalog.substr(next_body,8)||E'\nend;';
+  if pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(next_body,'UTF8')),'hex')
+    is distinct from 'd0eaa7a7589711c812cc1ad5a5b2ef387a5db3e7abaa51093ce056da4ea2896f' then
+    raise exception 'offering_mandate_leaf_wrapper_changed' using errcode='55000'; end if;
+  definition:=pg_catalog.pg_get_functiondef(target);
+  if (pg_catalog.length(definition)-pg_catalog.length(pg_catalog.replace(definition,source_body,'')))
+      /pg_catalog.length(source_body)<>1
+    or (pg_catalog.length(definition)-pg_catalog.length(pg_catalog.replace(definition,'LANGUAGE sql','')))
+      /pg_catalog.length('LANGUAGE sql')<>1 then
+    raise exception 'offering_mandate_leaf_header_or_body_ambiguous' using errcode='55000'; end if;
+  execute pg_catalog.replace(pg_catalog.replace(definition,source_body,next_body),'LANGUAGE sql','LANGUAGE plpgsql');
+  select pg_catalog.to_jsonb(p) into after_row from pg_catalog.pg_proc p where p.oid=target;
+  if after_row-array['prolang','prosrc'] is distinct from before_row-array['prolang','prosrc']
+    or after_row->>'prolang' is distinct from plpgsql_language::text
+    or after_row->>'prosrc' is distinct from next_body then
+    raise exception 'offering_mandate_leaf_catalog_changed' using errcode='55000'; end if;
+end $offering_mandate_leaf_cutover$;
+
 do $private_helpers$
 declare routine record; helper_count integer:=0;
 begin
