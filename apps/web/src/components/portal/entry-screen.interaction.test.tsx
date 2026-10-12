@@ -128,13 +128,34 @@ describe('real entry-screen review-availability interaction', () => {
       const fullName = screen.getByLabelText(/^Full name/) as HTMLInputElement
       fireEvent.change(fullName, { target: { value: 'Alex Unsaved Existing Application' } })
       const switcher = screen.getByRole('link', { name: 'Switch application or workspace' })
-      expect(switcher.getAttribute('href')).toBe('/portal?mode=applicant')
+      expect(switcher.getAttribute('href')).toBe('/portal?mode=applicant&section=applications')
       expect(screen.queryByRole('button', { name: 'Start another application' })).toBeNull()
       expect(fireEvent.click(switcher)).toBe(false)
       expect(confirmation).toHaveBeenCalledTimes(1)
       expect(fetchMock).not.toHaveBeenCalled()
       expect(fullName.value).toBe('Alex Unsaved Existing Application')
       expect(sessionStorage.getItem(markerStorageKey)).toBe(pendingMarker)
+    } finally { confirmation.mockRestore() }
+  })
+  it('protects unsaved answers when an applicant cancels any new directory navigation destination', () => {
+    const initial = missingReviewerSnapshot()
+    const fetchMock = isolatedEntryRead(initial)
+    const confirmation = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    try {
+      render(createElement(EntryScreen, { initial, release }))
+      const fullName = screen.getByLabelText(/^Full name/) as HTMLInputElement
+      fireEvent.change(fullName, { target: { value: 'Alex Unsaved Directory Navigation' } })
+      const navigation = screen.getAllByRole('navigation').find(item => item.getAttribute('aria-label') === 'Portal navigation')
+      expect(navigation).toBeTruthy()
+      for (const section of ['overview', 'applications', 'workspaces', 'help']) {
+        const link = navigation!.querySelector<HTMLAnchorElement>(`a[href="/portal?mode=applicant&section=${section}"]`)
+        expect(link).toBeTruthy()
+        expect(fireEvent.click(link!)).toBe(false)
+        expect(fullName.value).toBe('Alex Unsaved Directory Navigation')
+        expect(sessionStorage.getItem(markerStorageKey)).toBe(pendingMarker)
+      }
+      expect(confirmation).toHaveBeenCalledTimes(4)
+      expect(fetchMock).not.toHaveBeenCalled()
     } finally { confirmation.mockRestore() }
   })
 })

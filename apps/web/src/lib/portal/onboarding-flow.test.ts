@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { entryActorId, entryApplication, entryFixture } from './entry-test-fixtures'
-import { onboardingHasUnsavedAnswers, onboardingLinkDiscardsAnswers, onboardingRemainingItems, onboardingSteps, onboardingSubmissionConfirmed, type OnboardingAnswers } from './onboarding-flow'
+import { onboardingHasUnsavedAnswers, onboardingHistoryUnavailableMessage, onboardingLinkDiscardsAnswers, onboardingRemainingItems, onboardingSteps, onboardingSubmissionConfirmed, type OnboardingAnswers } from './onboarding-flow'
 
 const documents = (['IDENTITY', 'COMPANY', 'BENEFICIAL_OWNERS'] as const).map((kind, index) => ({ id: `${index + 4}4444444-4444-4444-8444-444444444444`, kind, title: `Fictional ${kind} evidence`, storage_path: `${entryActorId}/test-${index}.pdf`, sha256: 'a'.repeat(64), size: 100, mime_type: 'application/pdf' as const }))
 const answers: OnboardingAnswers = {
@@ -13,6 +13,11 @@ const answers: OnboardingAnswers = {
 const submittedDetails = { full_name: answers.full_name, country: answers.country, investor_type: 'INDIVIDUAL' as const, company_name: '', registration_reference: '', source_of_funds: answers.source_of_funds, experience: answers.experience, beneficial_owners: '', documents: [documents[0]], test_data_acknowledged: true as const }
 
 describe('guided onboarding requirements', () => {
+  it('distinguishes confirmed draft saving from submission in the history warning', () => {
+    expect(onboardingHistoryUnavailableMessage).toContain('check the save indicator')
+    expect(onboardingHistoryUnavailableMessage).toContain('a saved draft is not a submitted application')
+    expect(onboardingHistoryUnavailableMessage).not.toContain('not saved automatically')
+  })
   it.each(['WEALTH_MANAGER', 'INVESTOR'] as const)('orders uploaded evidence before %s ownership linkage', persona => {
     const steps = onboardingSteps(persona, 'ENTITY').map(step => step.id)
     expect(steps).toEqual(['identity', 'organisation', 'purpose', 'evidence', 'ownership', 'review'])

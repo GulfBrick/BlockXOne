@@ -20,6 +20,7 @@ vi.mock('./application-draft-client', async importOriginal => ({
   useApplicationDraft: () => ({ status: 'UNAVAILABLE', loading: false, busy: false, available: false, saved: false, dirty: false, message: '', revision: 0, save: async () => false, recover: async () => false }),
 }))
 import { EntryScreen } from './entry-screen'
+import { applicantSections } from './applicant-presentation'
 import type { EntryApplication, EntryMandate } from '@/lib/portal/entry-contracts'
 import type { CustomerHandoff } from '@/lib/portal/customer-handoff'
 import { entryActorId, entryApplication, entryApplicationId, entryFixture, entryHandoff, entryOrganisationId } from '@/lib/portal/entry-test-fixtures'
@@ -89,7 +90,7 @@ describe('connected pending application workspaces', () => {
     expect(html).toContain('Your organisation application.')
     expect(html).toContain('Track saved progress, read reviewer feedback')
     expect(html).not.toContain('Apply as an investor.')
-    expect(html).toContain('Current workspace:')
+    expect(html).toContain('Current context:')
   })
   it('requires older users with no recorded choice to choose a capacity explicitly', () => {
     const html = renderToStaticMarkup(createElement(EntryScreen, { initial: entryFixture([]), release }))
@@ -318,7 +319,7 @@ describe('connected pending application workspaces', () => {
     expect(html).toContain('My applications')
     expect(html).not.toContain('Initial representative mandate and operating access')
   })
-  it.each(['INVESTOR', 'WEALTH_MANAGER'] as const)('uses compact framing only while a selected %s application can be prepared', persona => {
+  it.each(['INVESTOR', 'WEALTH_MANAGER'] as const)('keeps consistent applicant framing for editable and submitted %s records', persona => {
     const editable = projectedApplication({ persona })
     const html = renderToStaticMarkup(createElement(EntryScreen, { initial: entryFixture([editable]), release }))
     expect(html).toContain('data-applicant-onboarding="true"')
@@ -326,7 +327,7 @@ describe('connected pending application workspaces', () => {
     expect(html).toContain('<summary>Account</summary>')
     const submitted = projectedApplication({ persona, status: 'SUBMITTED' })
     const readOnly = renderToStaticMarkup(createElement(EntryScreen, { initial: entryFixture([submitted]), release }))
-    expect(readOnly).not.toContain('data-applicant-onboarding="true"')
+    expect(readOnly).toContain('data-applicant-onboarding="true"')
     expect(readOnly).not.toContain('Start another application')
     expect(readOnly).toContain('Refresh application status')
   })
@@ -334,14 +335,14 @@ describe('connected pending application workspaces', () => {
     const application = projectedApplication()
     const initial = entryFixture([application])
     const chooser = renderToStaticMarkup(createElement(EntryScreen, { initial, release, chooseContext: true }))
-    expect(chooser).toContain('Your applications and workspaces.')
+    expect(chooser).toContain('Your BlockXOne overview.')
     expect(chooser).toContain('Start another application')
     expect(chooser).toContain(`application=${application.id}`)
-    expect(chooser).not.toContain('data-applicant-onboarding="true"')
+    expect(chooser).toContain('data-applicant-onboarding="true"')
     const newApplication = renderToStaticMarkup(createElement(EntryScreen, { initial, release, addCapacity: true }))
     expect(newApplication).toContain('Application type')
     expect(newApplication).toContain('Create or continue this application')
-    expect(newApplication).not.toContain('data-applicant-onboarding="true"')
+    expect(newApplication).toContain('data-applicant-onboarding="true"')
   })
   it('does not ask a new personal applicant to select an organisation they cannot access', () => {
     const html = renderToStaticMarkup(createElement(EntryScreen, { initial: entryFixture([]), release }))
@@ -369,5 +370,76 @@ describe('connected pending application workspaces', () => {
       expect(html).not.toContain('Tell us about yourself, add supporting evidence and send your application for review.')
       expect(html).not.toContain('Introduce your organisation and who you represent, then send the application to BlockXOne for review.')
     }
+  })
+  it.each(applicantSections)('keeps explicit %s separate from selected application intake for zero, one and multiple applications', section => {
+    const titles = { overview: 'Your BlockXOne overview.', applications: 'My applications.', workspaces: 'Your assigned workspaces.', help: 'Help with your next step.' }
+    for (const count of [0, 1, 2]) {
+      const applications = Array.from({ length: count }, (_, index) => projectedApplication({ id: index === 0 ? entryApplicationId : '55555555-5555-4555-8555-555555555555', persona: index === 0 ? 'INVESTOR' : 'WEALTH_MANAGER' }))
+      const html = renderToStaticMarkup(<EntryScreen initial={entryFixture(applications)} release={release} section={section} applicationId={applications[0]?.id} />)
+      expect(html).toContain(titles[section])
+      expect(html).toContain(`data-applicant-section="${section}"`)
+      expect(html).toContain('data-applicant-onboarding="true"')
+      expect(html).toContain(entryFixture().actor.email)
+      expect(html).not.toContain('Apply as an investor.')
+      expect(html).not.toContain('Apply for an organisation workspace.')
+      expect(html).not.toContain('Refresh application status')
+      expect(html).not.toContain('Refresh review availability')
+      expect(html).not.toContain('Submit application for review')
+      if (section === 'overview' || section === 'applications') for (const application of applications) expect(html).toContain(`/portal/onboarding?mode=applicant&amp;application=${application.id}`)
+    }
+    expect(presentationBoundary.submit).not.toHaveBeenCalled()
+    expect(presentationBoundary.fetch).not.toHaveBeenCalled()
+  })
+  it('keeps the workspace directory limited to exact returned assignments, not an approved customer application', () => {
+    const approved = projectedApplication({ persona: 'WEALTH_MANAGER', status: 'APPROVED', approved_until: '2099-01-01T00:00:00Z', organisation_id: entryOrganisationId })
+    const empty = renderToStaticMarkup(<EntryScreen initial={entryFixture([approved])} release={release} section="workspaces" />)
+    expect(empty).toContain('No assigned operating workspace')
+    expect(empty).not.toContain('role=OfferingManager')
+    expect(empty).not.toContain('role=SuperAdmin')
+    const initial = { ...entryFixture([approved]), contexts: [{ context_key: entryOrganisationId, organisation_id: entryOrganisationId, name: 'Fictional assigned organisation', roles: ['ComplianceOfficer' as const] }] }
+    const assigned = renderToStaticMarkup(<EntryScreen initial={initial} release={release} section="workspaces" />)
+    expect(assigned).toContain(`/portal?organisation=${entryOrganisationId}&amp;role=ComplianceOfficer`)
+    expect(assigned).toContain('Fictional assigned organisation · Compliance Officer')
+    expect(assigned).not.toContain('role=OfferingManager')
+    expect(assigned).not.toContain('role=SuperAdmin')
+    expect(presentationBoundary.submit).not.toHaveBeenCalled()
+  })
+  it('shows draft, submitted and changes-required cards from the saved handoff without manufacturing receipts', () => {
+    for (const status of ['DRAFT', 'SUBMITTED', 'CHANGES_REQUIRED'] as const) {
+      const application = projectedApplication({ status })
+      const html = renderToStaticMarkup(<EntryScreen initial={entryFixture([application])} release={release} section="applications" />)
+      expect(html).toContain(status === 'DRAFT' ? 'Draft · Not submitted' : status === 'SUBMITTED' ? 'Submitted for independent review' : 'Changes required')
+      expect(html).toContain(status === 'SUBMITTED' ? 'Independent BlockXOne Compliance Officer' : 'You, the applicant')
+      expect(html).not.toContain('application received')
+      expect(html).not.toContain('Hosted record confirmed')
+      expect(html).not.toContain('Open assigned workspace')
+    }
+  })
+  it('keeps expired and missing handoffs visibly unverified rather than turning approval into authority', () => {
+    const expired = entryApplication({ status: 'APPROVED', approved_until: '2020-01-01T00:00:00Z' })
+    const html = renderToStaticMarkup(<EntryScreen initial={entryFixture([expired])} release={release} section="applications" />)
+    expect(html).toContain('Admission expired')
+    expect(html).toContain('Current next step could not be verified')
+    expect(html).not.toContain('Open assigned workspace')
+    expect(html).not.toContain('Continue to account opening')
+    const unverified = entryApplication({ status: 'APPROVED', approved_until: '2099-01-01T00:00:00Z' })
+    expect(renderToStaticMarkup(<EntryScreen initial={entryFixture([unverified])} release={release} section="applications" />)).toContain('Recorded approval · Current access unverified')
+    const held = projectedApplication({ status: 'APPROVED', approved_until: '2099-01-01T00:00:00Z' }, { state: 'UNAVAILABLE', blocker: 'MONITORING_ON_HOLD', next_owner: 'COMPLIANCE', allowed_actions: [], gates: { intake_admitted: true, reviewer_available: true, monitoring_allows_new_actions: false }, destination: 'NONE' })
+    const hold = renderToStaticMarkup(<EntryScreen initial={entryFixture([held])} release={release} section="applications" />)
+    expect(hold).toContain('Customer relationship on hold')
+    expect(hold).toContain('Recorded approval · Current access unverified')
+    expect(hold).not.toContain('Admission approved for test scope')
+    expect(hold).not.toContain('Continue to account opening')
+  })
+  it('uses the same help section in MAIN without exposing TEST applicant commands or pretending admission is available', () => {
+    const html = renderToStaticMarkup(<EntryScreen initial={entryFixture([])} release={{ ...release, environment: 'MAINNET' }} section="help" />)
+    expect(html).toContain('Help with your next step.')
+    expect(html).toContain('MAIN environment')
+    expect(html).toContain('Approved admission is required.')
+    expect(html).toContain('pending upload is not a confirmed saved record')
+    expect(html).not.toContain('Create or continue this application')
+    expect(html).not.toContain('Submit application for review')
+    expect(html).not.toContain('Open assigned workspace')
+    expect(presentationBoundary.submit).not.toHaveBeenCalled()
   })
 })

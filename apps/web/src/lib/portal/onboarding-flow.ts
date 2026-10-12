@@ -133,7 +133,7 @@ function validHistoryEntry(entry: OnboardingHistoryEntry | null | undefined): en
   return Boolean(entry && typeof entry.key === 'string' && entry.key && Number.isInteger(entry.index) && entry.index >= 0 && typeof entry.url === 'string')
 }
 
-export const onboardingHistoryUnavailableMessage = 'Browser Back/Forward protection is unavailable in this browser. Your answers are not saved automatically. Use this form\'s Back/Next controls and submit before leaving.'
+export const onboardingHistoryUnavailableMessage = 'Browser Back/Forward protection is unavailable in this browser. Use the form’s step controls and check the save indicator before leaving. Only changes confirmed as Saved can be resumed; a saved draft is not a submitted application.'
 export const onboardingHistoryRestoreFailureMessage = 'Browser history could not be restored to this application. Your answers are still on this page, but the intended location could not be confirmed. Do not leave or submit again; ask the onboarding owner to reconcile the application.'
 
 /**

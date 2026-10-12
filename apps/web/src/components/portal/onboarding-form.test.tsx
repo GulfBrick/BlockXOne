@@ -2,12 +2,12 @@
 
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { entryApplicationSchema, type EntryApplication, type EntrySnapshot } from '@/lib/portal/entry-contracts'
 import { entryApplication, entryActorId, entryFixture, entryHandoff } from '@/lib/portal/entry-test-fixtures'
 import { applicationDetailsSchema, type LegacyApplicationDetails, type OwnershipControlRelationship, type PortalApplication, type PortalSnapshot, type WealthManagerApplicationDetailsV2 } from '@/lib/portal/contracts'
-import { ApplicationDetailsSummary, ApplicationHistoryFailureNotice, OnboardingForm, applicationFormDetails, applicationHistoryFailure, applicationNextStep, applicationSubmissionDetails, applicationSubmissionReady, applicationSubmitLabel, classifyDocumentUpload, requiredApplicationEvidence, withoutDraftEvidence } from './onboarding-form'
+import { ApplicationDetailsSummary, ApplicationHistoryFailureNotice, OnboardingForm, applicationFormDetails, applicationHistoryFailure, applicationNextStep, applicationSubmissionDetails, applicationSubmissionReady, applicationSubmitLabel, classifyDocumentUpload, ownershipPercentInputValid, requiredApplicationEvidence, withoutDraftEvidence } from './onboarding-form'
 import { ApplicationReview } from './portal-workflows'
 import { dateLabel } from './portal-primitives'
 import { PortalIdentityProvider } from './portal-client'
@@ -371,6 +371,56 @@ function unloadPrevented() {
 }
 
 describe('draft reliability in the applicant form', () => {
+  it('offers named step navigation without changing application authority or sending a submission', () => {
+    mountedForm(entryApplication({ persona: 'WEALTH_MANAGER', review_route: 'AVAILABLE' }))
+    const rail = within(screen.getByRole('navigation', { name: 'Application steps' }))
+    expect(rail.getByRole('button', { name: 'Your details' }).getAttribute('aria-current')).toBe('step')
+    fireEvent.click(rail.getByRole('button', { name: 'Organisation details' }))
+    expect(screen.getByRole('heading', { name: 'Organisation details' })).toBeTruthy()
+    fireEvent.change(screen.getByRole('combobox', { name: 'Go to application step' }), { target: { value: 'identity' } })
+    expect(screen.getByRole('heading', { name: 'Your details' })).toBeTruthy()
+    expect(boundary.submit).not.toHaveBeenCalled()
+  })
+  it('keeps named step navigation on the current step until its exact draft save is confirmed', async () => {
+    Object.assign(draftBoundary, { status: 'READY', available: true, dirty: true })
+    mountedForm(entryApplication({ review_route: 'AVAILABLE', details: investor }))
+    const button = within(screen.getByRole('navigation', { name: 'Application steps' })).getByRole('button', { name: 'Funds and objectives' })
+    await act(async () => { fireEvent.click(button) })
+    expect(screen.getByRole('heading', { name: 'Investor details' })).toBeTruthy()
+    expect(draftBoundary.save).toHaveBeenCalledTimes(1)
+    draftBoundary.save.mockResolvedValue(true)
+    await act(async () => { fireEvent.click(button) })
+    expect(screen.getByRole('heading', { name: 'Funds and objectives' })).toBeTruthy()
+    expect(boundary.submit).not.toHaveBeenCalled()
+  })
+  it('keeps Back on the current step after a failed save without losing answers', async () => {
+    Object.assign(draftBoundary, { status: 'READY', available: true })
+    draftBoundary.save.mockResolvedValueOnce(true)
+    mountedForm(entryApplication({ review_route: 'AVAILABLE', details: investor }))
+    await act(async () => { next() })
+    fireEvent.change(screen.getByRole('textbox', { name: /^Source of funds/ }), { target: { value: 'Fictional answers retained after a failed save.' } })
+    await act(async () => { back() })
+    expect(screen.getByRole('heading', { name: 'Funds and objectives' })).toBeTruthy()
+    expect((screen.getByRole('textbox', { name: /^Source of funds/ }) as HTMLTextAreaElement).value).toBe('Fictional answers retained after a failed save.')
+    expect(boundary.submit).not.toHaveBeenCalled()
+  })
+  it('does not reinterpret a blank controller percentage as zero or allow it to be submitted', () => {
+    const prepared = withOwnership(applicationFormDetails(entryApplication({ persona: 'WEALTH_MANAGER', details: manager })))
+    prepared.ownership_control = [{ ...relationship, relationship: 'CONTROLLER', ownership_basis_points: 0 }]
+    mountedForm(entryApplication({ persona: 'WEALTH_MANAGER', review_route: 'AVAILABLE', details: applicationDetailsSchema.parse(applicationSubmissionDetails('WEALTH_MANAGER', prepared)) }))
+    fireEvent.change(screen.getByRole('combobox', { name: 'Go to application step' }), { target: { value: 'ownership' } })
+    const input = screen.getByRole('spinbutton', { name: 'Economic ownership (%)' }) as HTMLInputElement
+    fireEvent.change(input, { target: { value: '' } })
+    expect(input.value).toBe('')
+    expect(screen.getByText('Finish the ownership percentage; this unfinished input is not saved')).toBeTruthy()
+    expect(unloadPrevented()).toBe(true)
+    expect(screen.queryByRole('button', { name: 'Save and exit' })).toBeNull()
+    expect((screen.getByRole('combobox', { name: 'Go to application step' }) as HTMLSelectElement).disabled).toBe(true)
+    fireEvent.change(input, { target: { value: '0' } })
+    expect(input.value).toBe('0')
+    expect((screen.getByRole('combobox', { name: 'Go to application step' }) as HTMLSelectElement).disabled).toBe(false)
+    expect(boundary.submit).not.toHaveBeenCalled()
+  })
   it('locks inputs while the initial saved draft loads, without claiming Saved', () => {
     Object.assign(draftBoundary, { status: 'LOADING', loading: true })
     mountedForm(entryApplication({ review_route: 'AVAILABLE' }))
@@ -551,7 +601,8 @@ describe('guided onboarding interaction at the existing command boundary', () =>
     expect(screen.getByRole('button', { name: /^Identity evidence: upload and select/ })).toBeTruthy()
     expect((screen.getByRole('button', { name: 'Submit for review' }) as HTMLButtonElement).disabled).toBe(true)
     expect(boundary.submit).not.toHaveBeenCalled()
-    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+    expect(fetchMock.mock.calls.filter(([input]) => input === '/api/portal/documents?queue=1')).toHaveLength(2)
   })
   it('does not attach a supposedly clean scan whose checked receipt mismatches the selected file', async () => {
     const selected = { ...documents[0], id: '77777777-7777-4777-8777-777777777777', title: 'Fictional clean identity' }
@@ -728,6 +779,73 @@ function deferredRestoration(navigation: NavigationModel) {
   })
   return requests
 }
+
+describe('V6 evidence recovery and unfinished numeric answers', () => {
+  it.each([
+    ['', 'CONTROLLER', false], ['0', 'CONTROLLER', true], ['0', 'DIRECT_OWNER', false],
+    ['0.01', 'DIRECT_OWNER', true], ['100', 'INDIRECT_OWNER', true], ['100.01', 'CONTROLLER', false],
+    ['-1', 'CONTROLLER', false], ['1.001', 'DIRECT_OWNER', false], ['not a number', 'CONTROLLER', false],
+  ] as const)('validates explicit percentage %s for %s without changing the basis-point schema', (raw, kind, valid) => {
+    expect(ownershipPercentInputValid(raw, kind)).toBe(valid)
+  })
+  it('recovers recent private uploads on a reopened evidence step but never includes them automatically', async () => {
+    const recent = { id: documents[0].id, kind: documents[0].kind, title: 'Previously uploaded fictional identity', state: 'SCANNED_CLEAN', created_at: '2026-10-12T10:00:00Z' }
+    const network = vi.fn(async (input: RequestInfo | URL) => {
+      if (input === '/api/portal/documents?queue=1') return new Response(JSON.stringify({ documents: [recent] }), { status: 200 })
+      throw new Error('Only the existing private queue may be read in this recovery test.')
+    })
+    vi.stubGlobal('fetch', network)
+    const application = entryApplication({ review_route: 'AVAILABLE', details: { ...investor, documents: [] } })
+    const first = mountedForm(application)
+    fireEvent.change(screen.getByRole('combobox', { name: 'Go to application step' }), { target: { value: 'evidence' } })
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Include clean file' })).toBeTruthy())
+    first.unmount()
+    mountedForm(application)
+    fireEvent.change(screen.getByRole('combobox', { name: 'Go to application step' }), { target: { value: 'evidence' } })
+    await waitFor(() => expect(screen.getByText(recent.title)).toBeTruthy())
+    expect(screen.queryByRole('button', { name: 'Exclude from this submission' })).toBeNull()
+    expect(screen.queryByText(/file uploaded for this application still awaits/)).toBeNull()
+    expect(network).toHaveBeenCalledTimes(2)
+    expect(boundary.submit).not.toHaveBeenCalled()
+    expect(sessionStorage.length).toBe(0); expect(localStorage.length).toBe(0)
+  })
+  it('recovers pending and rejected account uploads without treating them as clean or assigned', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ documents: [
+      { id: documents[0].id, kind: 'IDENTITY', title: 'Pending account upload', state: 'QUARANTINED', created_at: '2026-10-12T10:00:00Z' },
+      { id: documents[1].id, kind: 'COMPANY', title: 'Rejected account upload', state: 'REJECTED', created_at: '2026-10-12T10:00:00Z' },
+    ] }), { status: 200 })))
+    mountedForm(entryApplication({ review_route: 'AVAILABLE', details: { ...investor, documents: [] } }))
+    fireEvent.change(screen.getByRole('combobox', { name: 'Go to application step' }), { target: { value: 'evidence' } })
+    await waitFor(() => expect(screen.getByText('Awaiting independent scan')).toBeTruthy())
+    expect(screen.getByText('Rejected by scan; upload a different file')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Include clean file' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Exclude pending file from this application' })).toBeNull()
+    expect(boundary.submit).not.toHaveBeenCalled()
+  })
+  it('explains unavailable queue recovery without falsely claiming empty or clean files', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 503 })))
+    mountedForm(entryApplication({ review_route: 'AVAILABLE', details: { ...investor, documents: [] } }))
+    fireEvent.change(screen.getByRole('combobox', { name: 'Go to application step' }), { target: { value: 'evidence' } })
+    await waitFor(() => expect(screen.getByText('The private scan queue is unavailable. Retry later; no pending file is counted as evidence.')).toBeTruthy())
+    expect(screen.queryByText('No scanned or pending files are available for this account.')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Include clean file' })).toBeNull()
+    expect(boundary.submit).not.toHaveBeenCalled()
+  })
+  it('ignores an earlier application queue response after scope changes', async () => {
+    let release!: (response: Response) => void
+    const network = vi.fn(async () => new Response(JSON.stringify({ documents: [] }), { status: 200 }))
+    network.mockImplementationOnce(() => new Promise<Response>(resolve => { release = resolve }))
+    vi.stubGlobal('fetch', network)
+    const first = entryApplication({ review_route: 'AVAILABLE', details: investor })
+    const view = mountedForm(first)
+    fireEvent.change(screen.getByRole('combobox', { name: 'Go to application step' }), { target: { value: 'evidence' } })
+    const second = entryApplication({ id: '22222222-2222-4222-8222-222222222222', review_route: 'AVAILABLE', details: investor })
+    view.rerender(<PortalIdentityProvider actorId={entryActorId} environment="TESTNET"><OnboardingForm application={second} environment="TESTNET" onSaved={save} handoff={entryHandoff(second)} /></PortalIdentityProvider>)
+    await act(async () => { release(new Response(JSON.stringify({ documents: [{ id: documents[1].id, kind: 'COMPANY', title: 'Earlier scope private file', state: 'SCANNED_CLEAN', created_at: '2026-10-12T10:00:00Z' }] }), { status: 200 })) })
+    expect(screen.queryByText('Earlier scope private file')).toBeNull()
+    expect(boundary.submit).not.toHaveBeenCalled()
+  })
+})
 
 describe('feature-detected browser traversal guard', () => {
   it.each(['previous-entry', 'forward-entry'] as const)('cancels a cancelable traversal to %s before location or Next changes', destination => {

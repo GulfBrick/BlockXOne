@@ -14,7 +14,7 @@ const ownerLabels: Record<CustomerHandoff['next_owner'], string> = {
 const blockers: Record<CustomerHandoff['blocker'], { title: string; description: string }> = {
   NONE: { title: '', description: '' },
   INTAKE_NOT_ADMITTED: { title: 'Evidence submission is unavailable', description: 'The evidence-review route is not available for this environment and application. Your saved application remains intact; evidence submission and approval are unavailable. Contact the onboarding owner to resolve the route.' },
-  REVIEWER_UNAVAILABLE: { title: 'Independent reviewer not assigned', description: 'The onboarding owner must assign an eligible independent reviewer. Prepared browser fields are not submitted or saved automatically.' },
+  REVIEWER_UNAVAILABLE: { title: 'Independent reviewer not assigned', description: 'The onboarding owner must assign an eligible independent reviewer. You can prepare the application; check its save indicator before leaving. A saved draft is not a submitted application.' },
   PROVIDER_UNSUPPORTED: { title: 'The review route needs attention', description: 'The recorded provider mode cannot be used by this workflow. The provider owner must resolve the route; no clearance or account authority is inferred.' },
   ADMISSION_EXPIRED: { title: 'Customer admission expired', description: 'An authorised reviewer must renew the customer admission. Its historical approval does not permit account, mandate or product actions.' },
   MONITORING_ON_HOLD: { title: 'Customer relationship on hold', description: 'An ongoing monitoring decision prevents new actions. Contact the responsible reviewer; another capacity or account does not remove the hold.' },
@@ -31,7 +31,7 @@ export function customerHandoffPresentation(handoff: CustomerHandoff): { title: 
   if (handoff.blocker === 'REVIEWER_UNAVAILABLE' && handoff.state === 'REVIEW_PENDING') return { title: blockers.REVIEWER_UNAVAILABLE.title, description: 'Your submitted case is preserved, but an eligible independent reviewer is not currently assigned. The onboarding owner must restore the review handoff; do not submit a duplicate.', owner }
   if (handoff.blocker !== 'NONE') return { ...blockers[handoff.blocker], owner }
   const steps: Record<CustomerHandoff['state'], { title: string; description: string }> = {
-    PREPARE_APPLICATION: { title: 'Draft: not submitted', description: 'Complete your answers and add the requested evidence. Changes stay in this browser until the server confirms submission of this same application.' },
+    PREPARE_APPLICATION: { title: 'Draft: not submitted', description: 'Complete your answers and add the requested evidence. Check the save indicator for confirmed draft saving. Submit for review sends the completed application to the reviewer; saving a draft does not.' },
     REVIEW_PENDING: { title: 'Awaiting an independent decision', description: 'The saved application package is in the independent review handoff. Refresh saved status to see feedback or a decision; do not submit a duplicate.' },
     INFORMATION_REQUIRED: { title: 'Your changes are required', description: 'Read the recorded feedback, update the requested facts and evidence, then resubmit this same application. Earlier submitted revisions remain in its history.' },
     REAPPLICATION_REQUIRED: { title: 'Not approved; you can reapply', description: 'The rejection remains recorded. You may revise and reapply on this same application for a new independent decision. Reapplication does not reverse rejection into approval.' },

@@ -225,6 +225,49 @@ describe('portal server page access and selected context', () => {
     expect(fixture.screen).not.toHaveBeenCalled()
     expect(node.key).toContain(`${user.id}:TESTNET:`)
   })
+  it.each(['overview', 'applications', 'workspaces', 'help'] as const)('passes explicit applicant %s presentation without changing the server context query', async section => {
+    const entry = entryFixture([entryApplication()])
+    fixture.load.mockResolvedValueOnce({ kind: 'applicant', entry, release, scopes: [], chooseContext: false, operatingContext: { mode: 'APPLICANT' }, portal: undefined })
+    const query = { mode: 'applicant', section }
+    const node = await PortalPage({ view: '/portal', query })
+    renderToStaticMarkup(node)
+    expect(fixture.load).toHaveBeenCalledWith(query)
+    expect(fixture.entry).toHaveBeenCalledWith(expect.objectContaining({ initial: entry, section, applicationId: undefined }))
+    expect(fixture.screen).not.toHaveBeenCalled()
+    expect(node.key).toContain(`:${section}`)
+  })
+  it('normalizes absent, unknown and repeated applicant sections to overview instead of selecting the sole application', async () => {
+    const entry = entryFixture([entryApplication()])
+    for (const section of [undefined, 'unknown', ['applications', 'workspaces']]) {
+      fixture.entry.mockClear()
+      fixture.load.mockResolvedValueOnce({ kind: 'applicant', entry, release, scopes: [], chooseContext: false, operatingContext: { mode: 'APPLICANT' }, portal: undefined })
+      renderToStaticMarkup(await PortalPage({ view: '/portal', query: { mode: 'applicant', section } }))
+      expect(fixture.entry).toHaveBeenCalledWith(expect.objectContaining({ section: 'overview' }))
+    }
+    expect(fixture.screen).not.toHaveBeenCalled()
+  })
+  it('leaves exact onboarding selection separate from a directory presentation query', async () => {
+    const entry = entryFixture([entryApplication()])
+    fixture.load.mockResolvedValueOnce({ kind: 'applicant', entry, release, scopes: [], chooseContext: false, operatingContext: { mode: 'APPLICANT' }, portal: undefined })
+    const query = { mode: 'applicant', application: entry.applications[0].id, section: 'applications', organisation, role: 'ComplianceOfficer' }
+    renderToStaticMarkup(await PortalPage({ view: '/portal/onboarding', query }))
+    expect(fixture.load).toHaveBeenCalledWith({ ...query, mode: 'applicant', organisation: undefined, role: undefined })
+    expect(fixture.entry).toHaveBeenCalledWith(expect.objectContaining({ applicationId: entry.applications[0].id, section: undefined }))
+    expect(fixture.screen).not.toHaveBeenCalled()
+  })
+  it('does not turn an applicant section into a staff or foreign-application bypass', async () => {
+    fixture.load.mockRejectedValueOnce(new PortalError('Foreign application', 403))
+    const query = { mode: 'applicant', section: 'applications', application: 'foreign-application' }
+    const denied = renderToStaticMarkup(await PortalPage({ view: '/portal', query }))
+    expect(fixture.load).toHaveBeenCalledWith(query)
+    expect(denied).toContain('Complete your account access')
+    expect(fixture.entry).not.toHaveBeenCalled()
+    expect(fixture.screen).not.toHaveBeenCalled()
+    fixture.load.mockResolvedValueOnce(roleData())
+    renderToStaticMarkup(await PortalPage({ view: '/portal', query: { organisation, role: 'Investor', section: 'applications' } }))
+    expect(fixture.screen).toHaveBeenCalledWith(expect.objectContaining({ operatingContext: context, view: '/portal' }))
+    expect(fixture.entry).not.toHaveBeenCalled()
+  })
   it('denies operational child views in personal applicant mode even with a reviewer-shaped snapshot', async () => {
     const data = roleData()
     fixture.load.mockResolvedValueOnce({ kind: 'applicant', entry: { entry_version: 1, actor: user, applications: [], contexts: [], admission: { manual_test_review: true } }, release, scopes: [scope], operatingContext: { mode: 'APPLICANT' }, portal: { ...data.portal, snapshot: { ...data.portal.snapshot, actor: { ...data.portal.snapshot.actor, can_review: true } } } })
@@ -256,6 +299,11 @@ describe('portal server page access and selected context', () => {
     fixture.load.mockRejectedValueOnce(new PortalError('Unavailable', 503))
     const html = renderToStaticMarkup(await PortalPage({ view: '/portal/onboarding', query: { mode: 'applicant' } }))
     expect(html).toContain('href="/portal/onboarding?mode=applicant"')
+  })
+  it('preserves a validated applicant directory section after a transient failure', async () => {
+    fixture.load.mockRejectedValueOnce(new PortalError('Unavailable', 503))
+    const html = renderToStaticMarkup(await PortalPage({ view: '/portal', query: { mode: 'applicant', section: 'workspaces' } }))
+    expect(html).toContain('href="/portal?mode=applicant&amp;section=workspaces"')
   })
   it('preserves a valid requested role and organisation in a transient-error retry', async () => {
     fixture.load.mockRejectedValueOnce(new PortalError('Unavailable', 503))

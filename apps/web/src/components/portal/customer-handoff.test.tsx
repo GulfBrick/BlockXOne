@@ -13,6 +13,14 @@ function render(overrides: Partial<CustomerHandoff> = {}) {
 }
 
 describe('authoritative customer handoff presentation', () => {
+  it('keeps draft saving and independent submission distinct without an obsolete no-autosave claim', () => {
+    const draft = customerHandoffPresentation(entryHandoff(application, { state: 'PREPARE_APPLICATION' }))
+    expect(draft.description).toContain('save indicator')
+    expect(draft.description).toContain('saving a draft does not')
+    const missingReviewer = customerHandoffPresentation(entryHandoff(application, { blocker: 'REVIEWER_UNAVAILABLE' }))
+    expect(missingReviewer.description).toContain('A saved draft is not a submitted application')
+    for (const message of [draft.description, missingReviewer.description]) expect(message).not.toContain('not submitted or saved automatically')
+  })
   it.each([
     ['PREPARE_APPLICATION', 'APPLICANT', 'Draft: not submitted'],
     ['REVIEW_PENDING', 'COMPLIANCE', 'Awaiting an independent decision'],

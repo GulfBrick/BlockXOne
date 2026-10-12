@@ -24,7 +24,7 @@ describe('shared approved brand and release shell', () => {
     expect(css).toContain('prefers-reduced-motion')
     expect(css).not.toMatch(/#[a-f0-9]{3,8}\b/i)
   })
-  it('keeps V3 light aliases inside the editable applicant frame and navy around the real artwork', () => {
+  it('keeps light aliases inside the applicant frame and navy around the real artwork', () => {
     const css = readFileSync(new URL('./portal.module.css', import.meta.url), 'utf8')
     const lightFrame = css.match(/\.applicantOnboarding \.frame \{([\s\S]*?)\n\}/)?.[1]
     expect(lightFrame).toContain('--bxo-surface: var(--bxo-frost)')
@@ -57,8 +57,8 @@ describe('shared approved brand and release shell', () => {
     expect(html).not.toContain('>BX</span>')
     expect(html.match(/aria-label="Switch application or workspace"/g)).toHaveLength(1)
     const switcher = (html.match(/<a\b[^>]*>/g) ?? []).find(anchor => anchor.includes('aria-label="Switch application or workspace"'))
-    expect(switcher).toContain('href="/portal?mode=applicant"')
-    expect(html).toContain('Current workspace: Wealth-manager application')
+    expect(switcher).toContain('href="/portal?mode=applicant&amp;section=applications"')
+    expect(html).toContain('Current context: Personal account · Wealth-manager application')
     expect(html).not.toContain('Navigate your workspace')
     const account = html.match(/<details\b[^>]*><summary>Account<\/summary>[\s\S]*?<\/details>/g) ?? []
     expect(account).toHaveLength(1)
@@ -86,17 +86,28 @@ describe('shared approved brand and release shell', () => {
     expect(html).not.toContain('href="/portal/products')
     expect(html).not.toContain('href="/portal/compliance')
   })
-  it('does not apply applicant presentation to a role workspace or a non-onboarding screen', () => {
+  it('does not apply applicant presentation to a role workspace', () => {
     const organisationId = '11111111-1111-4111-8111-111111111111'
     const role = renderToStaticMarkup(<PortalShell user={{ id: 'actor', email: 'actor@example.invalid' }} capabilities={{ manageProducts: false, reviewCompliance: true, invest: false }} active="onboarding" title="Assigned review queue" operatingContext={{ mode: 'ROLE', organisationId, role: 'ComplianceOfficer' }} applicantOnboarding><p>Assigned work</p></PortalShell>)
-    const overview = renderToStaticMarkup(<PortalShell user={{ id: 'actor', email: 'actor@example.invalid' }} capabilities={{ manageProducts: false, reviewCompliance: false, invest: false }} active="overview" title="Applications" operatingContext={{ mode: 'APPLICANT' }} applicantOnboarding><p>Choose a workspace</p></PortalShell>)
-    for (const html of [role, overview]) {
-      expect(html).not.toContain('data-applicant-onboarding="true"')
-      expect(html).not.toContain('<summary>Account</summary>')
-      expect(html).toContain('Navigate your workspace')
-      expect(html).toContain('aria-label="Breadcrumb"')
-    }
+    expect(role).not.toContain('data-applicant-onboarding="true"')
+    expect(role).not.toContain('<summary>Account</summary>')
+    expect(role).toContain('Navigate your workspace')
+    expect(role).toContain('aria-label="Breadcrumb"')
     expect(role).toContain(`/portal/compliance?organisation=${organisationId}&amp;role=ComplianceOfficer`)
     expect(role).not.toContain('role=SuperAdmin')
+  })
+  it.each(['overview', 'applications', 'workspaces', 'help'] as const)('shares the light real-logo shell and same-route skip target for applicant %s', section => {
+    const html = renderToStaticMarkup(<PortalShell user={{ id: 'actor', email: 'actor@example.invalid' }} capabilities={{ manageProducts: false, reviewCompliance: false, invest: false }} active="overview" title="Applicant section" operatingContext={{ mode: 'APPLICANT' }} applicantOnboarding applicantSection={section}><p>Saved applicant content</p></PortalShell>)
+    expect(html).toContain('data-applicant-onboarding="true"')
+    expect(html).toContain(`data-applicant-section="${section}"`)
+    expect(html).toContain('blockxone-lockup-horizontal.png')
+    expect(html).toContain(`href="/portal?mode=applicant&amp;section=${section}"`)
+    expect(html).toContain('aria-label="Applicant sections on mobile"')
+    expect(html).toContain('href="#portal-content"')
+    expect(html).toContain('id="portal-content" tabindex="-1"')
+    expect(html.match(/<summary>Account<\/summary>/g)).toHaveLength(1)
+    expect(html.match(/action="\/auth\/logout"/g)).toHaveLength(1)
+    expect(html).not.toContain('href="/portal/compliance')
+    expect(html).not.toContain('href="/portal/products')
   })
 })

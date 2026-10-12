@@ -4,7 +4,8 @@ import Image from 'next/image'
 import { PLATFORM_VERSION, type PlatformRelease } from '@/lib/platform-release'
 import { portalScopeHref, type PortalOperatingContext } from '@/lib/portal/operating-context'
 import { getRoleDashboard } from '@/lib/portal/role-dashboards'
-import { ArrowUpRight, BriefcaseBusiness, Building2, ChevronDown, CircleUserRound, LayoutDashboard, ShieldCheck, WalletCards } from 'lucide-react'
+import { ArrowUpRight, BriefcaseBusiness, Building2, ChevronDown, CircleHelp, CircleUserRound, LayoutDashboard, ShieldCheck, WalletCards } from 'lucide-react'
+import { applicantSectionHref, type ApplicantSection } from './applicant-presentation'
 import styles from './portal.module.css'
 
 export type PortalNavigationCapabilities = { manageProducts: boolean; reviewCompliance: boolean; invest: boolean }
@@ -19,20 +20,26 @@ export function portalNavigation(capabilities: PortalNavigationCapabilities, onb
   ]
 }
 
-export function PortalShell({ user, organisationName, capacityName, capabilities, active, title, description, eyebrow, breadcrumbs = [], actions, children, release, onboardingAvailable = true, operatingContext, applicantOnboarding = false }: {
+export function PortalShell({ user, organisationName, capacityName, capabilities, active, title, description, eyebrow, breadcrumbs = [], actions, children, release, onboardingAvailable = true, operatingContext, applicantOnboarding = false, applicantSection }: {
   user: { id: string; email: string }; organisationName?: string; capacityName?: string; capabilities: PortalNavigationCapabilities; active: PortalNavigationKey;
-  title: string; description?: string; eyebrow?: string; breadcrumbs?: { label: string; href?: string }[]; actions?: ReactNode; children: ReactNode; release?: PlatformRelease; onboardingAvailable?: boolean; operatingContext?: PortalOperatingContext; applicantOnboarding?: boolean;
+  title: string; description?: string; eyebrow?: string; breadcrumbs?: { label: string; href?: string }[]; actions?: ReactNode; children: ReactNode; release?: PlatformRelease; onboardingAvailable?: boolean; operatingContext?: PortalOperatingContext; applicantOnboarding?: boolean; applicantSection?: ApplicantSection;
 }) {
   // Existing business screens are still explicitly TEST-only. Native dashboards
   // pass the verified deployment identity; this does not enable live settlement.
   const environment = release?.environment ?? 'TESTNET'
   const testnet = environment === 'TESTNET'
-  const compactApplicant = applicantOnboarding && active === 'onboarding' && operatingContext?.mode === 'APPLICANT'
+  const compactApplicant = applicantOnboarding && operatingContext?.mode === 'APPLICANT'
   const navigation = portalNavigation(capabilities, onboardingAvailable).map(item => ({ ...item, href: item.key === 'onboarding' && operatingContext?.mode === 'ROLE' ? '/portal/onboarding?mode=applicant' : portalScopeHref(item.href, operatingContext) }))
+  const applicantNavigation = [
+    { key: 'overview' as const, label: 'Overview', icon: LayoutDashboard },
+    { key: 'applications' as const, label: 'My applications', icon: CircleUserRound },
+    { key: 'workspaces' as const, label: 'Workspaces', icon: Building2 },
+    { key: 'help' as const, label: 'Help', icon: CircleHelp },
+  ]
   const workspaceLabel = capacityName ?? (operatingContext?.mode === 'ROLE' ? getRoleDashboard(operatingContext.role)?.title.replace(/ dashboard$/, '') ?? operatingContext.role : 'Personal account')
-  const links = <nav aria-label="Portal navigation" className={styles.nav}>{navigation.map(item => <Link key={item.key} href={item.href} className={styles.navLink} aria-current={active === item.key ? 'page' : undefined}><item.icon aria-hidden="true" /><span>{item.label}</span></Link>)}</nav>
-  const brand = <Link href={portalScopeHref('/portal', operatingContext)} className={styles.brand} aria-label="BlockXOne portal home"><Image src="/brand/blockxone-lockup-horizontal.png" alt="BlockXOne" width={236} height={48} className={styles.brandArtwork} priority /></Link>
-  return <div className={`${styles.portal}${compactApplicant ? ` ${styles.applicantOnboarding}` : ''}`} data-applicant-onboarding={compactApplicant ? 'true' : undefined}>
+  const links = <nav aria-label="Portal navigation" className={styles.nav}>{compactApplicant ? applicantNavigation.map(item => <Link key={item.key} href={applicantSectionHref(item.key)} className={styles.navLink} aria-current={(applicantSection ?? 'applications') === item.key ? 'page' : undefined}><item.icon aria-hidden="true" /><span>{item.label}</span></Link>) : navigation.map(item => <Link key={item.key} href={item.href} className={styles.navLink} aria-current={active === item.key ? 'page' : undefined}><item.icon aria-hidden="true" /><span>{item.label}</span></Link>)}</nav>
+  const brand = <Link href={compactApplicant ? applicantSectionHref('overview') : portalScopeHref('/portal', operatingContext)} className={styles.brand} aria-label="BlockXOne portal home"><Image src="/brand/blockxone-lockup-horizontal.png" alt="BlockXOne" width={236} height={48} className={styles.brandArtwork} priority /></Link>
+  return <div className={`${styles.portal}${compactApplicant ? ` ${styles.applicantOnboarding}` : ''}`} data-applicant-onboarding={compactApplicant ? 'true' : undefined} data-applicant-section={compactApplicant ? applicantSection : undefined}>
     <a href="#portal-content" className={styles.skip}>Skip to main content</a>
     <aside className={styles.sidebar}>
       {brand}
@@ -50,7 +57,7 @@ export function PortalShell({ user, organisationName, capacityName, capabilities
       <header className={styles.topbar}>
         {compactApplicant ? <>
           <div className={styles.mobileBrand}>{brand}</div>
-          <Link href="/portal?mode=applicant" className={styles.applicationSwitchLink} aria-label="Switch application or workspace" title={`${organisationName || 'Personal account'} · ${workspaceLabel}`}><span className={styles.switcherWorkspaceLabel}>Current workspace: {workspaceLabel}</span><span className={styles.switcherMobileLabel}>Workspace</span><ChevronDown aria-hidden="true" /></Link>
+          <Link href={applicantSectionHref('applications')} className={styles.applicationSwitchLink} aria-label="Switch application or workspace" title={`${organisationName || 'Personal account'} · ${workspaceLabel}`}><span className={styles.switcherWorkspaceLabel}>Current context: {organisationName || 'Personal account'} · {workspaceLabel}</span><span className={styles.switcherMobileLabel}>Applications</span><ChevronDown aria-hidden="true" /></Link>
           <details className={styles.accountMenu}><summary>Account</summary><div className={styles.accountMenuBody}>
             <p className={styles.accountEmail}>{user.email}</p>
             <nav aria-label="Account navigation" className={styles.nav}><a href="/workspace/security" className={styles.navLink}><ShieldCheck aria-hidden="true" />Account security</a><a href="/workspace" className={styles.navLink}>Account workspace</a><Link href="/register" className={styles.navLink}>Account options</Link></nav>
@@ -61,6 +68,7 @@ export function PortalShell({ user, organisationName, capacityName, capabilities
           <div className={styles.userArea}><span className={styles.environmentPill}>{testnet ? 'Testnet' : 'Mainnet'} environment</span><span className={styles.userEmail}>{user.email}</span><form action="/auth/logout" method="post"><button className={styles.buttonSecondary} type="submit">Sign out</button></form></div>
         </>}
       </header>
+      {compactApplicant ? <nav aria-label="Applicant sections on mobile" className={styles.applicantMobileNav}>{applicantNavigation.map(item => <Link key={item.key} href={applicantSectionHref(item.key)} aria-current={(applicantSection ?? 'applications') === item.key ? 'page' : undefined}>{item.label}</Link>)}</nav> : null}
       <main id="portal-content" tabIndex={-1} className={styles.content}>
         {compactApplicant ? <p className={styles.applicantNotice} role="note"><strong>{testnet ? 'TEST environment' : 'MAIN environment'}</strong><span>{testnet ? 'Fictional data only.' : 'Approved admission is required.'}</span></p> : <nav aria-label="Breadcrumb"><ol className={styles.breadcrumbs}><li><Link href={portalScopeHref('/portal', operatingContext)}>Portal</Link></li>{breadcrumbs.map((item, index) => <li key={`${item.label}-${index}`}>{item.href ? <Link href={portalScopeHref(item.href, operatingContext)}>{item.label}</Link> : <span aria-current="page">{item.label}</span>}</li>)}</ol></nav>}
         <div className={styles.pageHeading}><div>{eyebrow ? <p className={styles.eyebrow}>{eyebrow}</p> : null}<h1 className={styles.title}>{title}</h1>{description ? <p className={styles.subtitle}>{description}</p> : null}</div>{actions ? <div className={styles.actions}>{actions}</div> : null}</div>

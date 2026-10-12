@@ -279,6 +279,19 @@
 .applicantOnboarding .button, .applicantOnboarding .buttonSecondary { font-size: 16px; min-height: 44px; }
 .applicantOnboarding .frame .textLink, .applicantOnboarding .frame .applicationChecklist li,
 .applicantOnboarding .frame .copy, .applicantOnboarding .frame .detailList > div { font-size: 16px; }
+.applicantOnboarding[data-applicant-section] .content { max-width: 1120px; }
+.applicantOnboarding .panelHeader h2 { font-size: 18px; }
+.applicantIdentity { margin: 0; color: var(--portal-muted); font-size: 16px; overflow-wrap: anywhere; }
+.applicantCardGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.applicantCard { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; min-width: 0; padding: 20px; border: 1px solid var(--portal-line); border-radius: 10px; background: var(--portal-panel); }
+.applicantCard p { margin: 0; font-size: 16px; overflow-wrap: anywhere; }
+.applicantCardHeading { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 10px; }
+.applicantCardHeading h3 { margin: 0; font-size: 18px; line-height: 1.4; }
+.applicantCard .badge { white-space: normal; }
+.applicantCard .button { margin-top: auto; }
+.applicantCard .applicationHistory { width: 100%; }
+.applicantNextAction { color: var(--portal-ink); }
+.applicantMobileNav { display: none; }
 .mobileBrand { display: none; }
 .applicationSwitchLink { display: inline-flex; min-width: 0; min-height: 44px; align-items: center; gap: 8px; padding: 8px 12px; border: 1px solid var(--portal-line); border-radius: 7px; color: var(--portal-ink); font-size: 16px; text-decoration: none; }
 .applicationSwitchLink:hover { border-color: var(--portal-accent); }
@@ -301,6 +314,12 @@
   .applicantOnboarding .sidebar { display: none; }
   .applicantOnboarding .topbar { display: grid; grid-template-columns: 128px minmax(0, 1fr) auto; gap: 8px; padding: 10px 12px; }
   .applicantOnboarding .content { padding: 16px 16px 28px; }
+  .applicantCardGrid { grid-template-columns: minmax(0, 1fr); }
+  .applicantCard { padding: 16px; }
+  .applicantMobileNav { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--portal-line); background: var(--portal-panel); }
+  .applicantMobileNav a { display: flex; align-items: center; justify-content: center; min-width: 0; min-height: 44px; padding: 6px 2px; border-bottom: 3px solid transparent; color: var(--portal-muted); font-size: 16px; line-height: 1.35; text-align: center; text-decoration: none; overflow-wrap: anywhere; }
+  .applicantMobileNav a[aria-current=page] { color: var(--portal-link); border-bottom-color: var(--portal-link); font-weight: 600; }
+  .applicantMobileNav a:hover { color: var(--portal-link); }
   .applicantOnboarding .title { font-size: 26px; }
   .mobileBrand { display: block; min-width: 0; }
   .mobileBrand .brandArtwork { width: 128px; height: auto; }

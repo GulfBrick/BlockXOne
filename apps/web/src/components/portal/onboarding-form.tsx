@@ -46,6 +46,13 @@ export function newOwnershipRelationship(): OwnershipControlRelationship {
   return { id: crypto.randomUUID(), party_type: 'PERSON', legal_name: '', registration_reference: '', country: 'ZA', relationship: 'DIRECT_OWNER', ownership_basis_points: 0, control_basis: '', effective_on: '', change_reason: '', evidence_document_id: '' }
 }
 
+export function ownershipPercentInputValid(value: string, relationship: OwnershipControlRelationship['relationship']): boolean {
+  if (!value.trim()) return false
+  const percentage = Number(value), basisPoints = Math.round(percentage * 100)
+  return Number.isFinite(percentage) && percentage <= 100 && (relationship === 'CONTROLLER' ? percentage >= 0 : percentage > 0)
+    && Math.abs(percentage * 100 - basisPoints) < 1e-8
+}
+
 /** Carry shared historical facts forward, never reinterpret investor answers as organisation facts. */
 export function applicationFormDetails(application: EntryApplication): FormDetails {
   const details = application.details
@@ -124,11 +131,11 @@ export function applicationNextStep(application: EntryApplication): { title: str
     : { title: 'Review decision recorded', description: application.persona === 'INVESTOR' ? 'Continue to the available investor workflow. Product-specific eligibility, a current approval and an authorised investment account are checked separately.' : 'Your historical rehearsal relationship remains separate from native organisation roles. Existing product actions still recheck their current authority.', owner: 'You, within your approved scope' }
   if (application.status === 'REJECTED') return { title: 'Application not approved', description: 'Read the recorded rationale. Contact the BlockXOne onboarding owner with this application reference to discuss the decision. A new capacity does not reverse it.', owner: 'You and the BlockXOne onboarding owner' }
   if (application.status === 'CHANGES_REQUIRED') return { title: 'Your changes are required', description: 'Read the reviewer feedback, update the requested facts and evidence, then resubmit this same application. Previous submitted revisions remain in its history.', owner: 'You, the applicant' }
-  if (application.review_route === 'REVIEWER_UNAVAILABLE') return { title: 'Independent reviewer not assigned', description: application.status === 'SUBMITTED' ? 'Your submitted case is preserved, but no eligible independent reviewer is currently assigned. The BlockXOne onboarding owner must restore the review handoff.' : 'You can prepare these fields, but submission is unavailable until the BlockXOne onboarding owner assigns an eligible independent reviewer. Your browser edits have not been saved.', owner: 'BlockXOne onboarding owner' }
+  if (application.review_route === 'REVIEWER_UNAVAILABLE') return { title: 'Independent reviewer not assigned', description: application.status === 'SUBMITTED' ? 'Your submitted case is preserved, but no eligible independent reviewer is currently assigned. The BlockXOne onboarding owner must restore the review handoff.' : 'You can prepare your application, but submission is unavailable until BlockXOne assigns an eligible independent reviewer. Check the form’s save indicator before leaving; a saved draft is not a submitted application.', owner: 'BlockXOne onboarding owner' }
   if (application.review_route !== 'AVAILABLE') return { title: 'Review route not admitted', description: 'The BlockXOne onboarding owner must admit the review route for this context before evidence can be submitted. No approval is implied.', owner: 'BlockXOne onboarding owner' }
   return application.status === 'SUBMITTED'
     ? { title: 'Awaiting an independent decision', description: 'Your saved evidence package is awaiting the assigned BlockXOne compliance review function. Refresh status to see a decision or a request for information; do not submit a duplicate.', owner: 'BlockXOne independent compliance review' }
-    : { title: 'Draft: not submitted', description: 'Complete your details and private evidence, then select Submit for review. Changes remain in this browser until the server confirms submission.', owner: 'You, the applicant' }
+    : { title: 'Draft: not submitted', description: 'Complete your details and private evidence, then select Submit for review. The save indicator confirms draft saving separately; submission sends the completed application to your reviewer.', owner: 'You, the applicant' }
 }
 
 export function PrivateDocument({ document, history }: { document: Pick<EvidenceDocument, 'id' | 'kind' | 'title' | 'size'>; history?: { applicationId: string; revision: number } }) {
@@ -226,6 +233,7 @@ export function OnboardingForm({ application, environment, onSaved, receipts, ha
   const [scanBusy, setScanBusy] = useState(false)
   const [attachingScan, setAttachingScan] = useState('')
   const [pendingForApplication, setPendingForApplication] = useState<string[]>([])
+  const [ownershipInputs, setOwnershipInputs] = useState<Record<string, string>>({})
   const [step, setStep] = useState<OnboardingStepId>('identity')
   const [validationStep, setValidationStep] = useState<OnboardingStepId | null>(null)
   const [confirmedSubmission, setConfirmedSubmission] = useState(false)
@@ -248,9 +256,10 @@ export function OnboardingForm({ application, environment, onSaved, receipts, ha
   const submissionAttempt = useRef<{ application: EntryApplication; details: ApplicationDetails } | null>(null)
   const scanScope = `${environment}:${expectedActor}:${application.id}:${application.revision}`
   const activeScanScope = useRef(scanScope)
+  const scanQueueLoaded = useRef<string | null>(null)
   activeScanScope.current = scanScope
   useEffect(() => {
-    setScanQueue(null); setScanMessage(''); setScanBusy(false); setAttachingScan(''); setPendingForApplication([])
+    setScanQueue(null); setScanMessage(''); setScanBusy(false); setAttachingScan(''); setPendingForApplication([]); setOwnershipInputs({}); scanQueueLoaded.current = null
     transition.current = null; setContinuing(false)
   }, [scanScope])
   const editable = handoff ? customerHandoffHasAction(handoff, 'PREPARE_APPLICATION') : ['DRAFT', 'CHANGES_REQUIRED'].includes(application.status)
@@ -258,7 +267,7 @@ export function OnboardingForm({ application, environment, onSaved, receipts, ha
   const draft = useApplicationDraft({ application, actorId: expectedActor, environment, answers: draftAnswers, step, enabled: editable,
     onResume: (saved, savedStep) => {
       setDetails({ ...saved, test_data_acknowledged: true }); setAcknowledged(false)
-      setFile(null); setUploadTitle(''); setUploadMessage(''); setPendingForApplication([]); setCountrySearchPending(false); setResumeVersion(value => value + 1)
+      setFile(null); setUploadTitle(''); setUploadMessage(''); setPendingForApplication([]); setOwnershipInputs({}); setCountrySearchPending(false); setResumeVersion(value => value + 1)
       setStep(onboardingSteps(persona, saved.investor_type).some(item => item.id === savedStep) ? savedStep : 'identity')
     } })
   const command = useEntryCommand(expectedActor, environment, snapshot => {
@@ -280,12 +289,19 @@ export function OnboardingForm({ application, environment, onSaved, receipts, ha
   const steps = onboardingSteps(persona, details.investor_type)
   const currentIndex = Math.max(0, steps.findIndex(item => item.id === step))
   const activeStep = steps[currentIndex]
-  const remaining = onboardingRemainingItems(persona, details, acknowledged, pendingForApplication.length)
+  const unfinishedOwnership = details.ownership_control.flatMap((relationship, index) => {
+    const raw = ownershipInputs[relationship.id]
+    return raw !== undefined && !ownershipPercentInputValid(raw, relationship.relationship)
+      ? [{ key: `ownership_control.${index}.ownership_basis_points`, step: 'ownership' as const, message: 'Economic ownership: enter a percentage with up to two decimal places. Enter 0 only for a controller with no economic ownership.' }]
+      : []
+  })
+  const remaining = [...onboardingRemainingItems(persona, details, acknowledged, pendingForApplication.length).filter(item => !unfinishedOwnership.some(unfinished => unfinished.key === item.key)), ...unfinishedOwnership]
   const errors = validationStep ? remaining.filter(item => item.step === validationStep) : []
   const localFilePending = Boolean(uploadTitle.trim()) || Boolean(file) || pendingForApplication.length > 0
-  const localPending = localFilePending || countrySearchPending
+  const localPending = localFilePending || countrySearchPending || unfinishedOwnership.length > 0
   const saveLabel = draft.loading ? 'Loading draft…' : draft.busy ? 'Saving…' : draft.status === 'ERROR' ? 'Couldn’t save - retry'
     : draft.status === 'CONFLICT' ? 'Draft changed; your new answers are retained' : countrySearchPending ? 'Select a country to finish your answer'
+      : unfinishedOwnership.length ? 'Finish the ownership percentage; this unfinished input is not saved'
       : draft.saved ? localFilePending ? 'Answers saved · finish the selected upload' : 'Saved'
         : draft.available ? draft.dirty ? 'Unsaved changes' : 'Draft not saved yet' : 'New changes are not saved'
   const dirty = editable && !confirmedSubmission && (draft.dirty || localPending || (!draft.available && onboardingHasUnsavedAnswers(applicationFormDetails(application), details, acknowledged, uploadTitle, Boolean(file), pendingForApplication.length)))
@@ -343,7 +359,7 @@ export function OnboardingForm({ application, environment, onSaved, receipts, ha
     if (focusQuestion.current) { (document.getElementById(questionId(focusQuestion.current)) ?? stepHeading.current)?.focus(); focusQuestion.current = null }
     else stepHeading.current?.focus()
   }, [step, validationStep])
-  const submitReady = !draft.busy && (!handoff || customerHandoffHasAction(handoff, 'SUBMIT_APPLICATION')) && applicationSubmissionReady(persona, details, acknowledged, locked) && pendingForApplication.length === 0
+  const submitReady = !draft.busy && !localPending && (!handoff || customerHandoffHasAction(handoff, 'SUBMIT_APPLICATION')) && applicationSubmissionReady(persona, details, acknowledged, locked) && pendingForApplication.length === 0
   const next = handoff ? customerHandoffPresentation(handoff) : applicationNextStep(application)
   const legacyManager = persona === 'WEALTH_MANAGER' && !isWealthManagerDetailsV2(application.details) && Object.keys(application.details).length > 0
   const previouslySubmitted = Boolean(application.submitted_at) || application.status !== 'DRAFT'
@@ -352,28 +368,38 @@ export function OnboardingForm({ application, environment, onSaved, receipts, ha
     if (transition.current) return
     setConfirmedSubmission(false); setDetails(current => ({ ...current, ownership_control: current.ownership_control.map(item => item.id === id ? { ...item, ...patch } : item) }))
   }
+  function changeOwnershipPercent(relationship: OwnershipControlRelationship, value: string) {
+    if (transition.current) return
+    setOwnershipInputs(current => ({ ...current, [relationship.id]: value }))
+    if (ownershipPercentInputValid(value, relationship.relationship)) changeRelationship(relationship.id, { ownership_basis_points: Math.round(Number(value) * 100) })
+  }
   function goTo(target: OnboardingStepId, question?: string) {
     if (transition.current) return
     focusQuestion.current = question ?? null; setValidationStep(null); setStep(target)
     if (target === step && question) { document.getElementById(questionId(question))?.focus(); focusQuestion.current = null }
   }
-  async function nextStep() {
-    if (locked || transition.current) return
-    const missing = remaining.filter(item => item.step === activeStep.id)
-    if (missing.length) { focusQuestion.current = missing[0].key; setValidationStep(activeStep.id); document.getElementById(questionId(missing[0].key))?.focus(); return }
+  async function navigateStep(target: OnboardingStepId, question?: string) {
+    if (locked || transition.current || countrySearchPending || unfinishedOwnership.length) return
+    if (target === step) { goTo(target, question); return }
     const token = {}, captured = JSON.stringify(details), from = step, scope = scanScope
     transition.current = token; setContinuing(true)
     try {
       if (draft.available && !await draft.save()) return
       if (transition.current !== token || activeScanScope.current !== scope || currentStep.current !== from || JSON.stringify(currentAnswers.current) !== captured) return
       transition.current = null
-      goTo(steps[currentIndex + 1]?.id ?? 'review')
+      goTo(target, question)
     } finally { if (transition.current === token || transition.current === null && activeScanScope.current === scope) { transition.current = null; setContinuing(false) } }
+  }
+  async function nextStep() {
+    if (locked || transition.current) return
+    const missing = remaining.filter(item => item.step === activeStep.id)
+    if (missing.length) { focusQuestion.current = missing[0].key; setValidationStep(activeStep.id); document.getElementById(questionId(missing[0].key))?.focus(); return }
+    await navigateStep(steps[currentIndex + 1]?.id ?? 'review')
   }
   async function saveAndExit() {
     if (locked || localPending || !draft.available || draft.status === 'CONFLICT') return
     setExiting(true)
-    const saved = await saveDraftBeforeExit(draft.save, () => { dirtyRef.current = false; allowDeparture.current = true; onDirtyChange?.(false); window.location.assign('/portal?mode=applicant') })
+    const saved = await saveDraftBeforeExit(draft.save, () => { dirtyRef.current = false; allowDeparture.current = true; onDirtyChange?.(false); window.location.assign('/portal?mode=applicant&section=overview') })
     if (!saved) setExiting(false)
   }
   async function submitApplication() {
@@ -432,6 +458,12 @@ export function OnboardingForm({ application, environment, onSaved, receipts, ha
     } catch (error) { if (activeScanScope.current === scope) setScanMessage(error instanceof Error ? error.message : 'The scan queue is unavailable.') }
     finally { if (activeScanScope.current === scope) setScanBusy(false) }
   }
+  useEffect(() => {
+    if (!editable || step !== 'evidence' || draft.loading || scanQueueLoaded.current === scanScope) return
+    scanQueueLoaded.current = scanScope
+    void refreshScanQueue()
+    // The existing endpoint returns recent actor-private uploads, never application assignments.
+  }, [editable, step, draft.loading, scanScope]) // eslint-disable-line react-hooks/exhaustive-deps
   async function attachScannedDocument(item: ScanQueueItem) {
     if (attachingScan || item.state !== 'SCANNED_CLEAN' || details.documents.length >= 8) return
     const scope = scanScope
@@ -455,6 +487,8 @@ export function OnboardingForm({ application, environment, onSaved, receipts, ha
   }
   return <div className={`${styles.stack} ${flowStyles.flow}`}>
       {!editable ? handoffPanel : null}
+      <div className={editable ? flowStyles.workspace : undefined}>
+      {editable ? <nav className={flowStyles.stepRail} aria-label="Application steps"><p>Your application</p><ol>{steps.map((item, index) => <li key={item.id}><button type="button" aria-current={item.id === activeStep.id ? 'step' : undefined} disabled={locked || countrySearchPending || unfinishedOwnership.length > 0} onClick={() => void navigateStep(item.id)}><span aria-hidden="true">{index + 1}</span>{item.title}</button></li>)}</ol></nav> : null}
       <section className={flowStyles.card} aria-label={persona === 'INVESTOR' ? 'Investor application' : 'Organisation application'}>
         {dirty && historySupported === false ? <div role="status"><Notice title="Browser history protection unavailable" tone="warning">{onboardingHistoryUnavailableMessage}</Notice></div> : null}
         {historyProblem ? <Notice title="Browser history restoration not confirmed" tone="warning">{historyProblem}</Notice> : null}
@@ -467,6 +501,7 @@ export function OnboardingForm({ application, environment, onSaved, receipts, ha
         {!reviewAvailable ? <div className={styles.sectionGap}><Notice title={next.title} tone="warning">{next.description}<p>{handoff ? 'Submission remains disabled until the saved workflow confirms an eligible review route. Use Refresh review availability to recheck without discarding these unsaved answers; do not create a replacement application.' : 'After the review route is ready, select Check review route and submit. The server rechecks its current assignment without reloading or discarding these fields.'}</p></Notice></div> : null}
         <form className={`${styles.form} ${flowStyles.questions}`} noValidate onSubmit={event => { event.preventDefault(); if (activeStep.id === 'review') void submitApplication(); else void nextStep() }}>
           <div className={flowStyles.stepMeta}><span>Step {currentIndex + 1} of {steps.length}</span><span className={flowStyles.draftBadge}>{application.status === 'CHANGES_REQUIRED' ? 'Changes requested' : 'Draft · Not submitted'}</span></div>
+          <label className={flowStyles.mobileSteps}>Go to a step<select aria-label="Go to application step" value={activeStep.id} disabled={locked || countrySearchPending || unfinishedOwnership.length > 0} onChange={event => void navigateStep(event.target.value as OnboardingStepId)}>{steps.map((item, index) => <option key={item.id} value={item.id}>{index + 1}. {item.title}</option>)}</select></label>
           <ol className={flowStyles.progress} aria-label="Application questions progress">{steps.map((item, index) => <li key={item.id} aria-current={item.id === activeStep.id ? 'step' : undefined}><span className={flowStyles.srOnly}>Step {index + 1} of {steps.length}: {item.title}</span></li>)}</ol>
           <div><h2 ref={stepHeading} tabIndex={-1} className={flowStyles.heading}>{activeStep.title}</h2>{activeStep.id === 'identity' && persona === 'WEALTH_MANAGER' ? <p className={flowStyles.stepHint}>Who is completing this application?</p> : null}</div>
           {draft.loading ? <p role="status">Loading your saved draft…</p> : null}
@@ -484,7 +519,7 @@ export function OnboardingForm({ application, environment, onSaved, receipts, ha
             {details.ownership_control.map((relationship, index) => <section key={relationship.id} className={styles.panelBody}><div className={styles.actions}><h3>Relationship {index + 1}</h3><button type="button" className={styles.textLink} onClick={() => change('ownership_control', details.ownership_control.filter(item => item.id !== relationship.id))}>Remove</button></div>
               <div className={styles.formRow}><Question fieldKey={`ownership_control.${index}.party_type`} errors={errors} label="Party type"><select value={relationship.party_type} onChange={event => changeRelationship(relationship.id, { party_type: event.target.value as OwnershipControlRelationship['party_type'] })}><option value="PERSON">Person</option><option value="ENTITY">Legal entity</option></select></Question><Question fieldKey={`ownership_control.${index}.legal_name`} errors={errors} label="Legal name"><input value={relationship.legal_name} onChange={event => changeRelationship(relationship.id, { legal_name: event.target.value })} required minLength={2} maxLength={160} /></Question></div>
               <div className={styles.formRow}><Question fieldKey={`ownership_control.${index}.country`} errors={errors} label="Country"><input value={relationship.country} onChange={event => changeRelationship(relationship.id, { country: event.target.value.toUpperCase() })} required pattern="[A-Z]{2}" maxLength={2} /></Question><Question fieldKey={`ownership_control.${index}.registration_reference`} errors={errors} label="Registration reference" hint={relationship.party_type === 'ENTITY' ? 'Required for a legal entity.' : 'Optional for a person.'}><input value={relationship.registration_reference} onChange={event => changeRelationship(relationship.id, { registration_reference: event.target.value })} required={relationship.party_type === 'ENTITY'} maxLength={100} /></Question></div>
-              <div className={styles.formRow}><Question fieldKey={`ownership_control.${index}.relationship`} errors={errors} label="Relationship"><select value={relationship.relationship} onChange={event => changeRelationship(relationship.id, { relationship: event.target.value as OwnershipControlRelationship['relationship'] })}><option value="DIRECT_OWNER">Direct owner</option><option value="INDIRECT_OWNER">Indirect owner</option><option value="CONTROLLER">Controller without declared economic ownership</option></select></Question><Question fieldKey={`ownership_control.${index}.ownership_basis_points`} errors={errors} label="Economic ownership (%)" hint="Use 0 only for a controller without declared economic ownership."><input type="number" min={relationship.relationship === 'CONTROLLER' ? 0 : 0.01} max="100" step="0.01" value={relationship.ownership_basis_points / 100} onChange={event => changeRelationship(relationship.id, { ownership_basis_points: Math.round(Number(event.target.value) * 100) })} required /></Question></div>
+              <div className={styles.formRow}><Question fieldKey={`ownership_control.${index}.relationship`} errors={errors} label="Relationship"><select value={relationship.relationship} onChange={event => changeRelationship(relationship.id, { relationship: event.target.value as OwnershipControlRelationship['relationship'] })}><option value="DIRECT_OWNER">Direct owner</option><option value="INDIRECT_OWNER">Indirect owner</option><option value="CONTROLLER">Controller without declared economic ownership</option></select></Question><Question fieldKey={`ownership_control.${index}.ownership_basis_points`} errors={errors} label="Economic ownership (%)" hint={relationship.relationship === 'CONTROLLER' ? 'Required: enter 0 if this controller has no economic ownership. A blank answer is not zero.' : 'Required: enter more than 0 and up to 100, with at most two decimal places.'}><input type="number" min={relationship.relationship === 'CONTROLLER' ? 0 : 0.01} max="100" step="0.01" value={ownershipInputs[relationship.id] ?? relationship.ownership_basis_points / 100} onChange={event => changeOwnershipPercent(relationship, event.target.value)} required /></Question></div>
               <div className={styles.formRow}><Question fieldKey={`ownership_control.${index}.effective_on`} errors={errors} label="Effective date"><input type="date" value={relationship.effective_on} max={new Date().toISOString().slice(0, 10)} onChange={event => changeRelationship(relationship.id, { effective_on: event.target.value })} required /></Question><Question fieldKey={`ownership_control.${index}.evidence_document_id`} errors={errors} label="Linked ownership evidence"><select value={relationship.evidence_document_id} onChange={event => changeRelationship(relationship.id, { evidence_document_id: event.target.value })} required><option value="">Choose an uploaded beneficial-ownership file</option>{details.documents.filter(document => document.kind === 'BENEFICIAL_OWNERS').map(document => <option key={document.id} value={document.id}>{document.title}</option>)}</select></Question></div>
               <Question fieldKey={`ownership_control.${index}.control_basis`} errors={errors} label="Basis of ownership or control" hint="Explain the underlying shareholding, chain of ownership or controlling influence."><textarea value={relationship.control_basis} onChange={event => changeRelationship(relationship.id, { control_basis: event.target.value })} required minLength={20} maxLength={1000} /></Question><Question fieldKey={`ownership_control.${index}.change_reason`} errors={errors} label={previouslySubmitted ? 'What changed in this relationship?' : 'Reason for this relationship'} hint={previouslySubmitted ? 'Explain the addition, correction or removal requested by the reviewer. Minimum 20 characters.' : 'Explain why this person or entity is included in your initial fictional disclosure. For example, describe its ownership or control connection; do not assert a fact you have not checked.'}><textarea value={relationship.change_reason} onChange={event => changeRelationship(relationship.id, { change_reason: event.target.value })} required minLength={20} maxLength={500} /></Question>
             </section>)}
@@ -503,6 +538,7 @@ export function OnboardingForm({ application, environment, onSaved, receipts, ha
           <div className={styles.sectionGap}>
             <button type="button" className={styles.buttonSecondary} disabled={scanBusy} onClick={() => void refreshScanQueue()}>{scanBusy ? 'Checking private scan queue...' : 'View private scan queue'}</button>
             <p className={styles.muted}>Scanned files belong to your signed-in account, not automatically to this investor or organisation application. Select each clean file deliberately. Quarantined and rejected files never count as evidence.</p>
+            <p className={styles.muted}>Recent private uploads for your account appear here when you return. Choose a clean file to include it in this application. A file chosen on your device but not uploaded cannot be restored.</p>
             {pendingForApplication.length ? <p className={styles.fieldError} role="status">{pendingForApplication.length} file{pendingForApplication.length === 1 ? '' : 's'} uploaded for this application still await{pendingForApplication.length === 1 ? 's' : ''} a clean receipt or exclusion. Submission is disabled.</p> : null}
             {scanMessage ? <p className={styles.muted} role="status">{scanMessage}</p> : null}
             {scanQueue ? scanQueue.length ? <ul className={styles.applicationChecklist} aria-label="Private scan queue">{scanQueue.map(item => <li key={item.id} data-ready={item.state === 'SCANNED_CLEAN'}><strong>{item.title}</strong><span>{item.state === 'QUARANTINED' ? 'Awaiting independent scan' : item.state === 'REJECTED' ? 'Rejected by scan; upload a different file' : 'Clean receipt available; select for this application if relevant'}</span>{item.state === 'SCANNED_CLEAN' ? <button type="button" className={styles.buttonSecondary} disabled={Boolean(attachingScan) || details.documents.some(document => document.id === item.id) || details.documents.length >= 8} onClick={() => void attachScannedDocument(item)}>{details.documents.some(document => document.id === item.id) ? 'Selected in this draft' : attachingScan === item.id ? 'Checking receipt...' : 'Include clean file'}</button> : null}{pendingForApplication.includes(item.id) ? <button type="button" className={styles.textLink} onClick={() => setPendingForApplication(current => current.filter(id => id !== item.id))}>Exclude pending file from this application</button> : null}</li>)}</ul> : <p className={styles.muted}>No scanned or pending files are available for this account.</p> : null}
@@ -512,15 +548,16 @@ export function OnboardingForm({ application, environment, onSaved, receipts, ha
           <section hidden={activeStep.id !== 'review'} className={styles.stack} aria-label="Check your application before submission">
             <p className={styles.muted}>Check your answers and selected evidence. No approval, operating role or signing authority is created by submitting.</p>
             <details className={styles.applicationHistory}><summary>Review answers and evidence selections</summary><ApplicationDetailsSummary persona={persona} details={applicationSubmissionDetails(persona, details)} /><ul>{details.documents.map(document => <li key={document.id}>{document.title} · {document.kind.replaceAll('_', ' ')}</li>)}</ul></details>
-            <div className={flowStyles.remaining} aria-live="polite"><h4>{remaining.length ? `${remaining.length} remaining item${remaining.length === 1 ? '' : 's'} before submission` : 'All required answers and evidence are ready'}</h4>{remaining.length ? <ul>{remaining.map(item => <li key={item.key}><button type="button" onClick={() => goTo(item.step, item.key)}>{item.message}</button></li>)}</ul> : <p>An independent reviewer must make the decision.</p>}{handoff && !customerHandoffHasAction(handoff, 'SUBMIT_APPLICATION') ? <p>Submission is unavailable: {next.description}</p> : null}{command.unknown ? <p>The previous submission outcome is unknown. Keep the original request reference and use the available reconciliation guidance before sending another request.</p> : null}</div>
+            <div className={flowStyles.remaining} aria-live="polite"><h4>{remaining.length ? `${remaining.length} remaining item${remaining.length === 1 ? '' : 's'} before submission` : 'All required answers and evidence are ready'}</h4>{remaining.length ? <ul>{remaining.map(item => <li key={item.key}><button type="button" disabled={locked} onClick={() => void navigateStep(item.step, item.key)}>{item.message}</button></li>)}</ul> : <p>An independent reviewer must make the decision.</p>}{handoff && !customerHandoffHasAction(handoff, 'SUBMIT_APPLICATION') ? <p>Submission is unavailable: {next.description}</p> : null}{command.unknown ? <p>The previous submission outcome is unknown. Keep the original request reference and use the available reconciliation guidance before sending another request.</p> : null}</div>
             <label className={styles.check}><input id={questionId('acknowledged')} type="checkbox" required checked={acknowledged} disabled={locked} onChange={event => { setConfirmedSubmission(false); setAcknowledged(event.target.checked) }} /><span>I confirm this application and all evidence are fictional test data. I understand a manual test approval does not establish legal identity, investment eligibility or production authority.</span></label>
           </section>
-          <div className={flowStyles.navigation}><div className={flowStyles.saveState} role="status" aria-live="polite"><span>{saveLabel}</span>{draft.available && !localPending ? <button type="button" className={styles.textLink} disabled={locked || draft.busy || draft.status === 'CONFLICT'} onClick={() => void saveAndExit()}>{exiting ? 'Saving before exit…' : 'Save and exit'}</button> : null}{draft.status === 'ERROR' ? <button type="button" className={styles.textLink} disabled={locked || draft.busy} onClick={() => void draft.save()}>Retry save</button> : null}{['CONFLICT', 'ERROR'].includes(draft.status) ? <button type="button" className={styles.textLink} disabled={locked || draft.busy} onClick={() => void draft.recover(() => window.confirm('Replace your current answers and unfinished file selections with the latest saved draft? This does not submit the application or delete uploaded files.'))}>Load saved draft</button> : null}</div><div className={flowStyles.navigationActions}>{currentIndex > 0 ? <button type="button" className={styles.buttonSecondary} disabled={locked} onClick={() => goTo(steps[currentIndex - 1].id)}>Back</button> : null}{activeStep.id !== 'review' ? <button type="button" className={styles.button} disabled={locked} onClick={nextStep}>{continuing ? 'Saving…' : 'Continue'}</button> : <button type="submit" className={styles.button} disabled={!submitReady}>{command.busy ? 'Submitting…' : applicationSubmitLabel(application, handoff)}</button>}</div></div>
+          <div className={flowStyles.navigation}><div className={flowStyles.saveState} role="status" aria-live="polite"><span>{saveLabel}</span>{draft.available && !localPending ? <button type="button" className={styles.textLink} disabled={locked || draft.busy || draft.status === 'CONFLICT'} onClick={() => void saveAndExit()}>{exiting ? 'Saving before exit…' : 'Save and exit'}</button> : null}{draft.status === 'ERROR' ? <button type="button" className={styles.textLink} disabled={locked || draft.busy} onClick={() => void draft.save()}>Retry save</button> : null}{['CONFLICT', 'ERROR'].includes(draft.status) ? <button type="button" className={styles.textLink} disabled={locked || draft.busy} onClick={() => void draft.recover(() => window.confirm('Replace your current answers and unfinished inputs with the latest saved draft? This does not submit the application or delete uploaded files.'))}>Load saved draft</button> : null}</div><div className={flowStyles.navigationActions}>{currentIndex > 0 ? <button type="button" className={styles.buttonSecondary} disabled={locked} onClick={() => void navigateStep(steps[currentIndex - 1].id)}>Back</button> : null}{activeStep.id !== 'review' ? <button type="button" className={styles.button} disabled={locked} onClick={nextStep}>{continuing ? 'Saving…' : 'Continue'}</button> : <button type="submit" className={styles.button} disabled={!submitReady}>{command.busy ? 'Submitting…' : applicationSubmitLabel(application, handoff)}</button>}</div></div>
           {draft.message ? <p className={flowStyles.saveError} role="status">{draft.message}</p> : null}
-          {activeStep.id !== 'review' ? <button type="button" className={`${styles.textLink} ${flowStyles.remainingLink}`} disabled={locked} onClick={() => goTo('review')}>View remaining items</button> : null}
+          {activeStep.id !== 'review' ? <button type="button" className={`${styles.textLink} ${flowStyles.remainingLink}`} disabled={locked} onClick={() => void navigateStep('review')}>View remaining items</button> : null}
         </form>
         </> : <div className={`${styles.stack} ${styles.sectionGap}`}><p className={styles.muted}>Read-only saved application, revision {application.revision}. {application.status === 'SUBMITTED' ? 'A request for changes will reopen editing.' : 'The recorded decision does not alter these submitted answers.'}</p><ApplicationDetailsSummary persona={persona} details={application.details} /><section><h3>Submitted private evidence</h3>{application.details.documents?.length ? application.details.documents.map(document => <PrivateDocument key={document.id} document={document} />) : <p className={styles.muted}>No evidence is recorded.</p>}</section></div>}
       </section>
+      </div>
       {editable && (application.status !== 'DRAFT' || !reviewAvailable || handoff?.blocker !== 'NONE') ? handoffPanel : null}
       <details className={`${styles.applicationHistory} ${flowStyles.technical}`}><summary>Application details</summary><p className={styles.muted}>Saved record: revision {application.revision}. Draft saves are separate from submitted evidence and decisions.</p><DetailList rows={[{ label: 'Application reference', value: application.id }, { label: 'Saved revision', value: application.revision }, { label: 'Draft version', value: draft.revision }, { label: 'Submitted', value: dateLabel(application.submitted_at) }, { label: 'Decision recorded', value: dateLabel(application.reviewed_at) }, { label: 'Review provider', value: application.provider_mode === 'MANUAL_TEST_REVIEW' ? 'Manual test review' : 'Not assigned to this application yet' }]} /></details>
       {!handoff || ['NONE', 'REVIEWER_UNAVAILABLE'].includes(handoff.blocker) ? <details className={`${styles.applicationHistory} ${flowStyles.technical}`}><summary>Optional identity-provider information</summary><KycVerification key={`${environment}:${expectedActor}:${application.id}:${application.revision}`} application={application} environment={environment} actorId={expectedActor} manualTestReview={environment === 'TESTNET' && (application.provider_mode === 'MANUAL_TEST_REVIEW' || handoff?.gates.intake_admitted === true)} /></details> : null}

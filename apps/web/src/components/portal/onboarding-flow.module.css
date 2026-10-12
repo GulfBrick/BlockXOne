@@ -1,4 +1,13 @@
-.flow { min-width: 0; max-width: 740px; margin-inline: auto; width: 100%; }
+.flow { min-width: 0; max-width: 980px; margin-inline: auto; width: 100%; }
+.workspace { display: grid; grid-template-columns: 180px minmax(0, 740px); gap: 24px; align-items: start; }
+.stepRail { min-width: 0; padding-top: 12px; }
+.stepRail > p { margin: 0 0 12px; color: var(--bxo-text-secondary); font-size: 14px; }
+.stepRail ol { display: grid; gap: 6px; padding: 0; margin: 0; list-style: none; }
+.stepRail button { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 48px; padding: 12px 8px; border: 1px solid transparent; border-radius: 7px; text-align: left; font: inherit; font-size: 14px; background: transparent; color: var(--bxo-text-secondary); cursor: pointer; }
+.stepRail button > span { display: grid; place-items: center; width: 24px; height: 24px; flex: 0 0 24px; border: 1px solid var(--bxo-border-default); border-radius: 50%; }
+.stepRail button[aria-current=step] { color: var(--portal-link, var(--bxo-electric-cyan)); background: var(--bxo-surface-secondary); border-color: var(--bxo-border-default); font-weight: 650; }
+.stepRail button:disabled { cursor: not-allowed; opacity: .65; }
+.mobileSteps { display: none; }
 .card { border: 1px solid var(--bxo-border-default); border-radius: 10px; background: var(--bxo-surface); padding: 24px; }
 .questions { gap: 16px; }
 .flow fieldset { margin: 0; padding: 0; border: 0; gap: 16px; }
@@ -51,4 +60,11 @@
   .saveState { flex: 0 1 130px; }
   .navigationActions button { flex: 1; min-width: 110px; }
   .heading { font-size: 23px; }
+}
+@media (max-width: 1050px) {
+  .flow { max-width: 740px; }
+  .workspace { display: block; }
+  .stepRail { display: none; }
+  .mobileSteps { display: grid; gap: 6px; color: var(--bxo-text-secondary); }
+  .mobileSteps select { width: 100%; }
 }

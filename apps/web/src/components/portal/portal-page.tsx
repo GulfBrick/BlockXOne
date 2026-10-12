@@ -11,6 +11,7 @@ import { PortalScreen } from './portal-screens'
 import { PortalShell } from './portal-shell'
 import { RoleDashboardContent } from './role-dashboard'
 import { EntryScreen } from './entry-screen'
+import { applicantSection, applicantSectionHref } from './applicant-presentation'
 import styles from './portal.module.css'
 
 export async function PortalPage({ view, id, query = {} }: { view: PortalPath; id?: string; query?: DashboardQuery }) {
@@ -57,7 +58,8 @@ export async function PortalPage({ view, id, query = {} }: { view: PortalPath; i
         && item.representative_user_id === snapshot.actor.id && item.applicant_user_id !== snapshot.actor.id
         && Boolean(item.proposal_hash) && Date.parse(item.requested_until) > Date.now()) : []
     const representativeProposalCount = new Set(proposals.map(item => item.id)).size === proposals.length ? proposals.length : 0
-    return <EntryScreen key={`${data.entry.actor.id}:${data.release.environment}:${String(query.application ?? '')}:${String(query.add ?? '')}`} initial={data.entry} release={data.release} applicationId={typeof query.application === 'string' ? query.application : undefined} addCapacity={query.add === 'capacity'} chooseContext={data.chooseContext} operationsAvailable={Boolean(data.portal)} representativeProposalCount={representativeProposalCount} />
+    const section = view === '/portal' ? applicantSection(query.section) ?? 'overview' : undefined
+    return <EntryScreen key={`${data.entry.actor.id}:${data.release.environment}:${String(query.application ?? '')}:${String(query.add ?? '')}:${section ?? ''}`} initial={data.entry} release={data.release} applicationId={typeof query.application === 'string' ? query.application : undefined} addCapacity={query.add === 'capacity'} chooseContext={data.chooseContext} section={section} operationsAvailable={Boolean(data.portal)} representativeProposalCount={representativeProposalCount} />
   }
   if (data?.portal) return <PortalScreen key={`${data.portal.user.id}:${data.release.environment}:${portalContextKey(data.operatingContext)}:${view}:${id ?? ''}`} data={data.portal} view={view} id={id} operatingContext={data.operatingContext} release={data.release} scope={data.kind === 'role' ? data.scope : undefined} scopes={data.scopes} />
   if (data?.kind === 'role') {
@@ -69,6 +71,7 @@ export async function PortalPage({ view, id, query = {} }: { view: PortalPath; i
     </PortalShell>
   }
   const retryContext = portalOperatingContextSchema.safeParse(query.mode === 'applicant' && query.organisation === undefined && query.role === undefined ? { mode: 'APPLICANT' } : query.mode === undefined ? { mode: 'ROLE', organisationId: query.organisation, role: query.role } : null)
-  const retry = retryContext.success ? portalScopeHref(view, retryContext.data, id) : '/portal'
+  const retrySection = applicantSection(query.section)
+  const retry = retryContext.success ? view === '/portal' && retryContext.data.mode === 'APPLICANT' && retrySection ? applicantSectionHref(retrySection) : portalScopeHref(view, retryContext.data, id) : '/portal'
   return <div className={styles.portal} style={{ display: 'block' }}><main className={styles.content}><p className={styles.eyebrow}>BlockXOne / Client portal</p><h1 className={styles.title}>{ordinaryStepUpRequired ? 'Authenticator required for protected operations.' : status === 403 ? 'Complete your account access.' : 'Saved portal state is unavailable.'}</h1><p className={styles.subtitle}>{ordinaryStepUpRequired ? 'The temporary Testnet pause permits read-only entry only. Your existing authenticator has not been removed. Complete authenticator verification before opening Compliance evidence, approvals, account changes or financial operations; your assigned role and organisation are still checked separately.' : status === 403 ? 'Your selected role or organisation does not currently have access. Complete any required multi-factor authentication or use your assigned context. No new privileges have been assigned.' : 'The hosted platform could not load your saved records. Your existing applications and investments have not been changed.'}</p><div className={`${styles.actions} ${styles.sectionGap}`}><Link href={status === 403 ? '/login/mfa' : retry} className={styles.button}>{status === 403 ? 'Complete sign-in security' : 'Retry loading the portal'}</Link><Link href="/portal" className={styles.buttonSecondary}>Use my assigned dashboard</Link><Link href="/workspace" className={styles.buttonSecondary}>Return to account workspace</Link></div></main></div>
 }
