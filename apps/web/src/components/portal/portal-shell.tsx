@@ -3,6 +3,7 @@ import Link from 'next/link'
 import Image from 'next/image'
 import { PLATFORM_VERSION, type PlatformRelease } from '@/lib/platform-release'
 import { portalScopeHref, type PortalOperatingContext } from '@/lib/portal/operating-context'
+import { getRoleDashboard } from '@/lib/portal/role-dashboards'
 import { ArrowUpRight, BriefcaseBusiness, Building2, CircleUserRound, LayoutDashboard, ShieldCheck, WalletCards } from 'lucide-react'
 import styles from './portal.module.css'
 
@@ -11,7 +12,7 @@ export type PortalNavigationKey = 'overview' | 'onboarding' | 'products' | 'comp
 export function portalNavigation(capabilities: PortalNavigationCapabilities, onboardingAvailable = true) {
   return [
     { key: 'overview', label: 'Overview', href: '/portal', icon: LayoutDashboard },
-    ...(onboardingAvailable ? [{ key: 'onboarding', label: 'My onboarding', href: '/portal/onboarding', icon: CircleUserRound }] : []),
+    ...(onboardingAvailable ? [{ key: 'onboarding', label: 'My applications', href: '/portal/onboarding', icon: CircleUserRound }] : []),
     ...(capabilities.manageProducts ? [{ key: 'products', label: 'Products & offerings', href: '/portal/products', icon: Building2 }] : []),
     ...(capabilities.reviewCompliance ? [{ key: 'compliance', label: 'Compliance queue', href: '/portal/compliance', icon: ShieldCheck }] : []),
     ...(capabilities.invest ? [{ key: 'opportunities', label: 'Investment opportunities', href: '/portal/opportunities', icon: BriefcaseBusiness }, { key: 'portfolio', label: 'My portfolio', href: '/portal/portfolio', icon: WalletCards }] : []),
@@ -26,7 +27,8 @@ export function PortalShell({ user, organisationName, capacityName, capabilities
   // pass the verified deployment identity; this does not enable live settlement.
   const environment = release?.environment ?? 'TESTNET'
   const testnet = environment === 'TESTNET'
-  const navigation = portalNavigation(capabilities, onboardingAvailable).map(item => ({ ...item, href: portalScopeHref(item.href, operatingContext) }))
+  const navigation = portalNavigation(capabilities, onboardingAvailable).map(item => ({ ...item, href: item.key === 'onboarding' && operatingContext?.mode === 'ROLE' ? '/portal/onboarding?mode=applicant' : portalScopeHref(item.href, operatingContext) }))
+  const workspaceLabel = capacityName ?? (operatingContext?.mode === 'ROLE' ? getRoleDashboard(operatingContext.role)?.title.replace(/ dashboard$/, '') ?? operatingContext.role : 'Personal account')
   const links = <nav aria-label="Portal navigation" className={styles.nav}>{navigation.map(item => <Link key={item.key} href={item.href} className={styles.navLink} aria-current={active === item.key ? 'page' : undefined}><item.icon aria-hidden="true" /><span>{item.label}</span></Link>)}</nav>
   return <div className={styles.portal}>
     <a href="#portal-content" className={styles.skip}>Skip to main content</a>
@@ -44,7 +46,7 @@ export function PortalShell({ user, organisationName, capacityName, capabilities
     </aside>
     <div className={styles.frame}>
       <header className={styles.topbar}>
-        <div className={styles.topbarContext}><strong>{organisationName || 'Your BlockXOne account'}</strong><span>Active capacity: {capacityName ?? (operatingContext?.mode === 'ROLE' ? operatingContext.role : 'Personal / applicant')}</span><Link href="/portal?mode=applicant">Change capacity</Link></div>
+        <div className={styles.topbarContext}><strong>{organisationName || 'Your BlockXOne account'}</strong><span>Current workspace: {workspaceLabel}</span><Link href="/portal?mode=applicant">Switch application or workspace</Link></div>
         <div className={styles.userArea}><span className={styles.environmentPill}>{testnet ? 'Testnet' : 'Mainnet'} environment</span><span className={styles.userEmail}>{user.email}</span><form action="/auth/logout" method="post"><button className={styles.buttonSecondary} type="submit">Sign out</button></form></div>
       </header>
       <main id="portal-content" tabIndex={-1} className={styles.content}>

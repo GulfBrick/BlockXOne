@@ -40,8 +40,9 @@
 .environmentCard p { margin: 7px 0 0; color: var(--bxo-text-secondary); font-size: 11px; line-height: 1.6; }
 .frame { min-width: 0; }
 .topbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; min-height: 79px; padding: 16px 42px; background: var(--bxo-surface-secondary); border-bottom: 1px solid var(--portal-line); }
-.topbarContext { font-size: 12px; color: var(--portal-muted); }
-.topbarContext strong { display: block; font-size: 13px; color: var(--portal-ink); font-weight: 550; }
+.topbarContext { display: flex; flex-wrap: wrap; align-items: center; gap: 5px 14px; max-width: 730px; font-size: 12px; color: var(--portal-muted); }
+.topbarContext strong { flex-basis: 100%; display: block; font-size: 13px; color: var(--portal-ink); font-weight: 550; }
+.topbarContext a { display: inline-flex; align-items: center; min-height: 32px; color: var(--portal-cyan); text-underline-offset: 3px; }
 .userArea { display: flex; align-items: center; flex-wrap: wrap; gap: 16px; }
 .userEmail { max-width: 300px; overflow-wrap: anywhere; font-size: 12px; color: var(--portal-muted); }
 .userAvatar { display: grid; place-items: center; width: 34px; height: 34px; border: 1px solid var(--bxo-border-default); border-radius: 50%; background: var(--bxo-surface-secondary); color: var(--portal-accent); font-size: 12px; font-weight: 650; }
@@ -201,6 +202,10 @@
 .applicationOwner { font-size: 13px; line-height: 1.6; color: var(--bxo-text-primary); font-weight: 600; margin: 0 0 14px; }
 .applicationRefresh { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; }
 .applicationRefresh p { margin: 0; flex: 1 1 220px; line-height: 1.7; }
+.applicationSwitcher { min-width: 0; padding: 12px 16px; border: 1px solid var(--portal-line); border-radius: 8px; background: var(--portal-panel); }
+.applicationSwitcher summary { min-height: 32px; cursor: pointer; color: var(--portal-muted); font-size: 13px; }
+.applicationSwitcher[open] summary { color: var(--portal-ink); }
+@media (max-width: 760px) { .topbarContext a { min-height: 44px; } .applicationSwitcher summary { min-height: 44px; display: list-item; padding-block: 10px; } }
 .applicationRefresh [role=status] { flex-basis: 100%; font-size: 12px; color: var(--portal-muted); }
 .applicationRefresh [role=status]:empty { display: none; }
 .applicationHistory { border: 1px solid var(--bxo-border-default); border-radius: 6px; padding: 14px; }

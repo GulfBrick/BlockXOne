@@ -14,8 +14,8 @@ describe('normal admission command projection at applicant entry', () => {
     initial.stage2_access = { version: 1, environment: 'TESTNET', actor_id: entryActorId, operating_context: { mode: 'APPLICANT' }, session_mode: 'TEST_PASSWORD', allowed_commands: [] }
     const html = renderToStaticMarkup(<EntryScreen initial={initial} release={release} />)
     expect(html).toContain('Capacity application unavailable')
-    expect(html).not.toContain('Capacity to apply for')
-    expect(html).not.toContain('Application context')
+    expect(html).not.toContain('Application type')
+    expect(html).not.toContain('Organisation for this application')
     expect(html).not.toContain('Create or continue this application')
     expect(html).not.toContain('Submit for review')
     const forms = html.match(/<form\b[^>]*>[\s\S]*?<\/form>/g) ?? []
@@ -67,26 +67,26 @@ function projectedMandate(application: EntryApplication, record: EntryMandate): 
 describe('connected pending application workspaces', () => {
   it('renders the wealth-manager workspace from its saved persona, not an investor default', () => {
     const html = renderToStaticMarkup(createElement(EntryScreen, { initial: entryFixture([entryApplication({ persona: 'WEALTH_MANAGER' })]), release }))
-    expect(html).toContain('Your organisation and representative application.')
-    expect(html).toContain('Wealth managers are platform clients')
-    expect(html).not.toContain('Your investor application.')
-    expect(html).toContain('Active capacity:')
+    expect(html).toContain('Your organisation application.')
+    expect(html).toContain('Track saved progress, read reviewer feedback')
+    expect(html).not.toContain('Complete your investor application.')
+    expect(html).toContain('Current workspace:')
   })
   it('requires older users with no recorded choice to choose a capacity explicitly', () => {
     const html = renderToStaticMarkup(createElement(EntryScreen, { initial: entryFixture([]), release }))
     expect(html).toContain('No application type has been chosen')
-    expect(html).toContain('Choose a capacity')
-    expect(html).not.toContain('Your investor application.')
+    expect(html).toContain('Choose an application type')
+    expect(html).not.toContain('Complete your investor application.')
   })
   it('does not render test review forms on MAINNET even with misleading admission data', () => {
     const html = renderToStaticMarkup(createElement(EntryScreen, { initial: { ...entryFixture(), admission: { manual_test_review: true } }, release: { ...release, environment: 'MAINNET' } }))
-    expect(html).toContain('handoff unavailable')
+    expect(html).toContain('Saved progress could not be verified')
     expect(html).not.toContain('Submit for review')
   })
   it('does not offer personal manual-review submission for an organisation-scoped draft', () => {
     const application = entryApplication({ context_kind: 'ORGANISATION', context_organisation_id: entryOrganisationId })
     const html = renderToStaticMarkup(createElement(EntryScreen, { initial: { ...entryFixture([application]), admission: { manual_test_review: true } }, release }))
-    expect(html).toContain('handoff unavailable')
+    expect(html).toContain('Saved progress could not be verified')
     expect(html).not.toContain('Submit for review')
   })
   it('retains role links only for the exact server-returned scope', () => {
@@ -108,7 +108,7 @@ describe('connected pending application workspaces', () => {
   it('does not expose product-owner links after new WM customer admission even with an organisation identifier', () => {
     const initial = { ...entryFixture([projectedApplication({ persona: 'WEALTH_MANAGER', status: 'APPROVED', approved_until: '2099-01-01T00:00:00Z', organisation_id: entryOrganisationId, admission_purpose: 'CUSTOMER_ORGANISATION_ADMISSION', review_route: 'AVAILABLE' })]), admission: { manual_test_review: true } }
     const html = renderToStaticMarkup(createElement(EntryScreen, { initial, release, operationsAvailable: true }))
-    expect(html).toContain('Customer admission approved; operating assignment pending')
+    expect(html).toContain('Admission approved; representative appointment next')
     expect(html).not.toContain('/portal/products?mode=applicant')
     expect(html).not.toContain('Existing customer workflows')
   })
@@ -116,14 +116,14 @@ describe('connected pending application workspaces', () => {
     const initial = entryFixture([entryApplication({ persona: 'WEALTH_MANAGER', status: 'APPROVED', organisation_id: entryOrganisationId, admission_purpose: 'LEGACY_REHEARSAL' })])
     const html = renderToStaticMarkup(createElement(EntryScreen, { initial, release, operationsAvailable: true }))
     expect(html).not.toContain('/portal/products?mode=applicant')
-    expect(html).toContain('handoff unavailable')
+    expect(html).toContain('Saved progress could not be verified')
   })
   it('keeps multi-capacity application selection exact while showing separate statuses', () => {
     const investor = entryApplication({ status: 'SUBMITTED' })
     const manager = projectedApplication({ id: '55555555-5555-4555-8555-555555555555', persona: 'WEALTH_MANAGER', status: 'DRAFT' })
     const initial = { ...entryFixture([investor, manager]), admission: { manual_test_review: true } }
     const html = renderToStaticMarkup(createElement(EntryScreen, { initial, release, applicationId: manager.id }))
-    expect(html).toContain('Your organisation and representative application.')
+    expect(html).toContain('Set up your organisation.')
     expect(html).toContain('Draft: not submitted')
     expect(html).not.toContain('Refresh application status')
   })
@@ -204,7 +204,7 @@ describe('connected pending application workspaces', () => {
     for (const handoff of [undefined, { ...application.handoff!, application_revision: 2 }, { ...application.handoff!, actor_id: '88888888-8888-4888-8888-888888888888' }, { ...application.handoff!, environment: 'MAINNET' as const }]) {
       const initial = { ...entryFixture([{ ...application, handoff }]), admission: { manual_test_review: true } }
       const html = renderToStaticMarkup(createElement(EntryScreen, { initial, release }))
-      expect(html).toContain('handoff unavailable')
+      expect(html).toContain('Saved progress could not be verified')
       expect(html).not.toContain('Upload private evidence')
       expect(html).not.toContain('Submit for review')
       expect(html).not.toContain('/portal/portfolio?mode=applicant')
@@ -213,7 +213,7 @@ describe('connected pending application workspaces', () => {
   it('shows MAIN saved progress and exact missing intake owner without a real-document input or business action', () => {
     const application = projectedApplication({}, { environment: 'MAINNET', state: 'UNAVAILABLE', next_owner: 'PROVIDER_OWNER', blocker: 'INTAKE_NOT_ADMITTED', allowed_actions: [], gates: { intake_admitted: false, reviewer_available: false, monitoring_allows_new_actions: false } })
     const html = renderToStaticMarkup(createElement(EntryScreen, { initial: entryFixture([application], 'MAINNET'), release: { ...release, environment: 'MAINNET' } }))
-    expect(html).toContain('Evidence intake not admitted')
+    expect(html).toContain('Evidence submission is unavailable')
     expect(html).toContain('BlockXOne onboarding / provider owner')
     expect(html).toContain('MAIN admission remains unavailable')
     expect(html).not.toContain('type="file"')
@@ -275,5 +275,40 @@ describe('connected pending application workspaces', () => {
     expect(html).not.toContain('Refresh review availability')
     const missing = renderToStaticMarkup(createElement(EntryScreen, { initial: entryFixture(), release }))
     expect(missing).not.toContain('Refresh review availability')
+  })
+  it('keeps other applications collapsed while continuing one selected application', () => {
+    const application = projectedApplication()
+    const html = renderToStaticMarkup(createElement(EntryScreen, { initial: entryFixture([application]), release }))
+    expect(html).toMatch(/<details\b[^>]*><summary>Other applications and workspaces<\/summary>/)
+    expect(html).toContain('Complete your investor application.')
+    expect(html).toContain('My applications')
+    expect(html).not.toContain('Initial representative mandate and operating access')
+  })
+  it('does not ask a new personal applicant to select an organisation they cannot access', () => {
+    const html = renderToStaticMarkup(createElement(EntryScreen, { initial: entryFixture([]), release }))
+    expect(html).toContain('Application type')
+    expect(html).not.toContain('Organisation for this application')
+    expect(html).not.toContain('context_key')
+    expect(html).not.toContain('role=OfferingManager')
+  })
+  it('hides the manager appointment task until an admission or existing appointment makes it relevant', () => {
+    const application = projectedApplication({ persona: 'WEALTH_MANAGER', admission_purpose: 'CUSTOMER_ORGANISATION_ADMISSION' })
+    const html = renderToStaticMarkup(createElement(EntryScreen, { initial: entryFixture([application]), release }))
+    expect(html).toContain('Set up your organisation.')
+    expect(html).not.toContain('Request Offering Manager appointment review')
+    expect(html).not.toContain('Initial representative mandate and operating access')
+    expect(html).not.toContain('Open Offering Manager workspace')
+  })
+  it.each(['INVESTOR', 'WEALTH_MANAGER'] as const)('does not direct a saved %s case back into application preparation', persona => {
+    for (const status of ['SUBMITTED', 'APPROVED'] as const) {
+      const application = projectedApplication({ persona, status, ...(status === 'APPROVED' ? { approved_until: '2099-01-01T00:00:00Z' } : {}) })
+      const html = renderToStaticMarkup(createElement(EntryScreen, { initial: { ...entryFixture([application]), organisation_mandates: [] }, release }))
+      expect(html).toContain(persona === 'INVESTOR' ? 'Your investor application.' : 'Your organisation application.')
+      expect(html).toContain('Track saved progress, read reviewer feedback')
+      expect(html).not.toContain('Complete your investor application.')
+      expect(html).not.toContain('Set up your organisation.')
+      expect(html).not.toContain('Tell us about yourself, add supporting evidence and send your application for review.')
+      expect(html).not.toContain('Introduce your organisation and who you represent, then send the application to BlockXOne for review.')
+    }
   })
 })

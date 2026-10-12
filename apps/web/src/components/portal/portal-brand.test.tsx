@@ -24,4 +24,15 @@ describe('shared approved brand and release shell', () => {
     expect(css).toContain('prefers-reduced-motion')
     expect(css).not.toMatch(/#[a-f0-9]{3,8}\b/i)
   })
+  it('labels personal applications explicitly without carrying staff authority into that destination', () => {
+    const organisationId = '11111111-1111-4111-8111-111111111111'
+    const html = renderToStaticMarkup(<PortalShell user={{ id: 'actor', email: 'actor@example.invalid' }} organisationName="Assigned organisation" operatingContext={{ mode: 'ROLE', organisationId, role: 'ComplianceOfficer' }} capabilities={{ manageProducts: false, reviewCompliance: true, invest: false }} active="overview" title="Assigned review queue"><p>Assigned work</p></PortalShell>)
+    expect(html).toContain('My applications')
+    expect(html).toContain('href="/portal/onboarding?mode=applicant"')
+    expect(html).not.toContain(`/portal/onboarding?organisation=${organisationId}`)
+    expect(html).toContain(`/portal/compliance?organisation=${organisationId}&amp;role=ComplianceOfficer`)
+    expect(html).toContain('Current workspace: Compliance Officer')
+    expect(html).toContain('Switch application or workspace')
+    expect(html).not.toContain('role=SuperAdmin')
+  })
 })

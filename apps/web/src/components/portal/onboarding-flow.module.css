@@ -1,0 +1,32 @@
+.flow { min-width: 0; }
+.flow [hidden] { display: none !important; }
+.flow label input, .flow label select, .flow label textarea { font-size: 16px; }
+.flow :where(button, summary) { min-height: 44px; }
+.flow :where(button, input, select, textarea, summary):focus-visible { outline: 3px solid var(--bxo-electric-cyan); outline-offset: 4px; }
+.intro { margin: 0; color: var(--bxo-text-secondary); font-size: 14px; line-height: 1.65; }
+.progress { display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); gap: 8px; list-style: none; padding: 0; margin: 24px 0; }
+.progress li { border-top: 3px solid var(--bxo-border-default); padding-top: 10px; color: var(--bxo-text-secondary); font-size: 12px; line-height: 1.5; }
+.progress li[aria-current=step] { border-color: var(--bxo-electric-cyan); color: var(--bxo-text-primary); font-weight: 650; }
+.progress span { display: block; color: var(--bxo-text-secondary); font-size: 12px; font-weight: 400; }
+.heading { margin: 0 0 8px; font-size: 20px; line-height: 1.4; color: var(--bxo-text-primary); }
+.heading:focus { outline: none; }
+.errorSummary { padding: 16px; border: 1px solid var(--bxo-danger); border-radius: 8px; color: var(--bxo-danger); font-size: 14px; line-height: 1.6; }
+.errorSummary p { margin: 0 0 8px; }
+.errorSummary ul { margin: 0; padding-left: 20px; }
+.error { color: var(--bxo-danger); font-size: 13px; font-weight: 400; }
+.remaining { border: 1px solid var(--bxo-border-default); background: var(--bxo-surface-secondary); border-radius: 8px; padding: 16px; font-size: 14px; line-height: 1.6; }
+.remaining h4 { margin: 0 0 8px; font-size: 15px; }
+.remaining ul { margin: 0; padding-left: 20px; }
+.remaining button { border: 0; background: transparent; color: var(--bxo-electric-cyan); padding: 6px 0; font: inherit; text-align: left; text-decoration: underline; cursor: pointer; }
+.navigation { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; border-top: 1px solid var(--bxo-border-default); padding-top: 20px; }
+.navigation p { margin: 0; max-width: 55ch; color: var(--bxo-text-secondary); font-size: 13px; line-height: 1.6; }
+.navigationActions { display: flex; flex-wrap: wrap; gap: 12px; }
+.technical { margin-top: 20px; }
+.technical summary { color: var(--bxo-electric-cyan); cursor: pointer; font-size: 14px; align-content: center; }
+@media (max-width: 600px) {
+  .progress { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .navigation { align-items: stretch; }
+  .navigationActions { width: 100%; }
+  .navigationActions button { flex: 1; }
+  .heading { font-size: 18px; }
+}

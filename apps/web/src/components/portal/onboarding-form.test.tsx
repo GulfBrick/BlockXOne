@@ -1,12 +1,31 @@
+// @vitest-environment jsdom
+
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { describe, expect, it } from 'vitest'
-import type { EntryApplication } from '@/lib/portal/entry-contracts'
-import { entryApplication, entryActorId, entryHandoff } from '@/lib/portal/entry-test-fixtures'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { EntryApplication, EntrySnapshot } from '@/lib/portal/entry-contracts'
+import { entryApplication, entryActorId, entryFixture, entryHandoff } from '@/lib/portal/entry-test-fixtures'
 import { applicationDetailsSchema, type LegacyApplicationDetails, type OwnershipControlRelationship, type PortalApplication, type PortalSnapshot, type WealthManagerApplicationDetailsV2 } from '@/lib/portal/contracts'
 import { ApplicationDetailsSummary, ApplicationHistoryFailureNotice, OnboardingForm, applicationFormDetails, applicationHistoryFailure, applicationNextStep, applicationSubmissionDetails, applicationSubmissionReady, applicationSubmitLabel, classifyDocumentUpload, requiredApplicationEvidence, withoutDraftEvidence } from './onboarding-form'
 import { ApplicationReview } from './portal-workflows'
 import { dateLabel } from './portal-primitives'
+import { PortalIdentityProvider } from './portal-client'
+import { onboardingHistoryUnavailableMessage, type OnboardingHistoryEntry, type OnboardingNavigation } from '@/lib/portal/onboarding-flow'
+
+// Isolate the presentation at the unchanged command-hook boundary. Existing
+// entry-client tests separately exercise server receipts and idempotency.
+const boundary = vi.hoisted(() => ({ submit: vi.fn(async () => false), unknown: false, onSaved: undefined as undefined | ((snapshot: EntrySnapshot) => void) }))
+vi.mock('./entry-client', () => ({ useEntryCommand: (_actor: string, _environment: string, onSaved: (snapshot: EntrySnapshot) => void) => {
+  boundary.onSaved = onSaved
+  return { busy: false, unknown: boundary.unknown, message: '', submit: boundary.submit, retry: async () => false }
+} }))
+
+let originalNavigation: PropertyDescriptor | undefined
+let originalHistory: { state: unknown; href: string }
+let removeHistoryModel: (() => void) | null = null
+beforeEach(() => { boundary.submit.mockReset(); boundary.submit.mockResolvedValue(false); boundary.unknown = false; boundary.onSaved = undefined; sessionStorage.clear(); localStorage.clear(); originalNavigation = Object.getOwnPropertyDescriptor(window, 'navigation'); originalHistory = { state: window.history.state, href: window.location.href } })
+afterEach(() => { cleanup(); removeHistoryModel?.(); removeHistoryModel = null; vi.restoreAllMocks(); vi.unstubAllGlobals(); sessionStorage.clear(); if (originalNavigation) Object.defineProperty(window, 'navigation', originalNavigation); else Reflect.deleteProperty(window, 'navigation'); History.prototype.replaceState.call(window.history, originalHistory.state, '', originalHistory.href) })
 
 const documents = (['IDENTITY', 'COMPANY', 'BENEFICIAL_OWNERS'] as const).map((kind, index) => ({ id: `${index + 4}4444444-4444-4444-8444-444444444444`, kind, title: `Fictional ${kind} evidence`, storage_path: `${entryActorId}/test-${index}.pdf`, sha256: 'a'.repeat(64), size: 100, mime_type: 'application/pdf' as const })) satisfies NonNullable<EntryApplication['details']['documents']>
 const investor = { full_name: 'Alex Example', country: 'ZA', investor_type: 'INDIVIDUAL', company_name: '', registration_reference: '', source_of_funds: 'Fictional savings from employment income.', beneficial_owners: '', experience: 'Fictional long-term investment objectives.', documents: [documents[0]], test_data_acknowledged: true } satisfies LegacyApplicationDetails
@@ -278,5 +297,487 @@ describe('reviewer sees the same evidence and purpose as the applicant', () => {
     expect(html).toContain('Legacy source-of-funds answer')
     expect(html).toContain(investor.source_of_funds)
     expect(html).not.toContain('<h3>Business activities and requested services</h3>')
+  })
+})
+
+function mountedForm(application: EntryApplication, onSaved = vi.fn(), onDirtyChange = vi.fn()) {
+  const view = render(createElement(PortalIdentityProvider, { actorId: entryActorId, environment: 'TESTNET', children: createElement('div', null,
+      createElement('a', { href: '/portal/onboarding?application=other', onClick: event => event.preventDefault() }, 'Switch application'),
+      createElement('a', { href: '#same-page' }, 'Same-page section'),
+      createElement('form', { action: '/auth/logout', method: 'post', onSubmit: event => event.preventDefault() }, createElement('button', { type: 'submit' }, 'Sign out')),
+      createElement('form', { 'data-onboarding-discard': 'true', onSubmit: event => { event.preventDefault(); boundary.submit() } }, createElement('button', { type: 'submit' }, 'Create another application')),
+      createElement(OnboardingForm, { application, environment: 'TESTNET', onSaved, onDirtyChange, handoff: entryHandoff(application) }),
+    ) }))
+  return { ...view, onSaved, onDirtyChange }
+}
+function next() { fireEvent.click(screen.getByRole('button', { name: 'Next' })) }
+function back() { fireEvent.click(screen.getByRole('button', { name: 'Back' })) }
+function reviewAndAcknowledge() {
+  fireEvent.click(screen.getByRole('button', { name: 'View remaining items' }))
+  fireEvent.click(screen.getByRole('checkbox', { name: /I confirm this application and all evidence are fictional test data/ }))
+}
+function unloadPrevented() {
+  const event = new Event('beforeunload', { cancelable: true })
+  window.dispatchEvent(event)
+  return event.defaultPrevented
+}
+
+describe('guided onboarding interaction at the existing command boundary', () => {
+  it('validates the current step, focuses the missing answer and never submits from Next', () => {
+    mountedForm(entryApplication({ review_route: 'AVAILABLE' }))
+    next()
+    const fullName = screen.getByRole('textbox', { name: /^Full name/ })
+    expect(screen.getByRole('alert').textContent).toContain('Full name: enter 2-120 characters.')
+    expect(fullName.getAttribute('aria-invalid')).toBe('true')
+    expect(document.activeElement).toBe(fullName)
+    expect(screen.getByRole('heading', { name: 'Investor details' })).toBeTruthy()
+    expect(boundary.submit).not.toHaveBeenCalled()
+  })
+  it('retains investor answers on actual Back/Next and keeps inactive steps out of keyboard and accessible-role navigation', () => {
+    const { onDirtyChange } = mountedForm(entryApplication({ review_route: 'AVAILABLE', details: investor }))
+    const fullName = screen.getByRole('textbox', { name: /^Full name/ }) as HTMLInputElement
+    expect(screen.queryByRole('textbox', { name: /^Source of funds/ })).toBeNull()
+    fireEvent.change(fullName, { target: { value: 'Alex Changed Fictional Name' } })
+    next()
+    const funds = screen.getByRole('textbox', { name: /^Source of funds/ }) as HTMLTextAreaElement
+    fireEvent.change(funds, { target: { value: 'Fictional savings clarified during this browser session.' } })
+    back()
+    expect(screen.getByRole('textbox', { name: /^Full name/ })).toBe(fullName)
+    expect(fullName.value).toBe('Alex Changed Fictional Name')
+    next()
+    expect((screen.getByRole('textbox', { name: /^Source of funds/ }) as HTMLTextAreaElement).value).toBe('Fictional savings clarified during this browser session.')
+    next()
+    expect(screen.getByRole('heading', { name: 'Supporting evidence' })).toBeTruthy()
+    next()
+    expect(screen.getByRole('heading', { name: 'Check and submit' })).toBeTruthy()
+    expect((screen.getByRole('button', { name: 'Submit for review' }) as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.click(screen.getByRole('checkbox', { name: /I confirm this application and all evidence are fictional test data/ }))
+    expect((screen.getByRole('button', { name: 'Submit for review' }) as HTMLButtonElement).disabled).toBe(false)
+    expect(onDirtyChange).toHaveBeenLastCalledWith(true)
+    expect(sessionStorage.length).toBe(0)
+    expect(localStorage.length).toBe(0)
+    expect(boundary.submit).not.toHaveBeenCalled()
+  })
+  it.each(['WEALTH_MANAGER', 'INVESTOR'] as const)('guides the %s entity through evidence before relationship linkage, preserving Back/Next edits', persona => {
+    const prepared = persona === 'WEALTH_MANAGER' ? applicationFormDetails(entryApplication({ persona, details: manager })) : applicationFormDetails(entryApplication({ details: { ...investor, investor_type: 'ENTITY', company_name: manager.company_name, registration_reference: manager.registration_reference, beneficial_owners: manager.beneficial_owners, documents } }))
+    mountedForm(entryApplication({ persona, review_route: 'AVAILABLE', details: applicationSubmissionDetails(persona, withOwnership(prepared)) }))
+    next(); next(); next()
+    expect(screen.getByRole('heading', { name: 'Supporting evidence' })).toBeTruthy()
+    expect(screen.getByRole('combobox', { name: 'Evidence type' })).toBeTruthy()
+    expect(screen.queryByRole('combobox', { name: 'Linked ownership evidence' })).toBeNull()
+    next()
+    expect(screen.getByRole('heading', { name: 'Ownership and control' })).toBeTruthy()
+    const link = screen.getByRole('combobox', { name: 'Linked ownership evidence' }) as HTMLSelectElement
+    expect(link.value).toBe(documents[2].id)
+    const name = screen.getByRole('textbox', { name: 'Legal name' }) as HTMLInputElement
+    fireEvent.change(name, { target: { value: 'Alex Revised Fictional Owner' } })
+    back(); next()
+    expect(screen.getByRole('textbox', { name: 'Legal name' })).toBe(name)
+    expect(name.value).toBe('Alex Revised Fictional Owner')
+    expect((screen.getByRole('combobox', { name: 'Linked ownership evidence' }) as HTMLSelectElement).value).toBe(documents[2].id)
+    expect(boundary.submit).not.toHaveBeenCalled()
+  })
+  it('offers a complete remaining-items list and a direct correction path before final submission', () => {
+    mountedForm(entryApplication({ persona: 'WEALTH_MANAGER', review_route: 'AVAILABLE' }))
+    fireEvent.click(screen.getByRole('button', { name: 'View remaining items' }))
+    expect(screen.getByRole('heading', { name: /remaining items before submission/ })).toBeTruthy()
+    for (const label of ['Representative full name', 'Customer organisation legal name', 'Business activities and requested services', 'Representative identity evidence', 'Organisation registration evidence', 'Beneficial ownership evidence']) expect(screen.getByRole('button', { name: new RegExp(`^${label}:`) })).toBeTruthy()
+    expect((screen.getByRole('button', { name: 'Submit for review' }) as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.click(screen.getByRole('button', { name: /^Business activities and requested services:/ }))
+    expect(document.activeElement).toBe(screen.getByRole('textbox', { name: /^Business activities and requested services/ }))
+    expect(boundary.submit).not.toHaveBeenCalled()
+  })
+  it('keeps quarantined and then rejected uploads out of evidence requirements and submission', async () => {
+    const pending = { ...documents[0], id: '77777777-7777-4777-8777-777777777777', title: 'Fictional pending identity' }
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (input === '/api/portal/documents' && init?.method === 'POST') return new Response(JSON.stringify({ document: pending, validation_state: 'QUARANTINED' }), { status: 202 })
+      if (input === '/api/portal/documents?queue=1') return new Response(JSON.stringify({ documents: [{ id: pending.id, kind: pending.kind, title: pending.title, state: 'REJECTED', created_at: '2026-10-12T10:00:00Z' }] }), { status: 200 })
+      throw new Error('Unexpected network request in isolated fictional scan test.')
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    mountedForm(entryApplication({ review_route: 'AVAILABLE', details: investor }))
+    next(); next()
+    fireEvent.click(screen.getByRole('button', { name: 'Exclude from this submission' }))
+    fireEvent.change(screen.getByLabelText('Document title'), { target: { value: pending.title } })
+    fireEvent.change(screen.getByLabelText('Choose fictional evidence'), { target: { files: [new File(['fictional test evidence'], 'synthetic.pdf', { type: 'application/pdf' })] } })
+    fireEvent.click(screen.getByRole('button', { name: 'Upload private evidence' }))
+    await waitFor(() => expect(screen.getByText(/File quarantined for an independent scan/)).toBeTruthy())
+    next()
+    expect(screen.getByRole('alert').textContent).toContain('still awaits a clean receipt or exclusion')
+    expect(screen.getByRole('heading', { name: 'Supporting evidence' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'View private scan queue' }))
+    await waitFor(() => expect(screen.getByText('Rejected by scan; upload a different file')).toBeTruthy())
+    expect(screen.queryByRole('button', { name: 'Include clean file' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'View remaining items' }))
+    expect(screen.getByRole('button', { name: /^Identity evidence: upload and select/ })).toBeTruthy()
+    expect((screen.getByRole('button', { name: 'Submit for review' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(boundary.submit).not.toHaveBeenCalled()
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+  it('does not attach a supposedly clean scan whose checked receipt mismatches the selected file', async () => {
+    const selected = { ...documents[0], id: '77777777-7777-4777-8777-777777777777', title: 'Fictional clean identity' }
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (input === '/api/portal/documents?queue=1') return new Response(JSON.stringify({ documents: [{ id: selected.id, kind: selected.kind, title: selected.title, state: 'SCANNED_CLEAN', created_at: '2026-10-12T10:00:00Z' }] }), { status: 200 })
+      if (input === `/api/portal/documents?status=${selected.id}`) return new Response(JSON.stringify({ id: selected.id, state: 'SCANNED_CLEAN', document: { ...selected, title: 'Mismatched fictional title' } }), { status: 200 })
+      throw new Error('Unexpected network request in isolated receipt-match test.')
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    mountedForm(entryApplication({ review_route: 'AVAILABLE', details: investor }))
+    next(); next()
+    fireEvent.click(screen.getByRole('button', { name: 'Exclude from this submission' }))
+    fireEvent.click(screen.getByRole('button', { name: 'View private scan queue' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Include clean file' })).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Include clean file' }))
+    await waitFor(() => expect(screen.getByText('The scanned file receipt does not match the selected document.')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'View remaining items' }))
+    expect(screen.getByRole('button', { name: /^Identity evidence: upload and select/ })).toBeTruthy()
+    expect((screen.getByRole('button', { name: 'Submit for review' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(boundary.submit).not.toHaveBeenCalled()
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+  it('cancels same-tab application navigation, sign-out and new-application submission without discarding or posting', () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    mountedForm(entryApplication({ review_route: 'AVAILABLE', details: investor }))
+    const name = screen.getByRole('textbox', { name: /^Full name/ }) as HTMLInputElement
+    fireEvent.change(name, { target: { value: 'Alex Unsaved Fictional Name' } })
+    expect(unloadPrevented()).toBe(true)
+    expect(fireEvent.click(screen.getByRole('link', { name: 'Switch application' }))).toBe(false)
+    fireEvent.submit(screen.getByRole('button', { name: 'Sign out' }).closest('form')!)
+    fireEvent.submit(screen.getByRole('button', { name: 'Create another application' }).closest('form')!)
+    expect(confirm).toHaveBeenCalledTimes(3)
+    expect(name.value).toBe('Alex Unsaved Fictional Name')
+    expect(boundary.submit).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('link', { name: 'Same-page section' }))
+    expect(confirm).toHaveBeenCalledTimes(3)
+  })
+  it.each(['failure', 'unknown'] as const)('retains unsaved warning after %s command completion', async outcome => {
+    mountedForm(entryApplication({ review_route: 'AVAILABLE', details: investor }))
+    reviewAndAcknowledge()
+    boundary.unknown = outcome === 'unknown'
+    fireEvent.click(screen.getByRole('button', { name: 'Submit for review' }))
+    await waitFor(() => expect(boundary.submit).toHaveBeenCalledOnce())
+    expect(unloadPrevented()).toBe(true)
+  })
+  it.each(['wrong status', 'wrong application', 'same revision', 'empty answers', 'different answer', 'different evidence', 'context kind', 'context organisation', 'origin', 'admission purpose', 'invalid timestamp'] as const)('does not propagate or clear dirty answers for a truthy command with %s in its returned snapshot', async mismatch => {
+    const application = entryApplication({ review_route: 'AVAILABLE', details: investor })
+    const saved = { ...application, status: 'SUBMITTED' as const, revision: application.revision + 1, submitted_at: '2026-10-12T10:00:00Z' }
+    const returned: EntryApplication = { ...saved }
+    if (mismatch === 'wrong status') returned.status = 'DRAFT'
+    if (mismatch === 'wrong application') returned.id = '88888888-8888-4888-8888-888888888888'
+    if (mismatch === 'same revision') returned.revision = application.revision
+    if (mismatch === 'empty answers') returned.details = {}
+    if (mismatch === 'different answer') returned.details = { ...investor, full_name: 'Different Fictional Applicant' }
+    if (mismatch === 'different evidence') returned.details = { ...investor, documents: [{ ...documents[0], sha256: 'b'.repeat(64) }] }
+    if (mismatch === 'context kind') returned.context_kind = 'ORGANISATION'
+    if (mismatch === 'context organisation') returned.context_organisation_id = '88888888-8888-4888-8888-888888888888'
+    if (mismatch === 'origin') returned.origin = 'LEGACY'
+    if (mismatch === 'admission purpose') returned.admission_purpose = 'LEGACY_REHEARSAL'
+    if (mismatch === 'invalid timestamp') returned.submitted_at = 'not-a-timestamp'
+    boundary.submit.mockImplementation(async () => { boundary.onSaved?.(entryFixture([returned])); return true })
+    const { onSaved } = mountedForm(application)
+    reviewAndAcknowledge()
+    fireEvent.click(screen.getByRole('button', { name: 'Submit for review' }))
+    await waitFor(() => expect(screen.getByText('Application submission not confirmed')).toBeTruthy())
+    expect(onSaved).not.toHaveBeenCalled()
+    expect(unloadPrevented()).toBe(true)
+    expect((screen.getByRole('button', { name: 'Submit for review' }) as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByLabelText(/^Full name/) as HTMLInputElement).value).toBe(investor.full_name)
+  })
+  it('releases the warning only after the exact submitted application is confirmed and preserves the original command/payload', async () => {
+    const application = entryApplication({ review_route: 'AVAILABLE', details: investor })
+    const submitted = { ...application, status: 'SUBMITTED' as const, revision: application.revision + 1, submitted_at: '2026-10-12T10:00:00Z' }
+    boundary.submit.mockImplementation(async () => { boundary.onSaved?.(entryFixture([submitted])); return true })
+    const { onSaved, onDirtyChange } = mountedForm(application)
+    reviewAndAcknowledge()
+    expect(unloadPrevented()).toBe(true)
+    fireEvent.click(screen.getByRole('button', { name: 'Submit for review' }))
+    await waitFor(() => expect(onSaved).toHaveBeenCalledWith(entryFixture([submitted])))
+    expect(boundary.submit).toHaveBeenCalledWith('submit_application', { application_id: application.id, expected_revision: application.revision, details: investor })
+    expect(onDirtyChange).toHaveBeenLastCalledWith(false)
+    expect(unloadPrevented()).toBe(false)
+  })
+  it('binds confirmation to edited answers actually sent, not the old saved application details', async () => {
+    const application = entryApplication({ review_route: 'AVAILABLE', details: investor })
+    const staleContent = { ...application, status: 'SUBMITTED' as const, revision: application.revision + 1, submitted_at: '2026-10-12T10:00:00Z' }
+    boundary.submit.mockImplementation(async () => { boundary.onSaved?.(entryFixture([staleContent])); return true })
+    const { onSaved } = mountedForm(application)
+    fireEvent.change(screen.getByRole('textbox', { name: /^Full name/ }), { target: { value: 'Alex Edited Current Request' } })
+    reviewAndAcknowledge()
+    fireEvent.click(screen.getByRole('button', { name: 'Submit for review' }))
+    await waitFor(() => expect(screen.getByText('Application submission not confirmed')).toBeTruthy())
+    expect(boundary.submit).toHaveBeenCalledWith('submit_application', { application_id: application.id, expected_revision: application.revision, details: { ...investor, full_name: 'Alex Edited Current Request' } })
+    expect(onSaved).not.toHaveBeenCalled()
+    expect((screen.getByLabelText(/^Full name/) as HTMLInputElement).value).toBe('Alex Edited Current Request')
+    expect(unloadPrevented()).toBe(true)
+  })
+  it('accepts the normalized edited payload returned by the existing schema-aware command hook', async () => {
+    const application = entryApplication({ review_route: 'AVAILABLE', details: investor })
+    const submitted = { ...application, details: { ...investor, full_name: 'Alex Edited Current Request' }, status: 'SUBMITTED' as const, revision: application.revision + 1, submitted_at: '2026-10-12T10:00:00Z' }
+    boundary.submit.mockImplementation(async () => { boundary.onSaved?.(entryFixture([submitted])); return true })
+    const { onSaved } = mountedForm(application)
+    fireEvent.change(screen.getByRole('textbox', { name: /^Full name/ }), { target: { value: '  Alex Edited Current Request  ' } })
+    reviewAndAcknowledge()
+    fireEvent.click(screen.getByRole('button', { name: 'Submit for review' }))
+    await waitFor(() => expect(onSaved).toHaveBeenCalledWith(entryFixture([submitted])))
+    expect(boundary.submit).toHaveBeenCalledWith('submit_application', { application_id: application.id, expected_revision: application.revision, details: { ...investor, full_name: '  Alex Edited Current Request  ' } })
+    expect(unloadPrevented()).toBe(false)
+  })
+})
+
+type ModeledEntry = OnboardingHistoryEntry & { url: string; state: { __NA: boolean; __PRIVATE_NEXTJS_INTERNALS_TREE: string[] } }
+/**
+ * Isolated browser event model, not hosted-browser proof: commits are modeled
+ * with the native prototype solely so spies can detect any writes by the guard.
+ * Existing entry objects and their forward trail are never recreated by it.
+ */
+class NavigationModel extends EventTarget implements OnboardingNavigation {
+  currentEntry: ModeledEntry
+  readonly entries: ModeledEntry[]
+  traverseTo = vi.fn((key: string): { committed: Promise<unknown>; finished: Promise<unknown> } => {
+    this.attempt(key, true)
+    return { committed: Promise.resolve(), finished: Promise.resolve() }
+  })
+  constructor() {
+    super()
+    const url = (path: string) => new URL(path, window.location.origin).href
+    this.entries = [
+      { key: 'previous-entry', index: 0, url: url('/portal/portfolio'), state: { __NA: true, __PRIVATE_NEXTJS_INTERNALS_TREE: ['previous'] } },
+      { key: 'original-entry', index: 1, url: url('/portal/onboarding?application=one'), state: { __NA: true, __PRIVATE_NEXTJS_INTERNALS_TREE: ['original'] } },
+      { key: 'forward-entry', index: 2, url: url('/portal/onboarding?application=other'), state: { __NA: true, __PRIVATE_NEXTJS_INTERNALS_TREE: ['forward'] } },
+      { key: 'hash-entry', index: 3, url: url('/portal/onboarding?application=one#evidence'), state: { __NA: true, __PRIVATE_NEXTJS_INTERNALS_TREE: ['original'] } },
+    ]
+    this.currentEntry = this.entries[1]
+    this.commit(this.currentEntry)
+  }
+  private commit(entry: ModeledEntry) {
+    this.currentEntry = entry
+    History.prototype.replaceState.call(window.history, entry.state, '', entry.url)
+  }
+  attempt(key: string, cancelable: boolean, sameDocument = true): Event {
+    const destination = this.entries.find(entry => entry.key === key)!
+    const event = new Event('navigate', { cancelable })
+    Object.defineProperties(event, { navigationType: { value: 'traverse' }, destination: { value: { key: destination.key, index: destination.index, url: destination.url, sameDocument } } })
+    this.dispatchEvent(event)
+    if (!event.defaultPrevented) { this.commit(destination); window.dispatchEvent(new PopStateEvent('popstate', { state: destination.state })) }
+    return event
+  }
+}
+function historyModel() {
+  const navigation = new NavigationModel()
+  Object.defineProperty(window, 'navigation', { value: navigation, configurable: true })
+  const nextRoute = vi.fn()
+  // Model the exact Next 15 registration phase: a noncapture window listener
+  // registered before the mounted applicant component.
+  window.addEventListener('popstate', nextRoute)
+  removeHistoryModel = () => window.removeEventListener('popstate', nextRoute)
+  return { navigation, nextRoute }
+}
+function changedHistoryForm() {
+  const view = mountedForm(entryApplication({ review_route: 'AVAILABLE', details: investor }))
+  fireEvent.change(screen.getByRole('textbox', { name: /^Full name/ }), { target: { value: 'Alex Unsaved History Answers' } })
+  return view
+}
+
+function deferredRestoration(navigation: NavigationModel) {
+  const requests: { key: string; commit: () => void; finish: () => void; rejectBoth: () => void }[] = []
+  navigation.traverseTo.mockImplementation(key => {
+    let commit!: (value: unknown) => void, finish!: (value: unknown) => void, rejectCommit!: (reason: unknown) => void, rejectFinish!: (reason: unknown) => void
+    const committed = new Promise<unknown>((resolve, reject) => { commit = resolve; rejectCommit = reject })
+    const finished = new Promise<unknown>((resolve, reject) => { finish = resolve; rejectFinish = reject })
+    requests.push({ key, commit: () => { navigation.attempt(key, true); commit(undefined) }, finish: () => finish(undefined), rejectBoth: () => { const error = new DOMException('Modeled traversal was superseded.', 'AbortError'); rejectCommit(error); rejectFinish(error) } })
+    return { committed, finished }
+  })
+  return requests
+}
+
+describe('feature-detected browser traversal guard', () => {
+  it.each(['previous-entry', 'forward-entry'] as const)('cancels a cancelable traversal to %s before location or Next changes', destination => {
+    const { navigation, nextRoute } = historyModel()
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    changedHistoryForm()
+    let traversal!: Event
+    act(() => { traversal = navigation.attempt(destination, true) })
+    expect(traversal.defaultPrevented).toBe(true)
+    expect(navigation.currentEntry).toBe(navigation.entries[1])
+    expect(window.location.href).toBe(navigation.entries[1].url)
+    expect(window.history.state).toEqual(navigation.entries[1].state)
+    expect(nextRoute).not.toHaveBeenCalled()
+    expect(navigation.traverseTo).not.toHaveBeenCalled()
+    expect(confirm).toHaveBeenCalledOnce()
+    expect((screen.getByRole('textbox', { name: /^Full name/ }) as HTMLInputElement).value).toBe('Alex Unsaved History Answers')
+    expect(boundary.submit).not.toHaveBeenCalled()
+  })
+  it.each(['previous-entry', 'forward-entry'] as const)('restores a canceled noncancelable traversal to %s by exact key/index without changing Next state or the forward trail', destination => {
+    const { navigation, nextRoute } = historyModel()
+    const entries = [...navigation.entries]
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    const push = vi.spyOn(window.history, 'pushState'), replace = vi.spyOn(window.history, 'replaceState'), go = vi.spyOn(window.history, 'go')
+    changedHistoryForm()
+    let traversal!: Event
+    act(() => { traversal = navigation.attempt(destination, false) })
+    expect(traversal.defaultPrevented).toBe(false)
+    expect(navigation.traverseTo).toHaveBeenCalledTimes(1)
+    expect(navigation.traverseTo).toHaveBeenCalledWith('original-entry')
+    expect(navigation.currentEntry.key).toBe('original-entry')
+    expect(navigation.currentEntry.index).toBe(1)
+    expect(window.location.href).toBe(entries[1].url)
+    expect(window.history.state).toEqual(entries[1].state)
+    expect(navigation.entries).toEqual(entries)
+    entries.forEach((entry, index) => expect(navigation.entries[index]).toBe(entry))
+    expect(nextRoute).not.toHaveBeenCalled()
+    expect(confirm).toHaveBeenCalledOnce()
+    expect(push).not.toHaveBeenCalled(); expect(replace).not.toHaveBeenCalled(); expect(go).not.toHaveBeenCalled()
+    expect((screen.getByRole('textbox', { name: /^Full name/ }) as HTMLInputElement).value).toBe('Alex Unsaved History Answers')
+    expect(boundary.submit).not.toHaveBeenCalled()
+  })
+  it.each([
+    { first: 'previous-entry', second: 'forward-entry' },
+    { first: 'forward-entry', second: 'previous-entry' },
+  ])('keeps the original pinned when a second noncancelable traversal to $second supersedes queued restoration from $first', async ({ first, second }) => {
+    const { navigation, nextRoute } = historyModel()
+    const entries = [...navigation.entries]
+    const requests = deferredRestoration(navigation)
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    changedHistoryForm()
+    act(() => { navigation.attempt(first, false) })
+    expect(navigation.currentEntry.key).toBe(first)
+    expect(requests.map(request => request.key)).toEqual(['original-entry'])
+    expect((screen.getByRole('button', { name: 'Next' }) as HTMLButtonElement).disabled).toBe(true)
+    act(() => { navigation.attempt(second, false) })
+    expect(navigation.currentEntry.key).toBe(second)
+    expect(requests.map(request => request.key)).toEqual(['original-entry', 'original-entry'])
+    await act(async () => { requests[0].rejectBoth(); await Promise.resolve() })
+    expect(screen.queryByText('Browser history restoration not confirmed')).toBeNull()
+    expect((screen.getByRole('button', { name: 'Next' }) as HTMLButtonElement).disabled).toBe(true)
+    await act(async () => { requests[1].commit(); requests[1].finish(); await Promise.resolve() })
+    expect(navigation.currentEntry).toBe(entries[1])
+    expect(navigation.currentEntry.index).toBe(1)
+    expect(window.location.href).toBe(entries[1].url)
+    expect(window.history.state).toEqual(entries[1].state)
+    entries.forEach((entry, index) => expect(navigation.entries[index]).toBe(entry))
+    expect(nextRoute).not.toHaveBeenCalled()
+    expect(confirm).toHaveBeenCalledOnce()
+    expect((screen.getByRole('button', { name: 'Next' }) as HTMLButtonElement).disabled).toBe(false)
+    expect((screen.getByRole('textbox', { name: /^Full name/ }) as HTMLInputElement).value).toBe('Alex Unsaved History Answers')
+    expect(boundary.submit).not.toHaveBeenCalled()
+  })
+  it.each(['previous-entry', 'forward-entry'] as const)('cancels a superseding cancelable traversal to %s while exact restoration is still queued', async second => {
+    const { navigation, nextRoute } = historyModel()
+    const first = second === 'previous-entry' ? 'forward-entry' : 'previous-entry'
+    const requests = deferredRestoration(navigation)
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    changedHistoryForm()
+    act(() => { navigation.attempt(first, false) })
+    let superseding!: Event
+    act(() => { superseding = navigation.attempt(second, true) })
+    expect(superseding.defaultPrevented).toBe(true)
+    expect(navigation.currentEntry.key).toBe(first)
+    expect(requests.map(request => request.key)).toEqual(['original-entry'])
+    await act(async () => { requests[0].commit(); requests[0].finish(); await Promise.resolve() })
+    expect(navigation.currentEntry.key).toBe('original-entry')
+    expect(nextRoute).not.toHaveBeenCalled()
+    expect(confirm).toHaveBeenCalledOnce()
+    expect((screen.getByRole('button', { name: 'Next' }) as HTMLButtonElement).disabled).toBe(false)
+  })
+  it('keeps navigation locked after the restored popstate and committed promise until finished also confirms', async () => {
+    const { navigation, nextRoute } = historyModel()
+    const requests = deferredRestoration(navigation)
+    vi.spyOn(window, 'confirm').mockReturnValue(false)
+    changedHistoryForm()
+    act(() => { navigation.attempt('previous-entry', false) })
+    await act(async () => { requests[0].commit(); await Promise.resolve() })
+    expect(navigation.currentEntry.key).toBe('original-entry')
+    expect((screen.getByRole('button', { name: 'Next' }) as HTMLButtonElement).disabled).toBe(true)
+    await act(async () => { requests[0].finish(); await Promise.resolve() })
+    expect((screen.getByRole('button', { name: 'Next' }) as HTMLButtonElement).disabled).toBe(false)
+    expect(nextRoute).not.toHaveBeenCalled()
+  })
+  it.each(['previous-entry', 'forward-entry'] as const)('preserves normal Next traversal to %s when departure is accepted', destination => {
+    const { navigation, nextRoute } = historyModel()
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    changedHistoryForm()
+    act(() => { navigation.attempt(destination, true) })
+    expect(navigation.currentEntry.key).toBe(destination)
+    expect(nextRoute).toHaveBeenCalledOnce()
+    expect(navigation.traverseTo).not.toHaveBeenCalled()
+    expect(confirm).toHaveBeenCalledOnce()
+  })
+  it('does not prompt for hash-only traversal or an unchanged application', () => {
+    const { navigation, nextRoute } = historyModel()
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    changedHistoryForm()
+    act(() => { navigation.attempt('hash-entry', true) })
+    expect(navigation.currentEntry.key).toBe('hash-entry')
+    expect(nextRoute).toHaveBeenCalledOnce()
+    expect(confirm).not.toHaveBeenCalled()
+    fireEvent.change(screen.getByRole('textbox', { name: /^Full name/ }), { target: { value: investor.full_name } })
+    act(() => { navigation.attempt('previous-entry', true) })
+    expect(navigation.currentEntry.key).toBe('previous-entry')
+    expect(nextRoute).toHaveBeenCalledTimes(2)
+    expect(confirm).not.toHaveBeenCalled()
+  })
+  it('consumes confirmed link consent once and expires unused consent without permanently suppressing future warnings', () => {
+    vi.useFakeTimers()
+    try {
+      const { navigation, nextRoute } = historyModel()
+      const confirm = vi.spyOn(window, 'confirm').mockReturnValueOnce(true).mockReturnValue(false)
+      changedHistoryForm()
+      fireEvent.click(screen.getByRole('link', { name: 'Switch application' }))
+      act(() => { navigation.attempt('forward-entry', true) })
+      expect(confirm).toHaveBeenCalledOnce()
+      expect(nextRoute).toHaveBeenCalledOnce()
+      // Model returning to the retained original component without new consent.
+      History.prototype.replaceState.call(window.history, navigation.entries[1].state, '', navigation.entries[1].url)
+      navigation.currentEntry = navigation.entries[1]
+      confirm.mockReturnValueOnce(true)
+      fireEvent.click(screen.getByRole('link', { name: 'Switch application' }))
+      expect(confirm).toHaveBeenCalledTimes(2)
+      // This accepted link does not leave the modeled page. Its unused consent
+      // must expire, not suppress a later Back/Forward or unload warning.
+      act(() => { vi.advanceTimersByTime(1001); navigation.attempt('forward-entry', true) })
+      expect(confirm).toHaveBeenCalledTimes(3)
+      expect(navigation.currentEntry.key).toBe('original-entry')
+      expect(unloadPrevented()).toBe(true)
+    } finally { vi.useRealTimers() }
+  })
+  it('cleans up native and capture listeners when the form unmounts', () => {
+    const { navigation, nextRoute } = historyModel()
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    const removeNative = vi.spyOn(navigation, 'removeEventListener'), removeWindow = vi.spyOn(window, 'removeEventListener')
+    const view = changedHistoryForm()
+    view.unmount()
+    act(() => { navigation.attempt('previous-entry', true) })
+    expect(nextRoute).toHaveBeenCalledOnce()
+    expect(confirm).not.toHaveBeenCalled()
+    expect(navigation.traverseTo).not.toHaveBeenCalled()
+    expect(unloadPrevented()).toBe(false)
+    expect(removeNative).toHaveBeenCalledWith('navigate', expect.any(Function))
+    expect(removeWindow).toHaveBeenCalledWith('popstate', expect.any(Function), true)
+  })
+  it('shows an explicit compatibility warning only while unsupported-browser answers are dirty', () => {
+    Object.defineProperty(window, 'navigation', { value: undefined, configurable: true })
+    mountedForm(entryApplication({ review_route: 'AVAILABLE', details: investor }))
+    expect(screen.queryByText(onboardingHistoryUnavailableMessage)).toBeNull()
+    fireEvent.change(screen.getByRole('textbox', { name: /^Full name/ }), { target: { value: 'Alex Unsaved History Answers' } })
+    expect(screen.getByText(onboardingHistoryUnavailableMessage)).toBeTruthy()
+    expect(unloadPrevented()).toBe(true)
+    fireEvent.change(screen.getByRole('textbox', { name: /^Full name/ }), { target: { value: investor.full_name } })
+    expect(screen.queryByText(onboardingHistoryUnavailableMessage)).toBeNull()
+  })
+  it.each(['throws', 'committed rejects', 'finished rejects', 'both reject'] as const)('reports exact-entry restoration that %s rather than claiming cancellation succeeded or sending another submission', async failure => {
+    const { navigation, nextRoute } = historyModel()
+    vi.spyOn(window, 'confirm').mockReturnValue(false)
+    navigation.traverseTo.mockImplementation(() => {
+      if (failure === 'throws') throw new Error('Modeled exact entry is unavailable.')
+      const error = new DOMException('Modeled exact entry is unavailable.', 'InvalidStateError')
+      return { committed: failure === 'finished rejects' ? Promise.resolve() : Promise.reject(error), finished: failure === 'committed rejects' ? Promise.resolve() : Promise.reject(error) }
+    })
+    changedHistoryForm()
+    act(() => { navigation.attempt('previous-entry', false) })
+    await waitFor(() => expect(screen.getByText('Browser history restoration not confirmed')).toBeTruthy())
+    expect(nextRoute).not.toHaveBeenCalled()
+    expect((screen.getByRole('button', { name: 'Next' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(boundary.submit).not.toHaveBeenCalled()
+    expect(unloadPrevented()).toBe(true)
   })
 })

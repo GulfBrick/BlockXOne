@@ -42,8 +42,9 @@ function isolatedEntryRead(next: EntrySnapshot) {
 }
 function prepareUnsavedAnswers() {
   const fullName = screen.getByLabelText(/^Full name/) as HTMLInputElement
-  const acknowledgement = screen.getByRole('checkbox', { name: /I confirm this application and all evidence are fictional test data/ }) as HTMLInputElement
   fireEvent.change(fullName, { target: { value: 'Alex Unsaved Browser Revision' } })
+  fireEvent.click(screen.getByRole('button', { name: 'View remaining items' }))
+  const acknowledgement = screen.getByRole('checkbox', { name: /I confirm this application and all evidence are fictional test data/ }) as HTMLInputElement
   fireEvent.click(acknowledgement)
   expect(fullName.value).toBe('Alex Unsaved Browser Revision')
   expect(acknowledgement.checked).toBe(true)
@@ -76,8 +77,8 @@ describe('real entry-screen review-availability interaction', () => {
     const initial = missingReviewerSnapshot()
     const fetchMock = isolatedEntryRead(reviewerAvailable(initial))
     render(createElement(EntryScreen, { initial, release }))
-    expect((screen.getByRole('button', { name: 'Submission unavailable; review route required' }) as HTMLButtonElement).disabled).toBe(true)
     const { fullName, acknowledgement } = prepareUnsavedAnswers()
+    expect((screen.getByRole('button', { name: 'Submission unavailable; review route required' }) as HTMLButtonElement).disabled).toBe(true)
 
     fireEvent.click(screen.getByRole('button', { name: 'Refresh review availability' }))
     await waitFor(() => expect((screen.getByRole('button', { name: 'Submit for review' }) as HTMLButtonElement).disabled).toBe(false))
@@ -114,5 +115,24 @@ describe('real entry-screen review-availability interaction', () => {
     expect(sessionStorage.getItem(markerStorageKey)).toBe(pendingMarker)
     expect(fetchMock).toHaveBeenCalledTimes(1)
     expect(fetchMock.mock.calls.every(([, init]) => (init?.method ?? 'GET') === 'GET')).toBe(true)
+  })
+  it('does not send a new-application command when the user cancels discarding their existing answers', () => {
+    const initial = missingReviewerSnapshot()
+    const fetchMock = isolatedEntryRead(initial)
+    const confirmation = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    try {
+      render(createElement(EntryScreen, { initial, release }))
+      const fullName = screen.getByLabelText(/^Full name/) as HTMLInputElement
+      fireEvent.change(fullName, { target: { value: 'Alex Unsaved Existing Application' } })
+      fireEvent.click(screen.getByText('Other applications and workspaces', { selector: 'summary' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Start another application' }))
+      fireEvent.change(screen.getByLabelText('Application type'), { target: { value: 'WEALTH_MANAGER' } })
+      const start = screen.getByRole('button', { name: 'Create or continue this application' })
+      fireEvent.submit(start.closest('form')!)
+      expect(confirmation).toHaveBeenCalledTimes(1)
+      expect(fetchMock).not.toHaveBeenCalled()
+      expect(fullName.value).toBe('Alex Unsaved Existing Application')
+      expect(sessionStorage.getItem(markerStorageKey)).toBe(pendingMarker)
+    } finally { confirmation.mockRestore() }
   })
 })

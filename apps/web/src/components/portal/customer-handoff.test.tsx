@@ -17,7 +17,7 @@ describe('authoritative customer handoff presentation', () => {
     ['PREPARE_APPLICATION', 'APPLICANT', 'Draft: not submitted'],
     ['REVIEW_PENDING', 'COMPLIANCE', 'Awaiting an independent decision'],
     ['INFORMATION_REQUIRED', 'APPLICANT', 'Your changes are required'],
-    ['REAPPLICATION_REQUIRED', 'APPLICANT', 'Application not approved; reapplication available'],
+    ['REAPPLICATION_REQUIRED', 'APPLICANT', 'Not approved; you can reapply'],
     ['OPEN_ACCOUNT', 'APPLICANT', 'Investor admission approved; account opening next'],
     ['ACCOUNT_AVAILABLE', 'NONE', 'Investment account available'],
     ['REQUEST_MANDATE', 'APPLICANT', 'Entity account recorded; representative appointment next'],
@@ -25,36 +25,39 @@ describe('authoritative customer handoff presentation', () => {
     ['MANDATE_INFORMATION_REQUIRED', 'APPLICANT', 'Representative appointment needs your changes'],
     ['MANDATE_APPLY_PENDING', 'SUPER_ADMIN', 'Reviewed appointment awaiting application'],
     ['WORKSPACE_AVAILABLE', 'NONE', 'Operating workspace available'],
-    ['UNAVAILABLE', 'PROVIDER_OWNER', 'Customer handoff unavailable'],
+    ['UNAVAILABLE', 'PROVIDER_OWNER', 'Your next step is unavailable'],
   ] as const)('describes %s with its exact next owner', (state, next_owner, title) => {
     const presentation = customerHandoffPresentation(entryHandoff(application, { state, next_owner }))
     expect(presentation.title).toBe(title)
     expect(presentation.owner).toBe({ APPLICANT: 'You, the applicant', COMPLIANCE: 'Independent BlockXOne Compliance Officer', SUPER_ADMIN: 'Authorised BlockXOne Super Admin', PROVIDER_OWNER: 'BlockXOne onboarding / provider owner', NONE: 'No pending admission handoff' }[next_owner])
   })
   it.each([
-    ['INTAKE_NOT_ADMITTED', 'Evidence intake not admitted'],
+    ['INTAKE_NOT_ADMITTED', 'Evidence submission is unavailable'],
     ['REVIEWER_UNAVAILABLE', 'Independent reviewer not assigned'],
-    ['PROVIDER_UNSUPPORTED', 'Review provider not supported'],
+    ['PROVIDER_UNSUPPORTED', 'The review route needs attention'],
     ['ADMISSION_EXPIRED', 'Customer admission expired'],
     ['MONITORING_ON_HOLD', 'Customer relationship on hold'],
     ['MONITORING_RENEWAL_REQUIRED', 'Monitoring renewal required'],
     ['ACCOUNT_SUSPENDED', 'Investment account suspended'],
     ['MANDATE_NOT_EFFECTIVE', 'Representative mandate not effective'],
-    ['CONTEXT_UNAVAILABLE', 'Operating context not verified'],
-    ['CONTEXT_NOT_SUPPORTED', 'Application context not admitted'],
+    ['CONTEXT_UNAVAILABLE', 'Workspace access could not be verified'],
+    ['CONTEXT_NOT_SUPPORTED', 'This application needs a supported review route'],
     ['ADMISSION_NOT_APPROVED', 'Customer admission not current'],
   ] as const)('gives blocker %s precedence over an active-looking state', (blocker, title) => {
     const html = render({ state: 'WORKSPACE_AVAILABLE', blocker, allowed_actions: [], destination: 'NONE' })
     expect(html).toContain(title)
     expect(html).not.toContain('Open Offering Manager workspace')
     expect(html).not.toContain('/portal/portfolio?mode=applicant')
+    expect([...html.matchAll(/href="([^"]+)"/g)].map(match => match[1])).toEqual(['mailto:daniel@bx1.co.za'])
   })
   it('renders a missing projection as unavailable without status-derived actions', () => {
     const approved = entryApplication({ status: 'APPROVED' })
     const html = renderToStaticMarkup(createElement(CustomerHandoffPanel, { application: approved, handoff: null }))
     expect(html).toContain('Saved progress could not be verified')
     expect(html).toContain(approved.id)
-    expect(html).not.toContain('href=')
+    expect([...html.matchAll(/href="([^"]+)"/g)].map(match => match[1])).toEqual(['mailto:daniel@bx1.co.za'])
+    expect(html).not.toContain('/portal/portfolio?mode=applicant')
+    expect(html).not.toContain('Open Offering Manager workspace')
     expect(html).not.toContain('type="file"')
   })
   it('displays saved gate facts and references without using colour as the only indicator', () => {
@@ -66,6 +69,79 @@ describe('authoritative customer handoff presentation', () => {
     expect(html).toContain(application.id)
     expect(html).toContain('Saved revision')
   })
+  it('keeps references, revisions, gates and linked-record diagnostics inside closed details', () => {
+    const html = render({ state: 'WORKSPACE_AVAILABLE', persona: 'WEALTH_MANAGER', next_owner: 'NONE', allowed_actions: ['ENTER_OPERATING_WORKSPACE'], destination: 'OPERATING_WORKSPACE', accounts: [{ id: accountId, kind: 'ENTITY', status: 'ACTIVE' }], mandate: { id: mandateId, status: 'APPLIED', effective: true }, native_context: { organisation_id: entryOrganisationId, role: 'OfferingManager' } })
+    const detailsStart = html.indexOf('<details')
+    const primary = html.slice(0, detailsStart)
+    const details = html.slice(detailsStart, html.indexOf('</details>', detailsStart))
+    expect(detailsStart).toBeGreaterThan(0)
+    expect(details).toContain('Application details and access checks')
+    expect(details).not.toMatch(/^<details[^>]*\bopen(?:[=\s>])/)
+    expect(primary).toContain('Operating workspace available')
+    expect(primary).toContain('Next responsible owner')
+    expect(primary).toContain('Open Offering Manager workspace')
+    for (const value of [application.id, accountId, mandateId, 'Saved revision', 'Current customer workflow gates', 'Linked investment accounts', 'Linked representative appointment']) {
+      expect(primary).not.toContain(value)
+      expect(details).toContain(value)
+    }
+    expect(details).toContain('Verified operating organisation')
+    expect(details).toContain('Not assigned')
+  })
+  it('keeps the manual test-review boundary in application details', () => {
+    const reviewed = entryApplication({ provider_mode: 'MANUAL_TEST_REVIEW' })
+    const html = renderToStaticMarkup(createElement(CustomerHandoffPanel, { application: reviewed, handoff: entryHandoff(reviewed) }))
+    expect(html.slice(html.indexOf('<details'))).toContain('Manual test review (not live KYC clearance)')
+  })
+  it('keeps unavailable projection references collapsed while making recovery contact visible', () => {
+    const html = renderToStaticMarkup(createElement(CustomerHandoffPanel, { application, handoff: null }))
+    const detailsStart = html.indexOf('<details')
+    expect(html.slice(0, detailsStart)).toContain('Contact BlockXOne onboarding')
+    expect(html.slice(0, detailsStart)).toContain('Next responsible owner')
+    expect(html.slice(0, detailsStart)).not.toContain(application.id)
+    expect(html.slice(detailsStart)).toContain(application.id)
+    expect(html.slice(detailsStart)).not.toMatch(/^<details[^>]*\bopen(?:[=\s>])/)
+  })
+  it.each(['REVIEWER_UNAVAILABLE', 'PROVIDER_UNSUPPORTED', 'INTAKE_NOT_ADMITTED', 'CONTEXT_UNAVAILABLE', 'CONTEXT_NOT_SUPPORTED'] as const)('offers a recovery contact for %s without transmitting private references', blocker => {
+    const html = render({ state: 'UNAVAILABLE', blocker, next_owner: 'PROVIDER_OWNER', allowed_actions: [], destination: 'NONE', mandate: { id: mandateId, status: 'APPROVED', effective: false } })
+    const hrefs = [...html.matchAll(/href="([^"]+)"/g)].map(match => match[1])
+    expect(hrefs).toEqual(['mailto:daniel@bx1.co.za'])
+    expect(html).toContain('Contact BlockXOne onboarding')
+    expect(html).toContain('No application details are included automatically')
+    for (const value of [application.id, mandateId, entryOrganisationId, '?subject=', '?body=']) expect(hrefs.join(' ')).not.toContain(value)
+  })
+  it('preserves submitted-case recovery when an independent reviewer becomes unavailable', () => {
+    const html = render({ state: 'REVIEW_PENDING', blocker: 'REVIEWER_UNAVAILABLE', next_owner: 'PROVIDER_OWNER', allowed_actions: [], destination: 'NONE' })
+    expect(html).toContain('Your submitted case is preserved')
+    expect(html).toContain('do not submit a duplicate')
+    expect(html).toContain('Independent reviewer not assigned')
+    expect(html).toContain('mailto:daniel@bx1.co.za')
+    expect(html).not.toContain('/portal/portfolio?mode=applicant')
+    expect(html).not.toContain('Open Offering Manager workspace')
+  })
+  it.each(['WORKSPACE_AVAILABLE', 'OPEN_ACCOUNT', 'ACCOUNT_AVAILABLE'] as const)('does not derive a link from the active-looking %s state without an allowed action', state => {
+    const html = render({ state, allowed_actions: [], destination: 'INVESTMENT_ACCOUNT' })
+    expect(html).not.toContain('href=')
+    expect(html).not.toContain('Continue to investment-account opening')
+    expect(html).not.toContain('View investment account and orders')
+    expect(html).not.toContain('Open Offering Manager workspace')
+  })
+  it.each(['REVIEWER_UNAVAILABLE', 'PROVIDER_UNSUPPORTED', 'INTAKE_NOT_ADMITTED', 'ADMISSION_EXPIRED', 'MONITORING_ON_HOLD', 'MONITORING_RENEWAL_REQUIRED', 'ACCOUNT_SUSPENDED', 'MANDATE_NOT_EFFECTIVE', 'CONTEXT_UNAVAILABLE', 'CONTEXT_NOT_SUPPORTED', 'ADMISSION_NOT_APPROVED'] as const)('never renders an operating link for blocker %s even if a stale action is supplied', blocker => {
+    const html = render({ state: 'WORKSPACE_AVAILABLE', persona: 'WEALTH_MANAGER', blocker, allowed_actions: ['ENTER_OPERATING_WORKSPACE'], destination: 'OPERATING_WORKSPACE', mandate: { id: mandateId, status: 'APPLIED', effective: true }, native_context: { organisation_id: entryOrganisationId, role: 'OfferingManager' } })
+    expect([...html.matchAll(/href="([^"]+)"/g)].map(match => match[1])).toEqual(['mailto:daniel@bx1.co.za'])
+    expect(html).not.toContain('Open Offering Manager workspace')
+    expect(html).not.toContain(`/portal?organisation=${entryOrganisationId}`)
+  })
+  it('does not render an unavailable-state destination even if a stale action is supplied', () => {
+    const html = render({ state: 'UNAVAILABLE', allowed_actions: ['OPEN_INVESTMENT_ACCOUNT'], destination: 'INVESTMENT_ACCOUNT' })
+    expect([...html.matchAll(/href="([^"]+)"/g)].map(match => match[1])).toEqual(['mailto:daniel@bx1.co.za'])
+    expect(html).not.toContain('Continue to investment-account opening')
+  })
+  it('keeps wealth-manager admission separate from its representative appointment', () => {
+    const html = render({ persona: 'WEALTH_MANAGER', state: 'REQUEST_MANDATE', next_owner: 'APPLICANT', allowed_actions: ['REQUEST_REPRESENTATIVE_MANDATE'], destination: 'NONE' })
+    expect(html).toContain('Admission approved; representative appointment next')
+    expect(html).toContain('grants no product, financial or signing powers')
+    expect(html).not.toContain('Open Offering Manager workspace')
+  })
   it('separates account references from product eligibility, wallet authority and holdings', () => {
     const html = render({ state: 'ACCOUNT_AVAILABLE', allowed_actions: ['VIEW_INVESTMENT_ACCOUNT'], destination: 'INVESTMENT_ACCOUNT', accounts: [{ id: accountId, kind: 'INDIVIDUAL', status: 'ACTIVE' }] })
     expect(html).toContain(accountId)
@@ -73,10 +149,19 @@ describe('authoritative customer handoff presentation', () => {
     expect(html).toContain('/portal/portfolio?mode=applicant')
     expect(html).toContain('not product eligibility, wallet authority, funding or ownership')
   })
+  it('retains the permitted account-opening handoff before application details', () => {
+    const html = render({ state: 'OPEN_ACCOUNT', allowed_actions: ['OPEN_INVESTMENT_ACCOUNT'], destination: 'INVESTMENT_ACCOUNT' })
+    const primary = html.slice(0, html.indexOf('<details'))
+    expect(primary).toContain('Continue to investment-account opening')
+    expect(primary).toContain('/portal/portfolio?mode=applicant')
+    expect(primary).toContain('An account is not a cash balance, product eligibility or token holding')
+    expect(primary).not.toContain(application.id)
+  })
   it('takes entity representatives to the existing mandate workflow without claiming account-instruction authority', () => {
     const html = render({ state: 'REQUEST_MANDATE', allowed_actions: ['REQUEST_INVESTING_REPRESENTATIVE_MANDATE'], destination: 'INVESTMENT_ACCOUNT', accounts: [{ id: accountId, kind: 'ENTITY', status: 'ACTIVE' }] })
     expect(html).toContain('Entity account recorded; representative appointment next')
     expect(html).toContain('Continue to entity representative appointment')
+    expect(html).toContain('/portal/portfolio?mode=applicant')
     expect(html).not.toContain('View investment account and orders')
     expect(html).toContain('does not grant authority to instruct investments')
   })
@@ -98,7 +183,18 @@ describe('authoritative customer handoff presentation', () => {
     const html = render({ environment: 'MAINNET', state: 'UNAVAILABLE', next_owner: 'PROVIDER_OWNER', blocker: 'INTAKE_NOT_ADMITTED', allowed_actions: [], destination: 'NONE', gates: { intake_admitted: false, reviewer_available: false, monitoring_allows_new_actions: false } })
     expect(html).toContain('MAIN admission remains unavailable')
     expect(html).toContain('Do not submit real documents or transfer money')
+    expect([...html.matchAll(/href="([^"]+)"/g)].map(match => match[1])).toEqual(['mailto:daniel@bx1.co.za'])
+    expect(html).not.toContain('/portal/portfolio?mode=applicant')
+    expect(html).not.toContain('Open Offering Manager workspace')
+    expect(html).not.toContain('type="file"')
+  })
+  it('keeps the MAIN boundary visible and suppresses even stale action links', () => {
+    const html = render({ environment: 'MAINNET', state: 'OPEN_ACCOUNT', allowed_actions: ['OPEN_INVESTMENT_ACCOUNT'], destination: 'INVESTMENT_ACCOUNT' })
+    const primary = html.slice(0, html.indexOf('<details'))
+    expect(primary).toContain('MAIN admission remains unavailable')
+    expect(primary).toContain('Do not submit real documents or transfer money')
     expect(html).not.toContain('href=')
+    expect(html).not.toContain('Continue to investment-account opening')
     expect(html).not.toContain('type="file"')
   })
 })
