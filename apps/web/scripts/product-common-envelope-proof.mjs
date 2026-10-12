@@ -124,7 +124,7 @@ export async function proveProductCommonEnvelope(db, clients, featureSql, fundV2
   const scalar = async (sql, values = [], client = db) => Object.values((await client.query(sql, values)).rows[0])[0]
   const admin = async (client = db) => { await client.query('reset role'); eq(await scalar('select current_user', [], client), 'postgres', 'exact fixture owner before owner-only operation') }
   const begin = async () => { await admin(); await db.query('begin'); begun = true }
-  const commit = async () => { await admin(); await db.query('commit'); begun = false }
+  const commit = async onDispatch => { await admin(); onDispatch?.(); await db.query('commit'); begun = false }
   const claims = async (n, client = db, extra = {}) => {
     await admin(client)
     const at = Math.floor(Date.now() / 1000)
@@ -140,8 +140,9 @@ export async function proveProductCommonEnvelope(db, clients, featureSql, fundV2
   const records = [], inputs = [], products = new Set(), appointments = new Set(), revisions = new Set()
   const modelTerms = new Map(), revisionTerms = new Map()
   const read = async (n, context, client = db) => { await claims(n, client); return scalar('select public.bx1_portal_read_scoped($1::jsonb)', [JSON.stringify(context)], client) }
-  const command = async (n, context, action, body, requestKey = key(), client = db, extra = {}) => {
+  const command = async (n, context, action, body, requestKey = key(), client = db, extra = {}, onDispatch) => {
     await claims(n, client, extra)
+    onDispatch?.()
     return scalar('select public.bx1_portal_command_scoped($1,$2,$3::jsonb,$4::jsonb)', [action, requestKey, JSON.stringify(body), JSON.stringify(context)], client)
   }
   const funcs = async () => {
@@ -934,17 +935,32 @@ export async function proveProductCommonEnvelope(db, clients, featureSql, fundV2
       const body = historicalInput ? clone(kind === 'ISSUER' ? item.issuerInput : item.complianceInput) : reviewBody(p, kind)
       const requestKey = historicalInput ? (kind === 'ISSUER' ? item.issuerKey : item.complianceKey) : key()
       const before = await state()
+      const previousOfferingRevisionId = p.offering_package.id
       await begin()
       eq((await db.query('select id from bx1_portal.products where id=$1 for update', [p.id])).rows, [{ id: p.id }], 'blocker locks exactly the existing intended CE product row')
+      let changed
+      if (outcome === 'HISTORICAL_REPLAY') {
+        // Prepare the draft under the retained lock before the waiter's timer.
+        // The new immutable package is still created only AFTER observed wait.
+        p = await positive(1, manager, 'begin_offering_amendment', { product_id: p.id, expected_revision: p.revision,
+          reason: 'Fictional authorised revision-only amendment while exact historical replay waits.' }, p.id)
+        changed = clone(item.p.terms); changed.deployment_configuration.governance.controller_replacement_policy += ` Fictional ${lane} ${kind} waited amendment.`
+        p = await positive(1, manager, 'save_product', { product_id: p.id, expected_revision: p.revision, terms: changed }, p.id)
+      }
+      const waitTiming = { dispatchedAt: null, observedAt: null, commitDispatchedAt: null, commitAcknowledgedAt: null,
+        completedAt: null, returned: false, code: null, phase: 'PUBLIC_COMMAND', newPackageCreatedAfterWait: false }
       // The public call is started only after the exact product lock exists.
       const waiting = (async () => {
         await clients[0].query('begin')
         try {
-          const result = await command(n, context, action, body, requestKey, clients[0])
+          const result = await command(n, context, action, body, requestKey, clients[0], {}, () => { waitTiming.dispatchedAt = Date.now() })
+          waitTiming.completedAt = Date.now(); waitTiming.returned = true; waitTiming.phase = 'FULL_STATE_CAPTURE'
           const observedRows = await state(installedSpecs, clients[0])
+          waitTiming.phase = 'ROLLBACK'
           await clients[0].query('rollback')
           return { result, observedRows }
         } catch (error) {
+          waitTiming.completedAt ??= Date.now(); waitTiming.code = error?.code ?? null
           await clients[0].query('rollback')
           if (!error?.code) throw error
           return { code: error.code }
@@ -953,23 +969,24 @@ export async function proveProductCommonEnvelope(db, clients, featureSql, fundV2
       let completed, expectedAfter
       try {
         await waitForProduct(pids[1], pids[0], p.id)
+        waitTiming.observedAt = Date.now()
         if (outcome === 'STALE_FRESH') await db.query('update bx1_portal.products set revision=revision+1 where id=$1', [p.id])
         if (outcome === 'REVOKED_AUTHORITY' || outcome === 'REVOKED_HISTORICAL_REPLAY') {
           const a = kind === 'ISSUER' ? item.issuerAppointment : item.complianceAppointment
           await db.query("update bx1_portal.product_service_appointments set status='REVOKED',revision=revision+1,revoked_at=clock_timestamp(),revoked_by_user_id=$2,revoke_reason='Fictional waited CE authority revocation only.' where id=$1", [a.id, actor(5)])
         }
         if (outcome === 'HISTORICAL_REPLAY') {
-          p = await positive(1, manager, 'begin_offering_amendment', { product_id: p.id, expected_revision: p.revision,
-            reason: 'Fictional authorised revision-only amendment while exact historical replay waits.' }, p.id)
-          const changed = clone(item.p.terms); changed.deployment_configuration.governance.controller_replacement_policy += ` Fictional ${lane} ${kind} waited amendment.`
-          p = await positive(1, manager, 'save_product', { product_id: p.id, expected_revision: p.revision, terms: changed }, p.id)
           p = await positive(1, manager, 'submit_product', { product_id: p.id, expected_revision: p.revision }, p.id)
+          truth(p.offering_package.id !== previousOfferingRevisionId, 'canonical submission creates a different immutable package after actual observed wait')
+          waitTiming.newPackageCreatedAfterWait = true
           await snapshotData(p, changed); item.p = p
         }
-        await commit(); expectedAfter = await state(); completed = await waiting
+        await commit(() => { waitTiming.commitDispatchedAt = Date.now() }); waitTiming.commitAcknowledgedAt = Date.now()
+        expectedAfter = await state(); completed = await waiting
         if (outcome === 'HISTORICAL_REPLAY') {
           truth(completed.result, 'current-authority exact historical replay returns after authorised amendment')
           const returned = findProduct(completed.result, p.id)
+          truth(returned.offering_package.id !== previousOfferingRevisionId, 'historical retry cannot satisfy the race with the immediately previous committed package')
           eq(returned.offering_package.id, p.offering_package.id, 'historical retry returns fresh current scoped package, not cached old package')
           eq(completed.observedRows, expectedAfter, 'inside successful replay transaction, no hidden decision/request/snapshot/audit effect')
           eq(await state(), expectedAfter, 'historical replay adds no committed second effect')
@@ -978,10 +995,21 @@ export async function proveProductCommonEnvelope(db, clients, featureSql, fundV2
           if (outcome === 'REVOKED_HISTORICAL_REPLAY') eq(completed.result, undefined, 'revoked exact historical key returns no fresh scoped disclosure')
         }
       } finally {
-        if (begun) { await db.query('rollback'); begun = false }
-        // Release blocker before joining/cleaning the waiting backend.
-        await waiting
-        await admin()
+        try {
+          if (begun) { await db.query('rollback'); begun = false }
+          // Release blocker before joining/cleaning the waiting backend.
+          await waiting
+          await admin()
+        } finally {
+          const elapsed = at => at === null || waitTiming.dispatchedAt === null ? null : at - waitTiming.dispatchedAt
+          console.log('BX1_COMMON_ENVELOPE_WAIT_TIMING', JSON.stringify({ lane, asset: item.asset, reviewer_kind: kind, outcome,
+            observed_wait_ms_after_sql_dispatch: elapsed(waitTiming.observedAt),
+            commit_dispatch_ms_after_sql_dispatch: elapsed(waitTiming.commitDispatchedAt),
+            commit_ack_ms_after_sql_dispatch: elapsed(waitTiming.commitAcknowledgedAt),
+            sql_completed_ms_after_dispatch: elapsed(waitTiming.completedAt), public_call_returned: waitTiming.returned,
+            caught_code: waitTiming.code, caught_phase: waitTiming.code ? waitTiming.phase : null,
+            new_package_created_after_observed_wait: waitTiming.newPackageCreatedAfterWait }))
+        }
       }
       await begin()
       if (outcome === 'STALE_FRESH') await db.query('update bx1_portal.products set revision=$2 where id=$1', [item.p.id, item.p.revision])

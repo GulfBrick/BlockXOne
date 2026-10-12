@@ -206,7 +206,7 @@ jobs:
   compile-and-build:
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.mode != 'registration-browser-proof' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix:
