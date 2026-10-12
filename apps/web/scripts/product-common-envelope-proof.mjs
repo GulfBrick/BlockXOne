@@ -409,6 +409,29 @@ export async function proveProductCommonEnvelope(db, clients, featureSql, fundV2
     eq(restored, postMutation, 'diagnostic callback restores exact post-mutation baseline before original denial')
     return result
   }
+  const survivingReviewerReplay = async (n, context, action, body, requestKey, appointment) => {
+    eq(mode, 'STANDARD', 'independent reviewer survival is confined to native STANDARD authority')
+    const current = await replayAuthorityObservation(n, context, action, body, appointment)
+    for (const name of ['mandate_effective', 'manager_current', 'manager_membership_current'])
+      eq(current.predicates[name], false, 'source manager mandate and current capacity are ineffective')
+    for (const name of ['product_organisation_current', 'reviewer_appointment_effective', 'reviewer_appointment_authorised',
+      'command_context_current', 'operating_context_current'])
+      eq(current.predicates[name], true, 'acting reviewer retains exact independent current scope and appointment')
+    for (const name of ['caller_exact', 'caller_session_exact', 'application_actor_exact', 'mandate_source_exact',
+      'product_organisation_exact', 'native_binding_exact', 'native_manager_membership_exact',
+      'reviewer_appointment_exact', 'appointment_source_manager_exact'])
+      eq(current.linkage[name], true, 'surviving reviewer assertion uses the exact affected source and appointment')
+    eq(current.linkage.caller_is_source_manager, false, 'a different appointed reviewer is not the withdrawn manager')
+    await denied('withdrawn manager cannot reuse its affected native context at the public read boundary',
+      () => read(1, manager), '42501')
+    const beforeReplay = await state()
+    const response = await command(n, context, action, body, requestKey)
+    eq(response.operating_context, context, 'surviving exact retry preserves the acting reviewer context')
+    const returned = findProduct(response, body.product_id)
+    eq(response.products.filter(p => p.id === body.product_id).length, 1, 'surviving exact retry discloses exactly one target product')
+    eq(returned.terms_hash, body.terms_hash, 'surviving exact retry retains the originally approved terms')
+    eq(await state(), beforeReplay, 'surviving current reviewer exact retry has no business/request/receipt/event effect')
+  }
   const revokedReplay = async (n, context, action, body, requestKey, appointment) => {
     const before = await state()
     const label = { mode, asset: modelTerms.get(body.product_id)?.asset_type,
@@ -426,11 +449,13 @@ export async function proveProductCommonEnvelope(db, clients, featureSql, fundV2
       [managerApplication.id, actor(2), fictional(9450)])],
     ]) await isolated(async () => {
       const diagnostic = mutationLabel === 'SOURCE_MANAGER_MANDATE_REVOKED'
+      const independentReviewerSurvives = diagnostic && mode === 'STANDARD'
       const authorityBefore = diagnostic ? await replayAuthorityObservation(n, context, action, body, appointment) : null
       await admin()
       const mutationResult = await mutation()
       console.log('BX1_COMMON_ENVELOPE_REVOKED_REPLAY_CASE', JSON.stringify({ ...label, mutation: mutationLabel,
-        affected_row_count: mutationResult.rowCount, original_denial: 'PENDING' }))
+        affected_row_count: mutationResult.rowCount, expected_outcome: independentReviewerSurvives ? 'RETURNED' : '42501',
+        observation: 'PENDING' }))
       if (diagnostic) {
         const originalMode = mode
         try {
@@ -455,9 +480,11 @@ export async function proveProductCommonEnvelope(db, clients, featureSql, fundV2
           eq(await state(), postMutation, 'diagnostic and optional exact control preserve the deliberate source revocation')
         } finally { mode = originalMode; await claims(n); await admin() }
       }
-      await denied('exact historical replay still requires current session/profile/member/appointment/admission/mandate/monitoring', () => command(n, context, action, body, requestKey), '42501')
+      if (independentReviewerSurvives) await survivingReviewerReplay(n, context, action, body, requestKey, appointment)
+      else await denied('exact historical replay still requires current session/profile/member/appointment/admission/mandate/monitoring', () => command(n, context, action, body, requestKey), '42501')
       console.log('BX1_COMMON_ENVELOPE_REVOKED_REPLAY_CASE', JSON.stringify({ ...label, mutation: mutationLabel,
-        affected_row_count: mutationResult.rowCount, original_denial: '42501' }))
+        affected_row_count: mutationResult.rowCount, observed_outcome: independentReviewerSurvives ? 'RETURNED' : '42501',
+        expectation: independentReviewerSurvives ? 'CURRENT_INDEPENDENT_REVIEWER_NO_EFFECT' : 'CURRENT_AUTHORITY_DENIAL' }))
     })
     for (const [table, trigger, id] of [
       ['product_service_appointments', 'bx1_product_appointment_transition', appointment.id],
@@ -467,7 +494,9 @@ export async function proveProductCommonEnvelope(db, clients, featureSql, fundV2
       await db.query(`update bx1_portal.${table} set requested_until=clock_timestamp()-interval '1 minute' where id=$1`, [id])
       await db.query(`alter table bx1_portal.${table} enable trigger ${trigger}`)
       eq(await security(), installedSecurity, 'passive expiry fixture reenables every guard before the tested public RPC')
-      await denied('exact replay denies passive expiry of its appointment or source mandate', () => command(n, context, action, body, requestKey), '42501')
+      if (table === 'representative_mandates' && mode === 'STANDARD')
+        await survivingReviewerReplay(n, context, action, body, requestKey, appointment)
+      else await denied('exact replay denies passive expiry of its appointment or source mandate', () => command(n, context, action, body, requestKey), '42501')
     })
     if (mode === 'STANDARD') await isolated(async () => {
       await db.query("update bx1_private.person_principals set status='REVOKED' where auth_user_id=$1", [actor(n)])
@@ -478,7 +507,70 @@ export async function proveProductCommonEnvelope(db, clients, featureSql, fundV2
       for (const participant of [n, other]) await db.query("insert into bx1_private.person_principals(auth_user_id,person_id,status,evidence_reference,bootstrap_receipt_id) values($1,$2,'TRUSTED','fictional:CE-replay-alias-only',$3)", [actor(participant), fictional(9460), fictional(9470 + participant)])
       await denied('known manager/issuer/Compliance alias denies historical disclosure', () => command(n, context, action, body, requestKey), '42501')
     })
-    eq(await state(), before, 'every current-authority historical replay negative restores exact complete baseline')
+    eq(await state(), before, 'every scoped current-authority historical replay case restores exact complete baseline')
+  }
+  const canonicalManagerRevocation = async (p, issuerInput, issuerKey, issuerAppointment, complianceInput, complianceKey, complianceAppointment) => {
+    eq(mode, 'STANDARD', 'canonical joint revocation uses the existing native STANDARD actor')
+    const originalMode = mode, originalSequence = sequence
+    const originalModels = { inputs: clone(inputs), terms: clone([...modelTerms]), revision_terms: clone([...revisionTerms]) }
+    const before = await state(), beforeFunctions = await funcs(), beforeSecurity = await security()
+    const originalClaims = await scalar("select current_setting('request.jwt.claims',true)")
+    const originalMandate = before['bx1_portal.representative_mandates'].find(m => m.id === managerMandate.id)
+    const originalBinding = before['bx1_portal.organisation_authority_bindings'].find(b => b.id === originalMandate.authority_binding_id)
+    const originalMembership = before['public.bx1_memberships'].find(m => m.id === originalMandate.native_membership_id)
+    eq([originalMandate.status, originalBinding.status, originalMembership.status], ['APPLIED', 'ACTIVE', 'ACTIVE'],
+      'canonical joint revocation starts from exact applied authority rows')
+    const amend = { product_id: p.id, expected_revision: p.revision,
+      reason: 'Fictional otherwise-valid manager amendment for canonical revocation acceptance only.' }
+    const revoke = { mandate_id: originalMandate.id, expected_revision: originalMandate.revision,
+      reason: 'Fictional canonical manager mandate withdrawal; independent reviewer capacities remain separate.' }
+    try {
+      await isolated(async () => {
+        await isolated(async () => {
+          const response = await command(1, manager, 'begin_offering_amendment', amend)
+          eq(response.operating_context, manager, 'positive control uses the manager exact native context')
+          const changed = findProduct(response, p.id)
+          eq([changed.status, changed.revision, changed.offering_package], ['CHANGES_REQUIRED', p.revision + 1, null],
+            'same manager amendment is actually otherwise valid before canonical revocation')
+        })
+        eq(await state(), before, 'positive manager amendment control is fully rolled back before actual revocation')
+        await claims(5); await admin()
+        eq(await scalar('select bx1_private.has_token_mfa()'), true, 'canonical revoke retains actor-five verified native AAL2 authority')
+        const response = await command(5, applier, 'revoke_representative_mandate', revoke)
+        eq(response.operating_context, applier, 'real canonical revoke returns the existing SuperAdmin exact scoped context')
+        const revoked = await state()
+        const actualMandate = revoked['bx1_portal.representative_mandates'].find(m => m.id === originalMandate.id)
+        truth(actualMandate.revoked_at, 'real canonical revoke records its authoritative revocation time')
+        eq(actualMandate, { ...originalMandate, status: 'REVOKED', revision: originalMandate.revision + 1,
+          revoked_at: actualMandate.revoked_at, revoked_by_user_id: actor(5), revoke_reason: revoke.reason },
+        'real canonical revoke changes only exact mandate transition fields')
+        eq(revoked['bx1_portal.organisation_authority_bindings'].find(b => b.id === originalBinding.id),
+          { ...originalBinding, status: 'REVOKED' }, 'real canonical revoke withdraws its exact native binding')
+        eq(revoked['public.bx1_memberships'].find(m => m.id === originalMembership.id),
+          { ...originalMembership, status: 'SUSPENDED' }, 'real canonical revoke suspends its exact manager membership')
+        for (const table of ['bx1_portal.applications', 'bx1_portal.organisations', 'bx1_portal.product_service_appointments'])
+          eq(revoked[table], before[table], 'manager revoke preserves admitted organisation and separate reviewer appointments')
+        await denied('same otherwise-valid manager amendment is denied after real canonical withdrawal',
+          () => command(1, manager, 'begin_offering_amendment', amend), '42501')
+        await survivingReviewerReplay(3, issuer, 'review_offering_issuer', issuerInput, issuerKey, issuerAppointment)
+        await survivingReviewerReplay(2, reviewer, 'review_product', complianceInput, complianceKey, complianceAppointment)
+        eq(await state(), revoked, 'both independent original-key replays add no effect to the canonical revoked baseline')
+      })
+    } finally {
+      mode = originalMode; sequence = originalSequence; await admin()
+      await db.query("select set_config('request.jwt.claims',$1,true)", [originalClaims])
+    }
+    eq(await state(), before, 'canonical manager revocation case restores every exact business/request/receipt/event row')
+    eq(await funcs(), beforeFunctions, 'canonical manager revocation case restores every exact function manifest')
+    eq(await security(), beforeSecurity, 'canonical manager revocation case restores every exact role/ACL/trigger manifest')
+    eq({ inputs, terms: [...modelTerms], revision_terms: [...revisionTerms] }, originalModels,
+      'rolled-back canonical case adds no original-input journal or model history')
+    console.log('BX1_COMMON_ENVELOPE_CANONICAL_MANAGER_REVOKE_RECEIPT', JSON.stringify({ mode,
+      asset: p.terms.asset_type, actor: 'EXISTING_SUPER_ADMIN_WITH_NATIVE_AAL2',
+      writer: 'PUBLIC_SCOPED_CANONICAL_REVOKE', exact_joint_transitions: true,
+      manager_amendment_before: 'RETURNED_AND_ROLLED_BACK', manager_amendment_after: '42501',
+      issuer_original_key: 'RETURNED_NO_EFFECT', compliance_original_key: 'RETURNED_NO_EFFECT',
+      full_state_functions_security_restored: true, model_and_input_journal_restored: true }))
   }
   const checkReviews = async p => {
     await admin()
@@ -608,6 +700,8 @@ export async function proveProductCommonEnvelope(db, clients, featureSql, fundV2
     await revokedReplay(3, issuer, 'review_offering_issuer', issuerInput, issuerKey, issuerAppointment)
     await revokedReplay(2, reviewer, 'review_product', complianceInput, complianceKey, complianceAppointment)
     eq(p.status, 'APPROVED', 'full initial pair approves exact v3 common configuration')
+    if (mode === 'STANDARD') await canonicalManagerRevocation(p, issuerInput, issuerKey, issuerAppointment,
+      complianceInput, complianceKey, complianceAppointment)
     for (const change of ['COMMON_ONLY', 'CONFIGURATION_ONLY']) {
       const old = clone(p), previousRows = await scalarAfterOwner('select to_jsonb(r) from bx1_portal.offering_revisions r where id=$1', [p.offering_package.id])
       p = await positive(1, manager, 'begin_offering_amendment', { product_id: p.id, expected_revision: p.revision,
