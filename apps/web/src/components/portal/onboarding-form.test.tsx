@@ -4,7 +4,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { EntryApplication, EntrySnapshot } from '@/lib/portal/entry-contracts'
+import { entryApplicationSchema, type EntryApplication, type EntrySnapshot } from '@/lib/portal/entry-contracts'
 import { entryApplication, entryActorId, entryFixture, entryHandoff } from '@/lib/portal/entry-test-fixtures'
 import { applicationDetailsSchema, type LegacyApplicationDetails, type OwnershipControlRelationship, type PortalApplication, type PortalSnapshot, type WealthManagerApplicationDetailsV2 } from '@/lib/portal/contracts'
 import { ApplicationDetailsSummary, ApplicationHistoryFailureNotice, OnboardingForm, applicationFormDetails, applicationHistoryFailure, applicationNextStep, applicationSubmissionDetails, applicationSubmissionReady, applicationSubmitLabel, classifyDocumentUpload, requiredApplicationEvidence, withoutDraftEvidence } from './onboarding-form'
@@ -66,7 +66,9 @@ describe('persona-specific application preparation', () => {
     const readyDetails = persona === 'WEALTH_MANAGER'
       ? applicationSubmissionDetails('WEALTH_MANAGER', withOwnership(applicationFormDetails(entryApplication({ persona, details: manager }))))
       : investor
-    const ready = mountedForm({ ...application, details: readyDetails })
+    const parsedDetails = entryApplicationSchema.shape.details.parse(readyDetails)
+    expect(parsedDetails).toStrictEqual(readyDetails)
+    const ready = mountedForm({ ...application, details: parsedDetails })
     reviewAndAcknowledge()
     expect(ready.container.innerHTML).toContain('An independent reviewer must make the decision')
     expect(screen.getByRole('button', { name: 'Submit for review' }).matches(':disabled')).toBe(false)
