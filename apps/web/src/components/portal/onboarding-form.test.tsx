@@ -301,13 +301,17 @@ describe('reviewer sees the same evidence and purpose as the applicant', () => {
 })
 
 function mountedForm(application: EntryApplication, onSaved = vi.fn(), onDirtyChange = vi.fn()) {
-  const view = render(createElement(PortalIdentityProvider, { actorId: entryActorId, environment: 'TESTNET', children: createElement('div', null,
-      createElement('a', { href: '/portal/onboarding?application=other', onClick: event => event.preventDefault() }, 'Switch application'),
-      createElement('a', { href: '#same-page' }, 'Same-page section'),
-      createElement('form', { action: '/auth/logout', method: 'post', onSubmit: event => event.preventDefault() }, createElement('button', { type: 'submit' }, 'Sign out')),
-      createElement('form', { 'data-onboarding-discard': 'true', onSubmit: event => { event.preventDefault(); boundary.submit() } }, createElement('button', { type: 'submit' }, 'Create another application')),
-      createElement(OnboardingForm, { application, environment: 'TESTNET', onSaved, onDirtyChange, handoff: entryHandoff(application) }),
-    ) }))
+  const view = render(
+    <PortalIdentityProvider actorId={entryActorId} environment="TESTNET">
+      <div>
+        <a href="/portal/onboarding?application=other" onClick={event => event.preventDefault()}>Switch application</a>
+        <a href="#same-page">Same-page section</a>
+        <form action="/auth/logout" method="post" onSubmit={event => event.preventDefault()}><button type="submit">Sign out</button></form>
+        <form data-onboarding-discard="true" onSubmit={event => { event.preventDefault(); boundary.submit() }}><button type="submit">Create another application</button></form>
+        <OnboardingForm application={application} environment="TESTNET" onSaved={onSaved} onDirtyChange={onDirtyChange} handoff={entryHandoff(application)} />
+      </div>
+    </PortalIdentityProvider>,
+  )
   return { ...view, onSaved, onDirtyChange }
 }
 function next() { fireEvent.click(screen.getByRole('button', { name: 'Next' })) }
@@ -360,7 +364,7 @@ describe('guided onboarding interaction at the existing command boundary', () =>
   })
   it.each(['WEALTH_MANAGER', 'INVESTOR'] as const)('guides the %s entity through evidence before relationship linkage, preserving Back/Next edits', persona => {
     const prepared = persona === 'WEALTH_MANAGER' ? applicationFormDetails(entryApplication({ persona, details: manager })) : applicationFormDetails(entryApplication({ details: { ...investor, investor_type: 'ENTITY', company_name: manager.company_name, registration_reference: manager.registration_reference, beneficial_owners: manager.beneficial_owners, documents } }))
-    mountedForm(entryApplication({ persona, review_route: 'AVAILABLE', details: applicationSubmissionDetails(persona, withOwnership(prepared)) }))
+    mountedForm(entryApplication({ persona, review_route: 'AVAILABLE', details: applicationDetailsSchema.parse(applicationSubmissionDetails(persona, withOwnership(prepared))) }))
     next(); next(); next()
     expect(screen.getByRole('heading', { name: 'Supporting evidence' })).toBeTruthy()
     expect(screen.getByRole('combobox', { name: 'Evidence type' })).toBeTruthy()

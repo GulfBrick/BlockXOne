@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { entryActorId, entryApplication, entryFixture } from './entry-test-fixtures'
 import { onboardingHasUnsavedAnswers, onboardingLinkDiscardsAnswers, onboardingRemainingItems, onboardingSteps, onboardingSubmissionConfirmed, type OnboardingAnswers } from './onboarding-flow'
 
-const documents: OnboardingAnswers['documents'] = (['IDENTITY', 'COMPANY', 'BENEFICIAL_OWNERS'] as const).map((kind, index) => ({ id: `${index + 4}4444444-4444-4444-8444-444444444444`, kind, title: `Fictional ${kind} evidence`, storage_path: `${entryActorId}/test-${index}.pdf`, sha256: 'a'.repeat(64), size: 100, mime_type: 'application/pdf' }))
+const documents = (['IDENTITY', 'COMPANY', 'BENEFICIAL_OWNERS'] as const).map((kind, index) => ({ id: `${index + 4}4444444-4444-4444-8444-444444444444`, kind, title: `Fictional ${kind} evidence`, storage_path: `${entryActorId}/test-${index}.pdf`, sha256: 'a'.repeat(64), size: 100, mime_type: 'application/pdf' as const }))
 const answers: OnboardingAnswers = {
   full_name: 'Alex Fictional', country: 'ZA', investor_type: 'INDIVIDUAL', company_name: 'Synthetic Example Organisation', registration_reference: 'SYNTHETIC-001',
   source_of_funds: 'Fictional savings from employment income.', experience: 'Fictional long-term investment objectives.', beneficial_owners: 'Fictional sole owner has all economic ownership.',
