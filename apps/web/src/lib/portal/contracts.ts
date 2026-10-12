@@ -4,6 +4,7 @@ import { fundingCommandOptions, type FundingSnapshot } from './funding-contracts
 import fundV2LegacyCrossrefs from './fund-v2-legacy-crossrefs.json'
 import type { Stage2Access } from './stage2-access'
 import type { OfferingAccess } from './offering-access'
+import { commonEnvelopeUuidSchema, productCommonEnvelopeSchema, productDeploymentConfigurationSchema, strictProductText, validateCommonEnvelopeReferences, type ProductCommonEnvelope, type ProductDeploymentConfiguration } from './product-common-envelope'
 
 /** One customer workflow; environment-specific providers never manufacture settlement. */
 export const PORTAL_PATHS = ['/portal', '/portal/onboarding', '/portal/products', '/portal/products/new', '/portal/products/detail', '/portal/compliance', '/portal/compliance/detail', '/portal/opportunities', '/portal/opportunities/detail', '/portal/portfolio', '/portal/orders/detail'] as const
@@ -183,7 +184,9 @@ export type RealEstateTermsV2 = ProductTermsBase & {
     exits: { eligible_transfer_policy: string; disposal_liquidation_policy: string };
   };
 }
-export type ProductTerms = LegacyProductTerms | FundTermsV2 | RealEstateTermsV2
+export type FundTermsV3 = Omit<FundTermsV2, 'terms_version'> & { terms_version: 3; common_envelope: ProductCommonEnvelope; deployment_configuration: ProductDeploymentConfiguration }
+export type RealEstateTermsV3 = Omit<RealEstateTermsV2, 'terms_version'> & { terms_version: 3; common_envelope: ProductCommonEnvelope; deployment_configuration: ProductDeploymentConfiguration }
+export type ProductTerms = LegacyProductTerms | FundTermsV2 | RealEstateTermsV2 | FundTermsV3 | RealEstateTermsV3
 /** v2 keeps the legacy keys for package compatibility; nested fund policies are authoritative. */
 export const FUND_V2_CANONICAL_REFERENCES = fundV2LegacyCrossrefs
 /** Property v2 retains the old package keys solely as fixed pointers to typed policies. */
@@ -206,6 +209,10 @@ export function isFundTermsV2(terms: ProductTerms): terms is FundTermsV2 {
 export function isRealEstateTermsV2(terms: ProductTerms): terms is RealEstateTermsV2 {
   return terms.asset_type === 'REAL_ESTATE' && terms.terms_version === 2 && terms.currency === 'TST'
 }
+export function isFundTermsV3(terms: ProductTerms): terms is FundTermsV3 { return terms.asset_type === 'FUND' && terms.terms_version === 3 && terms.currency === 'TST' }
+export function isRealEstateTermsV3(terms: ProductTerms): terms is RealEstateTermsV3 { return terms.asset_type === 'REAL_ESTATE' && terms.terms_version === 3 && terms.currency === 'TST' }
+export function isFundTermsTyped(terms: ProductTerms): terms is FundTermsV2 | FundTermsV3 { return isFundTermsV2(terms) || isFundTermsV3(terms) }
+export function isRealEstateTermsTyped(terms: ProductTerms): terms is RealEstateTermsV2 | RealEstateTermsV3 { return isRealEstateTermsV2(terms) || isRealEstateTermsV3(terms) }
 export type PortalOfferingPackage = {
   id: string; package_number: number; origin: 'SUBMITTED' | 'LEGACY_PRODUCT_SNAPSHOT' | 'LEGACY_ORDER_SNAPSHOT';
   terms_hash: string; document_hashes: { memorandum: string; risks: string; subscription_terms: string };
@@ -218,6 +225,9 @@ export type PortalOfferingPackage = {
   /** Scoped to operators/reviewers; absent from investor discovery. */
   issuer_review_notes?: string | null; issuer_review_checks?: Record<string, boolean> | null;
   publishable?: boolean; subscribable?: boolean; can_review_issuer?: boolean; can_review_compliance?: boolean;
+  /** Absent on compatible old readers; all NULL on historical v1/v2 packages. */
+  common_envelope_hash?: string | null; deployment_configuration_hash?: string | null;
+  common_envelope?: ProductCommonEnvelope | null; deployment_configuration?: ProductDeploymentConfiguration | null;
 }
 export type PortalProduct = {
   id: string; organisation_id: string; created_by: string; revision: number; status: ProductStatus;
@@ -362,9 +372,44 @@ const realEstateTermsV2Schema = productTermsBaseSchema.extend({
     exits: z.object({ eligible_transfer_policy: text(20, 2400), disposal_liquidation_policy: text(20, 2400) }).strict(),
   }).strict(),
 }).strict()
-export const productTermsSchema = z.union([legacyProductTermsSchema, fundTermsV2Schema, realEstateTermsV2Schema]).superRefine((v, ctx) => {
+// Dedicated raw-value schemas: never return a transformed v2 parse as v3 terms.
+const raw = strictProductText
+const v3ProductTermsBaseSchema = z.object({
+  name: raw(3, 120), issuer_name: raw(3, 160), summary: raw(30, 600), strategy: raw(30, 4000), share_class: raw(1, 80), unit_price_minor: positive, cap_units: positive, minimum_units: positive,
+  pricing_basis: raw(10, 1200), fees: raw(10, 1200), redemption_terms: raw(20, 2400), eligible_countries: z.array(country).min(1).max(30), eligible_investor_types: z.array(z.enum(['INDIVIDUAL', 'ENTITY'])).min(1).max(2),
+  property_address: raw(0, 300), property_valuation_minor: z.string().regex(/^(0|[1-9][0-9]{0,19})$/), rental_income_policy: raw(0, 2000), documents: z.object({ memorandum: raw(50, 12000), risks: raw(50, 12000), subscription_terms: raw(50, 12000) }).strict(),
+  common_envelope: productCommonEnvelopeSchema, deployment_configuration: productDeploymentConfigurationSchema,
+})
+export const fundTermsV3Schema = v3ProductTermsBaseSchema.extend({ asset_type: z.literal('FUND'), currency: z.literal('TST'), terms_version: z.literal(3), settlement_decimals: z.literal(6),
+  fund: z.object({ mandate: raw(30, 4000), class_rights: raw(20, 2400),
+    nav: fundTermsV2Schema.shape.fund.shape.nav.omit({ valuation_method: true, pricing_cutoff: true, correction_policy: true }).extend({ valuation_method: raw(20, 2000), pricing_cutoff: raw(10, 300), correction_policy: raw(20, 2000) }).strict(),
+    dealing: fundTermsV2Schema.shape.fund.shape.dealing,
+    fees: fundTermsV2Schema.shape.fund.shape.fees.omit({ other_fees: true }).extend({ other_fees: raw(10, 2000) }).strict(),
+    liquidity: fundTermsV2Schema.shape.fund.shape.liquidity.omit({ suspension_policy: true }).extend({ suspension_policy: raw(20, 2000) }).strict(),
+    distributions: fundTermsV2Schema.shape.fund.shape.distributions.omit({ policy: true }).extend({ policy: raw(20, 2000) }).strict(),
+    redemption: z.object({ price_basis: z.literal('NAV'), conditions: raw(20, 2400) }).strict(),
+  }).strict(),
+}).strict().superRefine((value, ctx) => {
+  // Canonical SQL validates the exact numeric2 economics projection; web uses
+  // equivalent raw-value fields so Unicode code points are not UTF16-truncated.
+  if (value.property_address !== '' || value.property_valuation_minor !== '0' || value.rental_income_policy !== '') ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['property_address'], message: 'A v3 fund must keep property address and rental policy empty, and property valuation at zero.' })
+  validateCommonEnvelopeReferences(value, ctx)
+})
+export const realEstateTermsV3Schema = v3ProductTermsBaseSchema.extend({ asset_type: z.literal('REAL_ESTATE'), currency: z.literal('TST'), terms_version: z.literal(3), settlement_decimals: z.literal(6),
+  real_estate: z.object({
+    spv: z.object({ legal_name: raw(3, 160), registration_reference: raw(3, 100), jurisdiction: country, interest_rights: raw(20, 2400) }).strict(),
+    property: z.object({ title_evidence_reference: raw(10, 400), control_evidence_reference: raw(10, 400), valuation_method: raw(20, 2000), valuation_frequency: realEstateTermsV2Schema.shape.real_estate.shape.property.shape.valuation_frequency, correction_policy: raw(20, 2000) }).strict(),
+    financing: z.object({ debt_policy: raw(20, 2000), lender_consent_policy: raw(20, 2000) }).strict(),
+    cashflow: z.object({ rent_policy: raw(20, 2000), expense_policy: raw(20, 2000), reserve_policy: raw(20, 2000), distribution_policy: raw(20, 2000) }).strict(),
+    governance: z.object({ consent_rights: raw(20, 2000), voting_policy: raw(20, 2000) }).strict(),
+    exits: z.object({ eligible_transfer_policy: raw(20, 2400), disposal_liquidation_policy: raw(20, 2400) }).strict(),
+  }).strict(),
+}).strict().superRefine((value, ctx) => {
+  validateCommonEnvelopeReferences(value, ctx)
+})
+export const productTermsSchema = z.union([legacyProductTermsSchema, fundTermsV2Schema, realEstateTermsV2Schema, fundTermsV3Schema, realEstateTermsV3Schema]).superRefine((v, ctx) => {
   if (/^[1-9][0-9]{0,19}$/.test(v.minimum_units) && /^[1-9][0-9]{0,19}$/.test(v.cap_units) && BigInt(v.minimum_units) > BigInt(v.cap_units)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['minimum_units'], message: 'Minimum subscription must fit within the offering capacity.' })
-  if (v.asset_type === 'REAL_ESTATE' && (v.property_address.length < 10 || !/^[1-9][0-9]{0,19}$/.test(v.property_valuation_minor) || v.rental_income_policy.length < 20)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['property_address'], message: 'Provide property, valuation and rental-income terms.' })
+  if (v.asset_type === 'REAL_ESTATE' && ((v.terms_version === 3 ? Array.from(v.property_address).length : v.property_address.length) < 10 || !/^[1-9][0-9]{0,19}$/.test(v.property_valuation_minor) || (v.terms_version === 3 ? Array.from(v.rental_income_policy).length : v.rental_income_policy.length) < 20)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['property_address'], message: 'Provide property, valuation and rental-income terms.' })
   if (v.asset_type === 'FUND' && v.currency === 'TST') {
     for (const field of ['strategy', 'pricing_basis', 'fees', 'redemption_terms'] as const) {
       if (v[field] !== FUND_V2_CANONICAL_REFERENCES[field]) ctx.addIssue({ code: z.ZodIssueCode.custom, path: [field], message: 'The authoritative fund policy reference must not be edited.' })
@@ -380,7 +425,7 @@ export const productTermsSchema = z.union([legacyProductTermsSchema, fundTermsV2
   }
 })
 /** Historical v1 records remain readable; all new product writes use typed TST packages. */
-export const writableProductTermsSchema = productTermsSchema.refine(v => v.asset_type === 'FUND' ? isFundTermsV2(v as ProductTerms) : isRealEstateTermsV2(v as ProductTerms), {
+export const writableProductTermsSchema = productTermsSchema.refine(v => v.asset_type === 'FUND' ? isFundTermsTyped(v as ProductTerms) : isRealEstateTermsTyped(v as ProductTerms), {
   message: 'Upgrade this historical draft to a typed six-decimal TST package before saving or submitting.',
 })
 export const reviewChecks = z.object({ identity: z.boolean(), ownership: z.boolean(), screening: z.boolean(), suitability: z.boolean() }).strict()
@@ -454,6 +499,14 @@ const productEligibilityRequestSchema = z.object({
 export const representativeMandateChecks = z.object({ appointment: z.boolean(), evidence: z.boolean(), scope: z.boolean() }).strict()
 export const investingRepresentativeChecks = z.object({ appointment: z.boolean(), legal_entity: z.boolean(), scope: z.boolean() }).strict()
 export const productServiceAppointmentChecks = z.object({ appointment: z.boolean(), evidence: z.boolean(), scope: z.boolean() }).strict()
+const packageReviewBindings = { common_envelope_hash: hash.optional(), deployment_configuration_hash: hash.optional() }
+function completePackageReviewBindings(value: { product_id: string; offering_revision_id: string; expected_revision: number; common_envelope_hash?: string; deployment_configuration_hash?: string }, ctx: z.RefinementCtx) {
+  if ((value.common_envelope_hash === undefined) !== (value.deployment_configuration_hash === undefined)) ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Supply both immutable v3 package fingerprints or neither for a legacy package.' })
+  if (value.common_envelope_hash !== undefined && value.deployment_configuration_hash !== undefined) {
+    for (const field of ['product_id', 'offering_revision_id'] as const) if (!commonEnvelopeUuidSchema.safeParse(value[field]).success) ctx.addIssue({ code: z.ZodIssueCode.custom, path: [field], message: 'Use the canonical lowercase, non-zero package UUID.' })
+    if (value.expected_revision > 999999999) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['expected_revision'], message: 'The v3 workflow revision must be between 1 and 999999999.' })
+  }
+}
 export const portalCommandSchema = z.discriminatedUnion('command', [
   z.object({ command: z.literal('submit_application'), key: id, payload: z.object({ persona: z.enum(['INVESTOR', 'WEALTH_MANAGER']), expected_revision: z.number().int().min(0), details: applicationDetailsSchema }).strict() }).strict(),
   z.object({ command: z.literal('review_application'), key: id, payload: z.object({ application_id: id, expected_revision: z.number().int().positive(), decision: z.enum(['APPROVED', 'CHANGES_REQUIRED', 'REJECTED']), notes: text(20, 3000), checks: reviewChecks }).strict() }).strict(),
@@ -477,18 +530,23 @@ export const portalCommandSchema = z.discriminatedUnion('command', [
   z.object({ command: z.literal('review_representative_mandate'), key: id, payload: z.object({ mandate_id: id, expected_revision: z.number().int().positive(), decision: z.enum(['APPROVED', 'CHANGES_REQUIRED', 'REJECTED']), notes: text(20, 3000), checks: representativeMandateChecks }).strict() }).strict(),
   z.object({ command: z.literal('apply_representative_mandate'), key: id, payload: z.object({ mandate_id: id, expected_revision: z.number().int().positive() }).strict() }).strict(),
   z.object({ command: z.literal('revoke_representative_mandate'), key: id, payload: z.object({ mandate_id: id, expected_revision: z.number().int().positive(), reason: text(20, 1000) }).strict() }).strict(),
-  z.object({ command: z.literal('create_product'), key: id, payload: z.object({ organisation_id: id, terms: writableProductTermsSchema }).strict() }).strict(),
+  z.object({ command: z.literal('create_product'), key: id, payload: z.object({ organisation_id: id, terms: writableProductTermsSchema }).strict().superRefine((value, ctx) => {
+    if (value.terms.terms_version === 3 && value.terms.common_envelope.manager_organisation_id !== value.organisation_id) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['terms', 'common_envelope', 'manager_organisation_id'], message: 'Use the exact product organisation, not a native context reference.' })
+  }) }).strict(),
   z.object({ command: z.literal('save_product'), key: id, payload: z.object({ product_id: id, expected_revision: z.number().int().positive(), terms: writableProductTermsSchema }).strict() }).strict(),
   z.object({ command: z.literal('submit_product'), key: id, payload: z.object({ product_id: id, expected_revision: z.number().int().positive() }).strict() }).strict(),
   z.object({ command: z.literal('reopen_offering_review'), key: id, payload: z.object({ product_id: id, expected_revision: z.number().int().positive(), reason: text(20, 1000) }).strict() }).strict(),
   z.object({ command: z.literal('begin_offering_amendment'), key: id, payload: z.object({ product_id: id, expected_revision: z.number().int().positive(), reason: text(20, 1000) }).strict() }).strict(),
-  z.object({ command: z.literal('review_product'), key: id, payload: z.object({ product_id: id, offering_revision_id: id, expected_revision: z.number().int().positive(), terms_hash: hash, decision: z.enum(['APPROVED', 'CHANGES_REQUIRED']), notes: text(20, 3000), checks: offeringChecks }).strict() }).strict(),
-  z.object({ command: z.literal('review_offering_issuer'), key: id, payload: z.object({ product_id: id, offering_revision_id: id, expected_revision: z.number().int().positive(), terms_hash: hash, decision: z.enum(['APPROVED', 'CHANGES_REQUIRED']), notes: text(20, 3000), checks: z.object({ issuer_authority: z.boolean(), terms: z.boolean(), rights: z.boolean() }).strict() }).strict() }).strict(),
+  z.object({ command: z.literal('review_product'), key: id, payload: z.object({ product_id: id, offering_revision_id: id, expected_revision: z.number().int().positive(), terms_hash: hash, ...packageReviewBindings, decision: z.enum(['APPROVED', 'CHANGES_REQUIRED']), notes: text(20, 3000), checks: offeringChecks }).strict().superRefine(completePackageReviewBindings) }).strict(),
+  z.object({ command: z.literal('review_offering_issuer'), key: id, payload: z.object({ product_id: id, offering_revision_id: id, expected_revision: z.number().int().positive(), terms_hash: hash, ...packageReviewBindings, decision: z.enum(['APPROVED', 'CHANGES_REQUIRED']), notes: text(20, 3000), checks: z.object({ issuer_authority: z.boolean(), terms: z.boolean(), rights: z.boolean() }).strict() }).strict().superRefine(completePackageReviewBindings) }).strict(),
   z.object({ command: z.literal('publish_product'), key: id, payload: z.object({ product_id: id, expected_revision: z.number().int().positive() }).strict() }).strict(),
   z.object({ command: z.literal('subscribe'), key: id, payload: z.object({ product_id: id, offering_revision_id: id, investment_account_id: id.optional(), expected_revision: z.number().int().positive(), terms_hash: hash, units: positive, accepted_documents: z.literal(true), accepted_risks: z.literal(true) }).strict() }).strict(),
   z.object({ command: z.literal('cancel_subscription'), key: id, payload: z.object({ subscription_id: id }).strict() }).strict(),
   ...fundingCommandOptions,
-])
+]).superRefine((value, ctx) => {
+  if ((value.command === 'create_product' || value.command === 'save_product') && value.payload.terms.terms_version === 3
+    && new TextEncoder().encode(JSON.stringify(value)).byteLength > 65536) ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'The complete package command exceeds 65,536 UTF-8 bytes. Nothing is truncated or removed.' })
+})
 export type PortalCommand = z.infer<typeof portalCommandSchema>
 export function formatTestMoney(minor: string): string {
   if (!/^[0-9]+$/.test(minor)) return 'Unavailable'

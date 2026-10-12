@@ -48,6 +48,8 @@ on:
       - apps/web/scripts/account-representatives-proof.mjs
       - supabase/features/bx1_offering_workflow.sql
       - apps/web/scripts/offering-workflow-proof.mjs
+      - supabase/features/bx1_product_common_envelope.sql
+      - apps/web/scripts/product-common-envelope-proof.mjs
       - supabase/features/bx1_entry.sql
       - supabase/features/bx1_entry_admission.sql
       - PLATFORM_RELEASE.json
@@ -118,6 +120,8 @@ on:
       - apps/web/scripts/account-representatives-proof.mjs
       - supabase/features/bx1_offering_workflow.sql
       - apps/web/scripts/offering-workflow-proof.mjs
+      - supabase/features/bx1_product_common_envelope.sql
+      - apps/web/scripts/product-common-envelope-proof.mjs
       - supabase/features/bx1_entry.sql
       - supabase/features/bx1_entry_admission.sql
       - PLATFORM_RELEASE.json

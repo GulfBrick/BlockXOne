@@ -77,6 +77,38 @@ never borrows old package data or upgrades a generic denial into authority.
 The matching release migration must be generated through Supabase CLI and
 reviewed against this exact feature before installation.
 
+## Common product configuration (v3)
+
+The next additive increment preserves the v1 `ZAR_TEST` and v2 `TST` packages.
+An editable typed draft upgrades to v3 only by an explicit manager action. Saved
+history is never relabelled or silently rewritten. Property issuer and SPV
+identity must agree; an existing mismatch needs an explicit correction.
+
+V3 adds the shared issuer declaration, product-local classes and rights,
+custody/title proposal, legal-register authority, investor and transfer
+restrictions, fee/tax/rounding references, settlement proposal, servicing/default
+and asset-specific exit policy, plus a proposed governed deployment configuration.
+These are reviewed declarations, not evidence of an admitted issuer, verified
+title/custody, an approved beneficiary, appointed human signer or deployed token.
+Additional classes are declaration-only until their actual Stage4 operations
+are implemented. Fund redemption remains distinct from property interest
+transfer and property disposal/liquidation.
+
+Canonical create/save commands atomically create immutable, product-scoped issuer
+declaration snapshots. Immutable offering revisions carry database-derived
+`common_envelope_hash` and `deployment_configuration_hash`, alongside the original
+full-terms and disclosure-text hashes. Both appointed reviewers must bind their
+decision to those exact projected fingerprints. Common/configuration amendments
+require new revisions and fresh decisions; accepted historical orders remain
+attached to their original terms. A historical retry rechecks current authority,
+without appending another decision or treating the old revision as current.
+
+The additive common-envelope proof follows the unchanged accepted package proof
+in the existing cloud harness, before accepted-receipt post-overlay verification.
+It retains original SQL/client deadlines, exact legacy records and protected
+functions/security. The new source is not runtime or hosted acceptance until its
+exact-head cloud gates and independent complete-diff/log reviews pass.
+
 ## Proof and remaining Stage 3 scope
 
 The existing cloud harness runs the retained admission and accepted Stage2
