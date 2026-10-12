@@ -6,6 +6,35 @@ const service = '/api/portal/documents/processing'
 const blocked = (path: string, server = 'supabase', browser = 'supabase') =>
   isProductionWebPathBlocked(path, 'production', 'production', 'production', server, browser)
 
+describe('exact applicant draft service routing', () => {
+  const draftService = '/api/portal/application-drafts'
+
+  it('admits the one canonical route without granting draft preparation authority', () => {
+    expect(SUPABASE_ALLOWED_PATHS.filter(path => path === draftService)).toHaveLength(1)
+    expect(isSupabaseWebPathAllowed(draftService)).toBe(true)
+    expect(blocked(draftService)).toBe(false)
+    // The unchanged handler still verifies identity, ownership, preparation,
+    // current revisions and origin before the guarded database operation.
+  })
+
+  it.each([
+    `${draftService}/`, `${draftService}/save`, `${draftService}-admin`, `${draftService}.json`,
+    '/api/portal/Application-drafts', '/API/portal/application-drafts',
+    '/api/portal/%61pplication-drafts', '/api/portal//application-drafts',
+    '//api/portal/application-drafts', '/api\\portal\\application-drafts',
+    '/api/portal/application-drafts/../command', '/api/portal/arbitrary',
+  ])('keeps raw draft lookalike %s denied without a portal API wildcard', path => {
+    expect(isSupabaseWebPathAllowed(path)).toBe(false)
+    expect(blocked(path)).toBe(true)
+  })
+
+  it.each([
+    ['supabase', ''], ['', 'supabase'], ['Supabase', 'Supabase'], ['', ''],
+  ])('keeps draft service denied in unpaired or legacy mode %s/%s', (server, browser) => {
+    expect(blocked(draftService, server, browser)).toBe(true)
+  })
+})
+
 describe('exact document-processing service routing', () => {
   it('admits the single canonical service path through the existing paired Supabase boundary', () => {
     expect(SUPABASE_ALLOWED_PATHS.filter(path => path === service)).toHaveLength(1)

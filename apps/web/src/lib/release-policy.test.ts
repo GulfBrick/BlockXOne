@@ -24,6 +24,7 @@ describe('native Auth admission', () => {
       '/api/portal/command', '/api/portal/documents', '/api/portal/funding/verify', '/api/portal/entry',
       '/api/portal/kyc/session', '/api/portal/kyc/webhook', '/api/portal/kyc/evidence',
       '/api/portal/documents/processing',
+      '/api/portal/application-drafts',
     ])
   })
   it.each(['/workspace/administration', '/auth/admin-command'])('admits only exact administration path %s in paired mode', pathname => {

@@ -6,6 +6,81 @@ import { updateSupabaseSession } from './lib/supabase/middleware'
 
 vi.mock('./lib/supabase/middleware', () => ({ updateSupabaseSession: vi.fn() }))
 
+describe('exact applicant draft middleware boundary', () => {
+  const draftService = '/api/portal/application-drafts'
+
+  beforeEach(() => {
+    vi.stubEnv('NODE_ENV', 'production')
+    vi.stubEnv('BLOCKXONE_RELEASE_MODE', '')
+    vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_RELEASE_MODE', '')
+    vi.stubEnv('BLOCKXONE_AUTH_MODE', 'supabase')
+    vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_AUTH_MODE', 'supabase')
+    vi.mocked(updateSupabaseSession).mockReset()
+    vi.mocked(updateSupabaseSession).mockResolvedValue(NextResponse.next())
+  })
+  afterEach(() => vi.unstubAllEnvs())
+
+  it.each([
+    ['https://testnet.bx1.co.za', 'https://fegnnnlseuejkrusbbkv.supabase.co', 'preview'],
+    ['https://bx1.co.za', 'https://oqkevkjbkpugjotihtda.supabase.co', 'production'],
+  ])('preserves the exact GET and POST session response at %s without running a draft command', async (origin, project, environment) => {
+    vi.stubEnv('BLOCKXONE_APP_ORIGIN', origin)
+    vi.stubEnv('SUPABASE_URL', project)
+    vi.stubEnv('VERCEL_ENV', environment)
+    for (const [index, method] of ['GET', 'POST'].entries()) {
+      const refreshed = NextResponse.next()
+      refreshed.cookies.set('fixture-draft-refresh', 'nonsecret', { httpOnly: true, secure: true, sameSite: 'lax', path: '/' })
+      vi.mocked(updateSupabaseSession).mockResolvedValueOnce(refreshed)
+      const request = new NextRequest(`${origin}${draftService}`, { method, headers: { host: new URL(origin).host } })
+      const response = await middleware(request)
+      expect(response).toBe(refreshed)
+      expect(response.status).toBe(200)
+      expect(response.headers.get('location')).toBeNull()
+      expect(response.cookies.get('fixture-draft-refresh')?.value).toBe('nonsecret')
+      expect(response.headers.get('cache-control')).toBe('private, no-store')
+      expect(response.headers.get('cdn-cache-control')).toBe('no-store')
+      expect(response.headers.get('vercel-cdn-cache-control')).toBe('no-store')
+      expect(response.headers.get('referrer-policy')).toBe('no-referrer')
+      expect(response.headers.get('x-robots-tag')).toBe('noindex, nofollow, noarchive')
+      expect(updateSupabaseSession).toHaveBeenNthCalledWith(index + 1, request)
+      expect(request.bodyUsed).toBe(false)
+    }
+    expect(updateSupabaseSession).toHaveBeenCalledTimes(2)
+  })
+
+  it.each([
+    `${draftService}/`, `${draftService}/save`, `${draftService}-admin`, `${draftService}.json`,
+    '/api/portal/Application-drafts', '/API/portal/application-drafts',
+    '/api/portal/%61pplication-drafts', '/api/portal/arbitrary',
+  ])('does not refresh a session for normalized-safe draft lookalike %s', async path => {
+    const response = await middleware(new NextRequest(`https://bx1.co.za${path}`))
+    expect(response.status).toBe(404)
+    expect(response.headers.get('cache-control')).toBe('private, no-store')
+    expect(response.headers.get('referrer-policy')).toBe('no-referrer')
+    expect(updateSupabaseSession).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['supabase', ''], ['', 'supabase'], ['Supabase', 'Supabase'],
+  ])('denies an unpaired draft mode %s/%s before session refresh', async (server, browser) => {
+    vi.stubEnv('BLOCKXONE_AUTH_MODE', server)
+    vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_AUTH_MODE', browser)
+    const response = await middleware(new NextRequest(`https://bx1.co.za${draftService}`))
+    expect(response.status).toBe(503)
+    expect(response.headers.get('cache-control')).toBe('private, no-store')
+    expect(updateSupabaseSession).not.toHaveBeenCalled()
+  })
+
+  it.each(['GET', 'POST'])('retains private denial when %s session refresh fails', async method => {
+    vi.mocked(updateSupabaseSession).mockRejectedValueOnce(new Error('synthetic refresh failure'))
+    const response = await middleware(new NextRequest(`https://bx1.co.za${draftService}`, { method }))
+    expect(response.status).toBe(503)
+    expect(response.headers.get('cache-control')).toBe('private, no-store')
+    expect(response.headers.get('referrer-policy')).toBe('no-referrer')
+    expect(updateSupabaseSession).toHaveBeenCalledOnce()
+  })
+})
+
 describe('branded TEST legacy entry cutover', () => {
   const branded = 'https://testnet.bx1.co.za'
   const legacyHost = 'block-x-one-git-codex-testnet-961d10-danielswart-4443s-projects.vercel.app'
