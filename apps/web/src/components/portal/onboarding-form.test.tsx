@@ -615,7 +615,8 @@ describe('guided onboarding interaction at the existing command boundary', () =>
     mountedForm(entryApplication({ review_route: 'AVAILABLE', details: investor }))
     next(); next()
     fireEvent.click(screen.getByRole('button', { name: 'Exclude from this submission' }))
-    fireEvent.click(screen.getByRole('button', { name: 'View private scan queue' }))
+    // Evidence entry now loads the queue automatically. Wait for that read,
+    // retaining the same mismatched-receipt rejection and exact request count.
     await waitFor(() => expect(screen.getByRole('button', { name: 'Include clean file' })).toBeTruthy())
     fireEvent.click(screen.getByRole('button', { name: 'Include clean file' }))
     await waitFor(() => expect(screen.getByText('The scanned file receipt does not match the selected document.')).toBeTruthy())

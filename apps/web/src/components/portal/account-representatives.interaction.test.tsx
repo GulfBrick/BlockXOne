@@ -173,7 +173,8 @@ describe('normal mounted account-representative handoffs', () => {
       consent_decision: 'ACCEPT', consent_receipt_id: consentId, responded_at: new Date(Date.now() - 60_000).toISOString(), next_owner: 'COMPLIANCE' })] }
     const home = render(await PortalPage({ view: '/portal', query: { mode: 'applicant' } }))
     expect(screen.getByRole('heading', { name: 'Representative proposals awaiting your response' })).toBeTruthy()
-    expect(screen.getByRole('heading', { name: 'My applications' })).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'Your BlockXOne overview.', level: 1 })).toBeTruthy()
+    expect(screen.getAllByRole('link', { name: 'My applications', exact: true }).every(link => link.getAttribute('href') === '/portal?mode=applicant&section=applications')).toBe(true)
     const destination = screen.getByRole('link', { name: 'Open my representative proposals' })
     expect(destination.getAttribute('href')).toBe('/portal/portfolio?mode=applicant')
     expect(screen.queryByRole('button', { name: 'Accept representative proposal' })).toBeNull()
@@ -207,7 +208,8 @@ describe('normal mounted account-representative handoffs', () => {
     if (state === 'missing') value.investing_representative_mandates = undefined
     proof.load.mockResolvedValue(applicantDashboard(value))
     render(await PortalPage({ view: '/portal', query: { mode: 'applicant' } }))
-    expect(screen.getByRole('heading', { name: 'My applications' })).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'Your BlockXOne overview.', level: 1 })).toBeTruthy()
+    expect(screen.getAllByRole('link', { name: 'My applications', exact: true }).every(link => link.getAttribute('href') === '/portal?mode=applicant&section=applications')).toBe(true)
     expect(screen.queryByRole('link', { name: 'Open my representative proposals' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Accept representative proposal' })).toBeNull()
     expect(globalThis.fetch).not.toHaveBeenCalled(); expect(proof.submit).not.toHaveBeenCalled()
