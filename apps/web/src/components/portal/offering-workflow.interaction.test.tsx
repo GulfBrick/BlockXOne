@@ -344,6 +344,43 @@ describe('normal TEST mounted offering package handoffs', () => {
   })
 })
 
+describe('profiled document review remains signature-blocked', () => {
+  it.each(['FUND', 'REAL_ESTATE'] as const)('keeps both independent %s reviewer decisions CHANGES_REQUIRED after a clean seal', async kind => {
+    for (const role of ['IssuerFundManager', 'ComplianceOfficer'] as const) {
+      const document_evidence = { profile: 'PDF_SIGNATURE_REQUIRED_V1' as const, state: 'SEALED_SIGNATURE_REQUIRED' as const,
+        manifest_id: receiptId, manifest_hash: 'aa'.repeat(32), signature_status: 'NOT_CONNECTED' as const, approval_allowed: false as const }
+      const item = product(kind, { status: 'IN_REVIEW', offering_package: packageRecord({ can_review_issuer: true,
+        can_review_compliance: true, document_evidence }), allowed_actions: [role === 'IssuerFundManager' ? 'review_offering_issuer' : 'review_product'] })
+      const value = snapshot(role, [item])
+      nextResult = snapshot(role, [{ ...item, revision: 2, status: 'CHANGES_REQUIRED' }])
+      const Review = role === 'IssuerFundManager' ? IssuerOfferingReview : ProductReview
+      const page = render(<PortalCommandProvider snapshot={value} operatingContext={value.operating_context} environment="TESTNET"><Review product={item} snapshot={value} onSaved={() => {}} /></PortalCommandProvider>)
+      const choice = screen.getByLabelText(role === 'IssuerFundManager' ? 'Issuer decision' : 'Decision') as HTMLSelectElement
+      expect(choice.value).toBe('CHANGES_REQUIRED')
+      expect((choice.querySelector('option[value="APPROVED"]') as HTMLOptionElement).disabled).toBe(true)
+      fireEvent.change(screen.getByLabelText(role === 'IssuerFundManager' ? /^Issuer rationale/ : 'Review rationale'), { target: { value: 'Genuine signatures are not connected; request the exact corrected immutable package evidence.' } })
+      fireEvent.click(screen.getByRole('button', { name: role === 'IssuerFundManager' ? 'Record issuer decision' : 'Record Compliance decision' }))
+      await saved()
+      recorded(role === 'IssuerFundManager' ? 'review_offering_issuer' : 'review_product', { decision: 'CHANGES_REQUIRED', offering_revision_id: firstPackageId })
+      page.unmount()
+    }
+  })
+
+  it('uses the existing durable reopen command for terminal same-terms PDF correction, not a new product writer', async () => {
+    const item = product('FUND', { status: 'CHANGES_REQUIRED', allowed_actions: ['reopen_offering_review'], offering_package: packageRecord({
+      document_evidence: { profile: 'PDF_SIGNATURE_REQUIRED_V1', state: 'REJECTED_OR_EXCLUDED', manifest_id: null,
+        manifest_hash: null, signature_status: 'NOT_CONNECTED', approval_allowed: false } }) })
+    const value = snapshot('OfferingManager', [item])
+    nextResult = snapshot('OfferingManager', [{ ...item, revision: 2, status: 'IN_REVIEW', offering_package: { ...item.offering_package!, id: secondPackageId } }])
+    render(<PortalCommandProvider snapshot={value} operatingContext={value.operating_context} environment="TESTNET"><ProductActions product={item} availableCommands={['reopen_offering_review']} onSaved={() => {}} /></PortalCommandProvider>)
+    fireEvent.change(screen.getByLabelText(/^Reason for re-review/), { target: { value: 'Correct terminal rejected PDF bytes under the same retained immutable package terms.' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Create new review revision' }))
+    await saved()
+    recorded('reopen_offering_review', { product_id: productId, expected_revision: 1 })
+    expect(screen.getByText(/new revision inherits no earlier PDF manifest/)).toBeTruthy()
+  })
+})
+
 describe('offering saved-response continuity', () => {
   it.each(['missing', 'actor', 'context', 'environment', 'commands', 'stage2 mismatch'] as const)('keeps the durable marker when returned offering access has %s', async failure => {
     const value = snapshot('OfferingManager', [product()]); const expected = value.offering_access!

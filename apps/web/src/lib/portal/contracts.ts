@@ -4,6 +4,7 @@ import { fundingCommandOptions, type FundingSnapshot } from './funding-contracts
 import fundV2LegacyCrossrefs from './fund-v2-legacy-crossrefs.json'
 import type { Stage2Access } from './stage2-access'
 import type { OfferingAccess } from './offering-access'
+import { offeringDocumentEvidenceSchema, type OfferingDocumentEvidence } from './offering-files'
 import { commonEnvelopeUuidSchema, productCommonEnvelopeSchema, productDeploymentConfigurationSchema, strictProductText, validateCommonEnvelopeReferences, type ProductCommonEnvelope, type ProductDeploymentConfiguration } from './product-common-envelope'
 
 /** One customer workflow; environment-specific providers never manufacture settlement. */
@@ -228,6 +229,8 @@ export type PortalOfferingPackage = {
   /** Absent on compatible old readers; all NULL on historical v1/v2 packages. */
   common_envelope_hash?: string | null; deployment_configuration_hash?: string | null;
   common_envelope?: ProductCommonEnvelope | null; deployment_configuration?: ProductDeploymentConfiguration | null;
+  /** Absent on historical text-only revisions; never backfilled or a signature. */
+  document_evidence?: OfferingDocumentEvidence;
 }
 export type PortalProduct = {
   id: string; organisation_id: string; created_by: string; revision: number; status: ProductStatus;
@@ -555,9 +558,16 @@ export function formatTestMoney(minor: string): string {
 }
 export function isOfferingSubscribable(product: PortalProduct): boolean {
   const pkg = product.offering_package
-  return product.status === 'PUBLISHED' && pkg?.origin === 'SUBMITTED' && pkg.subscribable === true
+  return !offeringDocumentApprovalBlocked(product) && product.status === 'PUBLISHED' && pkg?.origin === 'SUBMITTED' && pkg.subscribable === true
     && pkg.technical_readiness_status === 'VERIFIED' && pkg.issuer_status === 'APPROVED'
     && pkg.compliance_status === 'APPROVED' && pkg.terms_hash === product.terms_hash
+}
+/** A malformed profiled summary also fails closed. CLEAN/sealed is not signed. */
+export function offeringDocumentApprovalBlocked(product: PortalProduct): boolean {
+  const evidence = product.offering_package?.document_evidence
+  if (evidence === undefined) return false
+  const parsed = offeringDocumentEvidenceSchema.safeParse(evidence)
+  return !parsed.success || parsed.data.approval_allowed === false
 }
 export function subscriptionQuote(product: PortalProduct, units: string): { amount_minor: string } | { error: string } {
   if (!/^[1-9][0-9]{0,19}$/.test(units)) return { error: 'Enter a positive whole-unit quantity.' }

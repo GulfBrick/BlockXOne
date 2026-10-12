@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { FUND_V2_CANONICAL_REFERENCES, REAL_ESTATE_V2_CANONICAL_REFERENCES, PORTAL_PATHS, applicationDetailsSchema, applicationDocumentLookupSchema, applicationDocumentVersionsSchema, applicationDraftDetailsSchema, customerMonitoringSnapshotSchema, entityProductEligibilitySchema, validatedEntityProductEligibility, investingProposalDocumentLookupSchema, isRealEstateTermsV2, isWealthManagerDetailsV2, evidenceSchema, formatTestMoney, portalCommandSchema, productTermsSchema, subscriptionQuote, type FundTermsV2, type RealEstateTermsV2, type PortalProduct, type ProductTerms } from './contracts'
+import { FUND_V2_CANONICAL_REFERENCES, REAL_ESTATE_V2_CANONICAL_REFERENCES, PORTAL_PATHS, applicationDetailsSchema, applicationDocumentLookupSchema, applicationDocumentVersionsSchema, applicationDraftDetailsSchema, customerMonitoringSnapshotSchema, entityProductEligibilitySchema, validatedEntityProductEligibility, investingProposalDocumentLookupSchema, isRealEstateTermsV2, isWealthManagerDetailsV2, evidenceSchema, formatTestMoney, portalCommandSchema, productTermsSchema, subscriptionQuote, offeringDocumentApprovalBlocked, isOfferingSubscribable, type FundTermsV2, type RealEstateTermsV2, type PortalProduct, type ProductTerms } from './contracts'
 import { isSupabaseWebPathAllowed } from '@/lib/auth-mode'
 import { isProductionWebPathBlocked } from '@/lib/release-policy'
 
@@ -27,6 +27,19 @@ const propertyV2: RealEstateTermsV2 = { ...oldProperty, ...REAL_ESTATE_V2_CANONI
 const product: PortalProduct = { id, organisation_id: id, created_by: id, revision: 4, status: 'PUBLISHED', terms, terms_hash: 'a'.repeat(64), reserved_units: '20', created_at: '2026-09-21T00:00:00Z', reviewer_id: null, review_notes: null, reviewed_at: null, published_at: null, review_checks: {}, offering_package: { id: key, package_number: 1, origin: 'SUBMITTED', terms_hash: 'a'.repeat(64), document_hashes: { memorandum: 'b'.repeat(64), risks: 'c'.repeat(64), subscription_terms: 'd'.repeat(64) }, submitted_at: '2026-09-21T00:00:00Z', issuer_status: 'APPROVED', compliance_status: 'APPROVED', technical_readiness_status: 'VERIFIED', publishable: false, subscribable: true, can_review_issuer: false } }
 
 describe('customer portal contracts', () => {
+  it('preserves legacy approved reads but never turns a profiled clean manifest into subscription/signature authority', () => {
+    expect(offeringDocumentApprovalBlocked(product)).toBe(false)
+    expect(isOfferingSubscribable(product)).toBe(true)
+    const current = { ...product, offering_package: { ...product.offering_package!, document_evidence: {
+      profile: 'PDF_SIGNATURE_REQUIRED_V1' as const, state: 'SEALED_SIGNATURE_REQUIRED' as const,
+      manifest_id: id, manifest_hash: 'e'.repeat(64), signature_status: 'NOT_CONNECTED' as const, approval_allowed: false as const } } }
+    expect(offeringDocumentApprovalBlocked(current)).toBe(true)
+    expect(isOfferingSubscribable(current)).toBe(false)
+    expect(subscriptionQuote(current, '10')).toHaveProperty('error')
+    const malformed = { ...current, offering_package: { ...current.offering_package, document_evidence: { approval_allowed: true } } } as unknown as PortalProduct
+    expect(offeringDocumentApprovalBlocked(malformed)).toBe(true)
+    expect(isOfferingSubscribable(malformed)).toBe(false)
+  })
   it('separates a guarded monitoring restriction from admission and rejects malformed scoped reads', () => {
     const item = { application_id: id, application_revision: 3, state: 'ON_HOLD', case_revision: 1, admission_expires_at: '2026-10-01T00:00:00+00:00', renewal_due: false, new_actions_allowed: false }
     expect(customerMonitoringSnapshotSchema.safeParse([item]).success).toBe(true)
