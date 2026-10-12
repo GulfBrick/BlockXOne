@@ -54,7 +54,7 @@ export async function verifiedOfferingFileSession(client: SupabaseClient, actorI
   try {
     const claims = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8')) as Record<string, unknown>
     if (claims.sub !== actorId || typeof claims.session_id !== 'string'
-      || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(claims.session_id)
+      || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(claims.session_id)
       || (claims.aal !== 'aal1' && claims.aal !== 'aal2')) throw new Error()
     const release = platformRelease(process.env)
     const project = release?.environment === 'TESTNET' ? 'fegnnnlseuejkrusbbkv'

@@ -421,7 +421,24 @@ export async function proveOfferingDocuments(db, clients, featureSql) {
       }
       eq(current,expected,'complete inherited pg_proc differs only by an authorised exact body')
     }
-    eq(after.filter(row=>!before.some(old=>old.oid===row.oid)).map(row=>row.signature).sort(),[...helperSignatures].sort(),'no hidden helper/overload or alternate writer')
+    // regprocedure displays canonical type names (for example timestamptz as
+    // timestamp with time zone). Resolve the unchanged explicit source list;
+    // do not broaden it or compare differently rendered identity strings.
+    const explicitHelpers=(await db.query(`select h.signature source_signature,
+      pg_catalog.to_regprocedure(h.signature)::oid::text oid,
+      pg_catalog.to_regprocedure(h.signature)::text canonical_signature
+      from pg_catalog.unnest($1::text[]) h(signature)`,[helperSignatures])).rows
+    eq(explicitHelpers.map(row=>row.source_signature).sort(),[...helperSignatures].sort(),'exact37 unchanged source helper signatures resolved')
+    truth(explicitHelpers.every(row=>typeof row.oid==='string'&&/^[1-9][0-9]*$/.test(row.oid)),'all37 explicit helper identities are present')
+    eq(new Set(explicitHelpers.map(row=>row.oid)).size,37,'all37 explicit helper identities are distinct')
+    const addedOids=after.filter(row=>!before.some(old=>old.oid===row.oid)).map(row=>row.oid).sort()
+    eq(addedOids,explicitHelpers.map(row=>row.oid).sort(),'no hidden helper/overload or alternate writer')
+    const alias=explicitHelpers.find(row=>row.source_signature==='bx1_private.record_offering_document_scan(uuid,text,text,text,text,timestamptz)')
+    truth(alias,'explicit timestamp-alias helper identity is retained')
+    console.log('BX1_OFFERING_DOCUMENT_HELPER_IDENTITY_RECEIPT',JSON.stringify({explicit_source_count:explicitHelpers.length,
+      resolved_distinct_count:new Set(explicitHelpers.map(row=>row.oid)).size,added_identity_count:addedOids.length,exact_added_set:true,
+      source_signature:alias.source_signature,canonical_signature:alias.canonical_signature,identity_oid:alias.oid,
+      fixture:'synthetic-cloud-PostgreSQL17',runtime_sql_changed:false}))
   }
   const assertInstalledSecurity=async()=>{
     const current=await security()

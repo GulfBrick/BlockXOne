@@ -68,6 +68,12 @@ describe('offering document verified session transport', () => {
     expect(result).toEqual({ id: sessionId, aal: 'aal2', attestation: claims })
   })
 
+  it('rejects the malformed 8-4-4-12 session shape after verifying the token instead of accepting it as a UUID', async () => {
+    const auth = authClient({ ...attestation, session_id: '22222222-2222-4222-222222222222' })
+    await expect(verifiedOfferingFileSession(auth.client, actor)).rejects.toBeInstanceOf(OfferingFileReceiptError)
+    expect(auth.getUser).toHaveBeenCalledWith(auth.token)
+  })
+
   it('denies unverified, wrong-issuer, expired, anonymous or malformed claims without trusting user metadata', async () => {
     const unverified = authClient(attestation, productId)
     await expect(verifiedOfferingFileSession(unverified.client, actor)).rejects.toBeInstanceOf(OfferingFileReceiptError)
