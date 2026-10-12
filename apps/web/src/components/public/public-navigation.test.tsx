@@ -74,4 +74,27 @@ describe('branded Mainnet and Testnet public navigation', () => {
     expect(html).not.toContain('href="/register"')
     expect(html).not.toContain('href="/login"')
   })
+
+  it.each(['MAINNET', 'TESTNET'] as const)('changes only the homepage CTA while retaining %s desktop access gates', environment => {
+    const html = renderToStaticMarkup(<PublicNavigation showPortalAccess environment={environment} variant="homepage" />)
+    expect(html).toMatch(/href="\/request-demo"[^>]*>Book a walkthrough<\/a>/)
+    expect(html).not.toContain('View platform workflow')
+    expect(html).toMatch(/href="\/register"[^>]*>Register<\/a>/)
+    expect(html).toMatch(new RegExp(`href="/login"[^>]*>${environment === 'MAINNET' ? 'Mainnet' : 'Testnet'} sign in</a>`))
+    expect(html).toContain('2xl:flex')
+    if (environment === 'MAINNET') expect(html).toContain(`href="${BRANDED_ENTRY.testnetLogin}"`)
+    else expect(html).toContain('Mainnet · admission required')
+  })
+
+  it.each(['MAINNET', 'TESTNET'] as const)('retains every destination in the homepage %s menu and honours sign-in advertising', environment => {
+    state.mobileOpen = true
+    const html = renderToStaticMarkup(<PublicNavigation showPortalAccess={false} environment={environment} variant="homepage" />)
+    const mobile = html.match(/<nav aria-label="Mobile public navigation"[\s\S]*?<\/nav>/)?.[0] ?? ''
+    expect(html).toContain('aria-expanded="true"')
+    expect(html).toContain('2xl:hidden')
+    for (const href of ['/how-it-works', '/asset-classes', '/for-investors', '/for-operators', '/security-and-compliance', '/register', '/request-demo']) expect(mobile).toContain(`href="${href}"`)
+    expect(mobile).not.toContain('href="/login"')
+    if (environment === 'MAINNET') expect(mobile).toContain(`href="${BRANDED_ENTRY.testnetLogin}"`)
+    else expect(mobile).toContain('href="https://bx1.co.za"')
+  })
 })

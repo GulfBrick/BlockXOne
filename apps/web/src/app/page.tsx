@@ -1,357 +1,142 @@
 import Image from 'next/image'
 import Link from 'next/link'
-import { ArrowDown, ArrowRight } from 'lucide-react'
+import { ArrowRight } from 'lucide-react'
 
-import { PlatformPreview } from '@/components/public/platform-preview'
+import { HomepageExample } from '@/components/public/homepage-example'
 import { PublicShell } from '@/components/public/public-shell'
-import { Button } from '@/components/ui/button'
-import { isPortalAccessAdvertised } from '@/lib/release-policy'
+import { BRANDED_ENTRY } from '@/lib/branded-entry'
+import { platformRelease } from '@/lib/platform-release'
+
+import styles from './homepage-v4.module.css'
 
 const assetStructures = [
-  {
-    index: '01',
-    title: 'Private debt notes',
-    text: 'Model face value, coupon, day count, maturity, seniority, security and the exact units authorised for issue.',
-    fields: ['Economic terms', 'Approved supply', 'Governing law'],
-  },
-  {
-    index: '02',
-    title: 'Fund interests',
-    text: 'Preserve the share class, NAV currency, dealing frequency, distribution policy and redemption terms of the fund.',
-    fields: ['Share class', 'Dealing terms', 'Distribution policy'],
-  },
-  {
-    index: '03',
-    title: 'Real estate SPVs',
-    text: 'Connect the property, SPV, valuation, jurisdiction, ownership rights and distribution policy to each position.',
-    fields: ['SPV identity', 'Property evidence', 'Ownership rights'],
-  },
-]
-
-const lifecycle = [
-  ['01', 'Model', 'Capture the instrument, legal vehicle, economic terms, currency, authorised units and target network.'],
-  ['02', 'Approve', 'Version the terms, create their SHA-256 fingerprint and keep preparation separate from approval.'],
-  ['03', 'Qualify', 'Record investor eligibility, bind the holder to a signed wallet challenge and approve the wallet independently.'],
-  ['04', 'Subscribe', 'Preserve exact units, amount, currency, eligibility outcome and request identity for each instruction.'],
-  ['05', 'Reconcile', 'Match provider evidence, statement data and ledger postings, with unresolved breaks kept visible.'],
-  ['06', 'Issue', 'Release only after readiness, wallet admission, reconciliation and the required chain authority are present.'],
-  ['07', 'Prove', 'Connect the position to its contract, transaction, block, confirmations, receipt and legal-register record.'],
+  { index: '01', title: 'Private debt', text: 'Keep economic terms, maturity and authorised issue connected.', crop: styles.debtStudy },
+  { index: '02', title: 'Fund interests', text: 'Preserve share classes, dealing terms and distributions.', crop: styles.fundStudy },
+  { index: '03', title: 'Real estate SPVs', text: 'Connect the vehicle, property evidence and ownership rights.', crop: styles.propertyStudy },
 ]
 
 const responsibilities = [
-  ['Offering teams', 'Prepare instruments, terms and offering readiness without holding final execution authority.'],
-  ['Compliance teams', 'Review eligibility, organisation context, wallet ownership and policy exceptions.'],
-  ['Finance teams', 'Control settlement evidence, ledger journals, reconciliation and release readiness.'],
-  ['Transfer agents', 'Maintain holder admission, legal-register continuity and position evidence.'],
-  ['Tokenisation agents', 'Deploy and issue only from an approved, exact instruction with an attributable operation record.'],
-  ['Investors', 'Review eligible opportunities, submit exact subscriptions and inspect finalized position evidence.'],
+  ['Offering teams', 'Prepare the product and its versioned terms.'],
+  ['Compliance', 'Review admission and product-specific eligibility.'],
+  ['Finance', 'Match funding, reconcile and post independently.'],
+  ['Transfer agents', 'Maintain holder and register continuity.'],
+  ['Tokenisation agents', 'Prepare governed network operations.'],
+  ['Investors', 'Review terms and instruct eligible investments.'],
 ]
 
-const evidenceFields = [
-  'Approved terms hash',
-  'Holder wallet',
-  'Token contract',
-  'Exact base-unit balance',
-  'Transaction and block',
-  'Receipt hash',
-  'Confirmation state',
-  'Legal-register sequence and hash',
+const lifecycle = [
+  ['Model', 'Define the product and its rights.'],
+  ['Approve', 'Review the exact terms and appointments.'],
+  ['Qualify', 'Check the account, eligibility and mandate.'],
+  ['Subscribe', 'Accept terms and record the instruction.'],
+  ['Reconcile', 'Match settlement and accounting evidence.'],
+  ['Issue', 'Obtain authority and verify finalised execution.'],
+  ['Prove', 'Reconcile the holding, register and ledger.'],
 ]
+
+const evidenceIndex = [
+  { title: 'Terms and approvals', text: 'An offering revision fixes the accepted terms. The fictional Atlas example still requires independent issuance approval; it is not an approved investment offer.' },
+  { title: 'Settlement evidence', text: 'This illustration assumes a match of 1,000 valueless TST. A payment claim or match alone cannot approve issuance, and no real payment is displayed here.' },
+  { title: 'Network receipt', text: 'There is no transaction or finalised network receipt in this example. A successful outer receipt would not, by itself, prove the authorised inner operation.' },
+  { title: 'Position and register', text: 'No interests have been issued in this example. A completed holding requires finalised execution and reconciliation with the legal register and accounting.' },
+]
+
+function Arrow() {
+  return <ArrowRight size={20} aria-hidden="true" />
+}
 
 export default function HomePage() {
-  const showPortalAccess = isPortalAccessAdvertised()
+  const environment = platformRelease(process.env)?.environment
+  const testnetHref = environment === 'TESTNET' ? '/register' : BRANDED_ENTRY.testnetRegister
 
   return (
-    <PublicShell>
-      <main id="main-content">
-        <div className="bxo-scroll-progress" aria-hidden="true">
-          <span data-bxo-scroll-progress />
+    <PublicShell variant="homepage">
+      <main id="main-content" className={styles.page}>
+        <section className={styles.hero} aria-labelledby="home-heading">
+          <div className={styles.container}>
+            <div className={styles.heroCopy}>
+              <p className={styles.overline}>Private-market infrastructure</p>
+              <h1 id="home-heading" className={styles.heroHeading}>
+                <span>Bring private assets</span>
+                <span>into <em>one working system.</em></span>
+              </h1>
+              <p className={styles.heroDescription}>Coordinate your teams, investor instructions and asset records - from approved terms to ownership.</p>
+              <div className={styles.actions}>
+                <Link href="/request-demo" className={styles.primaryAction}>Book a walkthrough <Arrow /></Link>
+                <Link href="/how-it-works" className={styles.textAction}>See the platform <Arrow /></Link>
+              </div>
+              <p className={styles.audience}>For wealth managers, asset managers and private-market teams.</p>
+            </div>
+            <figure className={styles.heroArt}>
+              <Image src="/editorial/homepage-sculpture-v4.png" alt="An abstract private-asset study in ivory paper, limestone, dark metal and a translucent turquoise plane" width={1536} height={1024} sizes="(max-width: 767px) 100vw, (max-width: 1535px) 66vw, 1050px" priority className={styles.sculpture} />
+              <div className={styles.artScrim} aria-hidden="true" />
+              <svg className={styles.heroConnector} viewBox="0 0 420 120" fill="none" aria-hidden="true"><path d="M0 110H230C265 110 240 35 285 35H418" /></svg>
+              <figcaption className={styles.relationship}>
+                <span className={styles.relationshipLabel}>Illustrative relationship</span>
+                <span>Instrument</span><span className={styles.relationshipArrow} aria-hidden="true">↓</span>
+                <span>Decision</span><span className={styles.relationshipArrow} aria-hidden="true">↓</span>
+                <span>Position</span>
+              </figcaption>
+            </figure>
+            <ul className={styles.outcomes} aria-label="The coordination model"><li>Align the work.</li><li>Make responsibility clear.</li><li>Keep the records connected.</li></ul>
+          </div>
+        </section>
+
+        <div className={styles.lightChapter}>
+          <section id="workspace-example" className={`${styles.container} ${styles.workspace}`} aria-labelledby="workspace-heading">
+            <div className={styles.sectionIntroduction}>
+              <div><p className={styles.overline}>01 / The workspace</p><h2 id="workspace-heading" className={styles.displayHeading}>A clear view of the work.<br />A record of <em>how it happened.</em></h2></div>
+              <p className={styles.sectionDescription}>Bring instrument setup, investor onboarding, settlement and issuance into a shared workflow, with distinct responsibilities.</p>
+            </div>
+            <HomepageExample />
+            <a href="#example-records" className={styles.lightTextAction}>Explore the worked example <Arrow /></a>
+          </section>
+          <section className={`${styles.container} ${styles.assets}`} aria-labelledby="assets-heading">
+            <p className={styles.overline}>02 / Asset structures</p>
+            <h2 id="assets-heading" className={styles.displayHeading}>Start with the asset.<br />Preserve what makes it different.</h2>
+            <div className={styles.assetGrid}>
+              {assetStructures.map(({ index, title, text, crop }) => (
+                <article key={title} className={styles.assetStructure}>
+                  <div className={`${styles.materialStudy} ${crop}`} aria-hidden="true"><Image src="/editorial/homepage-sculpture-v4.png" alt="" fill sizes="(max-width: 767px) 100vw, 33vw" /></div>
+                  <span className={styles.assetNumber}>{index}</span><h3>{title}</h3><p>{text}</p>
+                  <Link href="/asset-classes" className={styles.lightTextAction}>Explore {title.toLowerCase()} <Arrow /></Link>
+                </article>
+              ))}
+            </div>
+            <p className={styles.modelBoundary}>Product operating models, not available investment offers. Each product and jurisdiction requires its own appointments and admission.</p>
+          </section>
+          <section className={`${styles.container} ${styles.responsibility}`} aria-labelledby="responsibility-heading">
+            <div>
+              <p className={styles.overline}>03 / Responsibility</p><h2 id="responsibility-heading" className={styles.displayHeading}>Work together.<br />Keep authority distinct.</h2>
+              <p className={styles.sectionDescription}>Access and signing authority follow the relevant mandate. A shared record is not a shared wallet or universal permission.</p>
+              <div className={styles.participantLinks}><Link href="/for-operators" className={styles.lightTextAction}>For institutions <Arrow /></Link><Link href="/for-investors" className={styles.lightTextAction}>For investors <Arrow /></Link></div>
+            </div>
+            <div className={styles.responsibilityMap}>
+              <p className={styles.sharedRecord}>Shared record<span>Distinct responsibilities</span></p>
+              <ul>{responsibilities.map(([title, text]) => <li key={title}><h3>{title}</h3><p>{text}</p></li>)}</ul>
+            </div>
+          </section>
         </div>
 
-        <section className="bxo-cinematic-hero">
-          <div className="bxo-cinematic-hero__media" data-bxo-hero-media data-bxo-parallax-frame>
-            <div className="bxo-cinematic-hero__image" data-bxo-parallax="hero">
-              <Image
-                src="/editorial/hero-operable-assets.webp"
-                alt="Architectural model, legal records and steel instruments arranged as one connected private-asset system"
-                fill
-                priority
-                sizes="(max-width: 767px) 100vw, (max-width: 1023px) 82vw, (max-width: 1768px) 67vw, 1184px"
-                quality={90}
-              />
-            </div>
-            <div className="bxo-cinematic-hero__scrim" aria-hidden="true" />
-            <p className="bxo-cinematic-hero__caption" data-bxo-hero-detail data-bxo-hero-caption>
-              Structure. Authority. Evidence.
-            </p>
-          </div>
-
-          <div className="bxo-cinematic-hero__layout">
-            <div className="bxo-cinematic-hero__copy" data-bxo-hero-track>
-              <div className="bxo-editorial-index" data-bxo-hero-detail data-bxo-hero-kicker>
-                <span>01</span>
-                <span>Multi-asset tokenisation</span>
-              </div>
-
-              <h1 className="mt-7 text-bxo-text-primary">
-                <span className="bxo-type-mask">
-                  <span className="block font-ui text-[clamp(3.4rem,7.4vw,7.8rem)] font-medium leading-[0.86] tracking-[-0.075em]" data-bxo-hero-line>
-                    Private assets,
-                  </span>
-                </span>
-                <span className="bxo-type-mask mt-2 sm:mt-3">
-                  <span className="block font-editorial text-[clamp(2.95rem,14.5vw,3.8rem)] leading-[0.9] tracking-[-0.05em] text-bxo-accent-primary sm:text-[clamp(3.8rem,8.1vw,8.7rem)] sm:leading-[0.86]" data-bxo-hero-line>
-                    made operable.
-                  </span>
-                </span>
-              </h1>
-
-              <p className="mt-8 max-w-[42rem] font-reading text-xl leading-8 text-bxo-text-secondary sm:text-2xl sm:leading-9" data-bxo-hero-detail data-bxo-hero-copy>
-                Move from structured instrument terms to qualified investors, reconciled subscriptions, governed issuance and position evidence in one controlled workflow.
-              </p>
-
-              <div className="mt-9 flex flex-col gap-3 sm:flex-row sm:flex-wrap" data-bxo-hero-detail data-bxo-hero-actions>
-                <Button asChild size="lg" className="bxo-primary-cta h-12 rounded-sm px-7 font-semibold">
-                  <Link href="/how-it-works">
-                    Explore the workflow
-                    <ArrowRight className="ml-2 h-4 w-4" data-bxo-motion-arrow aria-hidden="true" />
-                  </Link>
-                </Button>
-                {showPortalAccess ? (
-                  <Button asChild size="lg" variant="outline" className="bxo-secondary-cta h-12 rounded-sm px-7 font-semibold">
-                    <Link href="/login">Enter your workspace</Link>
-                  </Button>
-                ) : null}
+        <section className={styles.evidenceChapter} aria-labelledby="evidence-heading">
+          <div className={styles.container}>
+            <div className={styles.evidenceLayout}>
+              <div><p className={styles.overline}>04 / Evidence</p><h2 id="evidence-heading" className={styles.displayHeading}>Understand the position.<br />Trace the decisions.</h2><p className={styles.sectionDescription}>Follow the terms, approvals, settlement evidence and network records behind a position.</p></div>
+              <div className={styles.evidenceIndex}>
+                <p className={styles.overline}>Illustrative record index</p>
+                {evidenceIndex.map(({ title, text }) => <details key={title}><summary>{title}<span>View <Arrow /></span></summary><p>{text}</p></details>)}
               </div>
             </div>
-
-            <div className="bxo-cinematic-hero__foot" data-bxo-hero-detail data-bxo-hero-foot>
-              <div className="bxo-cinematic-hero__facts">
-                <span>Private debt</span>
-                <span>Fund interests</span>
-                <span>Real estate SPVs</span>
-              </div>
-              <a href="#operating-model" className="bxo-scroll-cue" data-bxo-interactive>
-                Enter the system
-                <ArrowDown className="h-4 w-4" data-bxo-motion-arrow aria-hidden="true" />
-              </a>
-            </div>
+            <ol className={styles.lifecycle} aria-label="The seven business workflow stages">{lifecycle.map(([title, text]) => <li key={title}><span className={styles.lifecycleDot} aria-hidden="true" /><h3>{title}</h3><p>{text}</p></li>)}</ol>
+            <div className={styles.lifecycleFoot}><p>Each stage retains its own checks and accountable decisions.</p><Link href="/security-and-compliance" className={styles.textAction}>Security and operating controls <Arrow /></Link></div>
           </div>
         </section>
-
-        <section id="operating-model" className="bxo-editorial-section border-b border-bxo-border-subtle" data-bxo-flow-section>
-          <div className="mx-auto max-w-[90rem] px-4 py-20 sm:px-6 lg:px-8 lg:py-32">
-            <div className="bxo-statement-grid">
-              <div data-bxo-reveal data-bxo-flow-heading>
-                <div className="bxo-editorial-index">
-                  <span>02</span>
-                  <span>Operating model</span>
-                </div>
-                <h2 className="mt-7 max-w-4xl font-editorial text-5xl leading-[0.94] tracking-[-0.045em] text-bxo-text-primary sm:text-6xl lg:text-7xl">
-                  A private asset is more than a token.
-                </h2>
-              </div>
-              <div data-bxo-reveal data-bxo-flow-copy>
-                <p className="max-w-3xl font-reading text-xl leading-9 text-bxo-text-secondary sm:text-2xl">
-                  It is a set of rights, terms, approvals, people, obligations and evidence. BlockXOne keeps those parts connected before and after a network transaction.
-                </p>
-                <dl className="bxo-definition-list mt-10">
-                  <div>
-                    <dt>Before issuance</dt>
-                    <dd>Terms, readiness, eligibility, wallet control, subscription and reconciliation.</dd>
-                  </div>
-                  <div>
-                    <dt>At issuance</dt>
-                    <dd>Exact authority, operation identity, signer policy, transaction and finality state.</dd>
-                  </div>
-                  <div>
-                    <dt>After issuance</dt>
-                    <dd>Holder balance, position evidence and an append-only legal-register sequence.</dd>
-                  </div>
-                </dl>
-              </div>
-            </div>
-
-            <figure className="bxo-image-stage mt-16 lg:mt-24" data-bxo-image-reveal data-bxo-flow-media data-bxo-parallax-frame>
-              <div className="bxo-image-stage__media bxo-image-stage__media--wide" data-bxo-parallax="section">
-                <Image
-                  src="/editorial/multi-asset-structures.webp"
-                  alt="Three material studies representing private debt, fund interests and real estate structures"
-                  fill
-                  sizes="(max-width: 639px) calc(100vw - 2rem), (max-width: 1023px) calc(100vw - 3rem), (max-width: 1439px) calc(100vw - 4rem), 1376px"
-                  quality={86}
-                />
-              </div>
-              <figcaption className="bxo-image-stage__caption">
-                <span data-bxo-media-caption-item>Three validated instrument structures</span>
-                <span data-bxo-media-caption-item>One shared control foundation</span>
-              </figcaption>
-            </figure>
-
-            <div className="mt-14 border-t border-bxo-border-subtle" data-bxo-reveal-group data-bxo-flow-sequence>
-              {assetStructures.map(({ index, title, text, fields }) => (
-                <article key={title} className="bxo-structure-row" data-bxo-reveal-item data-bxo-flow-step>
-                  <span className="bxo-structure-row__index" data-bxo-flow-index>{index}</span>
-                  <h3 data-bxo-flow-content>{title}</h3>
-                  <p data-bxo-flow-content>{text}</p>
-                  <ul aria-label={`${title} record areas`} data-bxo-flow-content>
-                    {fields.map((field) => <li key={field}>{field}</li>)}
-                  </ul>
-                </article>
-              ))}
-            </div>
-          </div>
-        </section>
-
-        <section className="bxo-light-section" aria-labelledby="lifecycle-heading" data-bxo-flow-section>
-          <div className="mx-auto grid max-w-[90rem] gap-14 px-4 py-20 sm:px-6 lg:grid-cols-[0.78fr_1.22fr] lg:px-8 lg:py-32">
-            <div className="lg:sticky lg:top-32 lg:self-start" data-bxo-reveal>
-              <div data-bxo-flow-heading>
-                <div className="bxo-editorial-index bxo-editorial-index--dark">
-                  <span>03</span>
-                  <span>Evidence chain</span>
-                </div>
-                <h2 id="lifecycle-heading" className="mt-7 max-w-xl font-ui text-4xl font-medium leading-[1.01] tracking-[-0.055em] text-[#071923] sm:text-5xl lg:text-6xl">
-                  One lifecycle. <span className="font-reading font-normal italic text-[#087f96]">No missing middle.</span>
-                </h2>
-              </div>
-              <p className="mt-7 max-w-lg font-reading text-lg leading-8 text-[#35515c]" data-bxo-flow-copy>
-                Each stage has an input, an accountable decision and an evidence output. A blocked condition remains visible instead of being bypassed.
-              </p>
-            </div>
-
-            <ol className="bxo-light-sequence" data-bxo-reveal-group data-bxo-flow-sequence>
-              <span className="bxo-light-sequence__rail" data-bxo-flow-rail aria-hidden="true" />
-              {lifecycle.map(([index, title, text]) => (
-                <li key={title} className="bxo-light-sequence__row" data-bxo-reveal-item data-bxo-flow-step>
-                  <span data-bxo-flow-index>{index}</span>
-                  <div data-bxo-flow-content>
-                    <h3>{title}</h3>
-                    <p>{text}</p>
-                  </div>
-                </li>
-              ))}
-            </ol>
-          </div>
-        </section>
-
-        <section className="bxo-editorial-section border-b border-bxo-border-subtle" data-bxo-flow-section>
-          <div className="mx-auto max-w-[90rem] px-4 py-20 sm:px-6 lg:px-8 lg:py-32">
-            <div className="grid gap-8 lg:grid-cols-[0.72fr_1.28fr] lg:items-end">
-              <div data-bxo-reveal data-bxo-flow-heading>
-                <div className="bxo-editorial-index">
-                  <span>04</span>
-                  <span>Product proof</span>
-                </div>
-                <h2 className="mt-7 max-w-3xl font-editorial text-5xl leading-[0.95] tracking-[-0.04em] text-bxo-text-primary sm:text-6xl lg:text-7xl">
-                  The business record and the chain record, together.
-                </h2>
-              </div>
-              <p className="max-w-3xl font-reading text-xl leading-8 text-bxo-text-secondary sm:text-2xl sm:leading-9" data-bxo-reveal data-bxo-flow-copy>
-                Operators can follow the instrument, approval, investor, subscription, settlement, transaction and final position without stitching together an unexplained result.
-              </p>
-            </div>
-
-            <div className="mt-14 lg:mt-20" data-bxo-product-story>
-              <PlatformPreview />
-            </div>
-          </div>
-        </section>
-
-        <section className="bxo-editorial-section border-b border-bxo-border-subtle" data-bxo-flow-section>
-          <div className="mx-auto max-w-[90rem] px-4 py-20 sm:px-6 lg:px-8 lg:py-32">
-            <div className="bxo-statement-grid">
-              <div data-bxo-reveal data-bxo-flow-heading>
-                <div className="bxo-editorial-index">
-                  <span>05</span>
-                  <span>Authority</span>
-                </div>
-                <h2 className="mt-7 max-w-3xl font-editorial text-5xl leading-[0.95] tracking-[-0.04em] text-bxo-text-primary sm:text-6xl lg:text-7xl">
-                  Authority follows responsibility.
-                </h2>
-              </div>
-              <p className="max-w-3xl font-reading text-xl leading-9 text-bxo-text-secondary sm:text-2xl" data-bxo-reveal data-bxo-flow-copy>
-                Separate workspaces and permissions let each participant act on the same operating truth without inheriting someone else&apos;s authority.
-              </p>
-            </div>
-
-            <figure className="bxo-image-stage mt-16 lg:mt-24" data-bxo-image-reveal data-bxo-flow-media data-bxo-parallax-frame>
-              <div className="bxo-image-stage__media" data-bxo-parallax="section">
-                <Image
-                  src="/editorial/stewardship.webp"
-                  alt="Private-market professionals reviewing legal records and an architectural model in a controlled workspace"
-                  fill
-                  sizes="(max-width: 639px) calc(100vw - 2rem), (max-width: 1023px) calc(100vw - 3rem), (max-width: 1439px) calc(100vw - 4rem), 1376px"
-                  quality={86}
-                />
-              </div>
-              <figcaption className="bxo-image-stage__caption">
-                <span data-bxo-media-caption-item>Shared operating truth</span>
-                <span data-bxo-media-caption-item>Role-specific authority</span>
-              </figcaption>
-            </figure>
-
-            <div className="bxo-responsibility-list mt-14" data-bxo-reveal-group data-bxo-flow-sequence>
-              {responsibilities.map(([title, text], index) => (
-                <article key={title} data-bxo-reveal-item data-bxo-flow-step>
-                  <span data-bxo-flow-index>{String(index + 1).padStart(2, '0')}</span>
-                  <h3 data-bxo-flow-content>{title}</h3>
-                  <p data-bxo-flow-content>{text}</p>
-                </article>
-              ))}
-            </div>
-          </div>
-        </section>
-
-        <section className="bxo-evidence-statement" data-bxo-flow-section>
-          <div className="mx-auto max-w-[90rem] px-4 py-20 sm:px-6 lg:px-8 lg:py-32">
-            <div className="bxo-editorial-index" data-bxo-reveal data-bxo-flow-heading>
-              <span>06</span>
-              <span>Position evidence</span>
-            </div>
-            <div className="mt-7 grid gap-10 lg:grid-cols-[1.1fr_0.9fr] lg:items-end">
-              <h2 className="max-w-5xl font-reading text-4xl leading-[1.03] tracking-[-0.04em] text-bxo-text-primary sm:text-6xl lg:text-7xl" data-bxo-reveal data-bxo-flow-heading>
-                A completed position should be explainable down to its exact unit.
-              </h2>
-              <p className="max-w-2xl font-reading text-lg leading-8 text-bxo-text-secondary" data-bxo-reveal data-bxo-flow-copy>
-                Finalization connects business authorization to network execution and appends the next hash-linked legal-register record.
-              </p>
-            </div>
-
-            <div className="bxo-evidence-field-list mt-14 lg:mt-20" data-bxo-reveal-group data-bxo-flow-sequence>
-              {evidenceFields.map((field, index) => (
-                <div key={field} data-bxo-reveal-item data-bxo-flow-step>
-                  <span data-bxo-flow-index>{String(index + 1).padStart(2, '0')}</span>
-                  <strong data-bxo-flow-content>{field}</strong>
-                </div>
-              ))}
-            </div>
-
-            <div
-              className="mt-20 grid gap-8 border-t border-bxo-border-subtle pt-10 lg:grid-cols-[1fr_auto] lg:items-end"
-              data-bxo-reveal
-              data-bxo-flow-actions
-            >
-              <div>
-                <p className="font-editorial text-4xl leading-none text-bxo-text-primary sm:text-5xl">See the complete operating sequence.</p>
-                <p className="mt-5 max-w-2xl font-reading text-base leading-8 text-bxo-text-secondary">
-                  Explore every gate, decision and evidence output, or enter the workspace built for your role.
-                </p>
-              </div>
-              <div className="flex flex-col gap-3 sm:flex-row">
-                <Button asChild size="lg" className="bxo-primary-cta h-12 rounded-sm px-7 font-semibold">
-                  <Link href="/how-it-works">
-                    See how it works
-                    <ArrowRight className="ml-2 h-4 w-4" data-bxo-motion-arrow aria-hidden="true" />
-                  </Link>
-                </Button>
-                {showPortalAccess ? (
-                  <Button asChild size="lg" variant="outline" className="bxo-secondary-cta h-12 rounded-sm px-7 font-semibold">
-                    <Link href="/login">Choose a workspace</Link>
-                  </Button>
-                ) : null}
-              </div>
-            </div>
+        <section className={styles.invitation} aria-labelledby="invitation-heading">
+          <div className={styles.container}>
+            <h2 id="invitation-heading" className={styles.displayHeading}>See how your team<br />could work on BlockXOne.</h2>
+            <p>Walk through your operating model, the responsibilities and the records.</p>
+            <div className={styles.actions}><Link href="/request-demo" className={styles.primaryAction}>Book a walkthrough <Arrow /></Link>{environment ? <a href={testnetHref} className={styles.textAction}>Explore testnet <Arrow /></a> : null}</div>
+            <span className={styles.lineEnd} aria-hidden="true" />
           </div>
         </section>
       </main>

@@ -1,13 +1,32 @@
+// @vitest-environment jsdom
+
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { describe, expect, it, vi } from 'vitest'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 vi.mock('next/image', () => ({ default: (props: { src: string; alt: string }) => createElement('img', { src: props.src, alt: props.alt }) }))
+// Exercise the actual entry/form projection and Review navigation without a
+// business command or draft/provider request. Refresh hooks remain real.
+const presentationBoundary = vi.hoisted(() => ({
+  submit: vi.fn(async () => false),
+  fetch: vi.fn(async () => { throw new Error('Unexpected network request in isolated entry presentation proof.') }),
+}))
+vi.mock('./entry-client', async importOriginal => ({
+  ...await importOriginal<typeof import('./entry-client')>(),
+  useEntryCommand: () => ({ busy: false, unknown: false, message: '', submit: presentationBoundary.submit, retry: async () => false }),
+}))
+vi.mock('./application-draft-client', async importOriginal => ({
+  ...await importOriginal<typeof import('./application-draft-client')>(),
+  useApplicationDraft: () => ({ status: 'UNAVAILABLE', loading: false, busy: false, available: false, saved: false, dirty: false, message: '', revision: 0, save: async () => false, recover: async () => false }),
+}))
 import { EntryScreen } from './entry-screen'
 import type { EntryApplication, EntryMandate } from '@/lib/portal/entry-contracts'
 import type { CustomerHandoff } from '@/lib/portal/customer-handoff'
 import { entryActorId, entryApplication, entryApplicationId, entryFixture, entryHandoff, entryOrganisationId } from '@/lib/portal/entry-test-fixtures'
 const release = { version: 'test', environment: 'TESTNET' as const, source: 'fixture' }
 const mandateId = '66666666-6666-4666-8666-666666666666'
+beforeEach(() => { presentationBoundary.submit.mockClear(); presentationBoundary.fetch.mockClear(); sessionStorage.clear(); localStorage.clear(); vi.stubGlobal('fetch', presentationBoundary.fetch) })
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); sessionStorage.clear(); localStorage.clear() })
 describe('normal admission command projection at applicant entry', () => {
   it('does not create or submit a capacity when the current server command projection excludes it', () => {
     const initial = entryFixture([])
@@ -193,11 +212,16 @@ describe('connected pending application workspaces', () => {
   })
   it('uses the validated projection rather than the legacy manual-test flag to offer the saved intake', () => {
     const application = projectedApplication({ review_route: 'AVAILABLE' })
-    const html = renderToStaticMarkup(createElement(EntryScreen, { initial: entryFixture([application]), release }))
-    expect(html).toContain('Draft: not submitted')
-    expect(html).toContain('Submit for review')
+    const view = render(createElement(EntryScreen, { initial: entryFixture([application]), release }))
+    const html = view.container.innerHTML
+    expect(html).toContain('Draft · Not submitted')
     expect(html).toContain('Upload private evidence')
     expect(html).toContain(application.id)
+    expect(screen.queryByRole('button', { name: 'Submit for review' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'View remaining items' }))
+    expect(screen.getByRole('button', { name: 'Submit for review' }).matches(':disabled')).toBe(true)
+    expect(presentationBoundary.submit).not.toHaveBeenCalled()
+    expect(presentationBoundary.fetch).not.toHaveBeenCalled()
   })
   it('keeps missing, stale, foreign and wrong-environment projections closed even with a legacy review flag', () => {
     const application = projectedApplication()
@@ -222,14 +246,20 @@ describe('connected pending application workspaces', () => {
   })
   it('reopens rejected same-application preparation only for a projected reapplication action', () => {
     const application = projectedApplication({ status: 'REJECTED', revision: 4, submitted_at: '2026-09-22T09:30:00Z', review_notes: 'Clarify the source of these fictional funds.' })
-    const html = renderToStaticMarkup(createElement(EntryScreen, { initial: entryFixture([application]), release }))
-    expect(html).toContain('Reapply for independent review')
+    const view = render(createElement(EntryScreen, { initial: entryFixture([application]), release }))
+    const html = view.container.innerHTML
     expect(html).toContain('Reapplication does not reverse rejection into approval')
     expect(html).toContain('Clarify the source of these fictional funds.')
+    expect(html).toContain(application.id)
     expect(html).toContain('Saved record: revision 4')
     expect(html).toContain('View submitted versions')
     expect(html).not.toContain('Refresh application status')
     expect(html).not.toContain('/portal/portfolio?mode=applicant')
+    expect(screen.queryByRole('button', { name: 'Reapply for independent review' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'View remaining items' }))
+    expect(screen.getByRole('button', { name: 'Reapply for independent review' }).matches(':disabled')).toBe(true)
+    expect(presentationBoundary.submit).not.toHaveBeenCalled()
+    expect(presentationBoundary.fetch).not.toHaveBeenCalled()
   })
   it('requires current admission and monitoring for account destinations, not an old approval badge', () => {
     const application = projectedApplication({ status: 'APPROVED', approved_until: '2099-01-01T00:00:00Z', provider_mode: 'MANUAL_TEST_REVIEW' })

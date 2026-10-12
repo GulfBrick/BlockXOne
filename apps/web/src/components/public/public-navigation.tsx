@@ -19,7 +19,7 @@ const NAV_LINKS = [
   { href: '/security-and-compliance', label: 'Security' },
 ]
 
-export function PublicNavigation({ showPortalAccess, environment }: { showPortalAccess: boolean; environment?: PlatformEnvironment }) {
+export function PublicNavigation({ showPortalAccess, environment, variant = 'default' }: { showPortalAccess: boolean; environment?: PlatformEnvironment; variant?: 'default' | 'homepage' }) {
   const pathname = usePathname()
   const [mobileOpen, setMobileOpen] = useState(false)
   const triggerRef = useRef<HTMLButtonElement>(null)
@@ -103,7 +103,9 @@ export function PublicNavigation({ showPortalAccess, environment }: { showPortal
   const localSignInLabel = environment === 'MAINNET'
     ? 'Mainnet sign in'
     : environment === 'TESTNET' ? 'Testnet sign in' : 'Sign in'
-  const primaryAction = workflowIsActive
+  const primaryAction = variant === 'homepage'
+    ? { href: '/request-demo', label: 'Book a walkthrough' }
+    : workflowIsActive
     ? showPortalAccess
       ? { href: '/login', label: 'Choose workspace' }
       : { href: '/security-and-compliance', label: 'Review security' }
@@ -111,7 +113,7 @@ export function PublicNavigation({ showPortalAccess, environment }: { showPortal
 
   return (
     <>
-      <nav aria-label="Primary navigation" className="hidden items-center gap-1 xl:flex" data-bxo-nav>
+      <nav aria-label="Primary navigation" className={variant === 'homepage' ? 'hidden items-center gap-1 2xl:flex' : 'hidden items-center gap-1 xl:flex'} data-bxo-nav>
         {NAV_LINKS.map((item) => {
           const active = isActive(item.href)
           return (
@@ -150,7 +152,7 @@ export function PublicNavigation({ showPortalAccess, environment }: { showPortal
         ) : null}
       </nav>
 
-      <div className="hidden items-center justify-end gap-2 xl:flex" data-bxo-nav-actions>
+      <div className={variant === 'homepage' ? 'hidden items-center justify-end gap-2 2xl:flex' : 'hidden items-center justify-end gap-2 xl:flex'} data-bxo-nav-actions>
         {counterpart ? <a href={counterpart.href} className="px-2 py-3 text-xs text-bxo-text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bxo-accent-primary">{counterpart.label}</a> : null}
         {environment ? <Button asChild variant="outline" className="bxo-secondary-cta h-11 rounded-sm"><Link href="/register">Register</Link></Button> : null}
         {showPortalAccess ? (
@@ -163,7 +165,7 @@ export function PublicNavigation({ showPortalAccess, environment }: { showPortal
         </Button>
       </div>
 
-      <div className="relative xl:hidden">
+      <div className={variant === 'homepage' ? 'relative 2xl:hidden' : 'relative xl:hidden'}>
         <button
           ref={triggerRef}
           type="button"

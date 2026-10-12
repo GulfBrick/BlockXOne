@@ -11,6 +11,7 @@ import { ApplicationDetailsSummary, ApplicationHistoryFailureNotice, OnboardingF
 import { ApplicationReview } from './portal-workflows'
 import { dateLabel } from './portal-primitives'
 import { PortalIdentityProvider } from './portal-client'
+import { CustomerHandoffPanel } from './customer-handoff'
 import { onboardingHistoryUnavailableMessage, type OnboardingHistoryEntry, type OnboardingNavigation } from '@/lib/portal/onboarding-flow'
 import { applicationDraftAnswersSchema } from '@/lib/portal/application-drafts'
 
@@ -50,15 +51,27 @@ function reviewer(persona: PortalApplication['persona'], details: PortalApplicat
 describe('persona-specific application preparation', () => {
   it.each(['INVESTOR', 'WEALTH_MANAGER'] as const)('connects the admitted %s draft to manual sandbox KYC without changing submission authority', persona => {
     const application = entryApplication({ persona, review_route: 'AVAILABLE' })
-    const html = renderToStaticMarkup(createElement(OnboardingForm, {
-      application, environment: 'TESTNET', onSaved: save, handoff: entryHandoff(application),
-    }))
+    const network = rejectUnexpectedFetch()
+    const blank = mountedForm(application)
+    const html = blank.container.innerHTML
     expect(html).toContain('KYC placeholder · manual sandbox review')
     expect(html).toContain('View recorded provider evidence')
     expect(html).not.toContain('Start sandbox identity check')
     expect(html).toContain('fictional test data')
-    expect(html).toContain('An independent reviewer must make the decision')
-    expect(html).toContain('disabled=""')
+    fireEvent.click(screen.getByRole('button', { name: 'View remaining items' }))
+    expect(screen.getByRole('button', { name: 'Submit for review' }).matches(':disabled')).toBe(true)
+    expect(boundary.submit).not.toHaveBeenCalled()
+    blank.unmount()
+
+    const readyDetails = persona === 'WEALTH_MANAGER'
+      ? applicationSubmissionDetails('WEALTH_MANAGER', withOwnership(applicationFormDetails(entryApplication({ persona, details: manager }))))
+      : investor
+    const ready = mountedForm({ ...application, details: readyDetails })
+    reviewAndAcknowledge()
+    expect(ready.container.innerHTML).toContain('An independent reviewer must make the decision')
+    expect(screen.getByRole('button', { name: 'Submit for review' }).matches(':disabled')).toBe(false)
+    expect(boundary.submit).not.toHaveBeenCalled()
+    expect(network).not.toHaveBeenCalled()
   })
 
   it('never counts a quarantined upload as an attachable document', () => {
@@ -198,12 +211,19 @@ describe('truthful application state and handoff', () => {
     expect(html).not.toContain('Upload private evidence')
   })
   it('reopens requested changes with the recorded rationale and explicit resubmission', () => {
-    const html = form({ persona: 'WEALTH_MANAGER', status: 'CHANGES_REQUIRED', details: manager, review_notes: 'Please clarify the fictional board appointment.' })
+    const network = rejectUnexpectedFetch()
+    const application = entryApplication({ persona: 'WEALTH_MANAGER', status: 'CHANGES_REQUIRED', review_route: 'AVAILABLE', provider_mode: 'MANUAL_TEST_REVIEW', details: manager, review_notes: 'Please clarify the fictional board appointment.' })
+    const view = mountedForm(application, vi.fn(), vi.fn(), { handoff: undefined })
+    const html = view.container.innerHTML
     expect(html).toContain('Changes requested by your reviewer')
     expect(html).toContain('Please clarify the fictional board appointment.')
-    expect(html).toContain('Resubmit for review')
     expect(html).toContain('<textarea')
     expect(html).not.toContain('Application submitted</strong>')
+    expect(screen.queryByRole('button', { name: 'Resubmit for review' })).toBeNull()
+    reviewAndAcknowledge()
+    expect(screen.getByRole('button', { name: 'Resubmit for review' }).matches(':disabled')).toBe(true)
+    expect(boundary.submit).not.toHaveBeenCalled()
+    expect(network).not.toHaveBeenCalled()
   })
   it('separates approved customer admission from operating assignment', () => {
     const html = form({ persona: 'WEALTH_MANAGER', status: 'APPROVED', details: manager, admission_purpose: 'CUSTOMER_ORGANISATION_ADMISSION' })
@@ -226,24 +246,35 @@ describe('truthful application state and handoff', () => {
   it('uses projected rejected reapplication while preserving the decision and same saved reference', () => {
     const application = entryApplication({ status: 'REJECTED', review_route: 'AVAILABLE', details: investor, revision: 4, submitted_at: '2026-09-22T09:30:00Z', review_notes: 'Clarify the source of these fictional funds.' })
     const handoff = entryHandoff(application)
-    const html = renderToStaticMarkup(createElement(OnboardingForm, { application, handoff, environment: 'TESTNET', onSaved: save }))
-    expect(html).toContain('Reapply for independent review')
+    const network = rejectUnexpectedFetch()
+    const view = mountedForm(application, vi.fn(), vi.fn(), { handoff, handoffPanel: <CustomerHandoffPanel application={application} handoff={handoff} /> })
+    const html = view.container.innerHTML
     expect(html).toContain('Reapplication does not reverse rejection into approval')
     expect(html).toContain('Clarify the source of these fictional funds.')
     expect(html).toContain(application.id)
     expect(html).toContain('Saved record: revision 4')
     expect(html).toContain('View submitted versions')
     expect(html).toContain('<textarea')
+    expect(screen.queryByRole('button', { name: 'Reapply for independent review' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'View remaining items' }))
+    expect(screen.getByRole('button', { name: 'Reapply for independent review' }).matches(':disabled')).toBe(true)
+    expect(boundary.submit).not.toHaveBeenCalled()
+    expect(network).not.toHaveBeenCalled()
   })
   it('keeps projected missing-reviewer preparation unsaved and submission disabled', () => {
     const application = entryApplication({ review_route: 'REVIEWER_UNAVAILABLE', details: investor })
     const handoff = entryHandoff(application)
-    const html = renderToStaticMarkup(createElement(OnboardingForm, { application, handoff, environment: 'TESTNET', onSaved: save }))
+    const network = rejectUnexpectedFetch()
+    const view = mountedForm(application, vi.fn(), vi.fn(), { handoff })
+    const html = view.container.innerHTML
     expect(html).toContain('Independent reviewer not assigned')
     expect(html).toContain('Submission remains disabled')
-    expect(html).toContain('Submission unavailable; review route required')
     expect(html).toContain('<textarea')
     expect(html).not.toContain('Check review route and submit')
+    reviewAndAcknowledge()
+    expect(screen.getByRole('button', { name: 'Submission unavailable; review route required' }).matches(':disabled')).toBe(true)
+    expect(boundary.submit).not.toHaveBeenCalled()
+    expect(network).not.toHaveBeenCalled()
   })
   it('does not allow editing or provider-start actions for a projected monitoring hold', () => {
     const application = entryApplication({ review_route: 'AVAILABLE', details: investor })
@@ -306,7 +337,7 @@ describe('reviewer sees the same evidence and purpose as the applicant', () => {
   })
 })
 
-function mountedForm(application: EntryApplication, onSaved = vi.fn(), onDirtyChange = vi.fn()) {
+function mountedForm(application: EntryApplication, onSaved = vi.fn(), onDirtyChange = vi.fn(), overrides: Pick<Parameters<typeof OnboardingForm>[0], 'handoff' | 'handoffPanel'> = {}) {
   const view = render(
     <PortalIdentityProvider actorId={entryActorId} environment="TESTNET">
       <div>
@@ -314,11 +345,16 @@ function mountedForm(application: EntryApplication, onSaved = vi.fn(), onDirtyCh
         <a href="#same-page">Same-page section</a>
         <form action="/auth/logout" method="post" onSubmit={event => event.preventDefault()}><button type="submit">Sign out</button></form>
         <form data-onboarding-discard="true" onSubmit={event => { event.preventDefault(); boundary.submit() }}><button type="submit">Create another application</button></form>
-        <OnboardingForm application={application} environment="TESTNET" onSaved={onSaved} onDirtyChange={onDirtyChange} handoff={entryHandoff(application)} />
+        <OnboardingForm application={application} environment="TESTNET" onSaved={onSaved} onDirtyChange={onDirtyChange} handoff={entryHandoff(application)} {...overrides} />
       </div>
     </PortalIdentityProvider>,
   )
   return { ...view, onSaved, onDirtyChange }
+}
+function rejectUnexpectedFetch() {
+  const network = vi.fn(async () => { throw new Error('Unexpected network request in isolated onboarding presentation proof.') })
+  vi.stubGlobal('fetch', network)
+  return network
 }
 function next() { fireEvent.click(screen.getByRole('button', { name: 'Continue' })) }
 function back() { fireEvent.click(screen.getByRole('button', { name: 'Back' })) }
