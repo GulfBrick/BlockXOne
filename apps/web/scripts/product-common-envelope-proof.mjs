@@ -117,7 +117,7 @@ function termsV3(base, productOrganisation, ordinal, name) {
 export async function proveProductCommonEnvelope(db, clients, featureSql, fundV2LegacyCrossrefs) {
   if (process.env.GITHUB_ACTIONS !== 'true' || clients.length !== 2) throw new Error('CE proof requires retained disposable cloud fixture')
   let checks = 0, sequence = 10000, begun = false, phase = 'baseline', mode = 'TEST_PASSWORD', primaryFailure
-  let standardCommitted = false, standardPrior, standardFixture, settingsBefore, proofStartedAt
+  let standardCommitted = false, standardPrior, standardFixture, settingsBefore, proofStartedAt, passwordFixtureTouched = false
   const key = () => fictional(++sequence)
   const eq = (actual, expected, label) => { assert.deepEqual(actual, expected, label); checks++ }
   const truth = (value, label) => { assert.ok(value, label); checks++ }
@@ -167,6 +167,53 @@ export async function proveProductCommonEnvelope(db, clients, featureSql, fundV2
       result[`${table.nspname}.${table.relname}`] = await scalar(`select coalesce(jsonb_agg(to_jsonb(t) order by to_jsonb(t)::text),'[]'::jsonb) from ${table.nspname}.${table.relname} t`, [], client)
     }
     return result
+  }
+  const passwordFixtureConfiguration = () => {
+    eq(originalRows['bx1_portal.entry_configuration'].length, 1, 'one exact captured fixture configuration')
+    const captured = originalRows['bx1_portal.entry_configuration'][0]
+    eq(captured.environment, 'TESTNET', 'password selection is confined to disposable TEST configuration')
+    eq(captured.manual_test_review, true, 'password selection preserves already admitted synthetic review posture')
+    eq(typeof captured.test_ordinary_entry_enabled, 'boolean', 'original ordinary-entry Boolean is captured, not assumed')
+    return captured
+  }
+  const currentPasswordFixtureConfiguration = async () => {
+    await admin()
+    return scalar('select to_jsonb(c) from bx1_portal.entry_configuration c where singleton for update')
+  }
+  const selectPasswordFixture = async () => {
+    eq(mode, 'TEST_PASSWORD', 'fixture selection never changes STANDARD assurance')
+    const captured = passwordFixtureConfiguration()
+    eq(await currentPasswordFixtureConfiguration(), captured, 'selection starts from complete exact captured policy')
+    passwordFixtureTouched = true
+    const selected = await db.query("update bx1_portal.entry_configuration set test_ordinary_entry_enabled=true where singleton and environment='TESTNET' and manual_test_review=true")
+    eq(selected.rowCount, 1, 'only the existing admitted disposable TEST singleton is selected')
+    eq(await currentPasswordFixtureConfiguration(), { ...captured, test_ordinary_entry_enabled: true }, 'selection changes only the captured ordinary-entry Boolean')
+    await claims(1)
+    eq(await scalar("select jsonb_build_object('actor',auth.uid(),'session',auth.jwt()->>'session_id','aal',auth.jwt()->>'aal','sql_role',current_user)"),
+      { actor: actor(1), session: actor(101), aal: 'aal1', sql_role: 'authenticated' }, 'unchanged password actor/session/physical role is selected')
+    await admin()
+    eq(await scalar('select bx1_portal.admission_password_session()'), true, 'same captured claims satisfy actual admitted password predicate')
+    eq(await scalar('select bx1_portal.offering_workflow_context($1::jsonb)', [JSON.stringify(manager)]), true, 'same captured claims satisfy exact manager package context')
+    const beforeRead = await state()
+    const snapshot = await read(1, manager)
+    eq(snapshot.operating_context, manager, 'public password preflight preserves exact current manager context')
+    eq(snapshot.offering_access?.session_mode, 'TEST_PASSWORD', 'public preflight proves actual password path without native fallback')
+    eq(await state(), beforeRead, 'password path preflight has no complete-state effect')
+    console.log('BX1_COMMON_ENVELOPE_PASSWORD_FIXTURE_SELECTED', JSON.stringify({ captured_enabled: captured.test_ordinary_entry_enabled,
+      selected_enabled: true, other_fields_unchanged: true, same_actor_session: true, password_predicate: true,
+      manager_context: true, public_marker: 'TEST_PASSWORD', hosted_policy_changed: false }))
+  }
+  const restorePasswordFixture = async (requireSelected = true) => {
+    const captured = passwordFixtureConfiguration(), current = await currentPasswordFixtureConfiguration()
+    if (!requireSelected && isDeepStrictEqual(current, captured)) {
+      console.log('BX1_COMMON_ENVELOPE_PASSWORD_FIXTURE_RESTORED', JSON.stringify({ exact_captured_row: true, already_restored: true }))
+      return
+    }
+    eq(current, { ...captured, test_ordinary_entry_enabled: true }, 'restore refuses unexpected configuration drift')
+    const restored = await db.query("update bx1_portal.entry_configuration set test_ordinary_entry_enabled=$1 where singleton and environment='TESTNET' and manual_test_review=true", [captured.test_ordinary_entry_enabled])
+    eq(restored.rowCount, 1, 'restore changes only the existing disposable singleton Boolean')
+    eq(await currentPasswordFixtureConfiguration(), captured, 'complete original configuration row restored exactly')
+    console.log('BX1_COMMON_ENVELOPE_PASSWORD_FIXTURE_RESTORED', JSON.stringify({ exact_captured_row: true, already_restored: false }))
   }
   const security = async () => {
     await admin()
@@ -1114,8 +1161,9 @@ export async function proveProductCommonEnvelope(db, clients, featureSql, fundV2
     }
     await commit()
     phase = 'both-assurance-both-asset-canonical-loops'
-    const beforeStandard = await state()
     await begin()
+    await selectPasswordFixture()
+    const beforeStandard = await state()
     await isolated(async () => {
       mode = 'STANDARD'
       for (const n of [1, 2, 3, 4, 5]) {
@@ -1317,6 +1365,7 @@ export async function proveProductCommonEnvelope(db, clients, featureSql, fundV2
     await standardCleanup()
     phase = 'strict-input-correspondence-final-preservation'
     await begin()
+    await restorePasswordFixture()
     eq(await funcs(), installedFunctions, 'final complete pg_proc manifests remain exact after every path and wait')
     eq(await security(), installedSecurity, 'final all roles/edges/ACL/RLS/triggers/constraints remain exact')
     eq(await settings(), settingsBefore, 'final original deadlines and engine settings unchanged')
@@ -1475,7 +1524,9 @@ export async function proveProductCommonEnvelope(db, clients, featureSql, fundV2
       'bx1_portal.product_service_appointment_requests', 'bx1_portal.product_service_appointment_receipts',
       'bx1_portal.offering_amendment_begin_receipts', 'bx1_portal.offering_review_reopen_receipts'])
     for (const [name, rows] of Object.entries(additions)) if (!allowed.has(name)) eq(rows, [], 'all other identity/role/admission/receipt/provider/scanner/wallet/order/funding rows remain exact')
-    for (const item of records) {
+    await isolated(async () => {
+      await selectPasswordFixture()
+      for (const item of records) {
       await snapshotData(item.p, item.p.terms); await checkReviews(item.p)
       const snapshot = await read(1, manager), current = findProduct(snapshot, item.p.id)
       eq(current.offering_package.common_envelope, item.p.terms.common_envelope, 'fresh final read uses exact immutable common proposal')
@@ -1487,7 +1538,10 @@ export async function proveProductCommonEnvelope(db, clients, featureSql, fundV2
         eq(entry.deployment_configuration, frozen.terms.deployment_configuration, 'history cannot borrow mutable current configuration')
         for (const field of newReviewFields) eq(entry[field], frozen[field], 'each historical fingerprint belongs to that immutable revision')
       }
-    }
+      }
+      await restorePasswordFixture()
+    })
+    eq(await currentPasswordFixtureConfiguration(), passwordFixtureConfiguration(), 'final scoped-read savepoint retains complete original configuration')
     await admin()
     eq(await funcs(), installedFunctions, 'final full functions exact after final scoped reads')
     eq(await security(), installedSecurity, 'final full security/catalog exact after cleanup and final reads')
@@ -1502,12 +1556,27 @@ export async function proveProductCommonEnvelope(db, clients, featureSql, fundV2
     if (begun) await db.query('rollback').catch(() => {})
     await admin().catch(() => {})
     for (const client of clients) { await client.query('rollback').catch(() => {}); await admin(client).catch(() => {}) }
-    if (standardCommitted) {
-      try { await standardCleanup() }
-      catch (cleanupError) {
-        console.error('BX1_PRODUCT_COMMON_ENVELOPE_CLEANUP_FAILED code=COMMITTED_STANDARD_FIXTURE')
-        if (!primaryFailure) throw cleanupError
-        throw primaryFailure
+    let priorCleanupFailure
+    try {
+      if (standardCommitted) {
+        try { await standardCleanup() }
+        catch (cleanupError) {
+          console.error('BX1_PRODUCT_COMMON_ENVELOPE_CLEANUP_FAILED code=COMMITTED_STANDARD_FIXTURE')
+          if (!primaryFailure) throw cleanupError
+          throw primaryFailure
+        }
+      }
+    } catch (error) { priorCleanupFailure = error; throw error }
+    finally {
+      if (passwordFixtureTouched) {
+        try {
+          if (begun) { await db.query('rollback'); begun = false }
+          await begin(); await restorePasswordFixture(false); await commit()
+        } catch (cleanupError) {
+          if (begun) { await db.query('rollback').catch(() => {}); begun = false }
+          console.error('BX1_PRODUCT_COMMON_ENVELOPE_CLEANUP_FAILED code=PASSWORD_FIXTURE_POLICY')
+          if (!primaryFailure && !priorCleanupFailure) throw cleanupError
+        }
       }
     }
   }
