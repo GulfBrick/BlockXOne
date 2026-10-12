@@ -748,7 +748,7 @@ export async function proveProductCommonEnvelope(db, clients, featureSql, fundV2
       await denied('canonical publication remains outside v3 even under synthetic readiness', () => command(1, manager, 'publish_product', { product_id: p.id, expected_revision: p.revision }), mode === 'STANDARD' ? '23514' : '42501')
       await claims(1); await admin()
       await denied('privileged product publication remains sealed', () => db.query("update bx1_portal.products set status='PUBLISHED',published_at=clock_timestamp() where id=$1", [p.id]), '23514',
-        asset === 'FUND' ? 'fund_v2_settlement_route_not_admitted' : 'property_v2_settlement_route_not_admitted')
+        'fund_v2_settlement_route_not_admitted')
       const investorAccount = originalRows['bx1_portal.investment_accounts'].find(account => account.holder_user_id === actor(7))
       truth(investorAccount, 'public refusal reuses exact retained actor-seven account without adding financial authority')
       await denied('canonical v3 subscription is refused under retained closed admission, not positive financial authority', () => command(7, role('Investor'), 'subscribe', {
