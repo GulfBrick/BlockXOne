@@ -322,22 +322,142 @@ export async function proveProductCommonEnvelope(db, clients, featureSql, fundV2
     await denied('changed new hash with same key conflicts before legacy input could collide',
       () => command(n, context, action, { ...body, common_envelope_hash: '0'.repeat(64) }, requestKey), '23505')
   }
+  const replayAuthorityObservation = async (n, context, action, body, appointment) => {
+    // The owner may inspect private predicates, but each observation retains this
+    // exact caller's JWT. admin() deliberately resets only the SQL role.
+    await claims(n); await admin()
+    return scalar(`select jsonb_build_object(
+      'linkage',jsonb_build_object(
+        'caller_exact',auth.uid()=$1::uuid,'caller_session_exact',auth.jwt()->>'session_id'=$2::text,
+        'caller_is_source_manager',auth.uid()=m.applicant_user_id,
+        'application_actor_exact',a.id=$3::uuid and a.user_id=$4::uuid,
+        'mandate_source_exact',m.id=$5::uuid and m.application_id=a.id and m.applicant_user_id=a.user_id,
+        'product_organisation_exact',p.id=$6::uuid and p.organisation_id=o.id and o.id=m.product_organisation_id
+          and o.application_id=a.id and o.owner_id=a.user_id,
+        'native_binding_exact',b.id=m.authority_binding_id and b.product_organisation_id=o.id
+          and b.native_organisation_id=m.native_organisation_id and b.role=m.role
+          and b.approval_receipt_id=m.approval_receipt_id,
+        'native_manager_membership_exact',nm.id=m.native_membership_id and nm.user_id=m.applicant_user_id
+          and nm.organisation_id=m.native_organisation_id and nm.role=m.role,
+        'reviewer_appointment_exact',pa.id=$7::uuid and pa.product_id=p.id and pa.product_organisation_id=o.id
+          and pa.appointee_user_id=auth.uid() and pa.role=$8::text,
+        'appointment_source_manager_exact',pa.requested_by_user_id=m.applicant_user_id
+          and pa.requested_in_context->>'organisationId'=m.native_organisation_id::text),
+      'predicates',jsonb_build_object(
+        'mandate_effective',bx1_portal.representative_mandate_effective(m.id),
+        'manager_current',bx1_portal.offering_workflow_manager_current(m.applicant_user_id,o.id,m.native_organisation_id),
+        'product_organisation_current',bx1_portal.current_product_organisation(o.id),
+        'native_binding_current',b.status='ACTIVE' and b.valid_from<=clock_timestamp() and b.valid_until>clock_timestamp(),
+        'manager_membership_current',bx1_portal.native_membership_effective(m.native_membership_id),
+        'reviewer_appointment_effective',bx1_portal.offering_workflow_product_appointment_effective(pa.id),
+        'reviewer_appointment_authorised',bx1_portal.offering_workflow_product_appointment_authorised($9::jsonb,p.id,$8::text),
+        'command_context_current',bx1_portal.offering_workflow_command_context($9::jsonb,$10::text),
+        'operating_context_current',bx1_portal.valid_operating_context($9::jsonb),
+        'password_session',bx1_portal.admission_password_session(),
+        'jwt_aal1',auth.jwt()->>'aal'='aal1','jwt_aal2',auth.jwt()->>'aal'='aal2',
+        'jwt_password_only',jsonb_array_length(auth.jwt()->'amr')=1 and auth.jwt()->'amr'->0->>'method'='password',
+        'native_session_aal1',s.aal::text='aal1','native_session_aal2',s.aal::text='aal2'))
+      from bx1_portal.representative_mandates m
+      join bx1_portal.applications a on a.id=m.application_id
+      join bx1_portal.products p on p.id=$6::uuid
+      join bx1_portal.organisations o on o.id=p.organisation_id
+      left join bx1_portal.organisation_authority_bindings b on b.id=m.authority_binding_id
+      left join public.bx1_memberships nm on nm.id=m.native_membership_id
+      left join bx1_portal.product_service_appointments pa on pa.id=$7::uuid
+      left join auth.sessions s on s.id=$2::uuid and s.user_id=$1::uuid
+      where m.id=$5::uuid`, [actor(n), actor(100 + n), managerApplication.id, actor(1), managerMandate.id,
+      body.product_id, appointment.id, context.role, JSON.stringify(context), action])
+  }
+  const replayRowCounts = rows => Object.fromEntries(Object.entries(rows).map(([name, values]) => [name, values.length]))
+  const observeReplayCallback = async (n, context, action, body, requestKey, postMutation) => {
+    // Reused sequentially and released before return; do not advance the retained
+    // business request-key/fixture sequence just to name an observation.
+    await admin(); const savepoint = 'ce_replay_observation'
+    await db.query(`savepoint ${savepoint}`)
+    let result, observedRows, recovered = false
+    try {
+      const response = await command(n, context, action, body, requestKey)
+      observedRows = await state()
+      const allowed = ['operating_context', 'products', 'product_appointments', 'offering_access', 'requests', 'events']
+      const type = value => Array.isArray(value) ? 'array' : value === null ? 'null' : typeof value
+      const matches = Array.isArray(response?.products) ? response.products.filter(p => p.id === body.product_id) : []
+      result = { outcome: 'RETURNED', sqlstate: null, response_shape: {
+        type: type(response), fields: Object.fromEntries(allowed.filter(name => Object.hasOwn(response ?? {}, name))
+          .map(name => [name, type(response[name])])),
+        other_field_count: response && typeof response === 'object' ? Object.keys(response).filter(name => !allowed.includes(name)).length : 0,
+        target_product_count: matches.length, target_product_visible: matches.length === 1,
+        operating_context_continuity: isDeepStrictEqual(response?.operating_context, context),
+        target_terms_hash_matches_original_input: matches.length === 1 && matches[0].terms_hash === body.terms_hash },
+      state_observation: 'BEFORE_ROLLBACK', full_state_equal: isDeepStrictEqual(observedRows, postMutation) }
+    } catch (error) {
+      // A SQL error aborts the subtransaction. Recover it before owner inspection;
+      // never claim that the recovered state was an in-transaction response.
+      await db.query(`rollback to savepoint ${savepoint}`); recovered = true
+      observedRows = await state()
+      result = { outcome: typeof error?.code === 'string' && /^[0-9A-Z]{5}$/.test(error.code) ? 'SQL_ERROR' : 'UNCODED_ERROR',
+        sqlstate: typeof error?.code === 'string' && /^[0-9A-Z]{5}$/.test(error.code) ? error.code : null,
+        response_shape: null, state_observation: 'AFTER_ERROR_ROLLBACK', full_state_equal: isDeepStrictEqual(observedRows, postMutation) }
+    } finally {
+      if (!recovered) await db.query(`rollback to savepoint ${savepoint}`)
+      await db.query(`release savepoint ${savepoint}`); await admin()
+    }
+    result.row_counts_before = replayRowCounts(postMutation)
+    result.row_counts_observed = replayRowCounts(observedRows)
+    const restored = await state()
+    result.row_counts_restored = replayRowCounts(restored)
+    result.post_mutation_restored = isDeepStrictEqual(restored, postMutation)
+    eq(restored, postMutation, 'diagnostic callback restores exact post-mutation baseline before original denial')
+    return result
+  }
   const revokedReplay = async (n, context, action, body, requestKey, appointment) => {
     const before = await state()
-    for (const mutation of [
-      () => db.query("update auth.sessions set not_after=clock_timestamp()-interval '1 minute' where id=$1", [actor(100 + n)]),
-      () => db.query("update public.bx1_memberships set status='SUSPENDED' where id=$1", [actor(400 + n)]),
-      () => db.query("update public.bx1_profiles set status='SUSPENDED' where id=$1", [actor(n)]),
-      () => db.query("update bx1_portal.product_service_appointments set status='REVOKED',revision=revision+1,revoked_at=clock_timestamp(),revoked_by_user_id=$2,revoke_reason='Fictional replay revocation boundary only.' where id=$1", [appointment.id, actor(5)]),
-      () => db.query("with expiry as materialized (select clock_timestamp()-interval '1 day' AS expired_at) update bx1_portal.applications a set reviewed_at=e.expired_at-interval '30 days',approved_until=e.expired_at from expiry e where a.id=$1", [managerApplication.id]),
-      () => db.query("update bx1_portal.representative_mandates set status='REVOKED',revision=revision+1,revoked_at=clock_timestamp(),revoked_by_user_id=$2,revoke_reason='Fictional exact CE source mandate revoked.' where id=$1", [managerMandate.id, actor(2)]),
-      () => db.query(`insert into bx1_portal.customer_monitoring_cases(application_id,state,revision,decided_at,decided_by,last_receipt_id)
+    const label = { mode, asset: modelTerms.get(body.product_id)?.asset_type,
+      review_kind: action === 'review_offering_issuer' ? 'ISSUER' : 'COMPLIANCE' }
+    for (const [mutationLabel, mutation] of [
+      ['CALLER_SESSION_EXPIRED', () => db.query("update auth.sessions set not_after=clock_timestamp()-interval '1 minute' where id=$1", [actor(100 + n)])],
+      ['CALLER_MEMBERSHIP_SUSPENDED', () => db.query("update public.bx1_memberships set status='SUSPENDED' where id=$1", [actor(400 + n)])],
+      ['CALLER_PROFILE_SUSPENDED', () => db.query("update public.bx1_profiles set status='SUSPENDED' where id=$1", [actor(n)])],
+      ['CALLER_APPOINTMENT_REVOKED', () => db.query("update bx1_portal.product_service_appointments set status='REVOKED',revision=revision+1,revoked_at=clock_timestamp(),revoked_by_user_id=$2,revoke_reason='Fictional replay revocation boundary only.' where id=$1", [appointment.id, actor(5)])],
+      ['SOURCE_APPLICATION_EXPIRED', () => db.query("with expiry as materialized (select clock_timestamp()-interval '1 day' AS expired_at) update bx1_portal.applications a set reviewed_at=e.expired_at-interval '30 days',approved_until=e.expired_at from expiry e where a.id=$1", [managerApplication.id])],
+      ['SOURCE_MANAGER_MANDATE_REVOKED', () => db.query("update bx1_portal.representative_mandates set status='REVOKED',revision=revision+1,revoked_at=clock_timestamp(),revoked_by_user_id=$2,revoke_reason='Fictional exact CE source mandate revoked.' where id=$1", [managerMandate.id, actor(2)])],
+      ['SOURCE_MONITORING_ON_HOLD', () => db.query(`insert into bx1_portal.customer_monitoring_cases(application_id,state,revision,decided_at,decided_by,last_receipt_id)
         values($1,'ON_HOLD',1,clock_timestamp(),$2,$3) on conflict(application_id) do update
         set state='ON_HOLD',revision=bx1_portal.customer_monitoring_cases.revision+1,decided_at=clock_timestamp(),decided_by=$2,last_receipt_id=$3`,
-      [managerApplication.id, actor(2), fictional(9450)]),
+      [managerApplication.id, actor(2), fictional(9450)])],
     ]) await isolated(async () => {
-      await mutation()
+      const diagnostic = mutationLabel === 'SOURCE_MANAGER_MANDATE_REVOKED'
+      const authorityBefore = diagnostic ? await replayAuthorityObservation(n, context, action, body, appointment) : null
+      await admin()
+      const mutationResult = await mutation()
+      console.log('BX1_COMMON_ENVELOPE_REVOKED_REPLAY_CASE', JSON.stringify({ ...label, mutation: mutationLabel,
+        affected_row_count: mutationResult.rowCount, original_denial: 'PENDING' }))
+      if (diagnostic) {
+        const originalMode = mode
+        try {
+          const postMutation = await state()
+          const authorityAfter = await replayAuthorityObservation(n, context, action, body, appointment)
+          const observation = await observeReplayCallback(n, context, action, body, requestKey, postMutation)
+          let control
+          if (mode === 'TEST_PASSWORD' && authorityAfter.predicates.password_session === true) {
+            control = { status: 'EXACT_EXISTING_TEST_PASSWORD', authority: await replayAuthorityObservation(n, context, action, body, appointment),
+              callback: await observeReplayCallback(n, context, action, body, requestKey, postMutation) }
+          } else control = { status: 'CONTROL_UNAVAILABLE', reason: 'UNCHANGED_ACTOR_SESSION_DOES_NOT_MEET_TEST_PASSWORD',
+            jwt_aal1: authorityAfter.predicates.jwt_aal1, jwt_password_only: authorityAfter.predicates.jwt_password_only,
+            native_session_aal1: authorityAfter.predicates.native_session_aal1,
+            session_assurance_and_factors_unchanged: isDeepStrictEqual(postMutation['auth.sessions'], before['auth.sessions'])
+              && isDeepStrictEqual(postMutation['auth.mfa_factors'], before['auth.mfa_factors']) }
+          console.log('BX1_COMMON_ENVELOPE_REPLAY_AUTHORITY_DIAGNOSTIC', JSON.stringify({ ...label, mutation: mutationLabel,
+            affected_row_count: mutationResult.rowCount, request_key_fingerprint: digest(requestKey),
+            input_fingerprint: digest(JSON.stringify({ actor_id: actor(n), request_key: requestKey,
+              command: action, payload: body, operating_context: context })),
+            payload_fingerprint: digest(JSON.stringify(body)), before: authorityBefore, after: authorityAfter,
+            callback: observation, control }))
+          eq(await state(), postMutation, 'diagnostic and optional exact control preserve the deliberate source revocation')
+        } finally { mode = originalMode; await claims(n); await admin() }
+      }
       await denied('exact historical replay still requires current session/profile/member/appointment/admission/mandate/monitoring', () => command(n, context, action, body, requestKey), '42501')
+      console.log('BX1_COMMON_ENVELOPE_REVOKED_REPLAY_CASE', JSON.stringify({ ...label, mutation: mutationLabel,
+        affected_row_count: mutationResult.rowCount, original_denial: '42501' }))
     })
     for (const [table, trigger, id] of [
       ['product_service_appointments', 'bx1_product_appointment_transition', appointment.id],
