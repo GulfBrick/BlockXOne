@@ -10,6 +10,9 @@ vi.mock('next/image', () => ({ default: (props: { src: string; alt: string }) =>
 // Provider evidence and its SDK are outside this isolated React state-retention
 // proof. No provider session, consent, document download or external call occurs.
 vi.mock('./kyc-verification', () => ({ KycVerification: () => null }))
+// Draft read/save behavior has its own client/API proof. Keep this suite scoped
+// to the existing entry reads, pending markers and navigation cancellation.
+vi.mock('./application-draft-client', async importOriginal => ({ ...await importOriginal<typeof import('./application-draft-client')>(), useApplicationDraft: () => ({ status: 'UNAVAILABLE', loading: false, busy: false, available: false, saved: false, dirty: false, message: '', revision: 0, save: async () => false }) }))
 import { EntryScreen } from './entry-screen'
 
 const release = { version: 'interaction-fixture', environment: 'TESTNET' as const, source: 'synthetic-fixture' }
@@ -116,7 +119,7 @@ describe('real entry-screen review-availability interaction', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
     expect(fetchMock.mock.calls.every(([, init]) => (init?.method ?? 'GET') === 'GET')).toBe(true)
   })
-  it('does not send a new-application command when the user cancels discarding their existing answers', () => {
+  it('does not navigate to the new-application chooser or send a command when the user cancels discarding their existing answers', () => {
     const initial = missingReviewerSnapshot()
     const fetchMock = isolatedEntryRead(initial)
     const confirmation = vi.spyOn(window, 'confirm').mockReturnValue(false)
@@ -124,11 +127,10 @@ describe('real entry-screen review-availability interaction', () => {
       render(createElement(EntryScreen, { initial, release }))
       const fullName = screen.getByLabelText(/^Full name/) as HTMLInputElement
       fireEvent.change(fullName, { target: { value: 'Alex Unsaved Existing Application' } })
-      fireEvent.click(screen.getByText('Other applications and workspaces', { selector: 'summary' }))
-      fireEvent.click(screen.getByRole('button', { name: 'Start another application' }))
-      fireEvent.change(screen.getByLabelText('Application type'), { target: { value: 'WEALTH_MANAGER' } })
-      const start = screen.getByRole('button', { name: 'Create or continue this application' })
-      fireEvent.submit(start.closest('form')!)
+      const switcher = screen.getByRole('link', { name: 'Switch application or workspace' })
+      expect(switcher.getAttribute('href')).toBe('/portal?mode=applicant')
+      expect(screen.queryByRole('button', { name: 'Start another application' })).toBeNull()
+      expect(fireEvent.click(switcher)).toBe(false)
       expect(confirmation).toHaveBeenCalledTimes(1)
       expect(fetchMock).not.toHaveBeenCalled()
       expect(fullName.value).toBe('Alex Unsaved Existing Application')

@@ -20,11 +20,15 @@ vi.mock('./entry-client', () => ({ useEntryCommand: (_actor: string, _environmen
   boundary.onSaved = onSaved
   return { busy: false, unknown: boundary.unknown, message: '', submit: boundary.submit, retry: async () => false }
 } }))
+// Existing submission/navigation proofs isolate the new save boundary. The
+// draft-client suite independently exercises real loading, receipts and retries.
+const draftBoundary = vi.hoisted(() => ({ status: 'UNAVAILABLE', loading: false, busy: false, available: false, saved: false, dirty: false, message: '', revision: 0, save: vi.fn(async () => false), recover: vi.fn(async (_confirm: () => boolean) => false), onResume: undefined as undefined | Parameters<typeof import('./application-draft-client').useApplicationDraft>[0]['onResume'] }))
+vi.mock('./application-draft-client', async importOriginal => ({ ...await importOriginal<typeof import('./application-draft-client')>(), useApplicationDraft: (options: Parameters<typeof import('./application-draft-client').useApplicationDraft>[0]) => { draftBoundary.onResume = options.onResume; return draftBoundary } }))
 
 let originalNavigation: PropertyDescriptor | undefined
 let originalHistory: { state: unknown; href: string }
 let removeHistoryModel: (() => void) | null = null
-beforeEach(() => { boundary.submit.mockReset(); boundary.submit.mockResolvedValue(false); boundary.unknown = false; boundary.onSaved = undefined; sessionStorage.clear(); localStorage.clear(); originalNavigation = Object.getOwnPropertyDescriptor(window, 'navigation'); originalHistory = { state: window.history.state, href: window.location.href } })
+beforeEach(() => { boundary.submit.mockReset(); boundary.submit.mockResolvedValue(false); boundary.unknown = false; boundary.onSaved = undefined; Object.assign(draftBoundary, { status: 'UNAVAILABLE', loading: false, busy: false, available: false, saved: false, dirty: false, message: '', revision: 0, onResume: undefined }); draftBoundary.save.mockReset(); draftBoundary.save.mockResolvedValue(false); draftBoundary.recover.mockReset(); draftBoundary.recover.mockResolvedValue(false); sessionStorage.clear(); localStorage.clear(); originalNavigation = Object.getOwnPropertyDescriptor(window, 'navigation'); originalHistory = { state: window.history.state, href: window.location.href } })
 afterEach(() => { cleanup(); removeHistoryModel?.(); removeHistoryModel = null; vi.restoreAllMocks(); vi.unstubAllGlobals(); sessionStorage.clear(); if (originalNavigation) Object.defineProperty(window, 'navigation', originalNavigation); else Reflect.deleteProperty(window, 'navigation'); History.prototype.replaceState.call(window.history, originalHistory.state, '', originalHistory.href) })
 
 const documents = (['IDENTITY', 'COMPANY', 'BENEFICIAL_OWNERS'] as const).map((kind, index) => ({ id: `${index + 4}4444444-4444-4444-8444-444444444444`, kind, title: `Fictional ${kind} evidence`, storage_path: `${entryActorId}/test-${index}.pdf`, sha256: 'a'.repeat(64), size: 100, mime_type: 'application/pdf' as const })) satisfies NonNullable<EntryApplication['details']['documents']>
@@ -143,8 +147,9 @@ describe('persona-specific application preparation', () => {
 describe('truthful application state and handoff', () => {
   it('does not claim a draft or uploaded file is submitted', () => {
     const html = form({ details: investor })
-    expect(html).toContain('Draft: not submitted')
-    expect(html).toContain('There is no automatic draft save.')
+    expect(html).toContain('Draft · Not submitted')
+    expect(html).toContain('New changes are not saved')
+    expect(html).not.toContain('Save and exit')
     expect(html).toContain('Selected for this submission')
     expect(html).not.toContain('Submitted evidence history')
     expect(html).not.toContain('View submitted versions')
@@ -314,7 +319,7 @@ function mountedForm(application: EntryApplication, onSaved = vi.fn(), onDirtyCh
   )
   return { ...view, onSaved, onDirtyChange }
 }
-function next() { fireEvent.click(screen.getByRole('button', { name: 'Next' })) }
+function next() { fireEvent.click(screen.getByRole('button', { name: 'Continue' })) }
 function back() { fireEvent.click(screen.getByRole('button', { name: 'Back' })) }
 function reviewAndAcknowledge() {
   fireEvent.click(screen.getByRole('button', { name: 'View remaining items' }))
@@ -325,6 +330,97 @@ function unloadPrevented() {
   window.dispatchEvent(event)
   return event.defaultPrevented
 }
+
+describe('draft reliability in the applicant form', () => {
+  it('locks inputs while the initial saved draft loads, without claiming Saved', () => {
+    Object.assign(draftBoundary, { status: 'LOADING', loading: true })
+    mountedForm(entryApplication({ review_route: 'AVAILABLE' }))
+    expect(screen.getByLabelText(/^Full name/).matches(':disabled')).toBe(true)
+    expect((screen.getByRole('button', { name: 'Continue' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.queryByText('Saved', { exact: true })).toBeNull()
+  })
+  it('retains answers and navigation warnings when Save and exit fails', async () => {
+    Object.assign(draftBoundary, { status: 'READY', available: true, dirty: true })
+    mountedForm(entryApplication({ review_route: 'AVAILABLE' }))
+    fireEvent.change(screen.getByLabelText(/^Full name/), { target: { value: 'Keep this applicant answer' } })
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save and exit' })) })
+    expect(draftBoundary.save).toHaveBeenCalledTimes(1)
+    expect((screen.getByLabelText(/^Full name/) as HTMLInputElement).value).toBe('Keep this applicant answer')
+    expect(unloadPrevented()).toBe(true); expect(screen.queryByText('Saved', { exact: true })).toBeNull()
+  })
+  it('does not advance Continue when an admitted draft save fails', async () => {
+    Object.assign(draftBoundary, { status: 'READY', available: true, dirty: true })
+    mountedForm(entryApplication({ review_route: 'AVAILABLE', details: investor }))
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Continue' })) })
+    expect(draftBoundary.save).toHaveBeenCalledTimes(1); expect(screen.getByRole('heading', { name: 'Investor details' })).toBeTruthy()
+    expect(boundary.submit).not.toHaveBeenCalled()
+  })
+  it('advances a valid section after its current draft save confirms, without submitting it', async () => {
+    Object.assign(draftBoundary, { status: 'READY', available: true, saved: true })
+    draftBoundary.save.mockResolvedValue(true)
+    mountedForm(entryApplication({ review_route: 'AVAILABLE', details: investor }))
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Continue' })) })
+    expect(screen.getByRole('heading', { name: 'Funds and objectives' })).toBeTruthy(); expect(boundary.submit).not.toHaveBeenCalled()
+  })
+  it('protects an unfinished country search even when other answers are saved', () => {
+    Object.assign(draftBoundary, { status: 'READY', available: true, saved: true })
+    mountedForm(entryApplication({ review_route: 'AVAILABLE' }))
+    const input = screen.getByRole('combobox', { name: 'Country of residence *' })
+    fireEvent.change(input, { target: { value: 'Zimb' } })
+    expect(screen.getByRole('combobox', { name: 'Country of residence *' })).toBe(input)
+    expect(screen.queryByRole('button', { name: 'Save and exit' })).toBeNull(); expect(screen.queryByText('Saved', { exact: true })).toBeNull()
+    expect(unloadPrevented()).toBe(true)
+    fireEvent.keyDown(input, { key: 'Enter' }); expect((input as HTMLInputElement).value).toBe('Zimbabwe')
+    expect(screen.getByRole('button', { name: 'Save and exit' })).toBeTruthy()
+  })
+  it('freezes manual Continue edits and Back until the exact save resolves, without submitting', async () => {
+    Object.assign(draftBoundary, { status: 'READY', available: true })
+    draftBoundary.save.mockResolvedValueOnce(true)
+    mountedForm(entryApplication({ review_route: 'AVAILABLE', details: investor }))
+    await act(async () => { next() })
+    let resolve!: (saved: boolean) => void
+    draftBoundary.save.mockImplementationOnce(() => new Promise<boolean>(done => { resolve = done }))
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+    const input = screen.getByRole('textbox', { name: /^Source of funds/ }) as HTMLTextAreaElement
+    expect(input.matches(':disabled')).toBe(true)
+    expect((screen.getByRole('button', { name: 'Back' }) as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByRole('button', { name: 'Saving…' }) as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.change(input, { target: { value: '' } }); back()
+    expect(input.value).toBe(investor.source_of_funds); expect(screen.getByRole('heading', { name: 'Funds and objectives' })).toBeTruthy()
+    await act(async () => { resolve(true) })
+    expect(screen.getByRole('heading', { name: 'Supporting evidence' })).toBeTruthy(); expect(boundary.submit).not.toHaveBeenCalled()
+  })
+  it('keeps conflict and recovery navigation warnings even when the retained answers match an old record', () => {
+    Object.assign(draftBoundary, { status: 'CONFLICT', available: true, dirty: true })
+    const application = entryApplication({ review_route: 'AVAILABLE', details: investor })
+    const view = mountedForm(application)
+    expect(unloadPrevented()).toBe(true)
+    Object.assign(draftBoundary, { status: 'LOADING', available: false, loading: true })
+    view.rerender(<PortalIdentityProvider actorId={entryActorId} environment="TESTNET"><OnboardingForm application={application} environment="TESTNET" onSaved={save} handoff={entryHandoff(application)} /></PortalIdentityProvider>)
+    expect(unloadPrevented()).toBe(true)
+  })
+  it('asks before recovery and resets unfinished search only on exact resume', async () => {
+    Object.assign(draftBoundary, { status: 'CONFLICT', available: true, dirty: true })
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    draftBoundary.recover.mockImplementation(async decision => decision())
+    mountedForm(entryApplication({ review_route: 'AVAILABLE' }))
+    const input = screen.getByRole('combobox', { name: 'Country of residence *' })
+    fireEvent.change(input, { target: { value: 'Zimb' } })
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Load saved draft' })) })
+    expect(confirm).toHaveBeenCalledTimes(1); expect((input as HTMLInputElement).value).toBe('Zimb')
+    const { test_data_acknowledged: _acknowledgement, ...restored } = applicationFormDetails(entryApplication({ details: { ...investor, country: '' } }))
+    act(() => { draftBoundary.onResume!(restored, 'identity') })
+    expect((screen.getByRole('combobox', { name: 'Country of residence *' }) as HTMLInputElement).value).toBe('')
+    expect(boundary.submit).not.toHaveBeenCalled()
+  })
+  it('keeps the final submission in the same shared primary-action row as Back', () => {
+    mountedForm(entryApplication({ review_route: 'AVAILABLE', details: investor }))
+    reviewAndAcknowledge()
+    const submit = screen.getByRole('button', { name: 'Submit for review' })
+    expect(submit.parentElement).toBe(screen.getByRole('button', { name: 'Back' }).parentElement)
+    expect(submit.getAttribute('type')).toBe('submit')
+  })
+})
 
 describe('guided onboarding interaction at the existing command boundary', () => {
   it('validates the current step, focuses the missing answer and never submits from Next', () => {
@@ -646,13 +742,13 @@ describe('feature-detected browser traversal guard', () => {
     act(() => { navigation.attempt(first, false) })
     expect(navigation.currentEntry.key).toBe(first)
     expect(requests.map(request => request.key)).toEqual(['original-entry'])
-    expect((screen.getByRole('button', { name: 'Next' }) as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByRole('button', { name: 'Continue' }) as HTMLButtonElement).disabled).toBe(true)
     act(() => { navigation.attempt(second, false) })
     expect(navigation.currentEntry.key).toBe(second)
     expect(requests.map(request => request.key)).toEqual(['original-entry', 'original-entry'])
     await act(async () => { requests[0].rejectBoth(); await Promise.resolve() })
     expect(screen.queryByText('Browser history restoration not confirmed')).toBeNull()
-    expect((screen.getByRole('button', { name: 'Next' }) as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByRole('button', { name: 'Continue' }) as HTMLButtonElement).disabled).toBe(true)
     await act(async () => { requests[1].commit(); requests[1].finish(); await Promise.resolve() })
     expect(navigation.currentEntry).toBe(entries[1])
     expect(navigation.currentEntry.index).toBe(1)
@@ -661,7 +757,7 @@ describe('feature-detected browser traversal guard', () => {
     entries.forEach((entry, index) => expect(navigation.entries[index]).toBe(entry))
     expect(nextRoute).not.toHaveBeenCalled()
     expect(confirm).toHaveBeenCalledOnce()
-    expect((screen.getByRole('button', { name: 'Next' }) as HTMLButtonElement).disabled).toBe(false)
+    expect((screen.getByRole('button', { name: 'Continue' }) as HTMLButtonElement).disabled).toBe(false)
     expect((screen.getByRole('textbox', { name: /^Full name/ }) as HTMLInputElement).value).toBe('Alex Unsaved History Answers')
     expect(boundary.submit).not.toHaveBeenCalled()
   })
@@ -681,7 +777,7 @@ describe('feature-detected browser traversal guard', () => {
     expect(navigation.currentEntry.key).toBe('original-entry')
     expect(nextRoute).not.toHaveBeenCalled()
     expect(confirm).toHaveBeenCalledOnce()
-    expect((screen.getByRole('button', { name: 'Next' }) as HTMLButtonElement).disabled).toBe(false)
+    expect((screen.getByRole('button', { name: 'Continue' }) as HTMLButtonElement).disabled).toBe(false)
   })
   it('keeps navigation locked after the restored popstate and committed promise until finished also confirms', async () => {
     const { navigation, nextRoute } = historyModel()
@@ -691,9 +787,9 @@ describe('feature-detected browser traversal guard', () => {
     act(() => { navigation.attempt('previous-entry', false) })
     await act(async () => { requests[0].commit(); await Promise.resolve() })
     expect(navigation.currentEntry.key).toBe('original-entry')
-    expect((screen.getByRole('button', { name: 'Next' }) as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByRole('button', { name: 'Continue' }) as HTMLButtonElement).disabled).toBe(true)
     await act(async () => { requests[0].finish(); await Promise.resolve() })
-    expect((screen.getByRole('button', { name: 'Next' }) as HTMLButtonElement).disabled).toBe(false)
+    expect((screen.getByRole('button', { name: 'Continue' }) as HTMLButtonElement).disabled).toBe(false)
     expect(nextRoute).not.toHaveBeenCalled()
   })
   it.each(['previous-entry', 'forward-entry'] as const)('preserves normal Next traversal to %s when departure is accepted', destination => {
@@ -780,7 +876,7 @@ describe('feature-detected browser traversal guard', () => {
     act(() => { navigation.attempt('previous-entry', false) })
     await waitFor(() => expect(screen.getByText('Browser history restoration not confirmed')).toBeTruthy())
     expect(nextRoute).not.toHaveBeenCalled()
-    expect((screen.getByRole('button', { name: 'Next' }) as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByRole('button', { name: 'Continue' }) as HTMLButtonElement).disabled).toBe(true)
     expect(boundary.submit).not.toHaveBeenCalled()
     expect(unloadPrevented()).toBe(true)
   })

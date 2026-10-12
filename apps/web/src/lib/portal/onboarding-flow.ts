@@ -30,7 +30,7 @@ export function onboardingRemainingItems(persona: Persona, answers: OnboardingAn
     if (typeof value !== 'string' || value.trim().length < min || value.trim().length > max) add(key, step, `${label}: enter ${min}-${max} characters.`)
   }
   length('full_name', 'identity', persona === 'WEALTH_MANAGER' ? 'Representative full name' : 'Full name', 2, 120)
-  if (!/^[A-Z]{2}$/.test(answers.country)) add('country', 'identity', 'Country of residence: enter a two-letter country code, for example ZA.')
+  if (!/^[A-Z]{2}$/.test(answers.country)) add('country', 'identity', 'Country of residence: search for and select a country.')
   const organisation = persona === 'WEALTH_MANAGER' || answers.investor_type === 'ENTITY'
   if (persona === 'INVESTOR' && !['INDIVIDUAL', 'ENTITY'].includes(answers.investor_type)) add('investor_type', 'identity', 'Choose an investor classification.')
   if (organisation) {
@@ -103,7 +103,7 @@ export function onboardingSubmissionConfirmed(snapshot: EntrySnapshot, applicati
   return expected.success && returned.success && sameNormalizedValue(expected.data, returned.data)
 }
 
-export const onboardingDiscardMessage = 'Leave this application? Your unsubmitted answers and evidence selections will be discarded. There is no automatic draft save.'
+export const onboardingDiscardMessage = 'Leave this application? Changes not confirmed as saved and unfinished file selections will be lost. Your last confirmed saved record is kept.'
 
 export function onboardingLinkDiscardsAnswers(href: string, currentHref: string): boolean {
   const current = new URL(currentHref)

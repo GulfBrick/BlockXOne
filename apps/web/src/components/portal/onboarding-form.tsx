@@ -14,6 +14,10 @@ import { installOnboardingTraversalGuard, onboardingDiscardMessage, onboardingHa
 import { DetailList, Field, Notice, Panel, dateLabel } from './portal-primitives'
 import { KycVerification } from './kyc-verification'
 import { customerHandoffPresentation } from './customer-handoff'
+import { saveDraftBeforeExit, useApplicationDraft } from './application-draft-client'
+import type { ApplicationDraftAnswers } from '@/lib/portal/application-drafts'
+import { CountrySelector } from './country-selector'
+import { countryName } from '@/lib/portal/countries'
 import styles from './portal.module.css'
 import flowStyles from './onboarding-flow.module.css'
 
@@ -103,7 +107,7 @@ export function ApplicationDetailsSummary({ persona, details }: { persona: Perso
     {legacyManager ? <Notice title="Original legacy answers">These are the answers recorded on the earlier investor-shaped form. They are not evidence of business activities, representative position or authority basis. New organisation facts must be supplied explicitly.</Notice> : null}
     <DetailList rows={[
       { label: persona === 'WEALTH_MANAGER' ? 'Representative name' : 'Applicant name', value: details.full_name || 'Not provided' },
-      { label: 'Country of residence', value: details.country || 'Not provided' },
+      { label: 'Country of residence', value: details.country ? countryName(details.country) : 'Not provided' },
       ...(manager ? [{ label: 'Customer organisation', value: manager.company_name }, { label: 'Registration reference', value: manager.registration_reference }, { label: 'Representative position', value: manager.representative_position }]
         : [{ label: legacyManager ? 'Legacy investor classification' : 'Investor classification', value: 'investor_type' in details ? details.investor_type || 'Not provided' : 'Not provided' }, { label: legacyManager ? 'Legacy company / issuing entity' : 'Entity name', value: details.company_name || 'Not applicable' }, { label: 'Registration reference', value: details.registration_reference || 'Not applicable' }]),
     ]} />
@@ -203,7 +207,7 @@ function questionId(key: string) { return `onboarding-${key.replaceAll('.', '-')
 function Question({ fieldKey, label, hint, errors, children }: { fieldKey: string; label: string; hint?: string; errors: OnboardingRemainingItem[]; children: ReactElement }) {
   const error = errors.find(item => item.key === fieldKey)
   const id = questionId(fieldKey)
-  return <label className={styles.field} htmlFor={id}>{label}{cloneElement(children, { id, 'aria-invalid': error ? true : undefined, 'aria-describedby': [hint ? `${id}-hint` : '', error ? `${id}-error` : ''].filter(Boolean).join(' ') || undefined } as Record<string, unknown>)}{hint ? <span id={`${id}-hint`} className={styles.fieldHint}>{hint}</span> : null}{error ? <span id={`${id}-error`} className={flowStyles.error}>{error.message}</span> : null}</label>
+  return <div className={styles.field}><label htmlFor={id}>{label}</label>{cloneElement(children, { id, 'aria-invalid': error ? true : undefined, 'aria-describedby': [hint ? `${id}-hint` : '', error ? `${id}-error` : ''].filter(Boolean).join(' ') || undefined } as Record<string, unknown>)}{hint ? <span id={`${id}-hint`} className={styles.fieldHint}>{hint}</span> : null}{error ? <span id={`${id}-error`} className={flowStyles.error}>{error.message}</span> : null}</div>
 }
 
 export function OnboardingForm({ application, environment, onSaved, receipts, handoff, onActivityChange, onDirtyChange, handoffPanel }: { application: EntryApplication; environment: PlatformEnvironment; onSaved: (snapshot: EntrySnapshot) => void; receipts?: EntrySnapshot['requests']; handoff?: CustomerHandoff; onActivityChange?: (active: boolean) => void; onDirtyChange?: (dirty: boolean) => void; handoffPanel?: ReactNode }) {
@@ -229,6 +233,13 @@ export function OnboardingForm({ application, environment, onSaved, receipts, ha
   const [historySupported, setHistorySupported] = useState<boolean | null>(null)
   const [historyProblem, setHistoryProblem] = useState('')
   const [historyRestoring, setHistoryRestoring] = useState(false)
+  const [exiting, setExiting] = useState(false)
+  const [countrySearchPending, setCountrySearchPending] = useState(false)
+  const [resumeVersion, setResumeVersion] = useState(0)
+  const [continuing, setContinuing] = useState(false)
+  const transition = useRef<object | null>(null)
+  const currentAnswers = useRef(details); currentAnswers.current = details
+  const currentStep = useRef(step); currentStep.current = step
   const stepHeading = useRef<HTMLHeadingElement>(null)
   const focusQuestion = useRef<string | null>(null)
   const dirtyRef = useRef(false)
@@ -240,7 +251,16 @@ export function OnboardingForm({ application, environment, onSaved, receipts, ha
   activeScanScope.current = scanScope
   useEffect(() => {
     setScanQueue(null); setScanMessage(''); setScanBusy(false); setAttachingScan(''); setPendingForApplication([])
+    transition.current = null; setContinuing(false)
   }, [scanScope])
+  const editable = handoff ? customerHandoffHasAction(handoff, 'PREPARE_APPLICATION') : ['DRAFT', 'CHANGES_REQUIRED'].includes(application.status)
+  const draftAnswers = Object.fromEntries(Object.entries(details).filter(([key]) => key !== 'test_data_acknowledged')) as ApplicationDraftAnswers
+  const draft = useApplicationDraft({ application, actorId: expectedActor, environment, answers: draftAnswers, step, enabled: editable,
+    onResume: (saved, savedStep) => {
+      setDetails({ ...saved, test_data_acknowledged: true }); setAcknowledged(false)
+      setFile(null); setUploadTitle(''); setUploadMessage(''); setPendingForApplication([]); setCountrySearchPending(false); setResumeVersion(value => value + 1)
+      setStep(onboardingSteps(persona, saved.investor_type).some(item => item.id === savedStep) ? savedStep : 'identity')
+    } })
   const command = useEntryCommand(expectedActor, environment, snapshot => {
     const attempted = submissionAttempt.current
     if (attempted && onboardingSubmissionConfirmed(snapshot, attempted.application, expectedActor, attempted.details)) {
@@ -251,11 +271,10 @@ export function OnboardingForm({ application, environment, onSaved, receipts, ha
     }
   }, receipts)
   useEffect(() => {
-    onActivityChange?.(command.busy || command.unknown || Boolean(unconfirmedResult) || Boolean(historyProblem) || historyRestoring || uploadBusy || Boolean(attachingScan))
+    onActivityChange?.(command.busy || command.unknown || draft.busy || draft.loading || exiting || continuing || Boolean(unconfirmedResult) || Boolean(historyProblem) || historyRestoring || uploadBusy || Boolean(attachingScan))
     return () => onActivityChange?.(false)
-  }, [command.busy, command.unknown, unconfirmedResult, historyProblem, historyRestoring, uploadBusy, attachingScan, onActivityChange])
-  const editable = handoff ? customerHandoffHasAction(handoff, 'PREPARE_APPLICATION') : ['DRAFT', 'CHANGES_REQUIRED'].includes(application.status)
-  const locked = !editable || command.busy || command.unknown || Boolean(unconfirmedResult) || Boolean(historyProblem) || historyRestoring || uploadBusy || Boolean(attachingScan)
+  }, [command.busy, command.unknown, draft.busy, draft.loading, exiting, continuing, unconfirmedResult, historyProblem, historyRestoring, uploadBusy, attachingScan, onActivityChange])
+  const locked = !editable || command.busy || command.unknown || draft.loading || exiting || continuing || Boolean(unconfirmedResult) || Boolean(historyProblem) || historyRestoring || uploadBusy || Boolean(attachingScan)
   const reviewAvailable = handoff ? handoff.gates.reviewer_available : application.review_route === 'AVAILABLE'
   const requiredEvidence = requiredApplicationEvidence(persona, details.investor_type)
   const steps = onboardingSteps(persona, details.investor_type)
@@ -263,7 +282,13 @@ export function OnboardingForm({ application, environment, onSaved, receipts, ha
   const activeStep = steps[currentIndex]
   const remaining = onboardingRemainingItems(persona, details, acknowledged, pendingForApplication.length)
   const errors = validationStep ? remaining.filter(item => item.step === validationStep) : []
-  const dirty = editable && !confirmedSubmission && onboardingHasUnsavedAnswers(applicationFormDetails(application), details, acknowledged, uploadTitle, Boolean(file), pendingForApplication.length)
+  const localFilePending = Boolean(uploadTitle.trim()) || Boolean(file) || pendingForApplication.length > 0
+  const localPending = localFilePending || countrySearchPending
+  const saveLabel = draft.loading ? 'Loading draft…' : draft.busy ? 'Saving…' : draft.status === 'ERROR' ? 'Couldn’t save—retry'
+    : draft.status === 'CONFLICT' ? 'Draft changed; your new answers are retained' : countrySearchPending ? 'Select a country to finish your answer'
+      : draft.saved ? localFilePending ? 'Answers saved · finish the selected upload' : 'Saved'
+        : draft.available ? draft.dirty ? 'Unsaved changes' : 'Draft not saved yet' : 'New changes are not saved'
+  const dirty = editable && !confirmedSubmission && (draft.dirty || localPending || (!draft.available && onboardingHasUnsavedAnswers(applicationFormDetails(application), details, acknowledged, uploadTitle, Boolean(file), pendingForApplication.length)))
   dirtyRef.current = dirty
   useEffect(() => { onDirtyChange?.(dirty) }, [dirty, onDirtyChange])
   useEffect(() => () => onDirtyChange?.(false), [onDirtyChange])
@@ -318,22 +343,38 @@ export function OnboardingForm({ application, environment, onSaved, receipts, ha
     if (focusQuestion.current) { (document.getElementById(questionId(focusQuestion.current)) ?? stepHeading.current)?.focus(); focusQuestion.current = null }
     else stepHeading.current?.focus()
   }, [step, validationStep])
-  const submitReady = (!handoff || customerHandoffHasAction(handoff, 'SUBMIT_APPLICATION')) && applicationSubmissionReady(persona, details, acknowledged, locked) && pendingForApplication.length === 0
+  const submitReady = !draft.busy && (!handoff || customerHandoffHasAction(handoff, 'SUBMIT_APPLICATION')) && applicationSubmissionReady(persona, details, acknowledged, locked) && pendingForApplication.length === 0
   const next = handoff ? customerHandoffPresentation(handoff) : applicationNextStep(application)
   const legacyManager = persona === 'WEALTH_MANAGER' && !isWealthManagerDetailsV2(application.details) && Object.keys(application.details).length > 0
   const previouslySubmitted = Boolean(application.submitted_at) || application.status !== 'DRAFT'
-  function change<K extends keyof FormDetails>(key: K, value: FormDetails[K]) { setConfirmedSubmission(false); setDetails(current => ({ ...current, [key]: value })) }
+  function change<K extends keyof FormDetails>(key: K, value: FormDetails[K]) { if (transition.current) return; setConfirmedSubmission(false); setDetails(current => ({ ...current, [key]: value })) }
   function changeRelationship(id: string, patch: Partial<OwnershipControlRelationship>) {
+    if (transition.current) return
     setConfirmedSubmission(false); setDetails(current => ({ ...current, ownership_control: current.ownership_control.map(item => item.id === id ? { ...item, ...patch } : item) }))
   }
   function goTo(target: OnboardingStepId, question?: string) {
+    if (transition.current) return
     focusQuestion.current = question ?? null; setValidationStep(null); setStep(target)
     if (target === step && question) { document.getElementById(questionId(question))?.focus(); focusQuestion.current = null }
   }
-  function nextStep() {
+  async function nextStep() {
+    if (locked || transition.current) return
     const missing = remaining.filter(item => item.step === activeStep.id)
     if (missing.length) { focusQuestion.current = missing[0].key; setValidationStep(activeStep.id); document.getElementById(questionId(missing[0].key))?.focus(); return }
-    goTo(steps[currentIndex + 1]?.id ?? 'review')
+    const token = {}, captured = JSON.stringify(details), from = step, scope = scanScope
+    transition.current = token; setContinuing(true)
+    try {
+      if (draft.available && !await draft.save()) return
+      if (transition.current !== token || activeScanScope.current !== scope || currentStep.current !== from || JSON.stringify(currentAnswers.current) !== captured) return
+      transition.current = null
+      goTo(steps[currentIndex + 1]?.id ?? 'review')
+    } finally { if (transition.current === token || transition.current === null && activeScanScope.current === scope) { transition.current = null; setContinuing(false) } }
+  }
+  async function saveAndExit() {
+    if (locked || localPending || !draft.available || draft.status === 'CONFLICT') return
+    setExiting(true)
+    const saved = await saveDraftBeforeExit(draft.save, () => { dirtyRef.current = false; allowDeparture.current = true; onDirtyChange?.(false); window.location.assign('/portal?mode=applicant') })
+    if (!saved) setExiting(false)
   }
   async function submitApplication() {
     if (!submitReady) { const first = remaining[0]; if (first) { focusQuestion.current = first.key; setStep(first.step); setValidationStep(first.step) }; return }
@@ -370,7 +411,7 @@ export function OnboardingForm({ application, environment, onSaved, receipts, ha
         ] : [{ id: upload.document.id, kind: upload.document.kind, title: upload.document.title, state: 'QUARANTINED', created_at: new Date().toISOString() }])
         setUploadMessage('File quarantined for an independent scan. It is not attached to this application and cannot satisfy a submission requirement. Check the scan queue before submitting.')
       } else {
-        change('documents', [...details.documents, upload.document]); setUploadMessage('File uploaded privately. Its application attachment and these fields are not saved until submission is confirmed.')
+        change('documents', [...details.documents, upload.document]); setUploadMessage('File uploaded privately. Save the draft to keep this selection, then send the completed application for review.')
       }
     } catch (error) { if (activeScanScope.current === scope) setUploadMessage(error instanceof Error ? error.message : 'The upload was not confirmed.'); }
     finally { if (activeScanScope.current === scope) setUploadBusy(false) }
@@ -408,29 +449,30 @@ export function OnboardingForm({ application, environment, onSaved, receipts, ha
       setDetails(current => current.documents.some(document => document.id === item.id) ? current
         : current.documents.length >= 8 ? current : { ...current, documents: [...current.documents, manifest.data] })
       setPendingForApplication(current => current.filter(id => id !== item.id))
-      setScanMessage('The clean-scan receipt was rechecked and the file was selected for this application. Submit the application to save that selection.')
+      setScanMessage('The file passed its check and was selected for this application. Save the draft to keep the selection; sending for review is a separate step.')
     } catch (error) { if (activeScanScope.current === scope) setScanMessage(error instanceof Error ? error.message : 'The clean-scan receipt is unavailable.') }
     finally { if (activeScanScope.current === scope) setAttachingScan('') }
   }
   return <div className={`${styles.stack} ${flowStyles.flow}`}>
       {!editable ? handoffPanel : null}
-      <Panel title={persona === 'INVESTOR' ? 'Investor application' : 'Organisation / representative application'}>
-        {editable ? <p className={flowStyles.intro}>Answer one short section at a time. Required questions and evidence are checked before submission. There is no automatic draft save. Use fictional test data only; a provider event or manual test approval does not establish production KYC clearance.</p> : null}
+      <section className={flowStyles.card} aria-label={persona === 'INVESTOR' ? 'Investor application' : 'Organisation application'}>
         {dirty && historySupported === false ? <div role="status"><Notice title="Browser history protection unavailable" tone="warning">{onboardingHistoryUnavailableMessage}</Notice></div> : null}
         {historyProblem ? <Notice title="Browser history restoration not confirmed" tone="warning">{historyProblem}</Notice> : null}
         {historyRestoring ? <p className={styles.muted} role="status">Returning to this application. Your answers are retained; navigation and submission remain locked until the original history entry is confirmed.</p> : null}
-        {!handoffPanel ? <div className={styles.applicationState} aria-live="polite"><h3>{!handoff && application.status === 'DRAFT' ? 'Draft: not submitted' : next.title}</h3><p>{!handoff && application.status === 'DRAFT' ? 'Your application reference is saved. These fields and evidence links are not yet submitted. There is no automatic draft save.' : next.description}</p><p className={styles.muted}>Next responsible owner: {next.owner}</p></div> : null}
+        {!handoffPanel && !editable ? <div className={styles.applicationState} aria-live="polite"><h2>{next.title}</h2><p>{next.description}</p><p className={styles.muted}>Who handles this next: {next.owner}</p></div> : null}
         {application.review_notes ? <Notice title={application.status === 'CHANGES_REQUIRED' ? 'Changes requested by your reviewer' : 'Recorded review rationale'} tone="warning">{application.review_notes}</Notice> : null}
         {unconfirmedResult ? <Notice title="Application submission not confirmed" tone="warning">{unconfirmedResult}</Notice> : <CommandFeedback command={command} />}
         {editable ? <>
         {legacyManager ? <details className={`${styles.applicationHistory} ${styles.sectionGap}`}><summary>View original legacy answers</summary><div className={styles.sectionGap}><ApplicationDetailsSummary persona={persona} details={application.details} /></div></details> : null}
         {!reviewAvailable ? <div className={styles.sectionGap}><Notice title={next.title} tone="warning">{next.description}<p>{handoff ? 'Submission remains disabled until the saved workflow confirms an eligible review route. Use Refresh review availability to recheck without discarding these unsaved answers; do not create a replacement application.' : 'After the review route is ready, select Check review route and submit. The server rechecks its current assignment without reloading or discarding these fields.'}</p></Notice></div> : null}
-        <form className={`${styles.form} ${styles.sectionGap}`} noValidate onSubmit={event => { event.preventDefault(); if (activeStep.id === 'review') void submitApplication(); else nextStep() }}>
-          <ol className={flowStyles.progress} aria-label="Application questions progress">{steps.map((item, index) => <li key={item.id} aria-current={item.id === activeStep.id ? 'step' : undefined}><span>Step {index + 1} of {steps.length}</span>{item.title}</li>)}</ol>
-          <div><h3 ref={stepHeading} tabIndex={-1} className={flowStyles.heading}>{activeStep.title}</h3><p className={styles.muted}>Step {currentIndex + 1} of {steps.length}. Back keeps your answers; leaving this application does not save them.</p></div>
+        <form className={`${styles.form} ${flowStyles.questions}`} noValidate onSubmit={event => { event.preventDefault(); if (activeStep.id === 'review') void submitApplication(); else void nextStep() }}>
+          <div className={flowStyles.stepMeta}><span>Step {currentIndex + 1} of {steps.length}</span><span className={flowStyles.draftBadge}>{application.status === 'CHANGES_REQUIRED' ? 'Changes requested' : 'Draft · Not submitted'}</span></div>
+          <ol className={flowStyles.progress} aria-label="Application questions progress">{steps.map((item, index) => <li key={item.id} aria-current={item.id === activeStep.id ? 'step' : undefined}><span className={flowStyles.srOnly}>Step {index + 1} of {steps.length}: {item.title}</span></li>)}</ol>
+          <div><h2 ref={stepHeading} tabIndex={-1} className={flowStyles.heading}>{activeStep.title}</h2>{activeStep.id === 'identity' && persona === 'WEALTH_MANAGER' ? <p className={flowStyles.stepHint}>Who is completing this application?</p> : null}</div>
+          {draft.loading ? <p role="status">Loading your saved draft…</p> : null}
           {errors.length ? <div className={flowStyles.errorSummary} role="alert"><p>Complete these items to continue:</p><ul>{errors.map(item => <li key={item.key}>{item.message}</li>)}</ul></div> : null}
           <fieldset className={styles.fieldset} hidden={activeStep.id !== 'identity'} disabled={locked}><legend>{persona === 'INVESTOR' ? 'Investor details' : 'Representative details'}</legend>
-            <div className={styles.formRow}><Question fieldKey="full_name" errors={errors} label={persona === 'INVESTOR' ? 'Full name' : 'Representative full name'} hint="Use a fictional identity for this environment."><input value={details.full_name} onChange={event => change('full_name', event.target.value)} required minLength={2} maxLength={120} autoComplete="off" placeholder="e.g. Alex Example (test)" /></Question><Question fieldKey="country" errors={errors} label="Country of residence" hint="Two-letter country code, for example ZA."><input value={details.country} onChange={event => change('country', event.target.value.toUpperCase())} required pattern="[A-Z]{2}" maxLength={2} /></Question></div>
+            <div className={styles.formRow}><Question fieldKey="full_name" errors={errors} label={persona === 'INVESTOR' ? 'Full name *' : 'Representative full name *'}><input value={details.full_name} onChange={event => change('full_name', event.target.value)} required minLength={2} maxLength={120} autoComplete="off" placeholder="Enter your name" /></Question><Question fieldKey="country" errors={errors} label="Country of residence *"><CountrySelector key={resumeVersion} value={details.country} onChange={value => change('country', value)} onPendingChange={setCountrySearchPending} disabled={locked} /></Question></div>
             {persona === 'INVESTOR' ? <Question fieldKey="investor_type" errors={errors} label="Investor classification"><select value={details.investor_type} onChange={event => change('investor_type', event.target.value as LegacyApplicationDetails['investor_type'])}><option value="INDIVIDUAL">Individual</option><option value="ENTITY">Legal entity</option></select></Question> : null}
           </fieldset>
           {requiresOwnershipDisclosure(persona, details.investor_type) ? <fieldset className={styles.fieldset} hidden={activeStep.id !== 'organisation'} disabled={locked}><legend>Organisation details</legend><div className={styles.formRow}><Question fieldKey="company_name" errors={errors} label={persona === 'WEALTH_MANAGER' ? 'Customer organisation legal name' : 'Investing entity name'}><input value={details.company_name} onChange={event => change('company_name', event.target.value)} required minLength={3} maxLength={160} placeholder="Fictional example company" /></Question><Question fieldKey="registration_reference" errors={errors} label="Registration reference"><input value={details.registration_reference} onChange={event => change('registration_reference', event.target.value)} required minLength={3} maxLength={100} placeholder="SYNTHETIC-REG-001" /></Question></div><Question fieldKey="beneficial_owners" errors={errors} label="Ownership context" hint="Explain the disclosed structure. You will upload evidence before linking each person or entity in the ownership step."><textarea value={details.beneficial_owners} onChange={event => change('beneficial_owners', event.target.value)} required minLength={20} maxLength={2000} /></Question></fieldset> : null}
@@ -453,7 +495,7 @@ export function OnboardingForm({ application, environment, onSaved, receipts, ha
           <fieldset className={styles.fieldset} disabled={locked}><legend>Supporting evidence</legend><p className={styles.muted}>PDF, PNG or JPEG · up to 4 MiB each · up to eight files · access-controlled storage. Attach each required evidence type below.</p>
             <ul className={styles.applicationChecklist} aria-label="Required evidence checklist">{requiredEvidence.map(item => { const ready = details.documents.some(document => document.kind === item.kind); return <li key={item.kind} data-ready={ready}><strong>{item.label}</strong><span>{ready ? 'Selected for this submission' : 'Required: upload this evidence type'}</span></li> })}</ul>
             <div className={styles.formRow}><Field label="Evidence type"><select value={uploadKind} onChange={event => setUploadKind(event.target.value)}><option value="IDENTITY">Identity evidence</option><option value="ADDRESS">Address evidence</option><option value="COMPANY">Company evidence</option><option value="BENEFICIAL_OWNERS">Beneficial ownership</option></select></Field><Field label="Document title"><input value={uploadTitle} onChange={event => setUploadTitle(event.target.value)} maxLength={160} placeholder="Fictional proof of identity" /></Field></div>
-            <Field label="Choose fictional evidence"><input type="file" accept="application/pdf,image/png,image/jpeg" onChange={event => setFile(event.target.files?.[0] ?? null)} /></Field>
+            <Field label="Choose fictional evidence"><input key={resumeVersion} type="file" accept="application/pdf,image/png,image/jpeg" onChange={event => setFile(event.target.files?.[0] ?? null)} /></Field>
             <div><button type="button" className={styles.buttonSecondary} disabled={!file || uploadBusy} onClick={() => void upload()}><Upload size={16} aria-hidden="true" />{uploadBusy ? 'Uploading…' : 'Upload private evidence'}</button></div>
           </fieldset>
           <div role="status" aria-live="polite" className={styles.muted}>{uploadMessage}</div>
@@ -472,14 +514,15 @@ export function OnboardingForm({ application, environment, onSaved, receipts, ha
             <details className={styles.applicationHistory}><summary>Review answers and evidence selections</summary><ApplicationDetailsSummary persona={persona} details={applicationSubmissionDetails(persona, details)} /><ul>{details.documents.map(document => <li key={document.id}>{document.title} · {document.kind.replaceAll('_', ' ')}</li>)}</ul></details>
             <div className={flowStyles.remaining} aria-live="polite"><h4>{remaining.length ? `${remaining.length} remaining item${remaining.length === 1 ? '' : 's'} before submission` : 'All required answers and evidence are ready'}</h4>{remaining.length ? <ul>{remaining.map(item => <li key={item.key}><button type="button" onClick={() => goTo(item.step, item.key)}>{item.message}</button></li>)}</ul> : <p>An independent reviewer must make the decision.</p>}{handoff && !customerHandoffHasAction(handoff, 'SUBMIT_APPLICATION') ? <p>Submission is unavailable: {next.description}</p> : null}{command.unknown ? <p>The previous submission outcome is unknown. Keep the original request reference and use the available reconciliation guidance before sending another request.</p> : null}</div>
             <label className={styles.check}><input id={questionId('acknowledged')} type="checkbox" required checked={acknowledged} disabled={locked} onChange={event => { setConfirmedSubmission(false); setAcknowledged(event.target.checked) }} /><span>I confirm this application and all evidence are fictional test data. I understand a manual test approval does not establish legal identity, investment eligibility or production authority.</span></label>
-            <div className={styles.formFoot}><button type="submit" className={styles.button} disabled={!submitReady}>{command.busy ? 'Submitting…' : applicationSubmitLabel(application, handoff)}</button></div>
           </section>
-          <div className={flowStyles.navigation}><p>Saved record: revision {application.revision}. These answers are submitted only after a confirmed response. An independent reviewer must make the decision.</p><div className={flowStyles.navigationActions}>{currentIndex > 0 ? <button type="button" className={styles.buttonSecondary} disabled={locked} onClick={() => goTo(steps[currentIndex - 1].id)}>Back</button> : null}{activeStep.id !== 'review' ? <><button type="button" className={styles.buttonSecondary} disabled={locked} onClick={() => goTo('review')}>View remaining items</button><button type="button" className={styles.button} disabled={locked} onClick={nextStep}>Next</button></> : null}</div></div>
+          <div className={flowStyles.navigation}><div className={flowStyles.saveState} role="status" aria-live="polite"><span>{saveLabel}</span>{draft.available && !localPending ? <button type="button" className={styles.textLink} disabled={locked || draft.busy || draft.status === 'CONFLICT'} onClick={() => void saveAndExit()}>{exiting ? 'Saving before exit…' : 'Save and exit'}</button> : null}{draft.status === 'ERROR' ? <button type="button" className={styles.textLink} disabled={locked || draft.busy} onClick={() => void draft.save()}>Retry save</button> : null}{['CONFLICT', 'ERROR'].includes(draft.status) ? <button type="button" className={styles.textLink} disabled={locked || draft.busy} onClick={() => void draft.recover(() => window.confirm('Replace your current answers and unfinished file selections with the latest saved draft? This does not submit the application or delete uploaded files.'))}>Load saved draft</button> : null}</div><div className={flowStyles.navigationActions}>{currentIndex > 0 ? <button type="button" className={styles.buttonSecondary} disabled={locked} onClick={() => goTo(steps[currentIndex - 1].id)}>Back</button> : null}{activeStep.id !== 'review' ? <button type="button" className={styles.button} disabled={locked} onClick={nextStep}>{continuing ? 'Saving…' : 'Continue'}</button> : <button type="submit" className={styles.button} disabled={!submitReady}>{command.busy ? 'Submitting…' : applicationSubmitLabel(application, handoff)}</button>}</div></div>
+          {draft.message ? <p className={flowStyles.saveError} role="status">{draft.message}</p> : null}
+          {activeStep.id !== 'review' ? <button type="button" className={`${styles.textLink} ${flowStyles.remainingLink}`} disabled={locked} onClick={() => goTo('review')}>View remaining items</button> : null}
         </form>
         </> : <div className={`${styles.stack} ${styles.sectionGap}`}><p className={styles.muted}>Read-only saved application, revision {application.revision}. {application.status === 'SUBMITTED' ? 'A request for changes will reopen editing.' : 'The recorded decision does not alter these submitted answers.'}</p><ApplicationDetailsSummary persona={persona} details={application.details} /><section><h3>Submitted private evidence</h3>{application.details.documents?.length ? application.details.documents.map(document => <PrivateDocument key={document.id} document={document} />) : <p className={styles.muted}>No evidence is recorded.</p>}</section></div>}
-      </Panel>
-      {editable ? handoffPanel : null}
-      <details className={`${styles.applicationHistory} ${flowStyles.technical}`}><summary>Application reference and saved revision</summary><DetailList rows={[{ label: 'Application reference', value: application.id }, { label: 'Saved revision', value: application.revision }, { label: 'Submitted', value: dateLabel(application.submitted_at) }, { label: 'Decision recorded', value: dateLabel(application.reviewed_at) }, { label: 'Review provider', value: application.provider_mode === 'MANUAL_TEST_REVIEW' ? 'Manual test review' : 'Not assigned to this application yet' }]} /><p className={styles.muted}>Review availability is checked again when you submit. It does not prove a reviewer is currently signed in.</p></details>
+      </section>
+      {editable && (application.status !== 'DRAFT' || !reviewAvailable || handoff?.blocker !== 'NONE') ? handoffPanel : null}
+      <details className={`${styles.applicationHistory} ${flowStyles.technical}`}><summary>Application details</summary><p className={styles.muted}>Saved record: revision {application.revision}. Draft saves are separate from submitted evidence and decisions.</p><DetailList rows={[{ label: 'Application reference', value: application.id }, { label: 'Saved revision', value: application.revision }, { label: 'Draft version', value: draft.revision }, { label: 'Submitted', value: dateLabel(application.submitted_at) }, { label: 'Decision recorded', value: dateLabel(application.reviewed_at) }, { label: 'Review provider', value: application.provider_mode === 'MANUAL_TEST_REVIEW' ? 'Manual test review' : 'Not assigned to this application yet' }]} /></details>
       {!handoff || ['NONE', 'REVIEWER_UNAVAILABLE'].includes(handoff.blocker) ? <details className={`${styles.applicationHistory} ${flowStyles.technical}`}><summary>Optional identity-provider information</summary><KycVerification key={`${environment}:${expectedActor}:${application.id}:${application.revision}`} application={application} environment={environment} actorId={expectedActor} manualTestReview={environment === 'TESTNET' && (application.provider_mode === 'MANUAL_TEST_REVIEW' || handoff?.gates.intake_admitted === true)} /></details> : null}
       {application.status !== 'DRAFT' || application.submitted_at ? <details className={`${styles.applicationHistory} ${flowStyles.technical}`}><summary>Previous submitted evidence versions</summary><ApplicationDocumentHistory key={application.id} applicationId={application.id} /></details> : null}
   </div>

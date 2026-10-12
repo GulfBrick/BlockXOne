@@ -219,3 +219,93 @@
 .kycWidget { width: 100%; min-width: 0; overflow: hidden; border: 1px solid var(--bxo-border-default); border-radius: 8px; }
 .kycWidget iframe { display: block; max-width: 100%; border: 0; }
 @media (max-width: 760px) { .applicationRefresh .buttonSecondary { width: 100%; } .applicationState { padding: 15px; } }
+
+/* Presentation-only modifier for a selected, editable applicant flow. */
+.applicantOnboarding { font-size: 16px; }
+.applicantOnboarding .frame {
+  /* V3 workspace aliases stop here; the sidebar and other role screens retain
+     the approved dark brand system. The master artwork is not recoloured. */
+  --bxo-surface: var(--bxo-frost);
+  --bxo-surface-secondary: color-mix(in srgb, var(--bxo-frost) 92%, var(--bxo-chrome));
+  --bxo-surface-elevated: var(--bxo-frost);
+  --bxo-text-primary: var(--bxo-midnight);
+  --bxo-text-secondary: var(--bxo-deep-teal);
+  --bxo-text-tertiary: var(--bxo-structural-blue);
+  --bxo-border-default: color-mix(in srgb, var(--bxo-steel) 75%, var(--bxo-midnight));
+  --bxo-border-subtle: var(--bxo-chrome);
+  --bxo-warning: color-mix(in srgb, var(--bxo-warning-dark) 55%, var(--bxo-midnight));
+  --bxo-danger: color-mix(in srgb, var(--bxo-danger-dark) 75%, var(--bxo-carbon));
+  --bxo-success: color-mix(in srgb, var(--bxo-success-dark) 60%, var(--bxo-midnight));
+  --portal-canvas: color-mix(in srgb, var(--bxo-frost) 90%, var(--bxo-chrome));
+  --portal-panel: var(--bxo-surface);
+  --portal-ink: var(--bxo-text-primary);
+  --portal-muted: var(--bxo-text-secondary);
+  --portal-line: var(--bxo-border-default);
+  --portal-link: var(--bxo-structural-blue);
+  --portal-warning: var(--bxo-warning);
+  --portal-danger: var(--bxo-danger);
+  --portal-success: var(--bxo-success);
+  color-scheme: light;
+  color: var(--portal-ink);
+  background: var(--portal-canvas);
+}
+.applicantOnboarding .topbar { min-height: 64px; padding: 10px 32px; flex-wrap: nowrap; background: var(--bxo-midnight); color: var(--bxo-frost); }
+.applicantOnboarding .topbar .applicationSwitchLink { color: var(--bxo-frost); background: var(--bxo-deep-teal); border-color: var(--bxo-structural-blue); }
+.applicantOnboarding .topbar .applicationSwitchLink:hover { border-color: var(--bxo-electric-cyan); }
+.applicantOnboarding .accountMenu > summary { color: var(--bxo-frost); }
+.applicantOnboarding .frame .accountMenuBody { color: var(--portal-ink); box-shadow: 0 12px 28px color-mix(in srgb, var(--bxo-midnight) 18%, transparent); }
+.applicantOnboarding .frame .button { border-color: var(--portal-link); }
+.applicantOnboarding .frame .textLink, .applicantOnboarding .frame .applicationHistory summary,
+.applicantOnboarding .frame .releaseDetails summary, .applicantOnboarding .frame .badge[data-tone=info] { color: var(--portal-link); }
+.applicantOnboarding .frame .notice[data-tone=warning] { background: color-mix(in srgb, var(--bxo-warning-light) 32%, var(--bxo-frost)); }
+.applicantOnboarding .frame .notice[data-tone=danger] { background: color-mix(in srgb, var(--bxo-danger-light) 12%, var(--bxo-frost)); }
+.applicantOnboarding .frame :is(a, button, input, select, textarea, summary):focus-visible { outline: 3px solid var(--portal-link); outline-offset: 4px; }
+.applicantOnboarding .topbar > .applicationSwitchLink:focus-visible,
+.applicantOnboarding .accountMenu > summary:focus-visible,
+.applicantOnboarding .mobileBrand a:focus-visible { outline-color: var(--bxo-electric-cyan); }
+.applicantOnboarding .content { max-width: 804px; padding: 24px 32px 36px; }
+.applicantOnboarding .pageHeading { margin-bottom: 18px; }
+.applicantOnboarding .title { font-size: clamp(26px, 2.5vw, 32px); line-height: 1.2; letter-spacing: -.7px; }
+.applicantOnboarding .subtitle { font-size: 16px; margin-top: 8px; line-height: 1.45; }
+.applicantOnboarding .stack { gap: 16px; }
+.applicantOnboarding .panelHeader, .applicantOnboarding .panelBody { padding: 16px; }
+.applicantOnboarding .field, .applicantOnboarding .fieldHint, .applicantOnboarding .muted,
+.applicantOnboarding .notice, .applicantOnboarding .check, .applicantOnboarding .panelHeader p,
+.applicantOnboarding .navLink, .applicantOnboarding .navRestricted, .applicantOnboarding .boundary,
+.applicantOnboarding .applicationState p, .applicantOnboarding .applicationState h3,
+.applicantOnboarding .applicationOwner, .applicantOnboarding .applicationSwitcher summary,
+.applicantOnboarding .applicationHistory summary, .applicantOnboarding .fieldError,
+.applicantOnboarding .applicationRefresh [role=status], .applicantOnboarding .statusRegion { font-size: 16px; }
+.applicantOnboarding .button, .applicantOnboarding .buttonSecondary { font-size: 16px; min-height: 44px; }
+.applicantOnboarding .frame .textLink, .applicantOnboarding .frame .applicationChecklist li,
+.applicantOnboarding .frame .copy, .applicantOnboarding .frame .detailList > div { font-size: 16px; }
+.mobileBrand { display: none; }
+.applicationSwitchLink { display: inline-flex; min-width: 0; min-height: 44px; align-items: center; gap: 8px; padding: 8px 12px; border: 1px solid var(--portal-line); border-radius: 7px; color: var(--portal-ink); font-size: 16px; text-decoration: none; }
+.applicationSwitchLink:hover { border-color: var(--portal-accent); }
+.applicationSwitchLink svg { width: 16px; height: 16px; flex-shrink: 0; color: var(--portal-accent); }
+.switcherWorkspaceLabel { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.switcherMobileLabel { display: none; }
+.accountMenu { position: relative; min-width: 0; margin-left: auto; }
+.accountMenu > summary { min-height: 44px; padding: 8px; align-content: center; cursor: pointer; color: var(--portal-ink); font-size: 16px; white-space: nowrap; }
+.accountMenuBody { position: absolute; z-index: 30; top: calc(100% + 8px); right: 0; width: min(300px, calc(100vw - 32px)); padding: 16px; border: 1px solid var(--portal-line); border-radius: 8px; background: var(--portal-panel); box-shadow: 0 12px 28px var(--bxo-carbon); }
+.accountEmail { margin: 0 0 12px; overflow-wrap: anywhere; color: var(--portal-muted); font-size: 16px; }
+.accountMenuBody .navLink { font-size: 16px; min-height: 44px; }
+.accountMenuBody form { margin-top: 12px; }
+.accountMenuBody .buttonSecondary { width: 100%; }
+.applicantNotice { display: flex; flex-wrap: wrap; gap: 4px 10px; margin: 0 0 16px; color: var(--portal-muted); font-size: 16px; line-height: 1.4; }
+.applicantNotice strong { color: var(--portal-warning); font-weight: 600; }
+.releaseDetails { flex-basis: 100%; font-size: 14px; }
+.releaseDetails summary { min-height: 44px; align-content: center; cursor: pointer; color: var(--portal-muted); }
+.releaseDetails p { margin: 8px 0 0; overflow-wrap: anywhere; }
+@media (max-width: 760px) {
+  .applicantOnboarding .sidebar { display: none; }
+  .applicantOnboarding .topbar { display: grid; grid-template-columns: 128px minmax(0, 1fr) auto; gap: 8px; padding: 10px 12px; }
+  .applicantOnboarding .content { padding: 16px 16px 28px; }
+  .applicantOnboarding .title { font-size: 26px; }
+  .mobileBrand { display: block; min-width: 0; }
+  .mobileBrand .brandArtwork { width: 128px; height: auto; }
+  .applicationSwitchLink { gap: 6px; padding-inline: 8px; }
+  .switcherWorkspaceLabel { display: none; }
+  .switcherMobileLabel { display: inline; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .accountMenu > summary { padding-inline: 6px; }
+}
