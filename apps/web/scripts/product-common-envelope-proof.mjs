@@ -841,7 +841,7 @@ export async function proveProductCommonEnvelope(db, clients, featureSql, fundV2
         [false, false, false, false, 'u', 100], 'new helper has only frozen invoker metadata')
       eq(f.catalog.proowner, originalFunctions.find(old => old.signature === 'bx1_portal.validate_terms(jsonb)').catalog.proowner, 'trusted installer owner retained')
       eq(f.catalog.proconfig, ['search_path=""'], 'empty helper search path')
-      eq([f.catalog.pronargdefaults, f.catalog.proargdefaults, f.catalog.provariadic], [0, null, 0], 'no new helper default or variadic argument acquires another calling contract')
+      eq([f.catalog.pronargdefaults, f.catalog.proargdefaults, f.catalog.provariadic], [0, null, '0'], 'no new helper default or variadic argument acquires another calling contract')
       const localName = name.slice(0, name.indexOf('('))
       const definition = [...featureSql.matchAll(new RegExp(`create\\s+function\\s+bx1_portal\\.${localName}\\([\\s\\S]*?\\)\\s+returns\\s+${result}\\b[\\s\\S]*?as\\s+\\$\\$([\\s\\S]*?)\\$\\$;`, 'gi'))]
       eq(definition.length, 1, 'helper has exactly one authoritative source definition')
@@ -881,21 +881,21 @@ export async function proveProductCommonEnvelope(db, clients, featureSql, fundV2
       if (field === 'relations') eq(additions.map(row => row.relname), ['product_issuer_declarations'], 'only private declaration relation addition')
       if (field === 'triggers') {
         eq(additions.length, 2, 'only declaration immutability and product metadata trigger added')
-        truth(additions.some(row => row.tgrelid === Number(declaration.oid)), 'declaration trigger is confined to exact new table')
+        truth(additions.some(row => row.tgrelid === declaration.oid), 'declaration trigger is confined to exact new table')
         truth(additions.some(row => row.definition.includes('AFTER INSERT OR UPDATE OF terms ON bx1_portal.products')), 'snapshot trigger is metadata-only after canonical product DML')
       }
       if (field === 'constraints') {
-        const revisionOid = Number(installedSpecs.find(t => t.relname === 'offering_revisions' && t.nspname === 'bx1_portal').oid)
-        const decisionOid = Number(installedSpecs.find(t => t.relname === 'offering_decisions' && t.nspname === 'bx1_portal').oid)
+        const revisionOid = installedSpecs.find(t => t.relname === 'offering_revisions' && t.nspname === 'bx1_portal').oid
+        const decisionOid = installedSpecs.find(t => t.relname === 'offering_decisions' && t.nspname === 'bx1_portal').oid
         eq(additions.filter(row => row.conrelid === revisionOid).map(row => row.conname).sort(),
           ['bx1_ce_revision_binding_shape', 'bx1_ce_revision_declaration', 'bx1_ce_revision_hash_identity', 'offering_revisions_common_envelope_hash_check', 'offering_revisions_deployment_configuration_hash_check'].sort(), 'exact five new revision constraints')
         eq(additions.filter(row => row.conrelid === decisionOid).map(row => row.conname).sort(),
           ['bx1_ce_decision_binding_shape', 'bx1_ce_decision_revision_binding', 'offering_decisions_common_envelope_hash_check', 'offering_decisions_deployment_configuration_hash_check'].sort(), 'exact four new decision constraints')
-        const declarationConstraints = additions.filter(row => row.conrelid === Number(declaration.oid))
+        const declarationConstraints = additions.filter(row => row.conrelid === declaration.oid)
         eq(declarationConstraints.length, 10, 'exact declaration ten constraints: two identity, two foreign keys and six checks')
         eq(Object.fromEntries(['p', 'u', 'f', 'c'].map(type => [type, declarationConstraints.filter(row => row.contype === type).length])), { p: 1, u: 1, f: 2, c: 6 }, 'private declaration constraints have exact frozen kinds')
         eq(declarationConstraints.filter(row => row.contype === 'p' || row.contype === 'u').map(row => row.conname).sort(), ['bx1_ce_declaration_identity', 'bx1_ce_declaration_pk'], 'declaration identity keys have exact bounded names')
-        for (const row of additions) truth([Number(declaration.oid), revisionOid, decisionOid].includes(row.conrelid) && row.convalidated, 'no other relation constraint or unvalidated constraint is admitted')
+        for (const row of additions) truth([declaration.oid, revisionOid, decisionOid].includes(row.conrelid) && row.convalidated, 'no other relation constraint or unvalidated constraint is admitted')
       }
     }
     await commit()

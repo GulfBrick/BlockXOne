@@ -409,7 +409,7 @@ export const realEstateTermsV3Schema = v3ProductTermsBaseSchema.extend({ asset_t
 })
 export const productTermsSchema = z.union([legacyProductTermsSchema, fundTermsV2Schema, realEstateTermsV2Schema, fundTermsV3Schema, realEstateTermsV3Schema]).superRefine((v, ctx) => {
   if (/^[1-9][0-9]{0,19}$/.test(v.minimum_units) && /^[1-9][0-9]{0,19}$/.test(v.cap_units) && BigInt(v.minimum_units) > BigInt(v.cap_units)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['minimum_units'], message: 'Minimum subscription must fit within the offering capacity.' })
-  if (v.asset_type === 'REAL_ESTATE' && ((v.terms_version === 3 ? Array.from(v.property_address).length : v.property_address.length) < 10 || !/^[1-9][0-9]{0,19}$/.test(v.property_valuation_minor) || (v.terms_version === 3 ? Array.from(v.rental_income_policy).length : v.rental_income_policy.length) < 20)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['property_address'], message: 'Provide property, valuation and rental-income terms.' })
+  if (v.asset_type === 'REAL_ESTATE' && (('terms_version' in v && v.terms_version === 3 ? Array.from(v.property_address).length : v.property_address.length) < 10 || !/^[1-9][0-9]{0,19}$/.test(v.property_valuation_minor) || ('terms_version' in v && v.terms_version === 3 ? Array.from(v.rental_income_policy).length : v.rental_income_policy.length) < 20)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['property_address'], message: 'Provide property, valuation and rental-income terms.' })
   if (v.asset_type === 'FUND' && v.currency === 'TST') {
     for (const field of ['strategy', 'pricing_basis', 'fees', 'redemption_terms'] as const) {
       if (v[field] !== FUND_V2_CANONICAL_REFERENCES[field]) ctx.addIssue({ code: z.ZodIssueCode.custom, path: [field], message: 'The authoritative fund policy reference must not be edited.' })
@@ -531,7 +531,7 @@ export const portalCommandSchema = z.discriminatedUnion('command', [
   z.object({ command: z.literal('apply_representative_mandate'), key: id, payload: z.object({ mandate_id: id, expected_revision: z.number().int().positive() }).strict() }).strict(),
   z.object({ command: z.literal('revoke_representative_mandate'), key: id, payload: z.object({ mandate_id: id, expected_revision: z.number().int().positive(), reason: text(20, 1000) }).strict() }).strict(),
   z.object({ command: z.literal('create_product'), key: id, payload: z.object({ organisation_id: id, terms: writableProductTermsSchema }).strict().superRefine((value, ctx) => {
-    if (value.terms.terms_version === 3 && value.terms.common_envelope.manager_organisation_id !== value.organisation_id) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['terms', 'common_envelope', 'manager_organisation_id'], message: 'Use the exact product organisation, not a native context reference.' })
+    if ('terms_version' in value.terms && value.terms.terms_version === 3 && value.terms.common_envelope.manager_organisation_id !== value.organisation_id) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['terms', 'common_envelope', 'manager_organisation_id'], message: 'Use the exact product organisation, not a native context reference.' })
   }) }).strict(),
   z.object({ command: z.literal('save_product'), key: id, payload: z.object({ product_id: id, expected_revision: z.number().int().positive(), terms: writableProductTermsSchema }).strict() }).strict(),
   z.object({ command: z.literal('submit_product'), key: id, payload: z.object({ product_id: id, expected_revision: z.number().int().positive() }).strict() }).strict(),
@@ -544,7 +544,7 @@ export const portalCommandSchema = z.discriminatedUnion('command', [
   z.object({ command: z.literal('cancel_subscription'), key: id, payload: z.object({ subscription_id: id }).strict() }).strict(),
   ...fundingCommandOptions,
 ]).superRefine((value, ctx) => {
-  if ((value.command === 'create_product' || value.command === 'save_product') && value.payload.terms.terms_version === 3
+  if ((value.command === 'create_product' || value.command === 'save_product') && 'terms_version' in value.payload.terms && value.payload.terms.terms_version === 3
     && new TextEncoder().encode(JSON.stringify(value)).byteLength > 65536) ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'The complete package command exceeds 65,536 UTF-8 bytes. Nothing is truncated or removed.' })
 })
 export type PortalCommand = z.infer<typeof portalCommandSchema>

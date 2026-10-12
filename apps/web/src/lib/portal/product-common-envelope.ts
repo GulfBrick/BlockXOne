@@ -4,7 +4,7 @@ import type { FundTermsV2, FundTermsV3, RealEstateTermsV2, RealEstateTermsV3, Po
 /** V3 is a proposed package, never provider, custody, signing or deployment admission. */
 export const strictProductText = (min: number, max: number) => z.string().superRefine((value, ctx) => {
   const length = Array.from(value).length
-  if (length < min || length > max) ctx.addIssue({ code: z.ZodIssueCode.custom, message: `Use ${min}–${max} Unicode characters.` })
+  if (length < min || length > max) ctx.addIssue({ code: z.ZodIssueCode.custom, message: `Use ${min} to ${max} Unicode characters.` })
   if (/^[\t\n\v\f\r ]|[\t\n\v\f\r ]$/.test(value)) ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Remove leading or trailing ASCII whitespace; values are not silently trimmed.' })
 })
 export const commonEnvelopeUuidSchema = z.string().regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/).refine(value => value !== '00000000-0000-0000-0000-000000000000', 'Use a non-zero canonical UUID.')
