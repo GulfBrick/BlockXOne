@@ -329,7 +329,7 @@ export async function proveProductCommonEnvelope(db, clients, featureSql, fundV2
       () => db.query("update public.bx1_memberships set status='SUSPENDED' where id=$1", [actor(400 + n)]),
       () => db.query("update public.bx1_profiles set status='SUSPENDED' where id=$1", [actor(n)]),
       () => db.query("update bx1_portal.product_service_appointments set status='REVOKED',revision=revision+1,revoked_at=clock_timestamp(),revoked_by_user_id=$2,revoke_reason='Fictional replay revocation boundary only.' where id=$1", [appointment.id, actor(5)]),
-      () => db.query("with expiry as materialized (select clock_timestamp()-interval '1 day' at) update bx1_portal.applications a set reviewed_at=e.at-interval '30 days',approved_until=e.at from expiry e where a.id=$1", [managerApplication.id]),
+      () => db.query("with expiry as materialized (select clock_timestamp()-interval '1 day' AS expired_at) update bx1_portal.applications a set reviewed_at=e.expired_at-interval '30 days',approved_until=e.expired_at from expiry e where a.id=$1", [managerApplication.id]),
       () => db.query("update bx1_portal.representative_mandates set status='REVOKED',revision=revision+1,revoked_at=clock_timestamp(),revoked_by_user_id=$2,revoke_reason='Fictional exact CE source mandate revoked.' where id=$1", [managerMandate.id, actor(2)]),
       () => db.query(`insert into bx1_portal.customer_monitoring_cases(application_id,state,revision,decided_at,decided_by,last_receipt_id)
         values($1,'ON_HOLD',1,clock_timestamp(),$2,$3) on conflict(application_id) do update
