@@ -12,6 +12,7 @@ import { ApplicationReview } from './portal-workflows'
 import { dateLabel } from './portal-primitives'
 import { PortalIdentityProvider } from './portal-client'
 import { onboardingHistoryUnavailableMessage, type OnboardingHistoryEntry, type OnboardingNavigation } from '@/lib/portal/onboarding-flow'
+import { applicationDraftAnswersSchema } from '@/lib/portal/application-drafts'
 
 // Isolate the presentation at the unchanged command-hook boundary. Existing
 // entry-client tests separately exercise server receipts and idempotency.
@@ -409,7 +410,7 @@ describe('draft reliability in the applicant form', () => {
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Load saved draft' })) })
     expect(confirm).toHaveBeenCalledTimes(1); expect((input as HTMLInputElement).value).toBe('Zimb')
     const { test_data_acknowledged: _acknowledgement, ...restored } = applicationFormDetails(entryApplication({ details: { ...investor, country: '' } }))
-    act(() => { draftBoundary.onResume!(restored, 'identity') })
+    act(() => { draftBoundary.onResume!(applicationDraftAnswersSchema.parse(restored), 'identity') })
     expect((screen.getByRole('combobox', { name: 'Country of residence *' }) as HTMLInputElement).value).toBe('')
     expect(boundary.submit).not.toHaveBeenCalled()
   })

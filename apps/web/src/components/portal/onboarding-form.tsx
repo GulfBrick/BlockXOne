@@ -284,7 +284,7 @@ export function OnboardingForm({ application, environment, onSaved, receipts, ha
   const errors = validationStep ? remaining.filter(item => item.step === validationStep) : []
   const localFilePending = Boolean(uploadTitle.trim()) || Boolean(file) || pendingForApplication.length > 0
   const localPending = localFilePending || countrySearchPending
-  const saveLabel = draft.loading ? 'Loading draft…' : draft.busy ? 'Saving…' : draft.status === 'ERROR' ? 'Couldn’t save—retry'
+  const saveLabel = draft.loading ? 'Loading draft…' : draft.busy ? 'Saving…' : draft.status === 'ERROR' ? 'Couldn’t save - retry'
     : draft.status === 'CONFLICT' ? 'Draft changed; your new answers are retained' : countrySearchPending ? 'Select a country to finish your answer'
       : draft.saved ? localFilePending ? 'Answers saved · finish the selected upload' : 'Saved'
         : draft.available ? draft.dirty ? 'Unsaved changes' : 'Draft not saved yet' : 'New changes are not saved'

@@ -221,6 +221,7 @@ export async function proveApplicationDrafts(db, clients, featureSql) {
     phase = 'narrow-committed-race-fixture'
     await db.query('update bx1_portal.entry_configuration set test_ordinary_entry_enabled=true where singleton')
     await seedActor(1); raceApplication = await start(1)
+    await admin()
     eq(await scalar('select count(*)::int from bx1_private.person_principals where auth_user_id=$1', [id(1)]), 0, 'fictional ordinary applicant has no fabricated trusted person mapping')
     eq(await scalar('select count(*)::int from auth.mfa_factors where user_id=$1', [id(1)]), 0, 'fictional draft fixture fabricates no enrolled MFA factor')
     retainedRows = await rows()

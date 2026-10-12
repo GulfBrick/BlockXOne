@@ -74,7 +74,9 @@ describe('shared approved brand and release shell', () => {
     expect(releaseDetails[0]).not.toMatch(/^<details\b[^>]*\bopen(?:=|\s|>)/)
     expect(releaseDetails[0]).toContain(PLATFORM_VERSION)
     expect(releaseDetails[0]).toContain('abcdef123456')
-    const normalFlow = html.replace(releaseDetails[0], '')
+    const releaseDetail = releaseDetails[0]
+    if (!releaseDetail) throw new Error('Expected one closed environment and release details panel.')
+    const normalFlow = html.replace(releaseDetail, '')
     expect(normalFlow).not.toContain(PLATFORM_VERSION)
     expect(normalFlow).not.toContain('abcdef123456')
     expect(normalFlow.match(/role="note"/g)).toHaveLength(1)
