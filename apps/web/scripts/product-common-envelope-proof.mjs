@@ -1266,7 +1266,7 @@ export async function proveProductCommonEnvelope(db, clients, featureSql, fundV2
         eq(returned.products.find(p => p.terms.name === value.name)?.terms, value, 'named custody and four-slot threshold remain exact declarations, not operational grants')
       })
       const overflow = clone(template)
-      for (const field of Object.keys(overflow.documents)) overflow.documents[field] = 'F'.repeat(12000)
+      for (const field of Object.keys(overflow.documents)) overflow.documents[field] = '\u03a9'.repeat(12000)
       for (const field of Object.keys(overflow.deployment_configuration.governance.powers)) overflow.deployment_configuration.governance.powers[field] = `Fictional ${field} ${'P'.repeat(2350)}`
       overflow.common_envelope.custody_title.segregation_policy = 'S'.repeat(2400)
       overflow.common_envelope.custody_title.control_policy = 'C'.repeat(2400)
