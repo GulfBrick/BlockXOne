@@ -1,6 +1,6 @@
 {
   "product": "BlockXOne",
-  "version": "1.1.0-rc.38",
+  "version": "1.1.0-rc.39",
   "status": "release-candidate",
   "baseSource": "49e2bdacce37f032c94d89e2650b9dd7b972e23f",
   "sourceIdentity": "VERCEL_GIT_COMMIT_SHA",

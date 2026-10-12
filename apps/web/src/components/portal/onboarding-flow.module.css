@@ -65,6 +65,6 @@
   .flow { max-width: 740px; }
   .workspace { display: block; }
   .stepRail { display: none; }
-  .mobileSteps { display: grid; gap: 6px; color: var(--bxo-text-secondary); }
-  .mobileSteps select { width: 100%; }
+  .mobileSteps { display: flex; align-items: center; gap: 8px; color: var(--bxo-text-secondary); }
+  .mobileSteps select { flex: 1; min-width: 0; width: auto; }
 }
