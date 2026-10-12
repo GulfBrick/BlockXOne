@@ -5,6 +5,8 @@ import { portalCommandSchema } from '@/lib/portal/contracts'
 import { isPortalSnapshot, PortalError, readPortal, requirePortalEnvironment } from '@/lib/portal/server'
 import { portalFailure, readPortalBody } from '@/lib/portal/http'
 import { portalContextMatches, portalOperatingContextSchema } from '@/lib/portal/operating-context'
+import { hasStage2CommandAccess, validatedStage2Access } from '@/lib/portal/stage2-access'
+import { hasOfferingCommandAccess, isTestPasswordWorkflow, validatedOfferingAccess } from '@/lib/portal/offering-access'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -27,8 +29,11 @@ export async function POST(request: NextRequest) {
     const command = portalCommandSchema.safeParse(instruction)
     if (!command.success) throw new PortalError(command.error.issues[0]?.message ?? 'Check the request fields.', 400)
     const client = createRequestSupabaseClient(jar.adapter)
-    const { user } = await readPortal(client, context.data)
+    const { user, snapshot: before } = await readPortal(client, context.data)
     if (user.id !== expectedActor) throw new PortalError('The signed-in account changed. Reload before saving.', 403)
+    if (!isPortalSnapshot(before, user.id) || !portalContextMatches(before.operating_context, context.data)) throw new PortalError('The current operating context could not be verified.', 503)
+    if (isTestPasswordWorkflow(before) && !hasStage2CommandAccess(before, command.data.command, context.data)
+      && !hasOfferingCommandAccess(before, command.data.command, context.data)) throw new PortalError('This action is not available in your current workflow context.', 403)
     const { data, error } = await client.rpc('bx1_portal_command_scoped', { command: command.data.command, request_key: command.data.key, payload: command.data.payload, operating_context: context.data }).abortSignal(AbortSignal.timeout(15000))
     if (error) {
       if (error.code === '42501') throw new PortalError('You do not have current authority for this action.', 403)
@@ -36,6 +41,12 @@ export async function POST(request: NextRequest) {
       throw new PortalError('The request outcome is uncertain. Refresh to check whether it saved; retry only with the same request key.', 503)
     }
     if (!isPortalSnapshot(data, user.id) || !portalContextMatches(data.operating_context, context.data)) throw new PortalError('The saved result could not be read. Refresh before retrying.', 503)
+    const priorAccess = validatedStage2Access(before, context.data)
+    const savedAccess = validatedStage2Access(data, context.data)
+    if (priorAccess && (!savedAccess || savedAccess.environment !== priorAccess.environment || savedAccess.session_mode !== priorAccess.session_mode)) throw new PortalError('The saved admission context could not be read. Refresh before retrying.', 503)
+    const priorOffering = validatedOfferingAccess(before, context.data)
+    const savedOffering = validatedOfferingAccess(data, context.data)
+    if (priorOffering && (!savedOffering || savedOffering.environment !== priorOffering.environment || savedOffering.session_mode !== priorOffering.session_mode)) throw new PortalError('The saved package context could not be read. Refresh before retrying.', 503)
     return jar.finish(privateResponse(NextResponse.json({ snapshot: data })))
   } catch (error) { return jar.finish(portalFailure(error)) }
 }

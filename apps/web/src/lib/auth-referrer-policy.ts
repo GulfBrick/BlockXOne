@@ -1,6 +1,6 @@
 import { isAuthErrorCode } from './supabase/contracts'
 import { parseAdministrationQuery } from './administration/query'
-import { isRegistrationError, isRegistrationIntent } from './portal/registration'
+import { isRegistrationError, isRegistrationIntent, registrationFailureReference } from './portal/registration'
 
 export type AuthReferrerPolicy = 'no-referrer' | 'strict-origin'
 type AuthSearchParams = Record<string, string | string[] | undefined>
@@ -16,6 +16,7 @@ export function authDocumentReferrerPolicy(
   if (pathname === '/workspace/administration') return parseAdministrationQuery(searchParams) ? 'strict-origin' : 'no-referrer'
   if (!['/login', '/login/mfa', '/register', '/workspace', '/workspace/security', '/auth/confirm'].includes(pathname)) return 'no-referrer'
   const entries = searchParams instanceof URLSearchParams ? [...searchParams.entries()] : Object.entries(searchParams).filter(([, value]) => value !== undefined)
+  const registrationError = entries.find(([key]) => key === 'error')?.[1]
   const seen = new Set<string>()
   for (const [key, value] of entries) {
     if (seen.has(key)) return 'no-referrer'
@@ -25,6 +26,7 @@ export function authDocumentReferrerPolicy(
     if (pathname === '/login' && key === 'error' && isAuthErrorCode(value)) continue
     if (pathname === '/register' && key === 'intent' && isRegistrationIntent(value)) continue
     if (pathname === '/register' && key === 'error' && isRegistrationError(value)) continue
+    if (pathname === '/register' && key === 'ref' && registrationFailureReference(registrationError, value)) continue
     return 'no-referrer'
   }
   return 'strict-origin'

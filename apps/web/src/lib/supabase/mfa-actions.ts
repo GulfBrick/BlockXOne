@@ -1,22 +1,23 @@
 import 'server-only'
 
+import { randomUUID } from 'node:crypto'
 import { NextResponse } from 'next/server'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { platformRelease } from '@/lib/platform-release'
 import { privateResponse } from './http'
 import { MFA_CONTINUATIONS, MFA_ENROLL_QR_MAX_CHARACTERS, MFA_ENROLL_RESPONSE_MAX_BYTES, type MfaContinuation, type MfaErrorCode } from './mfa-contracts'
-import { hasRequiredMfa, isMfaContextCurrent, readMfaContext, requireRecentTotp, toMfaView } from './mfa'
+import { canRestartPendingTotpSetup, hasRequiredMfa, isFreshPendingTotpSetup, isMfaContextCurrent, readMfaContext, requireRecentTotp, toMfaView } from './mfa'
 
 const statuses: Record<MfaErrorCode, number> = {
   invalid_request: 400, unauthorised: 401, invalid_code: 400, rate_limited: 429,
-  unavailable: 503, pending_setup_exists: 409, already_enrolled: 409, unsupported_factor: 403,
+  unavailable: 503, pending_setup_exists: 409, already_enrolled: 409, unsupported_factor: 403, step_up_required: 403,
 }
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 function uuid(value: unknown): value is string {
   return typeof value === 'string' && uuidPattern.test(value) && value !== '00000000-0000-0000-0000-000000000000'
 }
 function record(value: unknown): value is Record<string, unknown> { return value !== null && typeof value === 'object' && !Array.isArray(value) }
-function continuation(value: unknown): value is MfaContinuation { return value === 'workspace' || value === 'setup' || value === 'security' }
+function continuation(value: unknown): value is MfaContinuation { return value === 'workspace' || value === 'setup' || value === 'security' || value === 'staff' }
 
 export function mfaErrorResponse(error: MfaErrorCode, status = statuses[error]): NextResponse {
   return privateResponse(NextResponse.json({ ok: false, error }, { status }))
@@ -51,8 +52,8 @@ function enrollmentProjection(value: unknown): { factorId: string; qrCode: strin
 // This helper never logs any input, provider object or caught exception.
 export async function handleMfaAction(action: string, form: URLSearchParams, client: SupabaseClient): Promise<NextResponse> {
   try {
-    if (action !== 'mfa-enroll' && action !== 'mfa-verify') return mfaErrorResponse('invalid_request', 404)
-    const fields = action === 'mfa-enroll' ? [] : ['factorId', 'code', 'continuation']
+    if (action !== 'mfa-enroll' && action !== 'mfa-verify' && action !== 'mfa-restart-setup') return mfaErrorResponse('invalid_request', 404)
+    const fields = action === 'mfa-verify' ? ['factorId', 'code', 'continuation'] : []
     if ([...form.keys()].some((key) => !fields.includes(key) || form.getAll(key).length !== 1)
       || fields.some((key) => !form.has(key))) return mfaErrorResponse('invalid_request')
     const factorId = form.get('factorId')
@@ -64,14 +65,29 @@ export async function handleMfaAction(action: string, form: URLSearchParams, cli
     // callers cannot use this API to distinguish assignments/factor existence.
     if (!context) return mfaErrorResponse('unauthorised')
     const view = toMfaView(context)
-    if (action === 'mfa-enroll') {
-      if (view.state !== 'unenrolled') return mfaErrorResponse('already_enrolled')
-      if (view.hasPendingTotp) return mfaErrorResponse('pending_setup_exists')
+    if (action === 'mfa-enroll' || action === 'mfa-restart-setup') {
+      if (action === 'mfa-restart-setup') {
+        if (!canRestartPendingTotpSetup(context)) return mfaErrorResponse('unauthorised', 403)
+      } else {
+        if (view.hasPendingTotp) return mfaErrorResponse('pending_setup_exists')
+        if (view.state === 'verified') {
+          // A second TOTP is a recovery factor, never an AAL1 reset. The
+          // existing factor must have just been verified in this live session.
+          if (!requireRecentTotp(context, Math.floor(Date.now() / 1000)).allowed) return mfaErrorResponse('step_up_required')
+        } else if (view.state !== 'unenrolled') return mfaErrorResponse('already_enrolled')
+        if (view.factors.length >= 10) return mfaErrorResponse('already_enrolled')
+      }
       if (!await isMfaContextCurrent(client, context)) return mfaErrorResponse('unauthorised')
-      const { data, error } = await client.auth.mfa.enroll({ factorType: 'totp', friendlyName: 'BlockXOne authenticator' })
+      const { data, error } = await client.auth.mfa.enroll({ factorType: 'totp', friendlyName: `BlockXOne authenticator ${randomUUID()}` })
       if (error) return providerFailure(error, false)
       const enrollment = enrollmentProjection(data)
       if (!enrollment) return mfaErrorResponse('unavailable')
+      if (action === 'mfa-restart-setup') {
+        if (view.factors.some((factor) => factor.id === enrollment.factorId)) return mfaErrorResponse('unavailable')
+        const after = await readMfaContext(client)
+        if (!after || !isFreshPendingTotpSetup(after, enrollment.factorId)
+          || !await isMfaContextCurrent(client, context) || !await isMfaContextCurrent(client, after)) return mfaErrorResponse('unavailable')
+      }
       const body = { ok: true, ...enrollment }
       // Keep the entire serialized UTF-8 response within the client's bounded
       // parser, including JSON escaping and multi-byte QR characters.
@@ -80,7 +96,13 @@ export async function handleMfaAction(action: string, form: URLSearchParams, cli
     }
     if (view.state === 'unsupported_factor') return mfaErrorResponse('unsupported_factor')
     const factor = view.factors.find((candidate) => candidate.id === factorId)
-    if (!factor || (factor.status === 'unverified' && (destination !== 'security' || view.state !== 'unenrolled'))) return mfaErrorResponse('unauthorised', 403)
+    if (!factor) return mfaErrorResponse('unauthorised', 403)
+    if (factor.status === 'unverified') {
+      const firstFactorSetup = view.state === 'unenrolled' && ['security','staff'].includes(destination ?? '')
+      const backupFactorSetup = view.state === 'verified' && destination === 'security'
+        && requireRecentTotp(context, Math.floor(Date.now() / 1000)).allowed
+      if (!firstFactorSetup && !backupFactorSetup) return mfaErrorResponse('unauthorised', 403)
+    }
     // Repeat the narrow type guards for control-flow narrowing, never cast
     // posted authority. Challenge IDs are created and consumed only here.
     if (!uuid(factorId) || typeof code !== 'string' || !continuation(destination)) return mfaErrorResponse('invalid_request')

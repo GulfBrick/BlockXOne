@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { canRefreshEntryApplication, readEntryApplicationStatus, reconcileEntryMarker } from './entry-client'
-import { entryActorId, entryApplication, entryApplicationId, entryFixture } from '@/lib/portal/entry-test-fixtures'
+import { canRefreshEntryApplication, readEntryApplicationAvailability, readEntryApplicationStatus, reconcileEntryMarker } from './entry-client'
+import { customerHandoffHasAction, validatedCustomerHandoff } from '@/lib/portal/customer-handoff'
+import { entryActorId, entryApplication, entryApplicationId, entryFixture, entryHandoff } from '@/lib/portal/entry-test-fixtures'
 const key = '44444444-4444-4444-8444-444444444444'
 const marker = { key, command: 'submit_application' as const, hash: 'a'.repeat(64) }
 function storage() {
@@ -82,5 +83,49 @@ describe('safe read-only application status refresh', () => {
     await expect(readEntryApplicationStatus(entryActorId, application)).rejects.toThrow('Verified sign-in required.')
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('<html>Sign in</html>', { headers: { 'content-type': 'text/html' } })))
     await expect(readEntryApplicationStatus(entryActorId, application)).rejects.toThrow('Status could not be verified')
+  })
+})
+
+describe('draft-preserving read-only review availability', () => {
+  afterEach(() => vi.unstubAllGlobals())
+  function pending() {
+    const application = entryApplication({ review_route: 'REVIEWER_UNAVAILABLE', details: { full_name: 'Saved synthetic applicant' } })
+    application.handoff = entryHandoff(application)
+    const updated = { ...application, review_route: 'AVAILABLE' as const }
+    updated.handoff = entryHandoff(updated)
+    return { application, updated, snapshot: entryFixture([updated]) }
+  }
+  it('regains submission on the same draft without replacing the revision, answers or command marker', async () => {
+    const { application, snapshot } = pending()
+    const saved = storage(); saved.setItem(storageKey, JSON.stringify(marker))
+    const fetch = vi.fn().mockResolvedValue(Response.json({ snapshot })); vi.stubGlobal('fetch', fetch)
+    const updated = await readEntryApplicationAvailability(entryActorId, 'TESTNET', application)
+    expect(updated.applications[0].revision).toBe(application.revision)
+    expect(updated.applications[0].details).toEqual(application.details)
+    expect(customerHandoffHasAction(validatedCustomerHandoff(updated, updated.applications[0], 'TESTNET'), 'SUBMIT_APPLICATION')).toBe(true)
+    expect(saved.getItem(storageKey)).toBe(JSON.stringify(marker))
+    expect(fetch.mock.calls[0][1]).not.toHaveProperty('method', 'POST')
+  })
+  it('preserves the draft if the reviewer is still unavailable', async () => {
+    const { application } = pending()
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ snapshot: entryFixture([application]) })))
+    const snapshot = await readEntryApplicationAvailability(entryActorId, 'TESTNET', application)
+    expect(customerHandoffHasAction(validatedCustomerHandoff(snapshot, snapshot.applications[0], 'TESTNET'), 'SUBMIT_APPLICATION')).toBe(false)
+  })
+  it.each([
+    { revision: 2 }, { status: 'SUBMITTED' }, { persona: 'WEALTH_MANAGER' }, { details: { full_name: 'Changed server record' } },
+  ])('does not replace prepared fields after saved-case changes %j', change => {
+    const { application, updated } = pending()
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ snapshot: entryFixture([{ ...updated, ...change } as typeof updated]) })))
+    return expect(readEntryApplicationAvailability(entryActorId, 'TESTNET', application)).rejects.toThrow('saved application changed')
+  })
+  it('rejects a different actor or environment, missing handoff, and live-session denial', async () => {
+    const { application, snapshot } = pending()
+    for (const data of [{ ...snapshot, actor: { id: key, email: 'other@example.invalid' } }, { ...snapshot, workflow: { ...snapshot.workflow!, environment: 'MAINNET', scoped_read_available: false } }, entryFixture([{ ...snapshot.applications[0], handoff: undefined }])]) {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ snapshot: data })))
+      await expect(readEntryApplicationAvailability(entryActorId, 'TESTNET', application)).rejects.toThrow()
+    }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ error: 'Complete MFA again.' }, { status: 403 })))
+    await expect(readEntryApplicationAvailability(entryActorId, 'TESTNET', application)).rejects.toThrow('Complete MFA again.')
   })
 })

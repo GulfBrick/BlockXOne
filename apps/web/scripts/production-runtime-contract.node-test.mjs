@@ -94,6 +94,31 @@ test('native production config has no legacy rewrite and private Auth/workspace 
   }
 })
 
+test('disabled demo requests do not allow their configured endpoint in the browser CSP', () => {
+  const endpoint = 'https://unused-demo-endpoint.example'
+  const result = loadNativeConfig({ NEXT_PUBLIC_DEMO_REQUEST_ENDPOINT: endpoint })
+  assert.equal(result.status, 0, result.stderr)
+  const configuration = JSON.parse(result.stdout)
+  const globalHeaders = configuration.headers.find((entry) => entry.source === '/:path*')?.headers
+  const csp = globalHeaders?.find(({ key }) => key === 'Content-Security-Policy')?.value
+  assert.ok(csp)
+  assert.ok(!csp.includes(endpoint), 'disabled demo endpoint must not be in connect-src')
+})
+
+test('enabled demo requests retain their reviewed endpoint in the browser CSP', () => {
+  const endpoint = 'https://demo-endpoint.example'
+  const result = loadNativeConfig({
+    NEXT_PUBLIC_DEMO_REQUEST_ENABLED: 'true',
+    NEXT_PUBLIC_DEMO_REQUEST_ENDPOINT: endpoint,
+    NEXT_PUBLIC_DEMO_PRIVACY_NOTICE_URL: 'https://bx1.co.za/privacy',
+  })
+  assert.equal(result.status, 0, result.stderr)
+  const configuration = JSON.parse(result.stdout)
+  const globalHeaders = configuration.headers.find((entry) => entry.source === '/:path*')?.headers
+  const csp = globalHeaders?.find(({ key }) => key === 'Content-Security-Policy')?.value
+  assert.ok(csp?.includes(endpoint), 'enabled demo endpoint must be in connect-src')
+})
+
 test('native production configuration rejects mismatches and server secret-key classes', () => {
   for (const changed of [
     { NEXT_PUBLIC_BLOCKXONE_AUTH_MODE: '' },

@@ -12,6 +12,8 @@ describe('shared approved brand and release shell', () => {
     expect(html).toContain(PLATFORM_VERSION)
     expect(html).toContain('abcdef123456')
     expect(html).toContain('action="/auth/logout"')
+    expect(html).toContain(environment === 'TESTNET' ? 'Testnet · Test environment' : 'Mainnet · Live environment')
+    expect(html).not.toContain('Rehearsal environment')
     if (environment === 'MAINNET') { expect(html).not.toContain('href="/portal/onboarding"'); expect(html).not.toContain('Fictional data only') }
   })
   it('uses shared brand tokens and reduced-motion handling instead of an independent palette', () => {

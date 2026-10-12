@@ -22,7 +22,7 @@ type ControllerOptions = {
 }
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const initialState = (): MfaFormState => ({ pending: false, reloadRequired: false })
-const nextPaths = new Set(['/portal', '/workspace', '/login?setup=1', '/workspace/security'])
+const nextPaths = new Set(['/portal', '/workspace', '/login?setup=1', '/workspace/security', '/workspace/staff-invite'])
 const errors: Record<MfaErrorCode, string> = {
   invalid_request: 'Unable to verify that code. Check your authenticator and try again.',
   unauthorised: 'Sign in again to continue.',
@@ -32,6 +32,7 @@ const errors: Record<MfaErrorCode, string> = {
   pending_setup_exists: 'Authenticator setup is already in progress.',
   already_enrolled: 'An authenticator is already enabled. Reload to continue.',
   unsupported_factor: 'This account requires a verification method not supported on this screen. Contact support.',
+  step_up_required: 'Verify a current authenticator code, then add your backup within five minutes.',
 }
 function record(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -47,9 +48,11 @@ export function createMfaFormController(options: ControllerOptions) {
   const emit = (next: MfaFormState) => { state = next; if (active) options.onChange(next) }
   const failUnknown = () => emit({ pending: false, reloadRequired: true, error: 'unavailable' })
   const allowedFactor = (id: string) => {
-    if (options.continuation === 'security' && state.setup?.factorId === id) return true
+    if (['security','staff'].includes(options.continuation) && state.setup?.factorId === id) return true
     return options.view.factors.some(factor => factor.id === id && factor.factorType === 'totp'
-      && (factor.status === 'verified' || (options.continuation === 'security' && options.view.state === 'unenrolled' && factor.status === 'unverified')))
+      && (factor.status === 'verified' || (factor.status === 'unverified'
+        && (['security','staff'].includes(options.continuation) && options.view.state === 'unenrolled'
+          || options.continuation === 'security' && options.view.state === 'verified'))))
   }
   async function submit(path: string, body: URLSearchParams, enrollment: boolean) {
     if (!active || state.pending || state.reloadRequired) return
@@ -62,7 +65,7 @@ export function createMfaFormController(options: ControllerOptions) {
       if (!record(result)) { failUnknown(); return }
       if (result.ok === false) {
         const error = typeof result.error === 'string' && Object.hasOwn(errors, result.error) ? result.error as MfaErrorCode : 'unavailable'
-        const retryable = error === 'invalid_code' || error === 'rate_limited'
+        const retryable = error === 'invalid_code' || error === 'rate_limited' || error === 'step_up_required'
         emit({ ...(retryable ? state : {}), pending: false, reloadRequired: !retryable, error })
         return
       }
@@ -85,7 +88,9 @@ export function createMfaFormController(options: ControllerOptions) {
   return {
     getState: () => state,
     enroll: async () => {
-      if (options.continuation !== 'security' || options.view.state !== 'unenrolled' || options.view.hasPendingTotp || options.view.factors.length || state.setup) return
+      const first = ['security','staff'].includes(options.continuation) && options.view.state === 'unenrolled' && !options.view.factors.length
+      const backup = options.continuation === 'security' && options.view.state === 'verified' && options.view.factors.some(factor => factor.status === 'verified' && factor.factorType === 'totp')
+      if ((!first && !backup) || options.view.hasPendingTotp || options.view.factors.length >= 10 || state.setup) return
       await submit('/auth/mfa-enroll', new URLSearchParams(), true)
     },
     verify: async (factorId: string, code: string) => {
@@ -93,6 +98,12 @@ export function createMfaFormController(options: ControllerOptions) {
       if (!uuid.test(factorId) || !allowedFactor(factorId)) { emit({ ...state, error: 'invalid_request' }); return }
       if (!/^[0-9]{6}$/.test(code)) { emit({ ...state, error: 'invalid_code' }); return }
       await submit('/auth/mfa-verify', new URLSearchParams({ factorId, code, continuation: options.continuation }), false)
+    },
+    restartUnfinishedSetup: async () => {
+      if (!active || state.pending || state.reloadRequired || state.setup || !options.view.canRestartPendingSetup
+        || options.view.state !== 'unenrolled' || !['security','staff'].includes(options.continuation)
+        || !options.view.factors.some(factor => factor.status === 'unverified' && factor.factorType === 'totp')) return
+      await submit('/auth/mfa-restart-setup', new URLSearchParams(), true)
     },
     clear: () => {
       ++generation; abort?.abort()
@@ -107,7 +118,7 @@ export function createMfaFormController(options: ControllerOptions) {
 async function post(path: string, body: URLSearchParams, signal: AbortSignal): Promise<unknown> {
   const response = await fetch(path, { method: 'POST', credentials: 'same-origin', cache: 'no-store', redirect: 'error',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' }, body, signal })
-  return readMfaResponse(response, path === '/auth/mfa-enroll')
+  return readMfaResponse(response, path === '/auth/mfa-enroll' || path === '/auth/mfa-restart-setup')
 }
 
 export async function readMfaResponse(response: Response, enrollment = false): Promise<unknown> {
@@ -180,9 +191,13 @@ export function MfaForm({ view, continuation }: { view: MfaView; continuation: M
   useEffect(() => { if (state.error) alert.current?.focus() }, [state.error])
 
   const factors = state.setup ? [{ id: state.setup.factorId, status: 'unverified' as const, factorType: 'totp' as const }]
-    : view.factors.filter(factor => factor.status === 'verified' || (continuation === 'security' && view.state === 'unenrolled'))
-  const canEnroll = continuation === 'security' && view.state === 'unenrolled' && !view.hasPendingTotp && !view.factors.length && !state.setup
+    : view.factors.filter(factor => factor.status === 'verified' || (['security','staff'].includes(continuation) && view.state === 'unenrolled') || (continuation === 'security' && view.state === 'verified'))
+  const firstEnrollment = ['security','staff'].includes(continuation) && view.state === 'unenrolled' && !view.factors.length
+  const backupEnrollment = continuation === 'security' && view.state === 'verified' && view.factors.some(factor => factor.status === 'verified' && factor.factorType === 'totp')
+  const canEnroll = (firstEnrollment || backupEnrollment) && !view.hasPendingTotp && view.factors.length < 10 && !state.setup
   const unsupported = view.state === 'unsupported_factor' || (view.state === 'verified' && !factors.length)
+  const canRestart = view.canRestartPendingSetup && view.state === 'unenrolled' && !state.setup
+    && ['security','staff'].includes(continuation)
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const values = new FormData(event.currentTarget)
@@ -194,9 +209,10 @@ export function MfaForm({ view, continuation }: { view: MfaView; continuation: M
   return <section className="mt-8 space-y-6" aria-label="Authenticator verification">
     {view.state === 'verified' ? <p className="text-base text-bxo-text-primary">Authenticator enabled. Additional verification may be required for sensitive actions.</p> : null}
     {unsupported ? <p role="alert" className="text-base text-bxo-text-secondary">{errors.unsupported_factor}</p> : null}
-    {view.hasPendingTotp && !state.setup && view.state === 'unenrolled' ? <div className="text-base leading-7 text-bxo-text-secondary"><p>Authenticator setup is unfinished.</p><p className="mt-2">If you no longer have this setup in your authenticator, contact support before starting again.</p></div> : null}
+    <p className="text-base leading-7 text-bxo-text-secondary">Your six-digit code comes from the authenticator app on your phone, such as Google Authenticator or Microsoft Authenticator. BlockXOne does not email this code. During setup, scan the QR code in that app to start generating codes.</p>
+    {view.hasPendingTotp && !state.setup && ['unenrolled','verified'].includes(view.state) ? <div className="space-y-4 text-base leading-7 text-bxo-text-secondary"><p>Authenticator setup is unfinished.</p><p>{canRestart ? 'If you never scanned the QR code or no longer have this unfinished setup in your app, start a fresh setup below. Scan the new QR code and verify the code from your phone.' : 'Use the code from the device where you started this setup. If it is unavailable, contact support.'}</p>{canRestart ? <Button type="button" variant="outline" className="min-h-11" disabled={state.pending || state.reloadRequired} onClick={() => void controller.current?.restartUnfinishedSetup()}>Start fresh authenticator setup</Button> : null}</div> : null}
     {state.error ? <p ref={alert} tabIndex={-1} role="alert" className="rounded-lg border border-bxo-danger-border bg-bxo-danger-soft p-4 text-base text-bxo-text-primary outline-none focus-visible:ring-2 focus-visible:ring-bxo-accent-primary">{errors[state.error]}</p> : null}
-    {canEnroll && !unsupported ? <div className="space-y-4"><p className="text-base leading-7 text-bxo-text-secondary">Add an authenticator app to protect your sign-in.</p><p className="text-sm leading-6 text-bxo-text-secondary">After setup is verified, future sign-ins require your authenticator code. This does not enable financial or token operations.</p><Button type="button" disabled={state.pending || state.reloadRequired} onClick={() => void controller.current?.enroll()} className="min-h-11">{state.pending ? 'Setting up...' : 'Set up authenticator'}</Button></div> : null}
+    {canEnroll && !unsupported ? <div className="space-y-4"><p className="text-base leading-7 text-bxo-text-secondary">{backupEnrollment ? 'Add a backup authenticator on a different device. Verify your current authenticator first if you have not done so recently.' : 'Add an authenticator app to protect your sign-in.'}</p><p className="text-sm leading-6 text-bxo-text-secondary">{backupEnrollment ? 'Keep both authenticators until the backup has been verified. Losing every verified factor still requires controlled support recovery.' : 'After setup is verified, future sign-ins require your authenticator code. This does not enable financial or token operations.'}</p><Button type="button" disabled={state.pending || state.reloadRequired} onClick={() => void controller.current?.enroll()} className="min-h-11">{state.pending ? 'Setting up...' : backupEnrollment ? 'Add backup authenticator' : 'Set up authenticator'}</Button></div> : null}
     {state.setup ? <div className="space-y-4 rounded-lg border border-bxo-border-default p-4">
       <Image src={state.setup.qrCode} alt="Authenticator setup QR code" width={240} height={240} unoptimized className="h-auto max-w-full bg-white" />
       <p className="text-sm font-semibold text-bxo-text-primary">Setup key</p><p className="break-all font-mono text-base text-bxo-text-primary">{state.setup.secret}</p>
@@ -204,7 +220,7 @@ export function MfaForm({ view, continuation }: { view: MfaView; continuation: M
     </div> : null}
     {!unsupported && factors.length ? <form method="post" action="/auth/mfa-verify" onSubmit={submit} aria-busy={state.pending} className="space-y-6">
       <input type="hidden" name="continuation" value={continuation} />
-      {factors.length > 1 ? <div><label htmlFor="bx1-mfa-factor" className="block text-sm font-semibold text-bxo-text-primary">Authenticator</label><select id="bx1-mfa-factor" name="factorId" className={inputClass} disabled={state.pending || state.reloadRequired}>{factors.map((factor, index) => <option key={factor.id} value={factor.id}>Authenticator {index + 1}</option>)}</select></div> : <input type="hidden" name="factorId" value={factors[0].id} />}
+      {factors.length > 1 ? <div><label htmlFor="bx1-mfa-factor" className="block text-sm font-semibold text-bxo-text-primary">Authenticator</label><select id="bx1-mfa-factor" name="factorId" className={inputClass} disabled={state.pending || state.reloadRequired}>{factors.map((factor, index) => <option key={factor.id} value={factor.id}>{factor.status === 'unverified' ? 'Finish backup setup' : `Authenticator ${index + 1}`}</option>)}</select></div> : <input type="hidden" name="factorId" value={factors[0].id} />}
       <div><label htmlFor="bx1-mfa-code" className="block text-sm font-semibold text-bxo-text-primary">Authentication code</label><input ref={codeInput.attach} id="bx1-mfa-code" name="code" type="text" inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength={6} minLength={6} required spellCheck={false} disabled={state.pending || state.reloadRequired} className={inputClass} /></div>
       <Button type="submit" disabled={state.pending || state.reloadRequired} className="min-h-11 w-full">{state.pending ? 'Verifying...' : state.setup ? 'Verify setup' : view.hasPendingTotp && view.state === 'unenrolled' ? 'Verify existing setup' : view.state === 'verified' ? 'Verify a new code' : 'Verify code'}</Button>
     </form> : null}

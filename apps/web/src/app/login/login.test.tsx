@@ -31,6 +31,11 @@ function configureTestIdentity() {
   vi.stubEnv('VERCEL_ENV', 'preview')
   vi.stubEnv('BLOCKXONE_APP_ORIGIN', 'https://testnet.bx1.co.za')
 }
+function configureMainIdentity() {
+  vi.stubEnv('SUPABASE_URL', 'https://oqkevkjbkpugjotihtda.supabase.co')
+  vi.stubEnv('VERCEL_ENV', 'production')
+  vi.stubEnv('BLOCKXONE_APP_ORIGIN', 'https://bx1.co.za')
+}
 describe('server login/setup admission', () => {
   it('does not render password setup after the token changes during workspace lookup', async () => {
     mocks.current.mockResolvedValue(false)
@@ -66,6 +71,53 @@ describe('server login/setup admission', () => {
     expect(html).not.toContain('Investor sign in')
     expect(html).not.toContain('/register')
   })
+  it('keeps MAIN sign-in local and gives separate canonical Testnet sign-in and registration links', async () => {
+    configureMainIdentity()
+    const html = renderToStaticMarkup(await LoginPage({ searchParams: Promise.resolve({}) }))
+    expect(html).toContain('Mainnet · Secure access')
+    expect(html).toContain('action="/auth/login"')
+    expect(html).toContain('Signing in does not enable financial operations')
+    expect(html).toContain('href="https://testnet.bx1.co.za/login"')
+    expect(html).toContain('href="https://testnet.bx1.co.za/register"')
+    expect(html).toContain('accounts and sessions are separate from Mainnet')
+    expect(html).toContain('href="/register"')
+    expect(html).toContain('Registration does not grant approval or signing authority')
+    expect(html).not.toContain('.vercel.app')
+  })
+  it('keeps the Testnet links visible on MAIN when auth-mode flags make sign-in unavailable', async () => {
+    configureMainIdentity()
+    vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_AUTH_MODE', '')
+    const html = renderToStaticMarkup(await LoginPage({ searchParams: Promise.resolve({}) }))
+    expect(html).toContain('Access is temporarily unavailable.')
+    expect(html).not.toContain('<form')
+    expect(html).toContain('href="https://testnet.bx1.co.za/login"')
+    expect(html).toContain('href="https://testnet.bx1.co.za/register"')
+    expect(html).not.toContain('href="/register"')
+  })
+  it('does not place Testnet navigation on MAIN password-setup links', async () => {
+    configureMainIdentity()
+    const html = renderToStaticMarkup(await LoginPage({ searchParams: Promise.resolve({ setup: '1' }) }))
+    expect(html).toContain('action="/auth/setup"')
+    expect(html).not.toContain('href="https://testnet.bx1.co.za/login"')
+    expect(html).not.toContain('href="https://testnet.bx1.co.za/register"')
+  })
+  it.each([
+    ['BLOCKXONE_APP_ORIGIN', 'https://testnet.bx1.co.za'],
+    ['BLOCKXONE_APP_ORIGIN', 'https://bx1.co.za.evil.test'],
+    ['SUPABASE_URL', 'https://fegnnnlseuejkrusbbkv.supabase.co'],
+    ['VERCEL_ENV', 'preview'],
+    ['BLOCKXONE_ENVIRONMENT', 'TESTNET'],
+    ['NEXT_PUBLIC_BLOCKXONE_RUNTIME_SCOPE', 'TESTNET'],
+  ])('does not show MAIN-only Testnet navigation with a conflicting binding: %s', async (name, value) => {
+    configureMainIdentity()
+    vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_AUTH_MODE', '')
+    vi.stubEnv(name, value)
+    const html = renderToStaticMarkup(await LoginPage({ searchParams: Promise.resolve({}) }))
+    expect(html).toContain('Access is temporarily unavailable.')
+    expect(html).not.toContain('href="https://testnet.bx1.co.za/login"')
+    expect(html).not.toContain('href="https://testnet.bx1.co.za/register"')
+    expect(html).not.toContain('Mainnet · Secure access')
+  })
   it('links new test customers to registration only in the exact hosted test environment', async () => {
     vi.stubEnv('BLOCKXONE_TESTNET_FUND_DEMO', 'enabled')
     vi.stubEnv('SUPABASE_URL', 'https://fegnnnlseuejkrusbbkv.supabase.co')
@@ -77,6 +129,9 @@ describe('server login/setup admission', () => {
     expect(html).toContain('investor or wealth manager')
     expect(html).toContain('Registration does not grant approval or signing authority')
     expect(html).toContain('action="/auth/login"')
+    expect(html).not.toContain('href="https://testnet.bx1.co.za/login"')
+    expect(html).not.toContain('href="https://testnet.bx1.co.za/register"')
+    expect(html).not.toContain('Mainnet · Secure access')
     const setup = renderToStaticMarkup(await LoginPage({ searchParams: Promise.resolve({ setup: '1' }) }))
     expect(setup).not.toContain('href="/register"')
     expect(setup).toContain('action="/auth/setup"')

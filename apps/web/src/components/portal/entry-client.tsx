@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { entryCommandSchema, entrySnapshotSchema, type EntryApplication, type EntryCommand, type EntrySnapshot } from '@/lib/portal/entry-contracts'
 import type { PlatformEnvironment } from '@/lib/platform-release'
+import { customerHandoffHasAction, validatedCustomerHandoff } from '@/lib/portal/customer-handoff'
 
 type EntryMarker = { key: string; command: EntryCommand['command']; hash: string }
 type MarkerStorage = Pick<Storage, 'getItem' | 'removeItem'>
@@ -57,6 +58,44 @@ export function useEntryStatusRefresh(actorId: string, environment: PlatformEnvi
     finally { lock.current = false; if (active.current === identity) setBusy(false) }
   }
   return { busy, message, refresh, available: canRefreshEntryApplication(application) }
+}
+
+/** Refresh only compatible same-revision metadata; never replace typed form fields. */
+export async function readEntryApplicationAvailability(actorId: string, environment: PlatformEnvironment, application: EntryApplication): Promise<EntrySnapshot> {
+  if (!['DRAFT', 'CHANGES_REQUIRED', 'REJECTED'].includes(application.status)) throw new Error('Review availability refresh is only for an editable application.')
+  const response = await fetch('/api/portal/entry', { credentials: 'same-origin', cache: 'no-store', redirect: 'error', headers: { 'x-bx1-expected-actor': actorId }, signal: AbortSignal.timeout(15000) })
+  if (!response.headers.get('content-type')?.includes('application/json')) throw new Error('Review availability could not be verified. Your browser answers were not replaced.')
+  const result = await response.json()
+  if (!response.ok) throw new Error(typeof result.error === 'string' ? result.error : 'Review availability could not be verified. Your browser answers were not replaced.')
+  const snapshot = entrySnapshotSchema.parse(result.snapshot)
+  const updated = snapshot.applications.find(item => item.id === application.id)
+  if (snapshot.actor.id !== actorId || snapshot.applications.some(item => item.user_id !== actorId) || !updated
+    || updated.revision !== application.revision || updated.status !== application.status || updated.persona !== application.persona
+    || JSON.stringify(updated.details) !== JSON.stringify(application.details)) throw new Error('The saved application changed. Your browser answers were retained; reconcile the saved revision before submitting.')
+  const handoff = validatedCustomerHandoff(snapshot, updated, environment)
+  if (!handoff || !customerHandoffHasAction(handoff, 'PREPARE_APPLICATION')) throw new Error('Current preparation access could not be verified. Your browser answers were not replaced; no new action was enabled.')
+  return snapshot
+}
+
+export function useEntryAvailabilityRefresh(actorId: string, environment: PlatformEnvironment, application: EntryApplication | null, onRefreshed: (snapshot: EntrySnapshot) => void) {
+  const [busy, setBusy] = useState(false), [message, setMessage] = useState('')
+  const lock = useRef(false)
+  const identity = `${environment}:${actorId}:${application?.id ?? ''}:${application?.revision ?? ''}:${application?.status ?? ''}`
+  const active = useRef<string | null>(identity)
+  active.current = identity
+  useEffect(() => { active.current = identity; setBusy(false); setMessage(''); return () => { active.current = null } }, [identity])
+  const available = Boolean(application && ['DRAFT', 'CHANGES_REQUIRED', 'REJECTED'].includes(application.status))
+  async function refresh() {
+    if (!application || !available || lock.current) return
+    lock.current = true; setBusy(true); setMessage('')
+    try {
+      const snapshot = await readEntryApplicationAvailability(actorId, environment, application)
+      if (active.current !== identity) return
+      onRefreshed(snapshot); setMessage('Review availability refreshed. Your browser answers are retained; nothing was submitted.')
+    } catch (error) { if (active.current === identity) setMessage(error instanceof Error ? error.message : 'Review availability could not be verified.') }
+    finally { lock.current = false; if (active.current === identity) setBusy(false) }
+  }
+  return { busy, message, refresh, available }
 }
 
 /** Persist only the idempotency reference and digest, never applicant evidence. */

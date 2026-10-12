@@ -1,10 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { NextRequest } from 'next/server'
 vi.mock('server-only', () => ({}))
-const mocks = vi.hoisted(() => ({ create: vi.fn(), user: vi.fn(), workspace: vi.fn(), mfaContext: vi.fn(), sufficient: vi.fn(), current: vi.fn(), portal: vi.fn() }))
+const mocks = vi.hoisted(() => ({ create: vi.fn(), user: vi.fn(), workspace: vi.fn(), mfaContext: vi.fn(), sufficient: vi.fn(), current: vi.fn(), portal: vi.fn(), paused: vi.fn(), ordinary: vi.fn(), pendingStaff: vi.fn(), beginStaff: vi.fn() }))
 vi.mock('@/lib/supabase/server', async original => ({ ...await original<object>(), createRequestSupabaseClient: mocks.create, readVerifiedUser: mocks.user, readWorkspace: mocks.workspace }))
 vi.mock('@/lib/supabase/mfa', () => ({ readMfaContext: mocks.mfaContext, hasRequiredMfa: mocks.sufficient, isMfaContextCurrent: mocks.current }))
 vi.mock('@/lib/portal/entry-server', () => ({ readEntry: mocks.portal }))
+vi.mock('@/lib/supabase/test-ordinary-entry', () => ({ isTestOrdinaryEntryAllowed: mocks.paused, readTestOrdinaryEntry: mocks.ordinary }))
+vi.mock('@/lib/administration/staff-invitations', () => ({ pendingStaffInvitations: mocks.pendingStaff, beginStaffInvitation: mocks.beginStaff }))
 vi.mock('@/lib/supabase/mfa-actions', () => ({ handleMfaAction: vi.fn(), mfaErrorResponse: vi.fn() }))
 vi.mock('@/lib/administration/actions', () => ({ handleAdministrationAction: vi.fn(), administrationErrorResponse: vi.fn() }))
 import { GET, POST } from './[action]/route'
@@ -38,6 +40,7 @@ beforeEach(() => {
   mocks.mfaContext.mockResolvedValue(nativeContext)
   mocks.sufficient.mockReturnValue(true)
   mocks.current.mockResolvedValue(true)
+  mocks.paused.mockReturnValue(false); mocks.ordinary.mockResolvedValue({ version: 1 }); mocks.pendingStaff.mockResolvedValue([]); mocks.beginStaff.mockResolvedValue(false)
   mocks.portal.mockResolvedValue({ user: { id: 'person-1', email: 'person@example.test' }, snapshot: { actor: { id: 'person-1', email: 'person@example.test', can_review: false }, applications: [], organisations: [], products: [], subscriptions: [], events: [] } })
 })
 afterEach(() => { vi.unstubAllEnvs() })
@@ -137,6 +140,27 @@ describe('TEST signup confirmation without consuming email-scanner GETs', () => 
 })
 
 describe('TEST login destinations retain native authority and suspension checks', () => {
+  it('routes paused ordinary password sign-in through only the own-only projection', async () => {
+    mocks.paused.mockReturnValue(true); mocks.sufficient.mockReturnValue(false)
+    const response = await POST(login(), context('login'))
+    expect(response.headers.get('location')).toBe(`${canonical}/portal`)
+    expect(mocks.ordinary).toHaveBeenCalledWith({ auth }, nativeContext)
+    expect(mocks.workspace).not.toHaveBeenCalled(); expect(mocks.portal).not.toHaveBeenCalled(); expect(mocks.pendingStaff).not.toHaveBeenCalled()
+  })
+  it('retains authoritative denial instead of trusting the pause flag', async () => {
+    mocks.paused.mockReturnValue(true); mocks.ordinary.mockRejectedValueOnce(new PortalError('No active own native session', 403))
+    const response = await POST(login(), context('login'))
+    expect(response.status).toBe(503); expect(response.headers.get('location')).toBeNull()
+    expect(mocks.workspace).not.toHaveBeenCalled(); expect(mocks.portal).not.toHaveBeenCalled(); expect(mocks.pendingStaff).not.toHaveBeenCalled()
+  })
+  it('does not apply ordinary sign-in pause to password update or recovery confirmation', async () => {
+    mocks.paused.mockReturnValue(true); mocks.sufficient.mockReturnValue(false)
+    const setup = await POST(post('setup', { password: 'a-new-unique-passphrase', confirmPassword: 'a-new-unique-passphrase' }), context('setup'))
+    expect(setup.headers.get('location')).toBe(`${canonical}/login/mfa?continue=setup`)
+    const recovery = await POST(post('confirm', {}, { cookie: `${PENDING_INVITE_COOKIE}=${staged('recovery')}` }), context('confirm'))
+    expect(recovery.headers.get('location')).toBe(`${canonical}/login/mfa?continue=setup`)
+    expect(mocks.ordinary).not.toHaveBeenCalled(); expect(auth.updateUser).not.toHaveBeenCalled()
+  })
   it('preserves password recovery for a verified applicant with no native staff profile', async () => {
     mocks.mfaContext.mockResolvedValue(null)
     const response = await POST(post('setup', { password: 'a-new-unique-passphrase', confirmPassword: 'a-new-unique-passphrase' }), context('setup'))

@@ -12,6 +12,8 @@ function fixture() {
     bx1_memberships: [{ id: 'membership-a', organisation_id: 'org-a', role: 'Investor', status: 'ACTIVE' }],
     bx1_organisations: [{ id: 'org-a', name: 'Internal A', status: 'ACTIVE' }],
   }
+  const responses: Record<string, Promise<{ data: unknown; error: null }>> = {}
+  const requestsStarted: string[] = []
   const filters: unknown[][] = []
   const client = {
     auth: { getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'user-a', email: 'alice@example.test', user_metadata: { role: 'SuperAdmin' }, app_metadata: { roles: ['SuperAdmin'], organisationId: 'forged-org' } } }, error: null }) },
@@ -24,13 +26,16 @@ function fixture() {
         select: vi.fn().mockReturnThis(),
         eq: vi.fn((...args: unknown[]) => { filters.push([table, ...args]); return query }),
         in: vi.fn().mockReturnThis(),
-        maybeSingle: vi.fn(async () => ({ data: rows[table], error: null })),
-        then: (resolve: (value: unknown) => unknown) => Promise.resolve({ data: rows[table], error: null }).then(resolve),
+        maybeSingle: vi.fn().mockReturnThis(),
+        then: (resolve: (value: unknown) => unknown) => {
+          requestsStarted.push(table)
+          return (responses[table] ?? Promise.resolve({ data: rows[table], error: null })).then(resolve)
+        },
       }
       return query
     }),
   }
-  return { client, rows, filters }
+  return { client, rows, filters, responses, requestsStarted }
 }
 
 beforeEach(() => {
@@ -42,6 +47,31 @@ beforeEach(() => {
 })
 
 describe('request-local Supabase client', () => {
+  it.each(['profile', 'memberships'])('overlaps own-record requests and waits for both when %s finishes first', async (first) => {
+    const { client, rows, responses, requestsStarted } = fixture()
+    let finishProfile!: (value: { data: unknown; error: null }) => void
+    let finishMemberships!: (value: { data: unknown; error: null }) => void
+    responses.bx1_profiles = new Promise(resolve => { finishProfile = resolve })
+    responses.bx1_memberships = new Promise(resolve => { finishMemberships = resolve })
+    const pending = readWorkspace(client as never)
+    await vi.waitFor(() => {
+      expect(requestsStarted).toEqual(['bx1_profiles', 'bx1_memberships'])
+    })
+    expect(client.rpc).not.toHaveBeenCalled()
+    expect(client.from).not.toHaveBeenCalledWith('bx1_organisations')
+    const completeProfile = () => finishProfile({ data: rows.bx1_profiles, error: null })
+    const completeMemberships = () => finishMemberships({ data: rows.bx1_memberships, error: null })
+    if (first === 'profile') completeProfile()
+    else completeMemberships()
+    await new Promise<void>(resolve => setImmediate(resolve))
+    expect(client.rpc).not.toHaveBeenCalled()
+    expect(client.from).not.toHaveBeenCalledWith('bx1_organisations')
+    if (first === 'profile') completeMemberships()
+    else completeProfile()
+    const workspace = await pending
+    expect(client.rpc).toHaveBeenCalledWith('bx1_workspace_effective_membership_ids')
+    expect(workspace?.organisations).toEqual([{ id: 'org-a', name: 'Internal A', roles: ['Investor'] }])
+  })
   it('forces host-only HttpOnly cookies, retains deletion options and no-store fetch', async () => {
     const adapter = { getAll: vi.fn(() => []), setAll: vi.fn() }
     createRequestSupabaseClient(adapter)

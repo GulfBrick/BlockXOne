@@ -7,6 +7,7 @@ import { Menu, X } from 'lucide-react'
 import { animate, createScope, stagger } from 'animejs'
 
 import { Button } from '@/components/ui/button'
+import { BRANDED_ENTRY } from '@/lib/branded-entry'
 import { cn } from '@/lib/utils'
 import type { PlatformEnvironment } from '@/lib/platform-release'
 
@@ -96,9 +97,12 @@ export function PublicNavigation({ showPortalAccess, environment }: { showPortal
 
   const isActive = (href: string) => pathname === href || pathname.startsWith(`${href}/`)
   const workflowIsActive = isActive('/how-it-works') || pathname === '/guided-demo'
-  const counterpart = environment === 'MAINNET'
-    ? { href: 'https://testnet.bx1.co.za', label: 'Testnet · test value' }
-    : environment === 'TESTNET' ? { href: 'https://bx1.co.za', label: 'Mainnet · admission required' } : null
+  const counterpart = environment === 'TESTNET'
+    ? { href: 'https://bx1.co.za', label: 'Mainnet · admission required' }
+    : null
+  const localSignInLabel = environment === 'MAINNET'
+    ? 'Mainnet sign in'
+    : environment === 'TESTNET' ? 'Testnet sign in' : 'Sign in'
   const primaryAction = workflowIsActive
     ? showPortalAccess
       ? { href: '/login', label: 'Choose workspace' }
@@ -134,6 +138,16 @@ export function PublicNavigation({ showPortalAccess, environment }: { showPortal
             </Link>
           )
         })}
+        {environment === 'MAINNET' ? (
+          <a
+            href={BRANDED_ENTRY.testnetLogin}
+            aria-label="Testnet sign in"
+            className="relative px-3 py-3 text-sm text-bxo-text-secondary transition-colors duration-base hover:text-bxo-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bxo-accent-primary"
+            data-bxo-nav-item
+          >
+            Testnet
+          </a>
+        ) : null}
       </nav>
 
       <div className="hidden items-center justify-end gap-2 xl:flex" data-bxo-nav-actions>
@@ -141,7 +155,7 @@ export function PublicNavigation({ showPortalAccess, environment }: { showPortal
         {environment ? <Button asChild variant="outline" className="bxo-secondary-cta h-11 rounded-sm"><Link href="/register">Register</Link></Button> : null}
         {showPortalAccess ? (
           <Button asChild variant="outline" className="bxo-secondary-cta h-11 rounded-sm">
-            <Link href="/login">Sign in</Link>
+            <Link href="/login">{localSignInLabel}</Link>
           </Button>
         ) : null}
         <Button asChild className="bxo-primary-cta h-11 rounded-sm font-semibold">
@@ -191,6 +205,15 @@ export function PublicNavigation({ showPortalAccess, environment }: { showPortal
                   </Link>
                 )
               })}
+              {environment === 'MAINNET' ? (
+                <a
+                  href={BRANDED_ENTRY.testnetLogin}
+                  className="flex min-h-11 items-center border-b border-bxo-border-subtle px-3 text-sm font-semibold text-bxo-text-primary transition-colors hover:text-bxo-accent-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bxo-accent-primary"
+                  data-bxo-menu-item
+                >
+                  Testnet sign in
+                </a>
+              ) : null}
               <div className="my-1 border-t border-bxo-border-subtle" />
               {environment ? <Link href="/register" className="flex min-h-11 items-center px-3 text-sm font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bxo-accent-primary" data-bxo-menu-item>Register</Link> : null}
               {counterpart ? <a href={counterpart.href} className="flex min-h-11 items-center px-3 text-sm text-bxo-text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bxo-accent-primary" data-bxo-menu-item>{counterpart.label}</a> : null}
@@ -200,7 +223,7 @@ export function PublicNavigation({ showPortalAccess, environment }: { showPortal
                   className="flex min-h-11 items-center px-3 text-sm font-semibold text-bxo-text-primary transition-colors hover:text-bxo-accent-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bxo-accent-primary"
                   data-bxo-menu-item
                 >
-                  Sign in
+                  {localSignInLabel}
                 </Link>
               ) : null}
               <Link

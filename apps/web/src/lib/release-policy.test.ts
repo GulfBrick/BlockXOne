@@ -14,14 +14,16 @@ describe('native Auth admission', () => {
     expect([...SUPABASE_ALLOWED_PATHS]).toEqual([
       '/login', '/auth/confirm', '/auth/login', '/auth/setup', '/auth/logout',
       '/workspace', '/workspace/access-denied', '/api/wallet/challenge', '/api/wallet/verify',
-      '/login/mfa', '/workspace/security', '/auth/mfa-enroll', '/auth/mfa-verify',
-      '/workspace/administration', '/auth/admin-command',
+      '/login/mfa', '/workspace/security', '/auth/mfa-enroll', '/auth/mfa-verify', '/auth/mfa-restart-setup',
+      '/workspace/administration', '/workspace/administration/staff-invitations', '/auth/admin-command', '/auth/staff-invite', '/workspace/staff-invite',
       '/workspace/testnet-fund', '/api/testnet-fund/command',
       '/register', '/auth/register', '/portal', '/portal/onboarding',
       '/portal/products', '/portal/products/new', '/portal/products/detail',
       '/portal/compliance', '/portal/compliance/detail', '/portal/opportunities',
       '/portal/opportunities/detail', '/portal/portfolio', '/portal/orders/detail',
       '/api/portal/command', '/api/portal/documents', '/api/portal/funding/verify', '/api/portal/entry',
+      '/api/portal/kyc/session', '/api/portal/kyc/webhook', '/api/portal/kyc/evidence',
+      '/api/portal/documents/processing',
     ])
   })
   it.each(['/workspace/administration', '/auth/admin-command'])('admits only exact administration path %s in paired mode', pathname => {
@@ -45,7 +47,7 @@ describe('native Auth admission', () => {
       expect(isProductionWebPathBlocked(pathname, environment, 'pilot', 'pilot', '', ''), `${pathname} is not a pilot alias in ${environment}`).toBe(true)
     }
   })
-  it.each(['/login/mfa', '/workspace/security', '/auth/mfa-enroll', '/auth/mfa-verify'])('admits MFA path %s only exactly in paired mode', pathname => {
+  it.each(['/login/mfa', '/workspace/security', '/auth/mfa-enroll', '/auth/mfa-verify', '/auth/mfa-restart-setup'])('admits MFA path %s only exactly in paired mode', pathname => {
     expect(isProductionWebPathBlocked(pathname, 'production', '', '', 'supabase', 'supabase')).toBe(false)
     for (const path of [`${pathname}/extra`, `${pathname}/`, pathname.replace('/', '//'), pathname.replaceAll('/', '\\'), pathname.replace('mfa', '%6dfa')]) {
       if (path !== pathname) expect(isProductionWebPathBlocked(path, 'production', '', '', 'supabase', 'supabase')).toBe(true)
@@ -53,7 +55,7 @@ describe('native Auth admission', () => {
     expect(isProductionWebPathBlocked(pathname, 'production', '', '', 'supabase', '')).toBe(true)
     expect(isProductionWebPathBlocked(pathname, 'production', '', '', '', '')).toBe(true)
   })
-  it.each(['/auth/mfa-unenroll', '/auth/mfa-reset', '/auth/mfa-cancel', '/auth/mfa/verify', '/login/MFA', '/workspace/security/reset', '/auth/mfa-verify.json'])('keeps MFA bypass/alias path %s blocked', pathname => {
+  it.each(['/auth/mfa-unenroll', '/auth/mfa-reset', '/auth/mfa-cancel', '/auth/mfa-cancel-setup', '/auth/mfa/verify', '/login/MFA', '/workspace/security/reset', '/auth/mfa-verify.json'])('keeps MFA bypass/alias path %s blocked', pathname => {
     expect(isProductionWebPathBlocked(pathname, 'production', 'pilot', 'pilot', 'supabase', 'supabase')).toBe(true)
   })
   it.each(['/login', '/auth/confirm', '/auth/login', '/auth/setup', '/auth/logout', '/workspace', '/workspace/access-denied', '/api/wallet/challenge', '/api/wallet/verify'])('admits only the exact native path %s', (pathname) => {

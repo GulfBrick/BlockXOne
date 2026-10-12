@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { entryApplicationHref, entryCommandSchema, entrySnapshotSchema, selectEntryApplication } from './entry-contracts'
-import { entryApplication, entryApplicationId, entryFixture, entryOrganisationId } from './entry-test-fixtures'
+import { entryApplication, entryApplicationId, entryFixture, entryHandoff, entryOrganisationId } from './entry-test-fixtures'
 
 const key = '44444444-4444-4444-8444-444444444444'
 describe('entry application identities and capacities', () => {
@@ -39,6 +39,15 @@ describe('entry application identities and capacities', () => {
   it('rejects manufactured staff roles and malformed environment admission', () => {
     expect(entrySnapshotSchema.safeParse({ ...entryFixture(), contexts: [{ context_key: key, organisation_id: key, name: 'Example', roles: ['WealthManager'] }] }).success).toBe(false)
     expect(entrySnapshotSchema.safeParse({ ...entryFixture(), admission: { manual_test_review: 'true' } }).success).toBe(false)
+  })
+  it('keeps the additive workflow projection strict and MAIN scoped reads sealed', () => {
+    const application = entryApplication({ review_route: 'AVAILABLE' })
+    application.handoff = entryHandoff(application)
+    expect(entrySnapshotSchema.safeParse(entryFixture([application])).success).toBe(true)
+    const snapshot = entryFixture([], 'MAINNET'); snapshot.workflow!.scoped_read_available = true
+    expect(entrySnapshotSchema.safeParse(snapshot).success).toBe(false)
+    const malformedSnapshot = { ...entryFixture([application]), applications: [{ ...application, handoff: { ...application.handoff, next_owner: 'AUTOMATIC_APPROVAL' } }] }
+    expect(entrySnapshotSchema.safeParse(malformedSnapshot).success).toBe(false)
   })
   it('requires explicit purpose and privacy-safe review status in saved entry records', () => {
     expect(entrySnapshotSchema.parse(entryFixture([entryApplication({ persona: 'WEALTH_MANAGER', review_route: 'REVIEWER_UNAVAILABLE' })])).applications[0].admission_purpose).toBe('CUSTOMER_ORGANISATION_ADMISSION')

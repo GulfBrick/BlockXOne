@@ -322,7 +322,7 @@ describe('login, setup, logout', () => {
 })
 
 describe('MFA route admission and shared cookie response', () => {
-  it.each(['mfa-enroll', 'mfa-verify'])('dispatches only same-origin bounded POST %s with the same client and cookie adapter', async (action) => {
+  it.each(['mfa-enroll', 'mfa-verify', 'mfa-restart-setup'])('dispatches only same-origin bounded POST %s with the same client and cookie adapter', async (action) => {
     mocks.create.mockImplementation((adapter) => {
       mocks.mfaAction.mockImplementation(async () => {
         adapter.setAll([{ name: 'sb-test.0', value: 'upgraded', options: {} }, { name: 'sb-test.1', value: '', options: { maxAge: 0 } }], { 'X-Test-Refresh': 'mfa' })
@@ -337,7 +337,7 @@ describe('MFA route admission and shared cookie response', () => {
     expect(response.cookies.get('sb-test.1')?.maxAge).toBe(0)
     expect(response.headers.get('x-test-refresh')).toBe('mfa')
   })
-  it.each(['mfa-enroll', 'mfa-verify'])('rejects non-POST %s, null origin and forged Host before Auth', async (action) => {
+  it.each(['mfa-enroll', 'mfa-verify', 'mfa-restart-setup'])('rejects non-POST %s, null origin and forged Host before Auth', async (action) => {
     for (const [handler, method] of [[GET, 'GET'], [PUT, 'PUT'], [PATCH, 'PATCH'], [DELETE, 'DELETE'], [OPTIONS, 'OPTIONS'], [HEAD, 'HEAD']] as const) {
       const response = await handler(new NextRequest(`${canonical}/auth/${action}`, { method }), context(action))
       expect(response.status).toBe(405)
@@ -352,7 +352,7 @@ describe('MFA route admission and shared cookie response', () => {
     expect(mocks.create).not.toHaveBeenCalled()
     expect(mocks.mfaAction).not.toHaveBeenCalled()
   })
-  it.each(['mfa-enroll', 'mfa-verify'])('keeps malformed %s requests private and JSON without raw details', async (action) => {
+  it.each(['mfa-enroll', 'mfa-verify', 'mfa-restart-setup'])('keeps malformed %s requests private and JSON without raw details', async (action) => {
     const req = new NextRequest(`${canonical}/auth/${action}`, { method: 'POST', headers: { origin: canonical, host: 'bx1.co.za', 'content-type': 'application/x-www-form-urlencoded' }, body: 'code=123456&code=123456' })
     const response = await POST(req, context(action))
     expect(response.status).toBe(400)

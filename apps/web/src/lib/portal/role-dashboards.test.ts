@@ -94,6 +94,8 @@ describe('shared nine-role dashboard catalog', () => {
     expect(review).toMatchObject({ status: 'available', href: '/portal/compliance' })
     expect(review?.description).toContain('not a live KYC-provider result')
     expect(ROLE_DASHBOARDS.ComplianceOfficer.workflow.find(step => step.id === 'provider-screening')?.status).toBe('not_connected')
+    expect(ROLE_DASHBOARDS.ComplianceOfficer.workflow.find(step => step.id === 'ongoing-monitoring')).toMatchObject({ status: 'available', href: '/portal/compliance' })
+    expect(ROLE_DASHBOARDS.ComplianceOfficer.workflow.find(step => step.id === 'ongoing-monitoring')?.description).toContain('not automatic provider monitoring')
   })
 
   it('keeps financial, register and chain integration visibly unconnected', () => {

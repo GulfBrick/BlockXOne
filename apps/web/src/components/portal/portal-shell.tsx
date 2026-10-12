@@ -34,12 +34,12 @@ export function PortalShell({ user, organisationName, capacityName, capabilities
       <Link href={portalScopeHref('/portal', operatingContext)} className={styles.brand} aria-label="BlockXOne portal home"><Image src="/brand/blockxone-lockup-horizontal.png" alt="BlockXOne" width={236} height={48} className={styles.brandArtwork} priority /></Link>
       <p className={styles.sidebarCaption}>Ownership, reimagined</p>
       {links}
-      <details className={styles.mobileNav}><summary>Navigate your workspace</summary>{links}<nav aria-label="Account navigation" className={styles.nav}><a href="/workspace/security" className={styles.navLink}><ShieldCheck aria-hidden="true" />Account security<ArrowUpRight aria-hidden="true" /></a><Link href="/workspace" className={styles.navLink}>Account workspace<ArrowUpRight aria-hidden="true" /></Link></nav></details>
+      <details className={styles.mobileNav}><summary>Navigate your workspace</summary>{links}<nav aria-label="Account navigation" className={styles.nav}><a href="/workspace/security" className={styles.navLink}><ShieldCheck aria-hidden="true" />Account security<ArrowUpRight aria-hidden="true" /></a><a href="/workspace" className={styles.navLink}>Account workspace<ArrowUpRight aria-hidden="true" /></a></nav></details>
       <p className={styles.navRestricted}>Workspace tools reflect your assigned access. Signing authority is managed separately.</p>
       <div className={styles.sidebarFoot}>
-        <div className={styles.environmentCard}><strong>{testnet ? 'Testnet · Rehearsal environment' : 'Mainnet · Live environment'}</strong><p>{testnet ? 'Fictional products and synthetic settlement. Test tokens have no investment value.' : 'Real-world operations require their own approved mandates, providers and production admission.'}</p><p>Version {release?.version ?? PLATFORM_VERSION}{release ? ` · ${release.source}` : ''}</p></div>
+        <div className={styles.environmentCard}><strong>{testnet ? 'Testnet · Test environment' : 'Mainnet · Live environment'}</strong><p>{testnet ? 'Fictional products and synthetic settlement. Test tokens have no investment value.' : 'Real-world operations require their own approved mandates, providers and production admission.'}</p><p>Version {release?.version ?? PLATFORM_VERSION}{release ? ` · ${release.source}` : ''}</p></div>
         <a href="/workspace/security" className={styles.navLink}><ShieldCheck aria-hidden="true" />Account security<ArrowUpRight aria-hidden="true" /></a>
-        <Link href="/workspace" className={styles.navLink}>Account workspace<ArrowUpRight aria-hidden="true" /></Link>
+        <a href="/workspace" className={styles.navLink}>Account workspace<ArrowUpRight aria-hidden="true" /></a>
       </div>
     </aside>
     <div className={styles.frame}>

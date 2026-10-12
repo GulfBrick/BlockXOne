@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import pg from 'pg'
+import { proveDocumentProcessingDefaultAcl } from './document-processing-proof.mjs'
+import { proveProviderBindingDefaultAcl } from './provider-binding-proof.mjs'
 
 // Source editing is local; every runtime and database proof is cloud-only.
 if (process.argv.length !== 2 || process.env.GITHUB_ACTIONS !== 'true') throw new Error('Entry SQL proof requires cloud CI without arguments')
@@ -88,17 +90,20 @@ try {
   await admin()
   const history = await scalar("select jsonb_build_object('application',(select to_jsonb(a) from bx1_portal.applications a where id=$1),'requests',(select jsonb_agg(to_jsonb(r) order by request_key) from bx1_portal.requests r),'events',(select jsonb_agg(to_jsonb(e) order by id) from bx1_portal.events e),'memberships',(select jsonb_agg(to_jsonb(m) order by id) from public.bx1_memberships m))", [legacyApplication.id])
   await sqlFile('../../../supabase/migrations/20260921160000_portal_authority_accounts.sql')
+  const authorityWrappers = await scalar("select jsonb_object_agg(oid::regprocedure::text,md5(pg_get_functiondef(oid))) from pg_proc where oid in ('bx1_portal.execute_scoped(jsonb,text,uuid,jsonb)'::regprocedure,'bx1_portal.read_scoped(jsonb)'::regprocedure)")
+  await sqlFile('../../../supabase/features/bx1_entry.sql')
+  eq(await scalar("select jsonb_object_agg(oid::regprocedure::text,md5(pg_get_functiondef(oid))) from pg_proc where oid in ('bx1_portal.execute_scoped(jsonb,text,uuid,jsonb)'::regprocedure,'bx1_portal.read_scoped(jsonb)'::regprocedure)"), authorityWrappers, 'entry cutover leaves existing scoped authority writers unchanged')
+  await db.query("insert into bx1_portal.entry_configuration(environment,manual_test_review,reviewer_scope,admission_reference) values('TESTNET',false,null,'synthetic entry acceptance funding installation fixture')")
   await sqlFile('../../../supabase/features/bx1_portal_funding.sql')
   const wrapperDefinitions = await scalar("select jsonb_object_agg(oid::regprocedure::text,md5(pg_get_functiondef(oid))) from pg_proc where oid in ('bx1_portal.execute_scoped(jsonb,text,uuid,jsonb)'::regprocedure,'bx1_portal.read_scoped(jsonb)'::regprocedure,'bx1_portal.execute_scoped_p2(jsonb,text,uuid,jsonb)'::regprocedure)")
-  await sqlFile('../../../supabase/features/bx1_entry.sql')
   await sqlFile('../../../supabase/features/bx1_entry_admission.sql')
   phase = 'additive-cutover-and-default-denial'
   eq(await scalar("select jsonb_build_object('application',(select to_jsonb(a)-array['context_kind','context_organisation_id','origin','created_at'] from bx1_portal.applications a where id=$1),'requests',(select jsonb_agg(to_jsonb(r) order by request_key) from bx1_portal.requests r),'events',(select jsonb_agg(to_jsonb(e) order by id) from bx1_portal.events e),'memberships',(select jsonb_agg(to_jsonb(m) order by id) from public.bx1_memberships m))", [legacyApplication.id]), history, 'historical IDs, decisions, receipts, audit and memberships unchanged')
-  eq(await scalar("select jsonb_object_agg(oid::regprocedure::text,md5(pg_get_functiondef(oid))) from pg_proc where oid in ('bx1_portal.execute_scoped(jsonb,text,uuid,jsonb)'::regprocedure,'bx1_portal.read_scoped(jsonb)'::regprocedure,'bx1_portal.execute_scoped_p2(jsonb,text,uuid,jsonb)'::regprocedure)"), wrapperDefinitions, 'outer authority and funding writers unchanged')
+  eq(await scalar("select jsonb_object_agg(oid::regprocedure::text,md5(pg_get_functiondef(oid))) from pg_proc where oid in ('bx1_portal.execute_scoped(jsonb,text,uuid,jsonb)'::regprocedure,'bx1_portal.read_scoped(jsonb)'::regprocedure,'bx1_portal.execute_scoped_p2(jsonb,text,uuid,jsonb)'::regprocedure)"), wrapperDefinitions, 'entry admission leaves outer authority and funding writers unchanged')
   const historicalRead = await read(3)
   eq(historicalRead.applications[0].id, legacyApplication.id, 'entry projection keeps exact historical application')
   eq(historicalRead.applications[0].origin, 'LEGACY', 'legacy provenance explicit')
-  eq(historicalRead.admission.manual_test_review, false, 'absent release configuration closes manual review')
+  eq(historicalRead.admission.manual_test_review, false, 'explicit unadmitted TEST configuration closes manual review')
   eq(historicalRead.contexts, [], 'applicant does not acquire native role context')
   await actor(3)
   truth((await scalar("select public.bx1_portal_read_scoped('{\"mode\":\"APPLICANT\"}'::jsonb)")).funding, 'funding projection remains installed after entry cutover')
@@ -112,9 +117,9 @@ try {
   for (const role of ['anon', 'service_role']) eq(await scalar("select has_function_privilege($1,'public.bx1_entry_command(text,uuid,jsonb)','EXECUTE')", [role]), false, `${role} cannot invoke entry command`)
   for (const name of ['execute_command_pre_entry(text,uuid,jsonb)', 'execute_command(text,uuid,jsonb)', 'entry_submit(uuid,integer,jsonb)', 'snapshot_signup_capacity()']) eq(await scalar("select has_function_privilege('authenticated',$1,'EXECUTE')", [`bx1_portal.${name}`]), false, `no direct privileged ${name}`)
   await denied('historical identity cannot be overwritten', () => db.query("update bx1_portal.applications set persona='WEALTH_MANAGER' where id=$1", [legacyApplication.id]))
-  await denied('mainnet cannot enable manual rehearsal review', () => db.query("insert into bx1_portal.entry_configuration(environment,manual_test_review,reviewer_scope,admission_reference) values('MAINNET',true,$1,'synthetic test admission')", [scope]))
-  await denied('null routing cannot bypass check', () => db.query("insert into bx1_portal.entry_configuration(environment,manual_test_review,reviewer_scope,admission_reference) values('TESTNET',true,null,'synthetic test admission')"))
-  await denied('unknown reviewer route cannot claim legacy compatibility', () => db.query("insert into bx1_portal.entry_configuration(environment,manual_test_review,reviewer_scope,admission_reference) values('TESTNET',true,$1,'synthetic test admission')", [other]))
+  await denied('mainnet cannot enable manual rehearsal review', () => db.query("update bx1_portal.entry_configuration set environment='MAINNET',manual_test_review=true,reviewer_scope=$1 where singleton", [scope]))
+  await denied('null routing cannot bypass check', () => db.query("update bx1_portal.entry_configuration set manual_test_review=true,reviewer_scope=null where singleton"))
+  await denied('unknown reviewer route cannot claim legacy compatibility', () => db.query("update bx1_portal.entry_configuration set manual_test_review=true,reviewer_scope=$1 where singleton", [other]))
   await denied('privileged Storage completion is default closed', () => db.query("insert into storage.objects(bucket_id,name,owner_id) values('bx1-portal-documents',$1,$2)", [`${uid(9)}/unadmitted-upload.pdf`, uid(9)]), '55000')
 
   phase = 'signup-intent-and-no-authority'
@@ -147,7 +152,7 @@ try {
   await denied('caller cannot assign role in entry payload', () => command(11, 'start_application', { persona: 'INVESTOR', role: 'SuperAdmin' }), '22023')
   await denied('caller cannot submit another principal case', () => command(11, 'submit_application', { application_id: manager.id, expected_revision: manager.revision, details: details(11, true) }), '42501')
   await denied('submission is default closed', () => command(11, 'submit_application', { application_id: investor.id, expected_revision: investor.revision, details: details(11) }), '55000')
-  await admin(); await db.query("insert into bx1_portal.entry_configuration(environment,manual_test_review,reviewer_scope,admission_reference) values('TESTNET',true,$1,'synthetic entry acceptance fixture')", [scope])
+  await admin(); await db.query("update bx1_portal.entry_configuration set manual_test_review=true,reviewer_scope=$1,admission_reference='synthetic entry acceptance fixture' where singleton", [scope])
   for (const n of [11, 12, 13]) await db.query("insert into storage.objects(bucket_id,name,owner_id,metadata,user_metadata) select 'bx1-portal-documents',$1||'/synthetic-'||kind||'.pdf',$1,'{\"size\":100,\"mimetype\":\"application/pdf\"}',jsonb_build_object('sha256',repeat('a',64)) from unnest(array['IDENTITY','COMPANY','BENEFICIAL_OWNERS'])kind", [uid(n)])
   await denied('TEST configuration cannot invoke MAIN-only ACL seal', () => db.query('select bx1_portal.seal_entry_only_baseline()'), '55000')
   const submitKey = key(), submission = { application_id: investor.id, expected_revision: investor.revision, details: details(11) }
@@ -223,7 +228,38 @@ try {
     await db.query('commit'); begun = false
     eq((await waiting).code, '42501', `${mode} changed during wait fails closed`)
   }
-  console.log(JSON.stringify({ ok: true, suite: 'stage1-entry-cloud-sql', checks, historical_application_id: legacyApplication.id, proof_boundary: 'Synthetic cloud PostgreSQL17 only; not hosted UI, genuine MFA enrollment, or production admission.' }))
+  phase = 'shared-handoff-current-stage2-upgrade'
+  await db.query('begin'); begun = true
+  await admin()
+  await sqlFile('../../../supabase/features/bx1_application_admission.sql')
+  for (const file of ['20260923134152_stage2_product_eligibility.sql',
+    '20260923143713_stage2_customer_mandates.sql', '20260923144216_stage2_document_receipts.sql',
+    '20260923161500_stage2_application_document_history.sql', '20260923171126_stage2_entity_investment_accounts.sql',
+    '20260923175822_stage2_superadmin_shell_mfa_boundary.sql', '20260924110608_stage2_provider_evidence.sql',
+    '20260924110922_stage2_beneficial_ownership_control.sql', '20260924112832_stage2_document_quarantine_lifecycle.sql',
+    '20260924125627_stage2_customer_monitoring.sql', '20260924125811_stage2_document_retention_authority.sql']) {
+    await sqlFile(`../../../supabase/migrations/${file}`)
+  }
+  await sqlFile('../../../supabase/features/bx1_provider_binding.sql')
+  await sqlFile('../../../supabase/features/bx1_provider_subject_availability.sql')
+  checks += await proveProviderBindingDefaultAcl(db)
+  const handoffBaseline = await snapshot()
+  const writerBeforeHandoff = await scalar("select md5(pg_get_functiondef('bx1_portal.execute_scoped(jsonb,text,uuid,jsonb)'::regprocedure))")
+  await sqlFile('../../../supabase/features/bx1_customer_handoff.sql')
+  await sqlFile('../../../supabase/features/bx1_document_processing.sql')
+  checks += await proveDocumentProcessingDefaultAcl(db)
+  eq(await snapshot(), handoffBaseline, 'handoff installation changes no historical entry/business records')
+  eq(await scalar("select md5(pg_get_functiondef('bx1_portal.execute_scoped(jsonb,text,uuid,jsonb)'::regprocedure))"), writerBeforeHandoff, 'handoff leaves the canonical command chain unchanged')
+  const handoffEntry = await read(11)
+  eq(handoffEntry.workflow, { version: 1, environment: 'TESTNET', actor_id: uid(11), scoped_read_available: true }, 'same entry reader emits configured caller-bound workflow')
+  eq(handoffEntry.applications.map(a => a.id).sort(), [investor.id, second.id].sort(), 'handoff preserves separate saved capacities')
+  truth(handoffEntry.applications.every(a => a.handoff.application_id === a.id && a.handoff.application_revision === a.revision && a.handoff.actor_id === uid(11)), 'handoffs bind exact own applications and revisions')
+  eq(await snapshot(), handoffBaseline, 'repeated handoff reads create no records or audit events')
+  for (const name of ['customer_application_handoff(jsonb,uuid)', 'entry_read_pre_handoff()', 'read_scoped_pre_handoff(jsonb)']) {
+    eq(await scalar("select has_function_privilege('authenticated',$1,'EXECUTE')", [`bx1_portal.${name}`]), false, `handoff preserves owner-only ${name}`)
+  }
+  await db.query('rollback'); begun = false
+  console.log(JSON.stringify({ ok: true, suite: 'stage1-entry-cloud-sql', checks, historical_application_id: legacyApplication.id, handoff_pure_read: true, proof_boundary: 'Synthetic cloud PostgreSQL17 only; not hosted UI, genuine MFA enrollment, or production admission.' }))
 } catch (error) {
   console.error(JSON.stringify({ ok: false, suite: 'stage1-entry-cloud-sql', phase, checks, code: error?.code ?? null, fixtureLine: error?.fixtureLine ?? null, message: error instanceof Error ? error.message : String(error) }))
   process.exitCode = 1

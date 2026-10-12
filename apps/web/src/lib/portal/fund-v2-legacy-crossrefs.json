@@ -1,0 +1,6 @@
+{
+  "strategy": "The fund.mandate policy is the authoritative investment mandate for this package.",
+  "pricing_basis": "The fund.nav and fund.dealing policies are the authoritative pricing terms for this package.",
+  "fees": "The fund.fees policy is the authoritative fee schedule for this package.",
+  "redemption_terms": "The fund.redemption, fund.dealing and fund.liquidity policies govern exits for this package."
+}
