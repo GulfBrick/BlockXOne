@@ -4,7 +4,7 @@ import Image from 'next/image'
 import { PLATFORM_VERSION, type PlatformRelease } from '@/lib/platform-release'
 import { portalScopeHref, type PortalOperatingContext } from '@/lib/portal/operating-context'
 import { getRoleDashboard } from '@/lib/portal/role-dashboards'
-import { ArrowUpRight, BriefcaseBusiness, Building2, CircleHelp, CircleUserRound, LayoutDashboard, ShieldCheck, WalletCards } from 'lucide-react'
+import { BriefcaseBusiness, Building2, CircleHelp, CircleUserRound, LayoutDashboard, ShieldCheck, WalletCards } from 'lucide-react'
 import { applicantSectionHref, type ApplicantSection } from './applicant-presentation'
 import { ApplicantAccountMenu } from './applicant-account-menu'
 import styles from './portal.module.css'
@@ -47,12 +47,10 @@ export function PortalShell({ user, organisationName, capacityName, capabilities
       {brand}
       <p className={styles.sidebarCaption}>Ownership, reimagined</p>
       {links}
-      {!compactApplicant ? <details className={styles.mobileNav}><summary>Navigate your workspace</summary>{links}<nav aria-label="Account navigation" className={styles.nav}><a href="/workspace/security" className={styles.navLink}><ShieldCheck aria-hidden="true" />Account security<ArrowUpRight aria-hidden="true" /></a><a href="/workspace" className={styles.navLink}>Account workspace<ArrowUpRight aria-hidden="true" /></a><Link href="/faq" className={styles.navLink}>FAQ</Link></nav></details> : null}
+      {!compactApplicant ? <div className={styles.mobileNav}>{links}</div> : null}
       <p className={styles.navRestricted}>Workspace tools reflect your assigned access. Signing authority is managed separately.</p>
       {!compactApplicant ? <div className={styles.sidebarFoot}>
         <div className={styles.environmentCard}><strong>{testnet ? 'Testnet · Test environment' : 'Mainnet · Live environment'}</strong><p>{testnet ? 'Fictional products and synthetic settlement. Test tokens have no investment value.' : 'Real-world operations require their own approved mandates, providers and production admission.'}</p><p>Version {release?.version ?? PLATFORM_VERSION}{release ? ` · ${release.source}` : ''}</p></div>
-        <a href="/workspace/security" className={styles.navLink}><ShieldCheck aria-hidden="true" />Account security<ArrowUpRight aria-hidden="true" /></a>
-        <a href="/workspace" className={styles.navLink}>Account workspace<ArrowUpRight aria-hidden="true" /></a>
         <Link href="/faq" className={styles.navLink}>FAQ</Link>
       </div> : null}
     </aside>
@@ -63,8 +61,8 @@ export function PortalShell({ user, organisationName, capacityName, capabilities
           <Link href={applicantSectionHref('applications')} className={styles.applicationSwitchLink} aria-label="Switch application or workspace" title={`${organisationName || 'Personal account'} · ${workspaceLabel}`}><span className={styles.switcherWorkspaceLabel}>{workspaceLabel === 'Personal account' ? 'My applications' : `Viewing: ${workspaceLabel}`}</span><span className={styles.switcherMobileLabel}>Applications</span></Link>
           <ApplicantAccountMenu email={user.email} />
         </> : <>
-          <div className={styles.topbarContext}><strong>{organisationName || 'Your BlockXOne account'}</strong><span>Current workspace: {workspaceLabel}</span><Link href="/portal?mode=applicant">Switch application or workspace</Link></div>
-          <div className={styles.userArea}><span className={styles.environmentPill}>{testnet ? 'Testnet' : 'Mainnet'} environment</span><span className={styles.userEmail}>{user.email}</span><form action="/auth/logout" method="post"><button className={styles.buttonSecondary} type="submit">Sign out</button></form></div>
+          <div className={styles.topbarContext}><strong>{organisationName || 'Your BlockXOne account'}</strong><span>Current workspace: {workspaceLabel}</span><Link href={applicantSectionHref('workspaces')}>Change workspace</Link></div>
+          <div className={styles.userArea}><span className={styles.environmentPill}>{testnet ? 'Testnet' : 'Mainnet'} environment</span><ApplicantAccountMenu email={user.email} /></div>
         </>}
       </header>
       {compactApplicant ? <nav aria-label="Applicant sections on mobile" className={styles.applicantMobileNav}>{applicantNavigation.map(item => <Link key={item.key} href={applicantSectionHref(item.key)} aria-current={(applicantSection ?? 'applications') === item.key ? 'page' : undefined}>{item.key === 'applications' ? 'Applications' : item.label}</Link>)}</nav> : null}

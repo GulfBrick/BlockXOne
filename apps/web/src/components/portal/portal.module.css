@@ -170,9 +170,9 @@
   .sidebar { padding: 20px; }
   .brand { font-size: 22px; }
   .sidebarCaption, .sidebarFoot, .sidebar > nav, .navRestricted { display: none; }
-  .mobileNav { display: block; margin-top: 18px; }
-  .mobileNav summary { min-height: 44px; padding: 10px 12px; border: 1px solid var(--bxo-border-default); border-radius: 6px; color: var(--bxo-text-secondary); font-size: 13px; cursor: pointer; }
-  .mobileNav nav { margin-top: 14px; }
+  .mobileNav { display: block; min-width: 0; max-width: 100%; margin-top: 18px; }
+  .mobileNav nav { display: flex; flex-wrap: nowrap; gap: 8px; min-width: 0; max-width: 100%; margin: 0; padding: 4px; overflow-x: auto; }
+  .mobileNav .navLink { flex: 0 0 auto; min-height: 44px; white-space: nowrap; }
   .topbar { min-height: 65px; padding: 14px 20px; }
   .userAvatar, .userEmail { display: none; }
   .content { padding: 22px 20px 36px; }
@@ -222,11 +222,11 @@
 
 /* Presentation-only modifier for a selected, editable applicant flow. */
 .applicantOnboarding { font-size: 16px; }
-.applicantOnboarding [hidden] { display: none !important; }
-.applicantOnboarding .frame {
-  /* V3 workspace aliases stop here; the sidebar and other role screens retain
-     the approved dark brand system. The master artwork is not recoloured. */
-  --bxo-surface: var(--bxo-frost);
+.portal [hidden] { display: none !important; }
+.frame, .accountMenuBody {
+  /* Shared V3 light workspace. Dark navigation and hero regions reset locally;
+     the supplied master logo artwork is never recoloured. */
+  --bxo-surface: color-mix(in srgb, var(--bxo-frost) 25%, white);
   --bxo-surface-secondary: color-mix(in srgb, var(--bxo-frost) 92%, var(--bxo-chrome));
   --bxo-surface-elevated: var(--bxo-frost);
   --bxo-text-primary: var(--bxo-midnight);
@@ -234,6 +234,13 @@
   --bxo-text-tertiary: var(--bxo-structural-blue);
   --bxo-border-default: color-mix(in srgb, var(--bxo-steel) 75%, var(--bxo-midnight));
   --bxo-border-subtle: var(--bxo-chrome);
+  --bxo-border-strong: var(--bxo-structural-blue);
+  --bxo-divider: var(--bxo-chrome);
+  --bxo-bg-secondary: var(--bxo-frost);
+  --bxo-accent-primary-light: var(--bxo-structural-blue);
+  --bxo-accent-border: var(--bxo-steel);
+  --bxo-accent-soft: color-mix(in srgb, var(--bxo-electric-cyan) 8%, var(--bxo-frost));
+  --bxo-accent-muted: color-mix(in srgb, var(--bxo-electric-cyan) 16%, var(--bxo-frost));
   --bxo-warning: color-mix(in srgb, var(--bxo-warning-dark) 55%, var(--bxo-midnight));
   --bxo-danger: color-mix(in srgb, var(--bxo-danger-dark) 75%, var(--bxo-carbon));
   --bxo-success: color-mix(in srgb, var(--bxo-success-dark) 60%, var(--bxo-midnight));
@@ -251,6 +258,35 @@
   color: var(--portal-ink);
   background: var(--portal-canvas);
 }
+.topbar, .hero {
+  --bxo-surface: var(--bxo-midnight);
+  --bxo-surface-secondary: var(--bxo-deep-teal);
+  --bxo-surface-elevated: var(--bxo-structural-blue);
+  --bxo-text-primary: var(--bxo-frost);
+  --bxo-text-secondary: var(--bxo-chrome);
+  --bxo-text-tertiary: var(--bxo-steel);
+  --bxo-border-default: var(--bxo-structural-blue);
+  --bxo-accent-primary-light: var(--bxo-ice-cyan);
+  --portal-panel: var(--bxo-midnight);
+  --portal-ink: var(--bxo-frost);
+  --portal-muted: var(--bxo-chrome);
+  --portal-line: var(--bxo-structural-blue);
+  --portal-link: var(--bxo-electric-cyan);
+  color-scheme: dark;
+  color: var(--portal-ink);
+  background: var(--bxo-midnight);
+}
+.frame .textLink, .frame .table a, .frame .eyebrow,
+.frame .breadcrumbs a:hover, .frame .applicationHistory summary,
+.frame .badge[data-tone=info], .frame .progress li[aria-current=step] { color: var(--portal-link); }
+.frame .button { border-color: var(--portal-link); }
+.frame .notice[data-tone=warning] { background: color-mix(in srgb, var(--bxo-warning-light) 32%, var(--bxo-frost)); }
+.frame .notice[data-tone=danger] { background: color-mix(in srgb, var(--bxo-danger-light) 12%, var(--bxo-frost)); }
+.frame :is(a, button, input, select, textarea, summary):focus-visible { outline-color: var(--portal-link); }
+.topbarContext a { min-height: 44px; }
+.accountMenuBody { background: var(--portal-panel); color: var(--portal-ink); }
+.accountMenuBody .navLink { color: var(--portal-muted); }
+.accountMenuBody .navLink:hover { color: var(--portal-link); }
 .applicantOnboarding .topbar { min-height: 64px; padding: 10px 32px; flex-wrap: nowrap; background: var(--bxo-midnight); color: var(--bxo-frost); }
 .applicantOnboarding .topbar .applicationSwitchLink { color: var(--bxo-frost); background: var(--bxo-deep-teal); border-color: var(--bxo-structural-blue); }
 .applicantOnboarding .topbar .applicationSwitchLink:hover { border-color: var(--bxo-electric-cyan); }

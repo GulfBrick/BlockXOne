@@ -75,22 +75,22 @@ function ProductDetailWorkspace({ product, snapshot, organisations, operatingCon
         onSaved={onSaved} operatingContext={operatingContext} onUnsavedChange={setHasUnsavedChanges} />
         : <div className={styles.stack}><ProductFacts product={product} /><ProductNarrative product={product} /></div>}
     </div>
-    {section === 'REVIEW' ? <div id={`product-${product.id}-REVIEW`} className={styles.stack}>
+    <div id={`product-${product.id}-REVIEW`} className={styles.stack} hidden={section !== 'REVIEW'}>
       <Panel title="Your next step"><p>{nextStep}</p><p className={styles.muted}>This page acts on the saved product version.</p>
         {hasUnsavedChanges ? <p className={styles.fieldError} role="status">Save your changes in Edit details before submitting. They are not part of the saved package yet.</p> : null}
       </Panel>
       <ProductActions product={product} onSaved={onSaved} availableCommands={commands} />
       {canReviewIssuer && pkg && product.status === 'IN_REVIEW' ? <IssuerOfferingReview product={product} snapshot={snapshot} onSaved={onSaved} /> : null}
       {pkg ? <OfferingPackageEvidence product={product} showIssuerRationale={canViewIssuerRationale} /> : null}
-    </div> : null}
+    </div>
     {section === 'DOCUMENTS' ? <div id={`product-${product.id}-DOCUMENTS`} className={styles.stack}>
       {!pkg ? <Panel title="Documents & signing"><EmptyState title="Save and submit the product first" description="The submitted package connects its document versions, uploads and signature evidence. Saving a draft does not create signed documents." /></Panel>
         : <><OfferingDocuments product={product} /><OfferingFilePanel product={product} context={operatingContext} actorId={snapshot.actor.id} />
           <OfferingSignatures product={product} context={operatingContext} actorId={snapshot.actor.id} appointments={snapshot.product_appointments} /></>}
     </div> : null}
-    {section === 'APPOINTMENTS' ? <div id={`product-${product.id}-APPOINTMENTS`}>
+    <div id={`product-${product.id}-APPOINTMENTS`} hidden={section !== 'APPOINTMENTS'}>
       <ProductAppointmentRequest product={product} snapshot={snapshot} operatingContext={operatingContext} onSaved={onSaved} />
-    </div> : null}
+    </div>
   </div>
 }
 
@@ -494,8 +494,8 @@ function OperatingPortalScreen({ data, view, id, operatingContext, release, scop
   }
 
   return <PortalCommandProvider snapshot={snapshot} operatingContext={operatingContext} environment={release?.environment}><PortalShell user={data.user} organisationName={scope?.organisationName ?? organisations[0]?.name} capabilities={capabilities} active={config.active} title={title} description={config.description} eyebrow={config.eyebrow} breadcrumbs={breadcrumbs} release={release} operatingContext={operatingContext} actions={<a href={href(view, id)} className={styles.buttonSecondary}>Refresh saved state</a>}>
-    {evaluation ? <Notice title="Your TEST workspace">{role === 'OfferingManager' ? 'Create, save and submit fictional fund or property drafts.' : 'Browse published TEST offerings and inspect the portfolio workspace without placing orders.'} This access is separate from your application decision; identity verification, production admission and signing authority are not implied. <Link href="/portal/onboarding?mode=applicant" className={styles.textLink}>View my application status</Link></Notice> : null}
-    {scopes?.length ? <nav aria-label={evaluation ? 'TEST workspace and organisation' : 'Assigned role and organisation'} className={`${styles.scopeSelector} ${styles.sectionGap}`}>
+    {evaluation && view === '/portal' ? <Notice title="Your TEST workspace">{role === 'OfferingManager' ? 'Prepare your fund or property and follow its review progress.' : 'Browse published TEST offerings and inspect the portfolio workspace without placing orders.'} This access is separate from your application decision; identity verification, production admission and signing authority are not implied. <Link href="/portal/onboarding?mode=applicant" className={styles.textLink}>View my application status</Link></Notice> : null}
+    {operatingContext?.mode !== 'ROLE' && scopes?.length ? <nav aria-label={evaluation ? 'TEST workspace and organisation' : 'Assigned role and organisation'} className={`${styles.scopeSelector} ${styles.sectionGap}`}>
       {scope ? <p>Working as <strong>{getRoleDashboard(scope.role)?.title ?? scope.role}</strong> in <strong>{scope.organisationName}</strong></p> : <p>Working with your <strong>personal and applicant relationships</strong>. An approved product-owner relationship here does not grant a native organisation role.</p>}
       <div className={styles.actions}><Link href={portalScopeHref('/portal', APPLICANT_CONTEXT)} className={styles.buttonSecondary} aria-current={operatingContext?.mode === 'APPLICANT' ? 'page' : undefined}>My personal / applicant relationships</Link>{scopes.map(item => <Link key={`${item.organisationId}-${item.role}`} href={portalScopeHref('/portal', { mode: 'ROLE', organisationId: item.organisationId, role: item.role })} className={styles.buttonSecondary} aria-current={item.organisationId === scope?.organisationId && item.role === scope?.role ? 'page' : undefined}>{item.organisationName} · {getRoleDashboard(item.role)?.title ?? item.role}</Link>)}</div>
     </nav> : null}

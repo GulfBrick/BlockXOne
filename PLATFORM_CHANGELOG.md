@@ -1,5 +1,13 @@
 # BlockXOne platform releases
 
+## 1.2.0-rc.8 - shared workspace theme and navigation
+
+- Carry the approved navy navigation, light workspace, real BlockXOne logo and cyan primary actions through all nine existing role views using the shared portal shell. Keep dense data tables wide and guided product forms comfortable to read.
+- Reuse the existing account menu, route Change workspace to the actual workspace chooser, remove repeated role-switching panels and replace mobile disclosure navigation with visible scrollable links.
+- Keep unsaved product edits and unknown request keys when changing product sections. Save, submit, review and publication remain separate guarded operations; presentation grants no authority.
+- Retain the two targeted TEST submission database corrections: a query-alias collision and two discarded intermediate readbacks. Preserve the final immutable-package snapshot, audit and live authority checks without increasing timeouts.
+- Public/auth pages outside the portal and provider-hosted content are not claimed as rethemed. MAIN is not activated or changed by this TEST release.
+
 ## 1.2.0-rc.7 - guided product setup and connected package work
 
 - Replace the overloaded customer form with guided product, issuer, rights, economics, documents and final-review steps. New customers author their own complete v3 terms; no example fund or property is created automatically.
