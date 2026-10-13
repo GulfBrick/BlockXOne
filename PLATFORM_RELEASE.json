@@ -1,8 +1,8 @@
 {
   "product": "BlockXOne",
-  "version": "1.2.0-rc.2",
+  "version": "1.2.0-rc.3",
   "status": "release-candidate",
-  "baseSource": "6f1d7b0c468950f203159f1a01aacce28958b5a4",
+  "baseSource": "f017b9fe1585ea49b5e60bbd001b03eb6d1bbb4d",
   "sourceIdentity": "VERCEL_GIT_COMMIT_SHA",
   "environmentSource": "validated deployment target, canonical origin and Supabase project",
   "sharedEntry": "/login",

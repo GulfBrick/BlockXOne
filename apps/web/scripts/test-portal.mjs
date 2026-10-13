@@ -21,6 +21,8 @@ import { proveOfferingFileQuarantine, proveOfferingFileProductIsolation } from '
 
 // Exact disposable GitHub PostgreSQL17 service only. No local/project execution.
 if (process.argv.length !== 2 || process.env.GITHUB_ACTIONS !== 'true') throw new Error('Portal SQL proof requires cloud CI without arguments')
+const proofLineage = process.env.BX1_PORTAL_PROOF_LINEAGE
+assert.ok(['STOCK', 'FUNDING_LINKED'].includes(proofLineage), 'Portal SQL proof requires an explicit supported writer lineage')
 const expected = 'postgresql://postgres:bx1-synthetic-ci-only@127.0.0.1:5432/bx1_demo_ci'
 if (process.env.BX1_PORTAL_SQL_TEST_URL !== expected) throw new Error('Portal SQL proof requires the exact disposable CI database')
 const fundV2LegacyCrossrefs = JSON.parse(await readFile(new URL('../src/lib/portal/fund-v2-legacy-crossrefs.json', import.meta.url), 'utf8'))
@@ -449,6 +451,41 @@ try {
   phase = 'stage2-eligibility-authority-only-wrapper'
   await db.query('begin'); begun = true
   await admin()
+  if (proofLineage === 'FUNDING_LINKED') {
+    const authoritySignature = 'bx1_portal.execute_scoped(jsonb,text,uuid,jsonb)'
+    const authorityBefore = await scalar('select to_jsonb(p) from pg_proc p where p.oid=$1::regprocedure', [authoritySignature])
+    eq(await scalar("select to_regprocedure('bx1_portal.execute_scoped_p2(jsonb,text,uuid,jsonb)') is null"), true, 'real funding predecessor is not separately installed')
+    const preservedFundingBootstrap = async () => scalar(`select jsonb_build_object(
+      'applications',(select jsonb_agg(to_jsonb(t) order by id) from bx1_portal.applications t),
+      'organisations',(select jsonb_agg(to_jsonb(t) order by id) from bx1_portal.organisations t),
+      'products',(select jsonb_agg(to_jsonb(t) order by id) from bx1_portal.products t),
+      'subscriptions',(select jsonb_agg(to_jsonb(t) order by id) from bx1_portal.subscriptions t),
+      'accounts',(select jsonb_agg(to_jsonb(t) order by id) from bx1_portal.investment_accounts t),
+      'bindings',(select jsonb_agg(to_jsonb(t) order by id) from bx1_portal.organisation_authority_bindings t),
+      'users',(select jsonb_agg(to_jsonb(t) order by id) from auth.users t),
+      'sessions',(select jsonb_agg(to_jsonb(t) order by id) from auth.sessions t),
+      'factors',(select jsonb_agg(to_jsonb(t) order by id) from auth.mfa_factors t),
+      'profiles',(select jsonb_agg(to_jsonb(t) order by id) from public.bx1_profiles t),
+      'memberships',(select jsonb_agg(to_jsonb(t) order by id) from public.bx1_memberships t),
+      'persons',(select jsonb_agg(to_jsonb(t) order by id) from bx1_private.persons t),
+      'principals',(select jsonb_agg(to_jsonb(t) order by auth_user_id) from bx1_private.person_principals t))`)
+    const preservedRows = await preservedFundingBootstrap()
+    // Exact unchanged source installation used by the independent funding proof.
+    // This temporary fixture contract is removed before the real entry migration.
+    await db.query(`create table bx1_portal.entry_configuration
+      (singleton boolean primary key default true,environment text not null
+        check(environment in ('TESTNET','MAINNET')))`)
+    await db.query("insert into bx1_portal.entry_configuration(environment) values('TESTNET')")
+    await sqlFile('../../../supabase/features/bx1_portal_funding.sql')
+    await db.query('drop table bx1_portal.entry_configuration')
+    eq(await preservedFundingBootstrap(), preservedRows, 'real funding bootstrap preserves every retained business and identity row')
+    const retainedAuthority = await scalar("select to_jsonb(p) from pg_proc p where p.oid='bx1_portal.execute_scoped_p2(jsonb,text,uuid,jsonb)'::regprocedure")
+    eq({ ...retainedAuthority, proname: authorityBefore.proname, proacl: authorityBefore.proacl }, authorityBefore,
+      'funding retains the original authority OID/body/catalog except its deliberate private name/ACL cutover')
+    eq(await scalar("select encode(sha256(convert_to(btrim(replace(prosrc,E'\\r\\n',E'\\n'),E' \\n\\t'),'UTF8')),'hex') from pg_proc where oid='bx1_portal.execute_scoped(jsonb,text,uuid,jsonb)'::regprocedure"),
+      '9a9156a1a628c88cc51bcfca16670f8c6bc137933d4f512e34455f22b8e25d06', 'real complete funding writer is installed, not a reconstructed graph')
+    console.log('BX1_PORTAL_LINEAGE_BOOTSTRAP', JSON.stringify({ lineage: proofLineage, retained_authority_oid: retainedAuthority.oid, funding_body_sha256: '9a9156a1a628c88cc51bcfca16670f8c6bc137933d4f512e34455f22b8e25d06' }))
+  }
   await sqlFile('../../../supabase/features/bx1_entry.sql')
   await sqlFile('../../../supabase/features/bx1_entry_admission.sql')
   await db.query("insert into bx1_portal.entry_configuration(environment,manual_test_review,reviewer_scope,admission_reference) values('TESTNET',true,$1,'synthetic product-eligibility cloud acceptance')", [nativeScope])
@@ -1254,6 +1291,7 @@ try {
   checks++
   await sqlFile('../../../supabase/migrations/20260924125627_stage2_customer_monitoring.sql')
   checks += await proveCustomerMonitoring(db, {
+    proofLineage,
     applicationId: ownershipApp.id,
     organisationId: v3Admission.organisation_id,
     draftProductId: v3Draft.id,
@@ -2684,7 +2722,7 @@ try {
     await source('../../../supabase/features/bx1_application_drafts.sql'))
   phase = 'normal-offering-workflow-proof'
   checks += await proveOfferingWorkflow(db, proofClients,
-    await source('../../../supabase/features/bx1_offering_workflow.sql'))
+    await source('../../../supabase/features/bx1_offering_workflow.sql'), proofLineage)
   phase = 'product-common-envelope-proof'
   checks += await proveProductCommonEnvelope(db, proofClients,
     await source('../../../supabase/features/bx1_product_common_envelope.sql'), fundV2LegacyCrossrefs)

@@ -118,8 +118,9 @@ const propertyV2Terms = name => ({
   },
 })
 
-export async function proveOfferingWorkflow(db, clients, offeringSql) {
+export async function proveOfferingWorkflow(db, clients, offeringSql, proofLineage) {
   if (process.env.GITHUB_ACTIONS !== 'true' || clients.length !== 2) throw new Error('Offering workflow proof requires retained cloud fixture')
+  assert.ok(['STOCK', 'FUNDING_LINKED'].includes(proofLineage), 'Offering proof requires its explicit supported predecessor lineage')
   let checks = 0, sequence = 1000, begun = false, phase = 'baseline'
   const id = n => `ef840000-0000-4000-8000-${String(n).padStart(12, '0')}`
   const key = () => id(++sequence)
@@ -245,6 +246,7 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
       session_mode: 'TEST_PASSWORD', allowed_commands: family[context.role] }, 'strict offering marker binds actor/context/exact bounded role family')
     for (const p of snapshot.products) truth((p.allowed_actions ?? []).every(action => family[context.role].includes(action)), 'record actions never escape package command family')
     if (['OfferingManager', 'IssuerFundManager'].includes(context.role)) {
+      eq(Object.hasOwn(snapshot, 'funding'), false, `${context.role}: actual public SQL package response omits the invalid financial array key`)
       for (const field of ['subscriptions', 'product_eligibility', 'entity_product_eligibility', 'investment_accounts', 'entity_investment_accounts'])
         if (field in snapshot) eq(snapshot[field], [], `package-only response exposes no ${field} financial/customer reader data`)
     }
@@ -518,6 +520,101 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
     const representativeSource = (await readFile(new URL('../../../supabase/features/bx1_account_representatives.sql', import.meta.url), 'utf8')).replaceAll('\r\n', '\n')
     eq(sourceHash(admissionSource), '173f0f7562120ec9c1b8ad99aa3cf302d285165363e5207e5c314d8730e7b779', 'immutable accepted admission source remains exact')
     eq(sourceHash(representativeSource), '1b7eca59131344c269b23e6d522f4b4592025204745eb5a5ac8556d58ce793d4', 'immutable accepted representatives source remains exact')
+    // V12-INSTALL-LINEAGE-01: independently derive the authority and funding
+    // bodies from immutable sources, never from a drifted observed definition.
+    const nominalAuthoritySignature = recipes[0].signature
+    const p2AuthoritySignature = 'bx1_portal.execute_scoped_p2(jsonb,text,uuid,jsonb)'
+    const authoritySource = (await readFile(new URL('../../../supabase/migrations/20260921160000_portal_authority_accounts.sql', import.meta.url), 'utf8')).replaceAll('\r\n', '\n')
+    const fundingSource = (await readFile(new URL('../../../supabase/features/bx1_portal_funding.sql', import.meta.url), 'utf8')).replaceAll('\r\n', '\n')
+    const authorityBodies = [...authoritySource.matchAll(/create function bx1_portal\.execute_scoped\(c jsonb,action text,key uuid,body jsonb\) returns jsonb\nlanguage plpgsql volatile security definer set search_path='' as \$\$([\s\S]*?)\$\$;/g)]
+    const fundingBodies = [...fundingSource.matchAll(/create function bx1_portal\.execute_scoped\(c jsonb,action text,key uuid,body jsonb\) returns jsonb\nlanguage plpgsql volatile security definer set search_path='' as \$\$([\s\S]*?)\$\$;/g)]
+    eq(authorityBodies.length, 1, 'one complete source authority writer')
+    eq(fundingBodies.length, 1, 'one complete real source funding writer')
+    const originalAuthorityBody = normalizedBody(authorityBodies[0][1])
+    const protectedFundingBody = normalizedBody(fundingBodies[0][1])
+    eq(sourceHash(originalAuthorityBody), '9900adab1a5188a28498b4de21bb1c1fb0f6210093621baba3b7d4129b708450', 'retained original authority body is independently source-pinned')
+    eq(sourceHash(protectedFundingBody), '9a9156a1a628c88cc51bcfca16670f8c6bc137933d4f512e34455f22b8e25d06', 'protected complete funding writer is independently source-pinned')
+    const admissionCutovers = [...admissionSource.matchAll(/\$cutovers\$([\s\S]*?)\$cutovers\$::jsonb/g)]
+    eq(admissionCutovers.length, 1, 'one unchanged admission cutover inventory')
+    const authorityAdmission = JSON.parse(admissionCutovers[0][1]).filter(recipe => recipe.signature === nominalAuthoritySignature)
+    eq(authorityAdmission.length, 1, 'one retained authority admission recipe')
+    eq(authorityAdmission[0].expected_sha256, sourceHash(originalAuthorityBody), 'authority admission starts from the exact original body')
+    eq(authorityAdmission[0].changes.map(change => change.count), [1, 3, 2, 1], 'four unchanged admission source replacements')
+    let acceptedAuthorityBody = originalAuthorityBody
+    for (const change of authorityAdmission[0].changes) {
+      eq(acceptedAuthorityBody.split(change.from).length - 1, change.count, 'each original admission authority anchor has its exact count')
+      acceptedAuthorityBody = acceptedAuthorityBody.replaceAll(change.from, change.to)
+    }
+    eq(sourceHash(acceptedAuthorityBody), recipes[0].expected_sha256, 'source-derived authority matches the unchanged first offering pin')
+    eq(recipes[0].expected_sha256, 'd35ef9590bcc28e59d1664630099c2a3f4b3b34151fce2f6d9f74a3f6ec6c707', 'only the exact accepted authority pin is supported')
+    eq(recipes[0].changes.map(change => change.count), [1, 1, 3, 2, 2, 1, 1], 'exact seven offering authority replacements remain unchanged')
+    let correctedAuthorityBody = acceptedAuthorityBody
+    for (const change of recipes[0].changes) {
+      eq(correctedAuthorityBody.split(change.from).length - 1, change.count, 'each first-recipe source anchor has its unchanged count')
+      correctedAuthorityBody = correctedAuthorityBody.replaceAll(change.from, change.to)
+    }
+    eq(sourceHash(correctedAuthorityBody), 'cf57f545044f1ac0e547ab4e7aa7f2e52bf466ba81350e35d77639e9019b3279', 'complete mapped cutover body is source-derived, not repinned from runtime')
+    const lineageCatalog = signature => scalar('select to_jsonb(p) from pg_proc p where p.oid=to_regprocedure($1)', [signature])
+    const nominalAuthorityCatalog = await lineageCatalog(nominalAuthoritySignature)
+    const p2AuthorityCatalog = await lineageCatalog(p2AuthoritySignature)
+    truth(nominalAuthorityCatalog, 'the original nominal predecessor exists')
+    if (proofLineage === 'STOCK') {
+      eq(p2AuthorityCatalog, null, 'stock arrangement has no p2 alternate predecessor')
+      eq(normalizedBody(nominalAuthorityCatalog.prosrc), acceptedAuthorityBody, 'stock nominal predecessor is the complete source authority')
+    } else {
+      truth(p2AuthorityCatalog, 'funding-linked arrangement has the actual retained p2 predecessor')
+      eq(normalizedBody(nominalAuthorityCatalog.prosrc), protectedFundingBody, 'funding-linked nominal predecessor is the complete real funding writer')
+      eq(normalizedBody(p2AuthorityCatalog.prosrc), acceptedAuthorityBody, 'funding-linked p2 is the complete source authority')
+    }
+    const actualAuthoritySignature = proofLineage === 'STOCK' ? nominalAuthoritySignature : p2AuthoritySignature
+    const actualAuthorityCatalog = proofLineage === 'STOCK' ? nominalAuthorityCatalog : p2AuthorityCatalog
+    const canonicalLineageCatalog = async signature => scalar(`select jsonb_build_object(
+      'owner',pg_get_userbyid(p.proowner),'language',l.lanname,'volatility',p.provolatile,
+      'kind',p.prokind,'security_definer',p.prosecdef,'returns_set',p.proretset,
+      'strict',p.proisstrict,'leakproof',p.proleakproof,'parallel',p.proparallel,
+      'cost',p.procost,'rows',p.prorows,'result',pg_get_function_result(p.oid),
+      'argument_types',oidvectortypes(p.proargtypes),'argument_names',p.proargnames,
+      'argument_count',p.pronargs,'default_count',p.pronargdefaults,'defaults',p.proargdefaults,
+      'variadic',p.provariadic::bigint,'support',p.prosupport::oid::bigint,'transforms',p.protrftypes,
+      'all_arguments',p.proallargtypes,'argument_modes',p.proargmodes,
+      'binary',p.probin,'sql_body',p.prosqlbody,'configuration',p.proconfig,
+      'acl',(select jsonb_agg(jsonb_build_object('grantor',pg_get_userbyid(a.grantor),
+        'grantee',case when a.grantee=0 then 'PUBLIC' else pg_get_userbyid(a.grantee) end,
+        'privilege',a.privilege_type,'grantable',a.is_grantable) order by a.grantor,a.grantee,a.privilege_type)
+        from aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) a))
+      from pg_proc p join pg_language l on l.oid=p.prolang where p.oid=to_regprocedure($1)`, [signature])
+    const canonicalAuthorityMetadata = { owner: 'postgres', language: 'plpgsql', volatility: 'v', kind: 'f',
+      security_definer: true, returns_set: false, strict: false, leakproof: false, parallel: 'u', cost: 100, rows: 0,
+      result: 'jsonb', argument_types: 'jsonb, text, uuid, jsonb', argument_names: ['c', 'action', 'key', 'body'], argument_count: 4,
+      default_count: 0, defaults: null, variadic: 0, support: 0, transforms: null, all_arguments: null,
+      argument_modes: null, binary: null, sql_body: null, configuration: ['search_path=""'],
+      acl: [{ grantor: 'postgres', grantee: 'postgres', privilege: 'EXECUTE', grantable: false }] }
+    eq(await canonicalLineageCatalog(actualAuthoritySignature), canonicalAuthorityMetadata, 'actual authority has the complete independent canonical catalog/owner-only effective ACL')
+    if (proofLineage === 'FUNDING_LINKED') eq(await canonicalLineageCatalog(nominalAuthoritySignature), canonicalAuthorityMetadata,
+      'protected funding predecessor has the complete same canonical metadata/owner-only effective ACL')
+    const fullLineageFunctions = async () => {
+      await admin()
+      return (await db.query(`select to_jsonb(p)-'prosrc'||jsonb_build_object('schema',n.nspname,
+        'prosrc_sha256',encode(sha256(convert_to(p.prosrc,'UTF8')),'hex')) as catalog
+        from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+        where n.nspname in ('auth','public','bx1_private','bx1_portal') order by p.oid`)).rows
+    }
+    const lineageFootprint = async () => ({ rows: await state(), catalogs: await fullLineageFunctions(), security: await security() })
+    const originalDelegatePath = []
+    let currentDelegate = 'bx1_portal.execute_scoped(jsonb,text,uuid,jsonb)'
+    while (currentDelegate) {
+      truth(!originalDelegatePath.includes(currentDelegate), 'actual pre-cutover executor delegate graph has no cycle')
+      originalDelegatePath.push(currentDelegate)
+      const currentCatalog = await lineageCatalog(currentDelegate)
+      truth(currentCatalog, 'each actual scoped executor predecessor exists')
+      const delegates = [...new Set([...currentCatalog.prosrc.matchAll(/bx1_portal\.(execute_scoped[a-z_0-9]*)\s*\(/g)].map(match => match[1]))]
+      truth(delegates.length <= 1, 'retained executor has one unambiguous next scoped predecessor')
+      currentDelegate = delegates.length ? `bx1_portal.${delegates[0]}(jsonb,text,uuid,jsonb)` : null
+    }
+    eq(originalDelegatePath.at(-1), actualAuthoritySignature, 'actual acyclic graph ends at the independently source-derived authority writer')
+    if (proofLineage === 'FUNDING_LINKED') eq(originalDelegatePath.slice(-2), [nominalAuthoritySignature, p2AuthoritySignature],
+      'actual funding-linked graph ends funding→retained authority, not a mocked side path')
+    // End of independently source-pinned writer-lineage preparation.
     const representativeRecipeMatches = [...representativeSource.matchAll(/\$cutovers\$([\s\S]*?)\$cutovers\$::jsonb/g)]
     eq(representativeRecipeMatches.length, 1, 'accepted representatives has one exact retained recipe array')
     const representativeRecipes = JSON.parse(representativeRecipeMatches[0][1])
@@ -665,6 +762,58 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
       && candidateRecipe.changes[3].to.includes("if not (manager_authority ? manager_product.organisation_id::text) then"),
     'product state resets and key presence distinguishes cached false from an unpopulated exact-org result')
     eq(candidateRecipe.changes[4].to.split('manager_allowed:=false;').length - 1, 2, 'both ordered org passes reset local per-item state')
+    // V12-INSTALL-LINEAGE-01 negatives retain the actual positive graph. Each
+    // deliberate broken arrangement exists only inside a restored savepoint.
+    const lineageRefusal = async (label, mutate) => {
+      const before = await lineageFootprint()
+      await isolated(async () => {
+        await mutate()
+        const changed = await lineageFootprint()
+        await denied(label, () => db.query(offeringSql), '55000')
+        eq(await lineageFootprint(), changed, `${label}: failed installer changes no complete row/catalog/security footprint`)
+      })
+      eq(await lineageFootprint(), before, `${label}: rollback restores every inherited row/full catalog/security field`)
+    }
+    const replaceLineageBody = async (signature, body) => {
+      const current = await lineageCatalog(signature)
+      const definition = await scalar('select pg_get_functiondef($1::regprocedure)', [signature])
+      eq(definition.split(current.prosrc).length - 1, 1, 'rollback-only lineage mutation has one complete source body location')
+      await db.query(definition.replace(current.prosrc, body))
+    }
+    const addStockP2 = async body => {
+      const definition = await scalar('select pg_get_functiondef($1::regprocedure)', [nominalAuthoritySignature])
+      const name = 'bx1_portal.execute_scoped_pre_eligibility('
+      eq(definition.split(name).length - 1, 1, 'unsupported stock alternate has one declaration name location')
+      eq(definition.split(nominalAuthorityCatalog.prosrc).length - 1, 1, 'unsupported stock alternate has one complete body location')
+      await db.query(definition.replace(name, 'bx1_portal.execute_scoped_p2(').replace(nominalAuthorityCatalog.prosrc, body))
+    }
+    await lineageRefusal('missing exact authority predecessor is rejected',
+      () => db.query(`drop function ${actualAuthoritySignature}`))
+    await lineageRefusal('both known predecessors matching the authority pin are rejected',
+      () => proofLineage === 'STOCK' ? addStockP2(acceptedAuthorityBody) : replaceLineageBody(nominalAuthoritySignature, acceptedAuthorityBody))
+    if (proofLineage === 'STOCK') {
+      await lineageRefusal('stock authority plus an unexpected funding alternate is rejected', () => addStockP2(protectedFundingBody))
+    } else {
+      await lineageRefusal('funding predecessor complete-body drift is rejected',
+        () => replaceLineageBody(nominalAuthoritySignature, nominalAuthorityCatalog.prosrc.replace(/\bbegin\b/i, 'begin\n-- fictional funding body drift')))
+      await lineageRefusal('reversed funding and authority arrangements are rejected', async () => {
+        await replaceLineageBody(nominalAuthoritySignature, acceptedAuthorityBody)
+        await replaceLineageBody(p2AuthoritySignature, protectedFundingBody)
+      })
+      await lineageRefusal('protected funding predecessor ACL drift is rejected',
+        () => db.query(`grant execute on function ${nominalAuthoritySignature} to authenticated`))
+      await lineageRefusal('protected funding predecessor catalog drift is rejected',
+        () => db.query(`alter function ${nominalAuthoritySignature} cost 1`))
+    }
+    await lineageRefusal('authority complete-body drift is rejected',
+      () => replaceLineageBody(actualAuthoritySignature, actualAuthorityCatalog.prosrc.replace(/\bbegin\b/i, 'begin\n-- fictional authority body drift')))
+    await lineageRefusal('authority owner-only effective ACL drift is rejected',
+      () => db.query(`grant execute on function ${actualAuthoritySignature} to authenticated`))
+    await lineageRefusal('authority security-definer drift is rejected',
+      () => db.query(`alter function ${actualAuthoritySignature} security invoker`))
+    for (const [label, clause] of [['volatility', 'immutable'], ['strictness', 'strict'], ['parallel', 'parallel safe'], ['cost', 'cost 1']])
+      await lineageRefusal(`authority ${label} catalog drift is rejected`, () => db.query(`alter function ${actualAuthoritySignature} ${clause}`))
+    // End of restored two-arrangement installer negatives.
     // Exact inherited signature is perturbed only inside a rolled-back
     // savepoint. A drift-safe extension must reject rather than accept it.
     await isolated(async () => {
@@ -695,6 +844,19 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
     eq(await functions(), baselineFunctions, 'drift probe fully rolls back all function changes')
     await db.query(offeringSql)
     installedFunctions = await functions()
+    const installedAuthorityCatalog = await lineageCatalog(actualAuthoritySignature)
+    eq({ ...installedAuthorityCatalog, prosrc: actualAuthorityCatalog.prosrc }, actualAuthorityCatalog,
+      'mapped authority preserves its complete pg_proc row/OID except the seven authorised body replacements')
+    eq(normalizedBody(installedAuthorityCatalog.prosrc), correctedAuthorityBody, 'selected actual OID receives exactly the source-derived seven replacements')
+    eq(await canonicalLineageCatalog(actualAuthoritySignature), canonicalAuthorityMetadata, 'mapped authority retains the complete canonical owner-only catalog')
+    if (proofLineage === 'FUNDING_LINKED') eq(await lineageCatalog(nominalAuthoritySignature), nominalAuthorityCatalog,
+      'complete real funding predecessor/OID/name/catalog/body/cancellation handlers remain byte-identical')
+    console.log('BX1_OFFERING_WRITER_LINEAGE_RECEIPT', JSON.stringify({ lineage: proofLineage,
+      actual_signature: actualAuthoritySignature, authority_oid: installedAuthorityCatalog.oid,
+      protected_funding_oid: proofLineage === 'FUNDING_LINKED' ? nominalAuthorityCatalog.oid : null,
+      authority_before_sha256: sourceHash(acceptedAuthorityBody), authority_after_sha256: sourceHash(correctedAuthorityBody),
+      protected_funding_sha256: proofLineage === 'FUNDING_LINKED' ? sourceHash(protectedFundingBody) : null,
+      acyclic_source_delegate_path: originalDelegatePath }))
     eq(normalizedBody(await scalar('select prosrc from pg_proc where oid=$1::regprocedure', [candidateRecipe.signature])), correctedCandidateReader, 'installed retained reader is exactly the source-derived five-replacement correction')
     eq(normalizedBody(await scalar('select prosrc from pg_proc where oid=$1::regprocedure', [admissionRecipe.signature])), correctedAdmissionProjection, 'installed marker equals the sole source-derived lazy-CASE filter replacement')
     eq(normalizedBody(await scalar('select prosrc from pg_proc where oid=$1::regprocedure', [admissionAuthoritySignature])), acceptedAdmissionAuthority, 'installer leaves the complete accepted current authority body byte-identical')
@@ -704,7 +866,7 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
     eq(sourceHash(normalizedBody(installedMandateLeafCatalog.prosrc)), 'd0eaa7a7589711c812cc1ad5a5b2ef387a5db3e7abaa51093ce056da4ea2896f', 'installed shared leaf has only the reviewed BEGIN RETURN END wrapper')
     // Kept explicit: broadening this list requires independent source review.
     const changedFunctions = new Set([
-      'bx1_portal.execute_scoped_pre_eligibility(jsonb,text,uuid,jsonb)',
+      actualAuthoritySignature,
       'bx1_portal.execute_command_pre_entry(text,uuid,jsonb)',
       'bx1_portal.execute_scoped_pre_monitoring(jsonb,text,uuid,jsonb)',
       'bx1_portal.execute_scoped(jsonb,text,uuid,jsonb)', 'bx1_portal.read_scoped(jsonb)',
@@ -720,7 +882,7 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
       mandateLeafSignature,
     ])
     eq(changedFunctions.size, 15, 'execution-shape correction adds only the one existing shared mandate leaf')
-    eq([...changedFunctions].sort(), [...recipes.map(recipe => recipe.signature), mandateLeafSignature].sort(), 'proof preserves fourteen exact recipe targets plus one dedicated leaf target')
+    eq([...changedFunctions].sort(), [...recipes.map((recipe, index) => index === 0 ? actualAuthoritySignature : recipe.signature), mandateLeafSignature].sort(), 'proof preserves fourteen actual recipe identities plus one dedicated leaf target')
     for (const original of baselineFunctions) {
       const current = installedFunctions.find(f => f.oid === original.oid)
       truth(current, `inherited ${original.signature} retains its exact OID`)
@@ -2033,6 +2195,11 @@ export async function proveOfferingWorkflow(db, clients, offeringSql) {
     await db.query('update bx1_private.document_lifecycle_policy set changed_at=$1::timestamptz where singleton', [originalLifecycle.changed_at])
     await db.query('alter table bx1_private.document_lifecycle_policy enable trigger bx1_document_lifecycle_activation')
     eq(await functions(), installedFunctions, 'temporary audit/drift fixtures are removed; installed function definitions/OIDs/ACLs stay exact')
+    eq(await lineageCatalog(actualAuthoritySignature), installedAuthorityCatalog, 'both-product public operations preserve the entire mapped authority catalog')
+    if (proofLineage === 'FUNDING_LINKED') eq(await lineageCatalog(nominalAuthoritySignature), nominalAuthorityCatalog,
+      'both-product public operations preserve the entire real funding predecessor and cancellation path')
+    eq([...new Set(inputs.filter(input => input.command === 'create_product').map(input => input.payload.terms.asset_type))].sort(),
+      ['FUND', 'REAL_ESTATE'], 'both actual product public journeys traverse the independently pinned acyclic authority lineage')
     eq(await security(), baselineSecurity, 'all global security and transition trigger metadata restored exactly')
     const finalRows = await state(), added = {}, window = { start: proofStartedAt, end: await scalar("select to_jsonb(clock_timestamp()) #>> '{}'") }
     for (const spec of specs) {

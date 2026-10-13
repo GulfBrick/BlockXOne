@@ -4,6 +4,7 @@ import assert from 'node:assert/strict'
 // the customer-monitoring migration and the synthetic v3 customer approval.
 // This module opens no connection, sends no email and modifies no cloud app.
 export async function proveCustomerMonitoring(db, {
+  proofLineage,
   applicationId, organisationId, draftProductId, managerMandateId,
   investorApplicationId, investorAccountId, entityApplicationId,
   entityAccountId, entityMandateId, eligibilityCaseId,
@@ -11,6 +12,7 @@ export async function proveCustomerMonitoring(db, {
   if (process.env.GITHUB_ACTIONS !== 'true'
     || process.env.BX1_PORTAL_SQL_TEST_URL !== 'postgresql://postgres:bx1-synthetic-ci-only@127.0.0.1:5432/bx1_demo_ci')
     throw new Error('Customer monitoring proof requires the disposable cloud fixture')
+  assert.ok(['STOCK', 'FUNDING_LINKED'].includes(proofLineage), 'Monitoring proof requires its explicit supported predecessor lineage')
 
   const uid = n => `e1000000-0000-4000-8000-${String(n).padStart(12, '0')}`
   const sid = n => `e2000000-0000-4000-8000-${String(n).padStart(12, '0')}`
@@ -66,6 +68,7 @@ export async function proveCustomerMonitoring(db, {
   eq(await scalar("select has_function_privilege('authenticated','bx1_portal.install_customer_monitoring_funding_hooks()','EXECUTE')"), false,
     'browser cannot install or replace monitoring funding gates')
   await db.query('select bx1_portal.assert_customer_monitoring_funding_hooks()')
+  if (proofLineage === 'STOCK') {
   eq(await scalar("select to_regclass('bx1_portal.funding_routes') is null"), true,
     'MAIN-compatible monitoring migration permits absent TEST-only funding tables')
   await db.query('savepoint monitoring_late_funding_install')
@@ -85,6 +88,83 @@ export async function proveCustomerMonitoring(db, {
   await db.query('rollback to savepoint monitoring_late_funding_install; release savepoint monitoring_late_funding_install')
   eq(await scalar("select to_regclass('bx1_portal.funding_routes') is null"), true,
     'synthetic late-install proof leaves no funding table in the portal-only fixture')
+  } else {
+    // The linked positive fixture contains the unchanged, fully installed
+    // funding platform. Never substitute skeletal tables for this branch.
+    const fundingTables = ['funding_routes', 'funding_obligations', 'funding_references',
+      'funding_verification_expectations', 'funding_observations', 'funding_receipt_claims',
+      'funding_acceptances', 'funding_journals', 'funding_journal_lines', 'funding_reversals']
+    const hooks = [
+      { relation: 'bx1_portal.funding_routes', name: 'bx1_monitoring_funding_route', function: 'bx1_portal.guard_customer_monitoring_new_action()', events: 23, columns: ['status'] },
+      { relation: 'bx1_portal.funding_obligations', name: 'bx1_monitoring_funding_obligation', function: 'bx1_portal.guard_customer_monitoring_new_action()', events: 7, columns: [] },
+      { relation: 'bx1_portal.funding_acceptances', name: 'bx1_monitoring_funding_acceptance', function: 'bx1_portal.guard_customer_monitoring_funding_transition()', events: 23, columns: ['approved_by'] },
+      { relation: 'bx1_portal.funding_journals', name: 'bx1_monitoring_funding_journal', function: 'bx1_portal.guard_customer_monitoring_funding_transition()', events: 7, columns: [] },
+    ]
+    for (const table of ['funding_routes', 'funding_obligations', 'funding_references', 'funding_acceptances', 'funding_journals'])
+      eq(await scalar('select to_regclass($1) is not null', [`bx1_portal.${table}`]), true, `real linked funding table ${table} exists`)
+    const actualHooks = (await db.query(`select t.tgrelid::regclass::text as relation,t.tgname as name,
+      t.tgfoid::regprocedure::text as "function",t.tgtype::integer as events,
+      array(select a.attname::text from pg_attribute a where a.attrelid=t.tgrelid
+        and a.attnum=any(t.tgattr) order by a.attnum) as columns,
+      t.tgenabled as enabled,t.tgisinternal as internal,t.tgdeferrable as deferrable,
+      t.tginitdeferred as deferred,t.tgqual is null as unconditional,t.tgnargs::integer as argument_count
+      from pg_trigger t where t.tgname like 'bx1_monitoring_funding_%' order by t.tgname`)).rows
+    eq(actualHooks, hooks.map(hook => ({ ...hook, enabled: 'O', internal: false,
+      deferrable: false, deferred: false, unconditional: true, argument_count: 0 })).sort((a, b) => a.name.localeCompare(b.name)),
+    'exact four real monitoring hooks bind their source relations/functions/events/columns')
+    const linkedFootprint = async () => {
+      await admin()
+      const funding = {}
+      for (const table of fundingTables) funding[table] = await scalar(`select coalesce(jsonb_agg(to_jsonb(t) order by to_jsonb(t)::text),'[]'::jsonb) from bx1_portal.${table} t`)
+      return { funding,
+        functions: (await db.query(`select to_jsonb(p)-'prosrc'||jsonb_build_object('schema',n.nspname,
+          'prosrc_sha256',encode(sha256(convert_to(p.prosrc,'UTF8')),'hex')) as catalog
+          from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+          where n.nspname in ('auth','storage','public','bx1_private','bx1_portal') order by p.oid`)).rows,
+        triggers: (await db.query(`select t.oid::text as oid,t.tgname as name,t.tgrelid::regclass::text as relation,
+          to_jsonb(t) as catalog,pg_get_triggerdef(t.oid) as definition
+          from pg_trigger t join pg_class c on c.oid=t.tgrelid join pg_namespace n on n.oid=c.relnamespace
+          where n.nspname in ('auth','storage','public','bx1_private','bx1_portal') order by t.oid`)).rows,
+        security: await scalar(`select jsonb_build_object(
+          'roles',(select jsonb_agg(to_jsonb(t) order by oid) from (select oid,rolname,rolsuper,rolinherit,
+            rolcreaterole,rolcreatedb,rolcanlogin,rolreplication,rolbypassrls,rolconnlimit,rolvaliduntil,rolconfig from pg_roles) t),
+          'edges',(select jsonb_agg(to_jsonb(t) order by roleid,member,grantor) from pg_auth_members t),
+          'schemas',(select jsonb_agg(to_jsonb(t) order by oid) from (select oid,nspname,nspowner,nspacl from pg_namespace
+            where nspname in ('auth','storage','public','bx1_private','bx1_portal')) t),
+          'relations',(select jsonb_agg(to_jsonb(t) order by oid) from (select c.oid,c.relname,c.relowner,c.relacl,c.relrowsecurity,c.relforcerowsecurity
+            from pg_class c join pg_namespace n on n.oid=c.relnamespace where c.relkind='r'
+              and n.nspname in ('auth','storage','public','bx1_private','bx1_portal')) t),
+          'policies',(select jsonb_agg(to_jsonb(t) order by schemaname,tablename,policyname) from pg_policies t),
+          'defaults',(select jsonb_agg(to_jsonb(t) order by oid) from pg_default_acl t))`) }
+    }
+    await db.query('select bx1_portal.assert_customer_monitoring_funding_hooks()')
+    for (const hook of hooks) {
+      const before = await linkedFootprint()
+      await db.query('savepoint monitoring_linked_hook_probe')
+      try {
+        await db.query(`drop trigger ${hook.name} on ${hook.relation}`)
+        const expected = { ...before, triggers: before.triggers.filter(row => !(row.name === hook.name && row.relation === hook.relation)) }
+        eq(before.triggers.length - expected.triggers.length, 1, 'only the selected actual monitoring hook is removed')
+        eq(await linkedFootprint(), expected, 'hook probe changes exactly one real trigger and no funding/function/security state')
+        await db.query('savepoint monitoring_linked_missing_hook')
+        let code, message
+        try { await db.query('select bx1_portal.assert_customer_monitoring_funding_hooks()') }
+        catch (error) { code = error.code; message = error.message }
+        await db.query('rollback to savepoint monitoring_linked_missing_hook; release savepoint monitoring_linked_missing_hook')
+        eq(code, '55000', 'actual missing funding hook fails closed with the original producer SQLSTATE')
+        eq(message, `monitoring_funding_hook_missing:${hook.name}`, 'actual missing hook fails at the exact source producer')
+        eq(await linkedFootprint(), expected, 'failed hook assertion has no other complete-footprint side effect')
+      } finally {
+        await db.query('rollback to savepoint monitoring_linked_hook_probe; release savepoint monitoring_linked_hook_probe')
+        await admin()
+      }
+      eq(await linkedFootprint(), before, 'rollback restores every actual funding row/function/trigger/catalog/security field')
+      await db.query('select bx1_portal.assert_customer_monitoring_funding_hooks()')
+    }
+    console.log('BX1_MONITORING_FUNDING_LINEAGE_PASS', JSON.stringify({ lineage: proofLineage,
+      actual_funding_tables: fundingTables.length, actual_hooks: hooks.length,
+      missing_hook_denials: hooks.length, complete_footprint_restored: true }))
+  }
   // The customer operating organisation already has an OfferingManager
   // appointment. A reviewer in the same native scope still needs a separate
   // product-organisation Compliance appointment; role/scope alone is not it.

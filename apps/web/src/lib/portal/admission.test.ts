@@ -1,4 +1,5 @@
 import { createElement, type ReactNode } from 'react'
+import { readFileSync } from 'node:fs'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -63,6 +64,64 @@ describe('bounded package read boundary and pre-cutover compatibility', () => {
   const manager = { mode: 'ROLE' as const, organisationId: organisation, role: 'OfferingManager' as const }
   const access = { version: 1, environment: 'TESTNET', actor_id: user.id, operating_context: manager, session_mode: 'TEST_PASSWORD', allowed_commands: ['submit_product'] }
   const marked = { ...snapshot, operating_context: manager, offering_access: access }
+  // Source-bound contract ends, not a claim of a live Supabase/BFF journey.
+  // The SQL proof independently calls both actual public role readers.
+  const packageOnlySnapshot = (role: 'OfferingManager' | 'IssuerFundManager') => {
+    const sql = readFileSync(new URL('../../../../../supabase/features/bx1_offering_workflow.sql', import.meta.url), 'utf8')
+    const bodies = [...sql.matchAll(/create function bx1_portal\.offering_workflow_read_scoped\(c jsonb\) returns jsonb[\s\S]*?as \$\$([\s\S]*?)\$\$;/g)]
+    expect(bodies).toHaveLength(1)
+    const projections = [...bodies[0][1].matchAll(/else\s+select pg_catalog\.jsonb_build_object\(([\s\S]*?)\)\s+into result from auth\.users u where u\.id=auth\.uid\(\);/g)]
+    expect(projections).toHaveLength(1)
+    const arrayKeys = [...projections[0][1].matchAll(/'([a-z_]+)'\s*,\s*'\[\]'::jsonb/g)].map(match => match[1])
+    expect(arrayKeys).toEqual(['applications', 'organisations', 'accounts', 'entity_investment_accounts',
+      'organisation_mandates', 'investing_representative_mandates', 'subscriptions', 'products',
+      'product_eligibility', 'entity_product_eligibility', 'customer_monitoring', 'events', 'requests',
+      'product_appointments', 'product_appointment_candidates'])
+    expect(projections[0][1]).not.toMatch(/'funding'\s*,/)
+    const context = { ...manager, role }
+    return { ...Object.fromEntries(arrayKeys.map(key => [key, []])), actor: snapshot.actor,
+      operating_context: context,
+      stage2_access: { version: 1, environment: 'TESTNET', actor_id: user.id, operating_context: context,
+        session_mode: 'TEST_PASSWORD', allowed_commands: [] },
+      offering_access: { ...access, operating_context: context, allowed_commands: [] } }
+  }
+  it.each(['OfferingManager', 'IssuerFundManager'] as const)('accepts the SQL-shaped %s package payload without invented funding data', async role => {
+    const data = packageOnlySnapshot(role), context = { ...manager, role }
+    expect(Object.hasOwn(data, 'funding')).toBe(false)
+    expect(isPortalSnapshot(data, user.id)).toBe(true)
+    mocks.rpc.mockReturnValue({ abortSignal: vi.fn().mockResolvedValue({ data, error: null }) })
+    expect((await readPortal({ rpc: mocks.rpc } as never, context)).snapshot).toEqual(data)
+    expect(mocks.rpc).toHaveBeenCalledExactlyOnceWith('bx1_portal_read_scoped', { operating_context: context })
+  })
+  it.each(['OfferingManager', 'IssuerFundManager'] as const)('still rejects the old invalid funding array in a %s payload', async role => {
+    const data = { ...packageOnlySnapshot(role), funding: [] }, context = { ...manager, role }
+    expect(isPortalSnapshot(data, user.id)).toBe(false)
+    mocks.rpc.mockReturnValue({ abortSignal: vi.fn().mockResolvedValue({ data, error: null }) })
+    await expect(readPortal({ rpc: mocks.rpc } as never, context)).rejects.toMatchObject({ status: 503 })
+  })
+  it('keeps valid financial object validation distinct from package-only data', async () => {
+    const funding = { routes: [], obligations: [], references: [], reversals: [], journals: [{
+      id: '10000000-0000-4000-8000-000000000001', obligation_id: '10000000-0000-4000-8000-000000000002',
+      reference_id: '10000000-0000-4000-8000-000000000003', kind: 'FUNDING', amount_base_units: '1000000',
+      token_address: `0x${'31'.repeat(20)}`, token_decimals: 6, created_at: '2026-10-13T00:00:00Z',
+      original_journal_id: null, posted_by: user.id, allowed_actions: [], lines: [
+        { account: 'TEST_SETTLEMENT_TOKEN_ASSET', side: 'DEBIT', amount_base_units: '1000000' },
+        { account: 'TEST_CUSTOMER_FUNDING_LIABILITY', side: 'CREDIT', amount_base_units: '1000000' },
+      ],
+    }] }
+    // Fictional DTO validation only: this does not invent a posted journal.
+    const data = { ...snapshot, operating_context: roleContext, funding }
+    expect(isPortalSnapshot(data, user.id)).toBe(true)
+    mocks.rpc.mockReturnValue({ abortSignal: vi.fn().mockResolvedValue({ data, error: null }) })
+    expect((await readPortal({ rpc: mocks.rpc } as never, roleContext)).snapshot).toEqual(data)
+    for (const invalid of [null, {}, { ...funding, journals: 'paid' },
+      { ...funding, journals: [{ ...funding.journals[0], amount_base_units: 1000000 }] }]) {
+      const malformed = { ...data, funding: invalid }
+      expect(isPortalSnapshot(malformed, user.id)).toBe(false)
+      mocks.rpc.mockReturnValue({ abortSignal: vi.fn().mockResolvedValue({ data: malformed, error: null }) })
+      await expect(readPortal({ rpc: mocks.rpc } as never, roleContext)).rejects.toMatchObject({ status: 503 })
+    }
+  })
   it('validates a package marker against the authenticated reader and selected context', async () => {
     mocks.rpc.mockReturnValue({ abortSignal: vi.fn().mockResolvedValue({ data: marked, error: null }) })
     expect((await readPortal({ rpc: mocks.rpc } as never, manager)).snapshot).toEqual(marked)

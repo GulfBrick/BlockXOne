@@ -585,7 +585,7 @@ begin
       'entity_investment_accounts','[]'::jsonb,'organisation_mandates','[]'::jsonb,
       'investing_representative_mandates','[]'::jsonb,'subscriptions','[]'::jsonb,
       'products','[]'::jsonb,'product_eligibility','[]'::jsonb,'entity_product_eligibility','[]'::jsonb,
-      'customer_monitoring','[]'::jsonb,'funding','[]'::jsonb,'events','[]'::jsonb,'requests','[]'::jsonb,
+      'customer_monitoring','[]'::jsonb,'events','[]'::jsonb,'requests','[]'::jsonb,
       'product_appointments','[]'::jsonb,'product_appointment_candidates','[]'::jsonb)
       into result from auth.users u where u.id=auth.uid();
   end if;
@@ -811,6 +811,8 @@ end $$;
 do $offering_cutover$
 declare spec jsonb; change jsonb; target oid; source_body text; next_body text;
   definition text; before_meta jsonb; after_meta jsonb; occurrences integer;
+  nominal_target oid; p2_target oid; authority_candidates oid[]; catalog record;
+  mapped_before jsonb; mapped_after jsonb; protected_target oid; protected_before jsonb;
 begin
   -- Static marker families are necessary-only. Their unchanged current authority
   -- must match the accepted complete body before any retained recipe is installed.
@@ -1257,7 +1259,60 @@ begin
   }
 ]
 $offering_recipes$::jsonb) loop
-    target:=pg_catalog.to_regprocedure(spec->>'signature');
+    mapped_before:=null; protected_target:=null; protected_before:=null;
+    if spec->>'signature'='bx1_portal.execute_scoped_pre_eligibility(jsonb,text,uuid,jsonb)'
+      and spec->>'expected_sha256'='d35ef9590bcc28e59d1664630099c2a3f4b3b34151fce2f6d9f74a3f6ec6c707' then
+      nominal_target:=pg_catalog.to_regprocedure(spec->>'signature');
+      p2_target:=pg_catalog.to_regprocedure('bx1_portal.execute_scoped_p2(jsonb,text,uuid,jsonb)');
+      select pg_catalog.array_agg(p.oid order by p.oid) into authority_candidates
+        from pg_catalog.pg_proc p where p.oid=any(array[nominal_target,p2_target])
+          and pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(
+            pg_catalog.btrim(pg_catalog.replace(p.prosrc,E'\r\n',E'\n'),E' \n\t'),'UTF8')),'hex')
+              =spec->>'expected_sha256';
+      if pg_catalog.cardinality(authority_candidates) is distinct from 1 then
+        raise exception 'offering_workflow_authority_lineage_changed' using errcode='55000'; end if;
+      target:=authority_candidates[1];
+      if target=nominal_target and p2_target is null then
+        null;
+      elsif target=p2_target and nominal_target is not null and exists(
+        select 1 from pg_catalog.pg_proc p where p.oid=nominal_target
+          and pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(
+            pg_catalog.btrim(pg_catalog.replace(p.prosrc,E'\r\n',E'\n'),E' \n\t'),'UTF8')),'hex')
+              ='9a9156a1a628c88cc51bcfca16670f8c6bc137933d4f512e34455f22b8e25d06') then
+        protected_target:=nominal_target;
+      else
+        raise exception 'offering_workflow_authority_lineage_changed' using errcode='55000';
+      end if;
+      for catalog in select p.* from pg_catalog.pg_proc p
+        where p.oid=any(array[target,protected_target]) loop
+        if catalog.proowner is distinct from ('postgres'::regrole::oid)
+          or catalog.prolang is distinct from (select oid from pg_catalog.pg_language where lanname='plpgsql')
+          or catalog.provolatile is distinct from 'v' or catalog.prokind is distinct from 'f'
+          or catalog.prosecdef is distinct from true or catalog.proretset is distinct from false
+          or catalog.proisstrict is distinct from false or catalog.proleakproof is distinct from false
+          or catalog.proparallel is distinct from 'u' or catalog.procost is distinct from 100::real
+          or catalog.prorows is distinct from 0::real or catalog.prorettype is distinct from ('jsonb'::regtype::oid)
+          or catalog.pronargs is distinct from 4
+          or pg_catalog.oidvectortypes(catalog.proargtypes) is distinct from 'jsonb, text, uuid, jsonb'
+          or catalog.proargnames is distinct from array['c','action','key','body']::text[]
+          or catalog.proconfig is distinct from array['search_path=""']::text[]
+          or catalog.pronargdefaults is distinct from 0 or catalog.proargdefaults is not null
+          or catalog.provariadic is distinct from 0::oid or catalog.prosupport is distinct from 0::oid
+          or catalog.protrftypes is not null or catalog.proallargtypes is not null
+          or catalog.proargmodes is not null or catalog.probin is not null or catalog.prosqlbody is not null
+          or (select count(*) from pg_catalog.aclexplode(coalesce(catalog.proacl,
+            pg_catalog.acldefault('f',catalog.proowner))))<>1
+          or not exists(select 1 from pg_catalog.aclexplode(coalesce(catalog.proacl,
+            pg_catalog.acldefault('f',catalog.proowner))) a
+            where a.grantee=catalog.proowner and a.grantor=catalog.proowner
+              and a.privilege_type='EXECUTE' and a.is_grantable is false) then
+          raise exception 'offering_workflow_authority_catalog_changed' using errcode='55000'; end if;
+      end loop;
+      select pg_catalog.to_jsonb(p) into mapped_before from pg_catalog.pg_proc p where p.oid=target;
+      select pg_catalog.to_jsonb(p) into protected_before from pg_catalog.pg_proc p where p.oid=protected_target;
+    else
+      target:=pg_catalog.to_regprocedure(spec->>'signature');
+    end if;
     if target is null then raise exception 'offering_workflow_function_missing: %',spec->>'signature' using errcode='55000'; end if;
     select p.prosrc,pg_catalog.jsonb_build_object('oid',p.oid,'owner',p.proowner,'acl',p.proacl,
       'security_definer',p.prosecdef,'configuration',p.proconfig,'arguments',p.proargtypes::text,
@@ -1289,6 +1344,14 @@ $offering_recipes$::jsonb) loop
       into after_meta from pg_catalog.pg_proc p where p.oid=target;
     if after_meta is distinct from before_meta or (select p.prosrc from pg_catalog.pg_proc p where p.oid=target) is distinct from next_body then
       raise exception 'offering_workflow_function_identity_changed' using errcode='55000'; end if;
+    if mapped_before is not null then
+      select pg_catalog.to_jsonb(p) into mapped_after from pg_catalog.pg_proc p where p.oid=target;
+      if mapped_after-'prosrc' is distinct from mapped_before-'prosrc'
+        or mapped_after->>'prosrc' is distinct from next_body
+        or (protected_target is not null and (select pg_catalog.to_jsonb(p)
+          from pg_catalog.pg_proc p where p.oid=protected_target) is distinct from protected_before) then
+        raise exception 'offering_workflow_authority_identity_changed' using errcode='55000'; end if;
+    end if;
   end loop;
 end $offering_cutover$;
 

@@ -317,6 +317,7 @@ jobs:
         shell: bash
         env:
           BX1_PORTAL_SQL_TEST_URL: postgresql://postgres:bx1-synthetic-ci-only@127.0.0.1:5432/bx1_demo_ci
+          BX1_PORTAL_PROOF_LINEAGE: ${{ matrix.target == 'TESTNET' && 'FUNDING_LINKED' || 'STOCK' }}
           BX1_SCANNER_CLOUD_PROOF: github-clamav-1.4.6
           BX1_SCANNER_CLOUD_ENGINE: /usr/local/bin/clamscan
           BX1_SCANNER_PACKAGE_SHA256: d3ee9e401974855a1edc1761b1425417d126de618d5f0c91cd51209f69f6fcc2
