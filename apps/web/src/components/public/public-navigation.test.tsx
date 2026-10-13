@@ -22,7 +22,11 @@ describe('branded Mainnet and Testnet public navigation', () => {
       const html = renderToStaticMarkup(<PublicNavigation showPortalAccess={false} environment={environment} variant={variant} />)
       for (const label of ['Primary navigation', 'Mobile public navigation']) {
         const nav = html.match(new RegExp(`<nav aria-label="${label}"[\\s\\S]*?</nav>`))?.[0] ?? ''
-        expect(nav).toMatch(/href="\/faq"[^>]*aria-current="page"/)
+        const faqLinks = nav.match(/<a\b(?=[^>]*\bhref="\/faq")[^>]*>[\s\S]*?<\/a>/g) ?? []
+        expect(faqLinks).toHaveLength(1)
+        expect(faqLinks[0]).toMatch(/^<a\b[^>]*\bhref="\/faq"/)
+        expect(faqLinks[0]).toMatch(/^<a\b[^>]*\baria-current="page"/)
+        expect(faqLinks[0]).toContain('FAQ')
       }
     }
   })

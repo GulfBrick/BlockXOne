@@ -2,6 +2,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { entryApplication, entryActorId, entryApplicationId } from '@/lib/portal/entry-test-fixtures'
+import { entityInvestorApplicationDetailsV3Schema } from '@/lib/portal/contracts'
 import { KycVerification, ProviderEvidenceReview, parseKycSession, providerEvidenceLabel } from './kyc-verification'
 import { PortalIdentityProvider } from './portal-client'
 
@@ -207,21 +208,34 @@ describe('application-scoped sandbox identity verification', () => {
       details: { full_name: 'Synthetic Individual', country: 'ZA', investor_type: 'INDIVIDUAL' } })
     const props = { application, actorId: entryActorId, environment: 'TESTNET' as const, manualTestReview: true,
       sandboxEnabled: true, individualEnabled: true, companyEnabled: false }
+    const entityDetails = entityInvestorApplicationDetailsV3Schema.parse({
+      details_version: 3, investor_type: 'ENTITY', full_name: 'Synthetic Applicant', country: 'ZA',
+      company_name: 'Synthetic Company', registration_reference: 'SYNTHETIC-REG',
+      source_of_funds: 'Fictional retained earnings for a synthetic entity.',
+      beneficial_owners: 'The fictional direct owner holds the whole synthetic entity.',
+      experience: 'Fictional long-term entity investment objectives.', test_data_acknowledged: true,
+      documents: (['IDENTITY', 'COMPANY', 'BENEFICIAL_OWNERS'] as const).map((kind, index) => ({
+        id: `${index + 4}4444444-4444-4444-8444-444444444444`, kind, title: `Synthetic ${kind} evidence`,
+        storage_path: `${entryActorId}/synthetic-entity-${index}.pdf`, sha256: 'a'.repeat(64), size: 100, mime_type: 'application/pdf',
+      })),
+      ownership_control: [{ id: 'f4444444-4444-4444-8444-444444444444', party_type: 'PERSON',
+        legal_name: 'Synthetic Owner', registration_reference: '', country: 'ZA', relationship: 'DIRECT_OWNER',
+        ownership_basis_points: 10_000, control_basis: 'Fictional direct ownership in the synthetic register.',
+        effective_on: '2026-09-01', change_reason: 'Initial fictional entity ownership disclosure.',
+        evidence_document_id: '64444444-4444-4444-8444-444444444444' }],
+      ownership_change_reason: 'Initial fictional entity ownership disclosure.',
+    })
     for (const overrides of [{ sandboxEnabled: false }, { individualEnabled: false },
       { application: { ...application, submitted_at: null } },
       { application: { ...application, context_kind: 'ORGANISATION' as const } },
       { application: { ...application, details: {} } },
-      { application: { ...application, details: { ...application.details, investor_type: 'ENTITY',
-        details_version: 3, company_name: 'Synthetic Company', registration_reference: 'SYNTHETIC-REG' } } }]) {
+      { application: { ...application, details: entityDetails } }]) {
       const html = renderKyc({ ...props, ...overrides })
       expect(html).not.toContain('Start sandbox identity check')
       expect(html).toContain('your manual TEST review can continue independently')
       expect(html).not.toContain('Sumsub sandbox identity verification')
     }
-    const companyClosed = renderKyc({ ...props, application: { ...application, details: {
-      ...application.details, investor_type: 'ENTITY', details_version: 3,
-      company_name: 'Synthetic Company', registration_reference: 'SYNTHETIC-REG',
-    } } })
+    const companyClosed = renderKyc({ ...props, application: { ...application, details: entityDetails } })
     expect(companyClosed).toContain('Company verification is unavailable')
     expect(companyClosed).toContain('An individual check cannot verify this company application')
     expect(companyClosed).toContain('this optional check does not block it')
