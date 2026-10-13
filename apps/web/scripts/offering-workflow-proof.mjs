@@ -554,7 +554,7 @@ export async function proveOfferingWorkflow(db, clients, offeringSql, proofLinea
       correctedAuthorityBody = correctedAuthorityBody.replaceAll(change.from, change.to)
     }
     eq(sourceHash(correctedAuthorityBody), 'cf57f545044f1ac0e547ab4e7aa7f2e52bf466ba81350e35d77639e9019b3279', 'complete mapped cutover body is source-derived, not repinned from runtime')
-    const lineageCatalog = signature => scalar('select to_jsonb(p) from pg_proc p where p.oid=to_regprocedure($1)', [signature])
+    const lineageCatalog = signature => scalar('select (select to_jsonb(p) from pg_proc p where p.oid=to_regprocedure($1)) as catalog', [signature])
     const nominalAuthorityCatalog = await lineageCatalog(nominalAuthoritySignature)
     const p2AuthorityCatalog = await lineageCatalog(p2AuthoritySignature)
     truth(nominalAuthorityCatalog, 'the original nominal predecessor exists')
@@ -778,14 +778,14 @@ export async function proveOfferingWorkflow(db, clients, offeringSql, proofLinea
       const current = await lineageCatalog(signature)
       const definition = await scalar('select pg_get_functiondef($1::regprocedure)', [signature])
       eq(definition.split(current.prosrc).length - 1, 1, 'rollback-only lineage mutation has one complete source body location')
-      await db.query(definition.replace(current.prosrc, body))
+      await db.query(definition.replace(current.prosrc, () => body))
     }
     const addStockP2 = async body => {
       const definition = await scalar('select pg_get_functiondef($1::regprocedure)', [nominalAuthoritySignature])
       const name = 'bx1_portal.execute_scoped_pre_eligibility('
       eq(definition.split(name).length - 1, 1, 'unsupported stock alternate has one declaration name location')
       eq(definition.split(nominalAuthorityCatalog.prosrc).length - 1, 1, 'unsupported stock alternate has one complete body location')
-      await db.query(definition.replace(name, 'bx1_portal.execute_scoped_p2(').replace(nominalAuthorityCatalog.prosrc, body))
+      await db.query(definition.replace(name, 'bx1_portal.execute_scoped_p2(').replace(nominalAuthorityCatalog.prosrc, () => body))
     }
     await lineageRefusal('missing exact authority predecessor is rejected',
       () => db.query(`drop function ${actualAuthoritySignature}`))
