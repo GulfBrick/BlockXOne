@@ -6,6 +6,124 @@ import { updateSupabaseSession } from './lib/supabase/middleware'
 
 vi.mock('./lib/supabase/middleware', () => ({ updateSupabaseSession: vi.fn() }))
 
+describe('exact offering-document middleware boundary', () => {
+  const configurations = [
+    ['https://testnet.bx1.co.za', 'https://fegnnnlseuejkrusbbkv.supabase.co', 'preview'],
+    ['https://bx1.co.za', 'https://oqkevkjbkpugjotihtda.supabase.co', 'production'],
+  ] as const
+  const services = ['/api/portal/offering-documents', '/api/portal/offering-documents/processing'] as const
+  const operations = [
+    ['/api/portal/offering-documents', 'GET'], ['/api/portal/offering-documents', 'POST'],
+    ['/api/portal/offering-documents', 'PUT'], ['/api/portal/offering-documents', 'PATCH'],
+    ['/api/portal/offering-documents/processing', 'POST'],
+  ] as const
+  const modes = [
+    ['supabase', ''], ['', 'supabase'], ['Supabase', 'Supabase'],
+    ['supabase', 'legacy'], ['legacy', 'supabase'], ['invalid', 'supabase'],
+    ['legacy', 'legacy'], ['', ''],
+  ] as const
+  const lookalikes = services.flatMap(path => [
+    `${path}/`, `${path}/extra`, `${path}-admin`, `${path}.json`, path.toUpperCase(),
+    path.replace('/offering', '/Offering'), path.replace('/offering', '/%6fffering'),
+    path.replace('/portal/', '/portal//'), `/${path}`, `${path}/*`,
+  ])
+  function configuration(origin: string, project: string, environment: string) {
+    vi.stubEnv('BLOCKXONE_APP_ORIGIN', origin)
+    vi.stubEnv('SUPABASE_URL', project)
+    vi.stubEnv('VERCEL_ENV', environment)
+  }
+
+  beforeEach(() => {
+    vi.stubEnv('NODE_ENV', 'production')
+    vi.stubEnv('BLOCKXONE_RELEASE_MODE', '')
+    vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_RELEASE_MODE', '')
+    vi.stubEnv('BLOCKXONE_AUTH_MODE', 'supabase')
+    vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_AUTH_MODE', 'supabase')
+    vi.mocked(updateSupabaseSession).mockReset()
+    vi.mocked(updateSupabaseSession).mockResolvedValue(NextResponse.next())
+  })
+  afterEach(() => vi.unstubAllEnvs())
+
+  it.each(configurations.flatMap(([origin, project, environment]) => operations.map(([path, method]) =>
+    [origin, project, environment, path, method])))('preserves refreshed response and unconsumed %s/%s/%s service %s %s', async (origin, project, environment, path, method) => {
+    configuration(origin, project, environment)
+    const refreshed = NextResponse.next()
+    refreshed.cookies.set('fixture-offering-refresh', 'nonsecret', { httpOnly: true, secure: true, sameSite: 'lax', path: '/' })
+    vi.mocked(updateSupabaseSession).mockResolvedValueOnce(refreshed)
+    const request = new NextRequest(`${origin}${path}`, {
+      method, headers: { host: new URL(origin).host, 'content-type': 'application/json' },
+      ...(method === 'GET' ? {} : { body: '{"fixture":"not-an-authorised-command"}' }),
+    })
+    const response = await middleware(request)
+    expect(response).toBe(refreshed)
+    expect(response.status).toBe(200)
+    expect(response.headers.get('x-middleware-next')).toBe('1')
+    expect(response.headers.get('location')).toBeNull()
+    expect(response.cookies.get('fixture-offering-refresh')?.value).toBe('nonsecret')
+    expect(response.headers.get('cache-control')).toBe('private, no-store')
+    expect(response.headers.get('pragma')).toBe('no-cache')
+    expect(response.headers.get('cdn-cache-control')).toBe('no-store')
+    expect(response.headers.get('vercel-cdn-cache-control')).toBe('no-store')
+    expect(response.headers.get('referrer-policy')).toBe('no-referrer')
+    expect(response.headers.get('x-robots-tag')).toBe('noindex, nofollow, noarchive')
+    expect(updateSupabaseSession).toHaveBeenCalledExactlyOnceWith(request)
+    expect(request.bodyUsed).toBe(false)
+    // Middleware only preserves reachability/session cookies. Existing handlers
+    // still enforce actor, scope, current authority, origin, HMAC and live lease.
+  })
+
+  it.each(configurations.flatMap(([origin, project, environment]) => lookalikes.map(path =>
+    [origin, project, environment, path])))('rejects URL-safe alias at %s/%s/%s: %s before refresh', async (origin, project, environment, path) => {
+    configuration(origin, project, environment)
+    const response = await middleware(new NextRequest(`${origin}${path}`))
+    expect(response.status).toBe(404)
+    expect(response.headers.get('cache-control')).toBe('private, no-store')
+    expect(response.headers.get('referrer-policy')).toBe('no-referrer')
+    expect(response.headers.get('set-cookie')).toBeNull()
+    expect(updateSupabaseSession).not.toHaveBeenCalled()
+  })
+
+  it.each(configurations.flatMap(([origin, project, environment]) => services.flatMap(path => modes.map(([server, browser]) =>
+    [origin, project, environment, path, server, browser]))))('rejects service at %s/%s/%s %s under mode %s/%s', async (origin, project, environment, path, server, browser) => {
+    configuration(origin, project, environment)
+    vi.stubEnv('BLOCKXONE_AUTH_MODE', server)
+    vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_AUTH_MODE', browser)
+    const legacy = server === '' && browser === ''
+    const response = await middleware(new NextRequest(`${origin}${path}`, { method: 'POST', body: '{}' }))
+    expect(response.status).toBe(legacy ? 404 : 503)
+    expect(response.headers.get('cache-control')).toBe(legacy ? 'no-store' : 'private, no-store')
+    expect(response.headers.get('set-cookie')).toBeNull()
+    expect(updateSupabaseSession).not.toHaveBeenCalled()
+  })
+
+  it.each(configurations.flatMap(([origin, project, environment]) => operations.map(([path, method]) =>
+    [origin, project, environment, path, method])))('fails closed on rejected refresh at %s/%s/%s %s %s', async (origin, project, environment, path, method) => {
+    configuration(origin, project, environment)
+    vi.mocked(updateSupabaseSession).mockRejectedValueOnce(new Error('synthetic offering refresh failure'))
+    const response = await middleware(new NextRequest(`${origin}${path}`, { method }))
+    expect(response.status).toBe(503)
+    expect(response.headers.get('cache-control')).toBe('private, no-store')
+    expect(response.headers.get('referrer-policy')).toBe('no-referrer')
+    expect(response.headers.get('set-cookie')).toBeNull()
+    expect(updateSupabaseSession).toHaveBeenCalledOnce()
+  })
+
+  it.each(configurations.flatMap(([origin, project, environment]) => services.map(path =>
+    [origin, project, environment, path])))('preserves refresh denial and cookies at %s/%s/%s %s', async (origin, project, environment, path) => {
+    configuration(origin, project, environment)
+    const denied = NextResponse.json({ error: 'unavailable' }, { status: 503 })
+    denied.cookies.set('fixture-offering-expired', '', { maxAge: 0, httpOnly: true, secure: true, sameSite: 'lax', path: '/' })
+    vi.mocked(updateSupabaseSession).mockResolvedValueOnce(denied)
+    const response = await middleware(new NextRequest(`${origin}${path}`, { method: 'POST' }))
+    expect(response).toBe(denied)
+    expect(response.status).toBe(503)
+    expect(response.cookies.get('fixture-offering-expired')?.maxAge).toBe(0)
+    expect(response.headers.get('cache-control')).toBe('private, no-store')
+    expect(response.headers.get('referrer-policy')).toBe('no-referrer')
+    expect(updateSupabaseSession).toHaveBeenCalledOnce()
+  })
+})
+
 describe('exact applicant draft middleware boundary', () => {
   const draftService = '/api/portal/application-drafts'
 

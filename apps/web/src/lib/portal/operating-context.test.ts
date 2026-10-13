@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { BX1_ROLES } from '../supabase/contracts'
-import type { PortalInvestingRepresentativeMandate, PortalOrganisationMandate, PortalProductServiceAppointment, PortalSnapshot } from './contracts'
-import { APPLICANT_CONTEXT, portalContextKey, portalContextMatches, portalOperatingContextSchema, portalScopeHref, portalViewAllowed, type PortalOperatingContext } from './operating-context'
+import type { PortalInvestingRepresentativeMandate, PortalOrganisationMandate, PortalProduct, PortalProductServiceAppointment, PortalSnapshot } from './contracts'
+import { APPLICANT_CONTEXT, appointedIssuerProducts, portalContextKey, portalContextMatches, portalOperatingContextSchema, portalScopeHref, portalViewAllowed, type PortalOperatingContext } from './operating-context'
+import type { OfferingAccess } from './offering-access'
 
 const organisation = '33333333-3333-4333-8333-333333333333'
 const otherOrganisation = '44444444-4444-4444-8444-444444444444'
@@ -22,6 +23,24 @@ function syntheticSnapshot(): PortalSnapshot {
 const admin: PortalOperatingContext = { mode: 'ROLE', organisationId: organisation, role: 'SuperAdmin' }
 const caseId = '55555555-5555-4555-8555-555555555555'
 const future = '2099-10-20T00:00:00Z'
+const packageActor = '11111111-1111-4111-8111-111111111111'
+const packageOrganisation = '77777777-7777-4777-8777-777777777777'
+const packageProduct: PortalProduct = { id: caseId, organisation_id: packageOrganisation, created_by: packageActor, revision: 3,
+  status: 'IN_REVIEW', terms: { asset_type: 'FUND', name: 'Synthetic fund', issuer_name: 'Fictional issuer', summary: 'Synthetic test product only.',
+    strategy: 'Synthetic assets for route testing.', share_class: 'A', currency: 'ZAR_TEST', unit_price_minor: '1000', cap_units: '100', minimum_units: '1',
+    pricing_basis: 'Synthetic fixed price.', fees: 'No actual charges.', redemption_terms: 'Synthetic units only.', eligible_countries: ['ZA'], eligible_investor_types: ['INDIVIDUAL'],
+    property_address: '', property_valuation_minor: '0', rental_income_policy: '', documents: { memorandum: 'Synthetic memorandum only.', risks: 'No real money or rights.', subscription_terms: 'Synthetic subscription terms.' } },
+  terms_hash: 'a'.repeat(64), reserved_units: '0', created_at: '2026-10-01T00:00:00Z', reviewer_id: null, review_notes: null,
+  reviewed_at: null, published_at: null, review_checks: {} }
+function packageSnapshot(role: OfferingAccess['operating_context']['role']): PortalSnapshot {
+  const context = { mode: 'ROLE' as const, organisationId: organisation, role }
+  const commands: Record<typeof role, OfferingAccess['allowed_commands']> = { OfferingManager: ['create_product', 'save_product', 'submit_product'],
+    IssuerFundManager: ['review_offering_issuer'], ComplianceOfficer: ['review_product', 'review_product_service_appointment'], SuperAdmin: ['apply_product_service_appointment'] }
+  return { ...snapshot, actor: { ...snapshot.actor, id: packageActor, can_review: role === 'ComplianceOfficer' }, operating_context: context,
+    offering_access: { version: 1, environment: 'TESTNET', actor_id: packageActor, operating_context: context, session_mode: 'TEST_PASSWORD', allowed_commands: commands[role] },
+    organisations: [{ id: packageOrganisation, name: 'Synthetic manager', status: 'ACTIVE', roles: [role], native_organisation_id: organisation, authority_source: 'NATIVE_BINDING' }],
+    products: [packageProduct] }
+}
 function organisationMandate(change: Partial<PortalOrganisationMandate> = {}): PortalOrganisationMandate {
   return { id: caseId, application_id: 'application', product_organisation_id: 'product-org', native_organisation_id: null,
     reviewer_scope_organisation_id: organisation, applicant_user_id: 'applicant', organisation_name: 'Fictional customer',
@@ -51,6 +70,60 @@ function appointment(change: Partial<PortalProductServiceAppointment> = {}): Por
     approval_receipt_id: 'receipt', applied_at: null, applied_by_user_id: null, revoked_at: null, revoke_reason: null,
     effective: false, next_owner: 'SUPER_ADMIN', can_review: false, can_apply: true, can_revoke: false, ...change }
 }
+
+describe('normal sandbox package route boundaries', () => {
+  it('keeps manager create/list/detail bound to the active native organisation', () => {
+    const value = packageSnapshot('OfferingManager'); const context = value.offering_access!.operating_context
+    for (const view of ['/portal/products', '/portal/products/new', '/portal/products/detail'] as const) expect(portalViewAllowed(view, context, value, caseId)).toBe(true)
+    expect(portalViewAllowed('/portal/products/detail', context, value, 'unreturned')).toBe(false)
+    for (const change of [{ status: 'REVOKED' }, { native_organisation_id: otherOrganisation }, { authority_source: 'LEGACY_OWNER' as const }, { roles: ['Investor'] }]) {
+      const denied = { ...value, organisations: [{ ...value.organisations[0], ...change }] }
+      for (const view of ['/portal/products', '/portal/products/new', '/portal/products/detail'] as const) expect(portalViewAllowed(view, context, denied, caseId)).toBe(false)
+    }
+    expect(portalViewAllowed('/portal/products/new', context, { ...value, offering_access: { ...value.offering_access!, allowed_commands: ['save_product'] } })).toBe(false)
+  })
+  it('uses current issuer appointments rather than inventing a customer/native ID mapping', () => {
+    const value = packageSnapshot('IssuerFundManager'); value.organisations = []
+    value.product_appointments = [appointment({ product_id: caseId, product_organisation_id: packageOrganisation, appointee_user_id: packageActor,
+      role: 'IssuerFundManager', status: 'APPLIED', effective: true, can_apply: false, can_review: false, next_owner: 'NONE', reviewer_scope_organisation_id: otherOrganisation })]
+    const context = value.offering_access!.operating_context
+    expect(appointedIssuerProducts(value, context)).toEqual([packageProduct])
+    expect(portalViewAllowed('/portal/products', context, value)).toBe(true)
+    expect(portalViewAllowed('/portal/products/detail', context, value, caseId)).toBe(true)
+    expect(portalViewAllowed('/portal/products/new', context, value)).toBe(false)
+    // The completed review flag is not the enduring appointment authority.
+    expect(value.product_appointments[0].can_review).toBe(false)
+    for (const change of [{ appointee_user_id: otherOrganisation }, { role: 'ComplianceOfficer' as const }, { status: 'APPROVED' as const },
+      { effective: false }, { requested_until: '2000-01-01T00:00:00Z' }, { requested_until: 'not-a-date' }]) {
+      const denied = { ...value, product_appointments: [{ ...value.product_appointments[0], ...change }] }
+      expect(appointedIssuerProducts(denied, context)).toEqual([])
+      expect(portalViewAllowed('/portal/products/detail', context, denied, caseId)).toBe(false)
+      expect(portalViewAllowed('/portal/products', context, denied)).toBe(false)
+    }
+    expect(portalViewAllowed('/portal/products', { ...context, mode: 'ROLE', organisationId: otherOrganisation }, value)).toBe(false)
+    expect(portalViewAllowed('/portal/products', context, { ...value, offering_access: undefined })).toBe(false)
+  })
+  it('separates Compliance review and the exact Super Admin apply handoff', () => {
+    const reviewer = packageSnapshot('ComplianceOfficer')
+    expect(portalViewAllowed('/portal/compliance', reviewer.operating_context!, reviewer)).toBe(true)
+    expect(portalViewAllowed('/portal/products', reviewer.operating_context!, reviewer)).toBe(false)
+    const apply = packageSnapshot('SuperAdmin'); apply.product_appointments = [appointment()]
+    expect(portalViewAllowed('/portal/compliance/detail', apply.operating_context!, apply, caseId)).toBe(true)
+    expect(portalViewAllowed('/portal/compliance', apply.operating_context!, apply)).toBe(false)
+    expect(portalViewAllowed('/portal/compliance/detail', apply.operating_context!, apply, 'unreturned')).toBe(false)
+  })
+  it.each(['OfferingManager', 'IssuerFundManager', 'ComplianceOfficer', 'SuperAdmin'] as const)('does not expose funding/investor paths or forged context to %s package access', role => {
+    const value = packageSnapshot(role); const context = value.offering_access!.operating_context
+    for (const view of ['/portal/opportunities', '/portal/opportunities/detail', '/portal/portfolio', '/portal/orders/detail'] as const) expect(portalViewAllowed(view, context, value, caseId)).toBe(false)
+    expect(portalViewAllowed('/portal', context, { ...value, offering_access: { ...value.offering_access!, actor_id: otherOrganisation } })).toBe(false)
+    expect(portalViewAllowed('/portal', { ...context, mode: 'ROLE', organisationId: otherOrganisation }, value)).toBe(false)
+  })
+  it('does not turn standard issuer read access into a manager create action', () => {
+    const value = packageSnapshot('IssuerFundManager'); delete value.offering_access
+    expect(portalViewAllowed('/portal/products', value.operating_context!, value)).toBe(true)
+    expect(portalViewAllowed('/portal/products/new', value.operating_context!, value)).toBe(false)
+  })
+})
 type ApplyCaseKind = 'organisation' | 'entity' | 'appointment'
 function applySnapshot(kind: ApplyCaseKind): PortalSnapshot {
   return { ...snapshot, operating_context: admin,

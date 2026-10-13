@@ -73,7 +73,9 @@ export function verifyDocumentBytes(bytes, manifest) {
 export function signedRequest(body, config, kind, now = Date.now()) {
   const raw = Buffer.from(JSON.stringify(body), 'utf8')
   const timestamp = String(Math.floor(now / 1000))
-  const prefix = kind === 'processing' ? 'bx1-document-processing-v1:' : kind === 'result' ? '' : reject('INVALID_PROTOCOL')
+  const prefix = kind === 'processing' ? 'bx1-document-processing-v1:' : kind === 'result' ? ''
+    : kind === 'offering-processing' ? 'bx1-offering-document-processing-v1:'
+      : kind === 'offering-result' ? 'bx1-offering-document-scan-v1:' : reject('INVALID_PROTOCOL')
   return Object.freeze({ raw, timestamp, signature: `sha256=${createHmac('sha256', config.signingKey)
     .update(prefix).update(timestamp).update('.').update(raw).digest('hex')}` })
 }
@@ -99,13 +101,16 @@ async function boundedReply(response, limit) {
 }
 
 export async function sendSigned(config, request, kind, { fetchImpl = fetch, timeoutMs = HTTP_TIMEOUT } = {}) {
-  if (config.origin !== TEST_ORIGIN || !['processing', 'result'].includes(kind)
+  const protocols = { processing: ['/api/portal/documents/processing', 'POST'], result: ['/api/portal/documents', 'PATCH'],
+    'offering-processing': ['/api/portal/offering-documents/processing', 'POST'], 'offering-result': ['/api/portal/offering-documents', 'PATCH'] }
+  if (config.origin !== TEST_ORIGIN || !Object.hasOwn(protocols, kind)
     || !Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > HTTP_TIMEOUT) reject('INVALID_DESTINATION')
-  const endpoint = `${TEST_ORIGIN}/api/portal/documents${kind === 'processing' ? '/processing' : ''}`
+  const [pathname, method] = protocols[kind]
+  const endpoint = `${TEST_ORIGIN}${pathname}`
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
   try {
-    const response = await fetchImpl(endpoint, { method: kind === 'processing' ? 'POST' : 'PATCH',
+    const response = await fetchImpl(endpoint, { method,
       redirect: 'error', cache: 'no-store', credentials: 'omit', referrerPolicy: 'no-referrer',
       signal: controller.signal, headers: { 'Content-Type': 'application/json',
         'x-bx1-scanner-timestamp': request.timestamp, 'x-bx1-scanner-signature': request.signature }, body: request.raw })
@@ -113,7 +118,7 @@ export async function sendSigned(config, request, kind, { fetchImpl = fetch, tim
       || !/(?:^|,)\s*no-store\s*(?:,|$)/i.test(response.headers.get('cache-control') ?? '')
       || response.headers.has('set-cookie')) reject('INVALID_RESPONSE')
     const type = response.headers.get('content-type') ?? ''
-    if (/^application\/octet-stream(?:;|$)/i.test(type) && kind === 'processing') {
+    if (/^application\/octet-stream(?:;|$)/i.test(type) && (kind === 'processing' || kind === 'offering-processing')) {
       return { bytes: await boundedReply(response, MAX_BYTES) }
     }
     if (!/^application\/json(?:;\s*charset=utf-8)?$/i.test(type)) reject('INVALID_RESPONSE')
@@ -300,11 +305,118 @@ export async function runOnce(config, { fetchImpl = fetch, engine = scanWithClam
     databaseSha256: scan.databaseSha256, byteSha256: scan.sha256 } }
 }
 
+/** Separate exact offering wire schema: admission manifests can never cross it. */
+export function validateOfferingManifest(value, config, now = Date.now()) {
+  const keys = ['file_id', 'product_id', 'offering_revision_id', 'uploader_id', 'attempt_id', 'authority_epoch',
+    'scanner_authority_epoch', 'attempt_number', 'worker_id', 'scanner_id', 'reference', 'lease_expires_at',
+    'storage_path', 'sha256', 'size', 'mime_type', 'kind']
+  if (!exact(value, keys) || ![value.file_id, value.product_id, value.offering_revision_id, value.uploader_id, value.attempt_id]
+    .every(x => typeof x === 'string' && ID.test(x))
+    || !Number.isSafeInteger(value.authority_epoch) || value.authority_epoch < 1
+    || !Number.isSafeInteger(value.scanner_authority_epoch) || value.scanner_authority_epoch < 1
+    || !Number.isInteger(value.attempt_number) || value.attempt_number < 1 || value.attempt_number > 5
+    || value.worker_id !== config.workerId || value.scanner_id !== config.scannerId
+    || value.reference !== `bx1-offering-scan:${value.attempt_id}`
+    || value.storage_path !== `${value.offering_revision_id}/${value.uploader_id}/${value.file_id}`
+    || typeof value.sha256 !== 'string' || !HASH.test(value.sha256)
+    || !Number.isInteger(value.size) || value.size < 1 || value.size > MAX_BYTES || value.mime_type !== 'application/pdf'
+    || !['MEMORANDUM', 'RISKS', 'SUBSCRIPTION_TERMS'].includes(value.kind)
+    || typeof value.lease_expires_at !== 'string'
+    || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(value.lease_expires_at)
+    || !Number.isFinite(Date.parse(value.lease_expires_at)) || Date.parse(value.lease_expires_at) <= now
+    || Date.parse(value.lease_expires_at) > now + 120_000) reject('INVALID_MANIFEST')
+  return Object.freeze({ ...value })
+}
+
+function validateOfferingFailure(value, job, code) {
+  if (!exact(value, ['file_id', 'attempt_id', 'state', 'attempt_number', 'next_attempt_at'])
+    || value.file_id !== job.file_id || value.attempt_id !== job.attempt_id || value.attempt_number !== job.attempt_number
+    || !['RETRY_WAIT', 'EXHAUSTED'].includes(value.state)
+    || (value.state === 'EXHAUSTED' && (value.next_attempt_at !== null || (!['INVALID_DOCUMENT', 'HASH_MISMATCH'].includes(code) && job.attempt_number !== 5)))
+    || (value.state === 'RETRY_WAIT' && (['INVALID_DOCUMENT', 'HASH_MISMATCH'].includes(code) || job.attempt_number === 5
+      || typeof value.next_attempt_at !== 'string' || !Number.isFinite(Date.parse(value.next_attempt_at))))) reject('INVALID_RESPONSE')
+  return value.state
+}
+
+/** Unknown callback outcome is recovery of this exact result, never FAIL or rescan. */
+export async function recoverOfferingResult(recovery, config, { fetchImpl = fetch, clock = Date.now } = {}) {
+  if (!exact(recovery, ['kind', 'request', 'fileId', 'verdict']) || recovery.kind !== 'OFFERING_RESULT_RECOVERY'
+    || !ID.test(recovery.fileId) || !['CLEAN', 'MALICIOUS'].includes(recovery.verdict)
+    || !exact(recovery.request, ['raw', 'timestamp', 'signature']) || !Buffer.isBuffer(recovery.request.raw)
+    || recovery.request.raw.length > 4096 || !/^[0-9]{10}$/.test(recovery.request.timestamp)
+    || !/^sha256=[0-9a-f]{64}$/.test(recovery.request.signature)
+    || Math.abs(clock() - Number(recovery.request.timestamp) * 1000) > 300_000) reject('INVALID_RECOVERY')
+  const digest = createHmac('sha256', config.signingKey).update('bx1-offering-document-scan-v1:')
+    .update(recovery.request.timestamp).update('.').update(recovery.request.raw).digest()
+  if (!timingSafeEqual(digest, Buffer.from(recovery.request.signature.slice(7), 'hex'))) reject('INVALID_RECOVERY')
+  let payload
+  try { payload = JSON.parse(new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(recovery.request.raw)) }
+  catch { reject('INVALID_RECOVERY') }
+  if (!exact(payload, ['file_id', 'sha256', 'verdict', 'reference', 'observed_at', 'authority_epoch', 'scanner_authority_epoch'])
+    || payload.file_id !== recovery.fileId || payload.verdict !== recovery.verdict || !HASH.test(payload.sha256)
+    || !/^bx1-offering-scan:[0-9a-f-]{36}$/.test(payload.reference) || !ID.test(payload.reference.slice('bx1-offering-scan:'.length))
+    || !Number.isSafeInteger(payload.authority_epoch) || payload.authority_epoch < 1
+    || !Number.isSafeInteger(payload.scanner_authority_epoch) || payload.scanner_authority_epoch < 1
+    || typeof payload.observed_at !== 'string' || !Number.isFinite(Date.parse(payload.observed_at))) reject('INVALID_RECOVERY')
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const reply = await sendSigned(config, recovery.request, 'offering-result', { fetchImpl })
+      if (!exact(reply, ['id', 'state']) || reply.id !== recovery.fileId
+        || reply.state !== (recovery.verdict === 'CLEAN' ? 'PROMOTED_CLEAN' : 'REJECTED')) reject('INVALID_RESPONSE')
+      return { outcome: 'RESULT_ACCEPTED', verdict: recovery.verdict }
+    } catch { /* A missing/bad acknowledgement can follow committed evidence. */ }
+  }
+  return { outcome: 'RESULT_RECOVERY_REQUIRED', recovery }
+}
+
+export async function runOfferingOnce(config, { fetchImpl = fetch, engine = scanWithClamav, clock = Date.now, requestId = randomUUID() } = {}) {
+  if (!ID.test(requestId) || config.origin !== TEST_ORIGIN) reject('INVALID_CONFIGURATION')
+  const claimRequest = signedRequest({ command: 'CLAIM', request_id: requestId }, config, 'offering-processing', clock())
+  let claim
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try { claim = await sendSigned(config, claimRequest, 'offering-processing', { fetchImpl }); break } catch { /* Same durable CLAIM key. */ }
+  }
+  if (claim === undefined) return { outcome: 'CLAIM_RECOVERY_REQUIRED', recovery: { kind: 'OFFERING_CLAIM_RECOVERY', request: claimRequest } }
+  if (!exact(claim, ['job'])) reject('INVALID_RESPONSE')
+  if (claim.job === null) return { outcome: 'EMPTY_QUEUE' }
+  const job = validateOfferingManifest(claim.job, config, clock())
+  const binding = { file_id: job.file_id, attempt_id: job.attempt_id, authority_epoch: job.authority_epoch,
+    scanner_authority_epoch: job.scanner_authority_epoch, sha256: job.sha256 }
+  let scan
+  try {
+    if (Date.parse(job.lease_expires_at) - clock() < SCAN_TIMEOUT + HTTP_TIMEOUT + DELIVERY_MARGIN) reject('LEASE_EXPIRED')
+    const reply = await sendSigned(config, signedRequest({ command: 'BYTES', ...binding }, config, 'offering-processing', clock()), 'offering-processing', { fetchImpl })
+    if (!exact(reply, ['bytes'])) reject('INVALID_RESPONSE')
+    const bytes = verifyDocumentBytes(reply.bytes, job)
+    if (Date.parse(job.lease_expires_at) - clock() < SCAN_TIMEOUT + DELIVERY_MARGIN) reject('LEASE_EXPIRED')
+    scan = await engine(bytes, { databasePath: config.databasePath, databaseSha256: config.databaseSha256, clock })
+    if (!scan || !['CLEAN', 'MALICIOUS'].includes(scan.verdict) || scan.engineVersion !== CLAMAV_VERSION
+      || scan.engineSha256 !== CLAMAV_EXECUTABLE_SHA256 || scan.databaseSha256 !== config.databaseSha256 || scan.sha256 !== job.sha256) reject('ENGINE_UNAVAILABLE')
+    if (Date.parse(job.lease_expires_at) - clock() < DELIVERY_MARGIN) reject('LEASE_EXPIRED')
+  } catch (error) {
+    const code = error instanceof RunnerError && ['HASH_MISMATCH', 'INVALID_DOCUMENT', 'DELIVERY_FAILED'].includes(error.code)
+      ? error.code : 'ENGINE_UNAVAILABLE'
+    if (Date.parse(job.lease_expires_at) <= clock()) return { outcome: 'LEASE_EXPIRED' }
+    try {
+      const value = await sendSigned(config, signedRequest({ command: 'FAIL', ...binding, code }, config, 'offering-processing', clock()), 'offering-processing', { fetchImpl })
+      return { outcome: 'PROCESSING_FAILED', code, state: validateOfferingFailure(value, job, code) }
+    } catch { return { outcome: 'FAILURE_UNCONFIRMED', code } }
+  }
+  const request = signedRequest({ file_id: job.file_id, sha256: job.sha256, verdict: scan.verdict, reference: job.reference,
+    observed_at: new Date(clock()).toISOString(), authority_epoch: job.authority_epoch,
+    scanner_authority_epoch: job.scanner_authority_epoch }, config, 'offering-result', clock())
+  const result = await recoverOfferingResult({ kind: 'OFFERING_RESULT_RECOVERY', request, fileId: job.file_id, verdict: scan.verdict }, config, { fetchImpl, clock })
+  return { ...result, engine: { version: scan.engineVersion, executableSha256: scan.engineSha256,
+    databaseSha256: scan.databaseSha256, byteSha256: scan.sha256 } }
+}
+
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
-    const result = await runOnce(runnerConfig())
+    if (process.env.BX1_SCANNER_SCOPE && !['ADMISSION', 'OFFERING'].includes(process.env.BX1_SCANNER_SCOPE)) reject('INVALID_CONFIGURATION')
+    const scope = process.env.BX1_SCANNER_SCOPE === 'OFFERING' ? 'OFFERING' : 'ADMISSION'
+    const result = await (scope === 'OFFERING' ? runOfferingOnce : runOnce)(runnerConfig())
     // Deliberately no result.recovery, identifiers, HMAC, body, raw output or key.
-    console.log(JSON.stringify({ scope: 'TEST_SCANNER_RUNNER', outcome: result.outcome,
+    console.log(JSON.stringify({ scope: scope === 'OFFERING' ? 'TEST_OFFERING_SCANNER_RUNNER' : 'TEST_SCANNER_RUNNER', outcome: result.outcome,
       ...(result.engine ? { engine: result.engine } : {}), ...(result.verdict ? { verdict: result.verdict } : {}) }))
     if (!['EMPTY_QUEUE', 'RESULT_ACCEPTED'].includes(result.outcome)) process.exitCode = 2
   } catch { console.error('Private scanner runner stopped without acceptance.'); process.exitCode = 2 }

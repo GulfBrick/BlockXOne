@@ -4,7 +4,8 @@ import { useState } from 'react'
 import Link from 'next/link'
 import type { PortalProduct, PortalProductServiceAppointment, PortalSnapshot } from '@/lib/portal/contracts'
 import { portalScopeHref, type PortalOperatingContext } from '@/lib/portal/operating-context'
-import { CommandFeedback, usePortalCommand } from './portal-client'
+import { hasOfferingCommandAccess, isTestPasswordWorkflow } from '@/lib/portal/offering-access'
+import { CommandFeedback, usePortalCommand, usePortalCommandAllowed } from './portal-client'
 import { DetailList, EmptyState, Field, Notice, Panel, StatusBadge, dateLabel } from './portal-primitives'
 import styles from './portal.module.css'
 
@@ -15,6 +16,7 @@ export function ProductAppointmentRequest({ product, snapshot, operatingContext,
   onSaved: (snapshot: PortalSnapshot) => void;
 }) {
   const command = usePortalCommand(onSaved)
+  const requestAvailable = usePortalCommandAllowed('request_product_service_appointment')
   const [role, setRole] = useState<PortalProductServiceAppointment['role']>('IssuerFundManager')
   const [membershipId, setMembershipId] = useState('')
   const [evidence, setEvidence] = useState('')
@@ -30,13 +32,13 @@ export function ProductAppointmentRequest({ product, snapshot, operatingContext,
     && Date.parse(item.requested_until) <= Date.now())
   const hasOpenRole = appointments.some(item => item.role === role && (item.status === 'APPLIED'
     || (['SUBMITTED', 'APPROVED'].includes(item.status) && Date.parse(item.requested_until) > Date.now())))
-  const canRequest = isManager && Boolean(candidate) && !hasOpenRole && evidence.trim().length >= 20 && Boolean(expiryDay)
+  const canRequest = requestAvailable && isManager && Boolean(candidate) && !hasOpenRole && evidence.trim().length >= 20 && Boolean(expiryDay)
 
   return <Panel title="Product service appointments" description="Appoint separate people for this exact product. An issuer name or manager relationship does not grant review or signing authority.">
     {!Array.isArray(snapshot.product_appointments) || !Array.isArray(snapshot.product_appointment_candidates)
       ? <Notice title="Appointment service unavailable" tone="warning">Refresh saved state. Do not infer that no appointments exist while this service is unavailable.</Notice>
       : <>{appointments.length ? <div className={styles.tableWrap}><table className={styles.table}><thead><tr><th scope="col">Appointment</th><th scope="col">State</th><th scope="col">Validity</th><th scope="col">Next owner</th></tr></thead><tbody>{appointments.map(item => <tr key={item.id}><td><strong>{roleLabel(item.role)}</strong><small className={styles.mono}>{item.id}</small></td><td><StatusBadge status={item.status} />{item.status === 'APPLIED' && !item.effective ? <small>Not currently effective</small> : null}</td><td>{dateLabel(item.requested_until)}</td><td>{item.status === 'APPLIED' && !item.effective ? 'Super Admin: revoke inactive appointment before replacement' : item.next_owner === 'COMPLIANCE' ? 'Independent Compliance' : item.next_owner === 'SUPER_ADMIN' ? 'Super Admin' : item.next_owner === 'OFFERING_MANAGER' ? 'Offering Manager' : 'No pending hand-off'}</td></tr>)}</tbody></table></div> : <p className={styles.muted}>No product-specific appointment is recorded in this scope.</p>}
-        {isManager ? <form className={`${styles.form} ${styles.sectionGap}`} onSubmit={event => {
+        {isManager && requestAvailable ? <form className={`${styles.form} ${styles.sectionGap}`} onSubmit={event => {
           event.preventDefault()
           if (!canRequest || !candidate) return
           const requestedUntil = new Date(`${expiryDay}T23:59:59Z`).toISOString()
@@ -60,10 +62,14 @@ export function ProductAppointmentRequest({ product, snapshot, operatingContext,
 
 export function ProductAppointmentQueue({ snapshot, operatingContext }: { snapshot: PortalSnapshot; operatingContext?: PortalOperatingContext }) {
   if (operatingContext?.mode !== 'ROLE' || !['ComplianceOfficer', 'SuperAdmin'].includes(operatingContext.role)) return null
-  const appointments = snapshot.product_appointments?.filter(item => item.can_review || item.can_apply || item.can_revoke) ?? []
+  const passwordWorkflow = isTestPasswordWorkflow(snapshot)
+  const canReview = operatingContext.role === 'ComplianceOfficer' && (!passwordWorkflow || hasOfferingCommandAccess(snapshot, 'review_product_service_appointment', operatingContext))
+  const canApply = operatingContext.role === 'SuperAdmin' && (!passwordWorkflow || hasOfferingCommandAccess(snapshot, 'apply_product_service_appointment', operatingContext))
+  const canRevoke = !passwordWorkflow
+  const appointments = snapshot.product_appointments?.filter(item => canReview && item.can_review || canApply && item.can_apply || canRevoke && item.can_revoke) ?? []
   return <Panel title="Product service appointments" description="Review and apply product-specific issuer and Compliance appointments separately from customer admission." flush>
     {!Array.isArray(snapshot.product_appointments) ? <Notice title="Appointment queue unavailable" tone="warning">Refresh saved state before concluding no cases need action.</Notice>
-      : appointments.length ? <div className={styles.tableWrap}><table className={styles.table}><thead><tr><th scope="col">Product</th><th scope="col">Role</th><th scope="col">State</th><th scope="col">Action</th></tr></thead><tbody>{appointments.map(item => <tr key={item.id}><td><strong>{snapshot.products.find(product => product.id === item.product_id)?.terms.name ?? 'Scoped product'}</strong><small className={styles.mono}>{item.product_id}</small></td><td>{roleLabel(item.role)}</td><td><StatusBadge status={item.status} /></td><td><Link href={portalScopeHref('/portal/compliance/detail', operatingContext, item.id)}>{item.can_review ? 'Review appointment' : item.can_apply ? 'Apply approved appointment' : 'Inspect revocation'}</Link></td></tr>)}</tbody></table></div>
+      : appointments.length ? <div className={styles.tableWrap}><table className={styles.table}><thead><tr><th scope="col">Product</th><th scope="col">Role</th><th scope="col">State</th><th scope="col">Action</th></tr></thead><tbody>{appointments.map(item => <tr key={item.id}><td><strong>{snapshot.products.find(product => product.id === item.product_id)?.terms.name ?? 'Scoped product'}</strong><small className={styles.mono}>{item.product_id}</small></td><td>{roleLabel(item.role)}</td><td><StatusBadge status={item.status} /></td><td><Link href={portalScopeHref('/portal/compliance/detail', operatingContext, item.id)}>{canReview && item.can_review ? 'Review appointment' : canApply && item.can_apply ? 'Apply approved appointment' : 'Inspect revocation'}</Link></td></tr>)}</tbody></table></div>
         : <EmptyState title="No product appointments need action" description="The connected queue will show cases available to this current role and organisation." />}
   </Panel>
 }
@@ -72,12 +78,18 @@ export function ProductAppointmentDecision({ appointment, snapshot, onSaved }: {
   appointment: PortalProductServiceAppointment; snapshot: PortalSnapshot; onSaved: (snapshot: PortalSnapshot) => void;
 }) {
   const command = usePortalCommand(onSaved)
+  const reviewAvailable = usePortalCommandAllowed('review_product_service_appointment')
+  const applyAvailable = usePortalCommandAllowed('apply_product_service_appointment')
+  const revokeAvailable = usePortalCommandAllowed('revoke_product_service_appointment')
   const [decision, setDecision] = useState<'APPROVED' | 'CHANGES_REQUIRED' | 'REJECTED'>('CHANGES_REQUIRED')
   const [notes, setNotes] = useState('')
   const [checks, setChecks] = useState({ appointment: false, evidence: false, scope: false })
   const [revokeReason, setRevokeReason] = useState('')
   const product = snapshot.products.find(item => item.id === appointment.product_id)
   const checked = Object.values(checks).every(Boolean)
+  const canReview = appointment.can_review && reviewAvailable
+  const canApply = appointment.can_apply && applyAvailable
+  const canRevoke = appointment.can_revoke && revokeAvailable
   return <div className={styles.stack}>
     <Notice title="Product appointment, not transaction authority">This synthetic TEST appointment permits only the stated product-review function while it remains effective. It grants no settlement, token issuance, wallet signature or production authority.</Notice>
     <Panel title={product?.terms.name ?? 'Product service appointment'} action={<StatusBadge status={appointment.status} />}><DetailList rows={[
@@ -90,7 +102,7 @@ export function ProductAppointmentDecision({ appointment, snapshot, onSaved }: {
       { label: 'Requested until', value: dateLabel(appointment.requested_until) },
       { label: 'Effective now', value: appointment.effective ? 'Yes' : 'No' },
     ]} /><h3>Appointment evidence reference</h3><p className={styles.copy}>{appointment.evidence_reference}</p>{appointment.review_notes ? <><h3>Review rationale</h3><p className={styles.copy}>{appointment.review_notes}</p></> : null}</Panel>
-    {appointment.can_review ? <Panel title="Independent Compliance review" description="Assess the appointment, evidence and exact product before deciding."><form className={styles.form} onSubmit={event => {
+    {canReview ? <Panel title="Independent Compliance review" description="Assess the appointment, evidence and exact product before deciding."><form className={styles.form} onSubmit={event => {
       event.preventDefault()
       if (decision === 'APPROVED' && !checked) return
       void command.submit('review_product_service_appointment', { appointment_id: appointment.id, expected_revision: appointment.revision, decision, notes: notes.trim(), checks })
@@ -102,12 +114,12 @@ export function ProductAppointmentDecision({ appointment, snapshot, onSaved }: {
       <Field label="Decision"><select value={decision} onChange={event => setDecision(event.target.value as typeof decision)}><option value="CHANGES_REQUIRED">Request changes</option><option value="APPROVED">Approve for separate application</option><option value="REJECTED">Reject</option></select></Field>
       <Field label="Reasoned decision" hint="20 to 3,000 characters."><textarea required minLength={20} maxLength={3000} value={notes} onChange={event => setNotes(event.target.value)} /></Field>
       <CommandFeedback command={command} /><button className={styles.button} type="submit" disabled={decision === 'APPROVED' && !checked}>Record review</button></fieldset></form></Panel> : null}
-    {appointment.can_apply ? <Panel title="Super Admin application" description="Apply only this independently reviewed product appointment."><CommandFeedback command={command} /><button type="button" className={styles.button} disabled={command.busy || command.unknown} onClick={() => void command.submit('apply_product_service_appointment', { appointment_id: appointment.id, expected_revision: appointment.revision })}>Apply product appointment</button></Panel> : null}
-    {appointment.can_revoke ? <Panel title="Revoke product appointment" description="Ends this product-specific review authority, including prepared but unused actions."><form className={styles.form} onSubmit={event => {
+    {canApply ? <Panel title="Super Admin application" description="Apply only this independently reviewed product appointment."><CommandFeedback command={command} /><button type="button" className={styles.button} disabled={command.busy || command.unknown} onClick={() => void command.submit('apply_product_service_appointment', { appointment_id: appointment.id, expected_revision: appointment.revision })}>Apply product appointment</button></Panel> : null}
+    {canRevoke ? <Panel title="Revoke product appointment" description="Ends this product-specific review authority, including prepared but unused actions."><form className={styles.form} onSubmit={event => {
       event.preventDefault()
       if (revokeReason.trim().length < 20) return
       void command.submit('revoke_product_service_appointment', { appointment_id: appointment.id, expected_revision: appointment.revision, reason: revokeReason.trim() })
     }}><Field label="Revocation reason" hint="20 to 1,000 characters."><textarea required minLength={20} maxLength={1000} value={revokeReason} onChange={event => setRevokeReason(event.target.value)} /></Field><CommandFeedback command={command} /><button className={styles.button} type="submit" disabled={command.busy || command.unknown || revokeReason.trim().length < 20}>Revoke appointment</button></form></Panel> : null}
-    {!appointment.can_review && !appointment.can_apply && !appointment.can_revoke ? <Notice title="No action in this scope">This case is visible for context, but your current role has no outstanding action.</Notice> : null}
+    {!canReview && !canApply && !canRevoke ? <Notice title="No action in this scope">This case is visible for context, but your current role has no outstanding action.</Notice> : null}
   </div>
 }

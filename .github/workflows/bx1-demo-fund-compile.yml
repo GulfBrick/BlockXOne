@@ -46,6 +46,12 @@ on:
       - apps/web/scripts/entity-eligibility-proof.mjs
       - supabase/features/bx1_account_representatives.sql
       - apps/web/scripts/account-representatives-proof.mjs
+      - supabase/features/bx1_offering_workflow.sql
+      - apps/web/scripts/offering-workflow-proof.mjs
+      - supabase/features/bx1_product_common_envelope.sql
+      - apps/web/scripts/product-common-envelope-proof.mjs
+      - supabase/features/bx1_offering_documents.sql
+      - apps/web/scripts/offering-document-processing-proof.mjs
       - supabase/features/bx1_entry.sql
       - supabase/features/bx1_entry_admission.sql
       - PLATFORM_RELEASE.json
@@ -114,6 +120,12 @@ on:
       - apps/web/scripts/entity-eligibility-proof.mjs
       - supabase/features/bx1_account_representatives.sql
       - apps/web/scripts/account-representatives-proof.mjs
+      - supabase/features/bx1_offering_workflow.sql
+      - apps/web/scripts/offering-workflow-proof.mjs
+      - supabase/features/bx1_product_common_envelope.sql
+      - apps/web/scripts/product-common-envelope-proof.mjs
+      - supabase/features/bx1_offering_documents.sql
+      - apps/web/scripts/offering-document-processing-proof.mjs
       - supabase/features/bx1_entry.sql
       - supabase/features/bx1_entry_admission.sql
       - PLATFORM_RELEASE.json
@@ -198,7 +210,7 @@ jobs:
   compile-and-build:
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.mode != 'registration-browser-proof' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix:
@@ -286,11 +298,28 @@ jobs:
           BX1_DEMO_SQL_TEST_URL: postgresql://postgres:bx1-synthetic-ci-only@127.0.0.1:5432/bx1_demo_ci
         run: node scripts/test-testnet-fund.mjs
 
+      - name: Install pinned ClamAV for connected offering-document proof
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 2 --max-time 180 \
+            'https://github.com/Cisco-Talos/clamav/releases/download/clamav-1.4.6/clamav-1.4.6.linux.x86_64.deb' \
+            --output "$RUNNER_TEMP/bx1-clamav-1.4.6.deb"
+          printf '%s  %s\n' 'd3ee9e401974855a1edc1761b1425417d126de618d5f0c91cd51209f69f6fcc2' "$RUNNER_TEMP/bx1-clamav-1.4.6.deb" | sha256sum --check --strict
+          sudo dpkg --install "$RUNNER_TEMP/bx1-clamav-1.4.6.deb"
+          test -x /usr/local/bin/clamscan
+          printf '%s  %s\n' '08160a5c11103e1a7af3b783b25e947a52bb0a598c40102c7aaa6525e477f7bf' '/usr/local/bin/clamscan' | sha256sum --check --strict
+          /usr/local/bin/clamscan --version
+
       - name: Verify customer onboarding, offerings and reservations in isolated cloud PostgreSQL
         if: ${{ !cancelled() }}
         shell: bash
         env:
           BX1_PORTAL_SQL_TEST_URL: postgresql://postgres:bx1-synthetic-ci-only@127.0.0.1:5432/bx1_demo_ci
+          BX1_SCANNER_CLOUD_PROOF: github-clamav-1.4.6
+          BX1_SCANNER_CLOUD_ENGINE: /usr/local/bin/clamscan
+          BX1_SCANNER_PACKAGE_SHA256: d3ee9e401974855a1edc1761b1425417d126de618d5f0c91cd51209f69f6fcc2
         run: node apps/web/scripts/test-portal.mjs
 
       - name: Typecheck and build hosted web with compiled artifact

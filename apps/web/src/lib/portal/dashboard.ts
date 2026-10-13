@@ -1,6 +1,8 @@
 import { BX1_ROLES, type Bx1Role, type Bx1Workspace } from '../supabase/contracts'
 import type { PlatformEnvironment } from '../platform-release'
 import type { PortalSnapshot } from './contracts'
+import { hasOfferingCommandAccess, isTestPasswordWorkflow, validatedOfferingAccess } from './offering-access'
+import { appointedIssuerProducts } from './operating-context'
 
 export type DashboardScope = { organisationId: string; organisationName: string; role: Bx1Role }
 export type DashboardQuery = Record<string, string | string[] | undefined>
@@ -25,6 +27,9 @@ export function dashboardProjection(scope: DashboardScope, environment: Platform
   const queue: { label: string; value: number; description: string }[] = []
   if (environment !== 'TESTNET') return { availablePaths: paths, queue, queueMessage: 'Live business services are not connected in this release. No balances or completed activity are inferred.' }
   if (!snapshot) return { availablePaths: paths, queue, queueMessage: 'Saved test-environment records could not be loaded. This is not a zero balance or an empty work queue.' }
+  const operatingContext = { mode: 'ROLE' as const, organisationId: scope.organisationId, role: scope.role }
+  const offering = validatedOfferingAccess(snapshot, operatingContext, environment)
+  if (snapshot.offering_access !== undefined && !offering) return { availablePaths: paths, queue, queueMessage: 'The current package context could not be verified. Refresh your signed-in context.' }
   paths.push('/portal/onboarding')
   // The existing customer feature has product organisations distinct from
   // native access organisations. Never manufacture an ID mapping between them.
@@ -39,11 +44,19 @@ export function dashboardProjection(scope: DashboardScope, environment: Platform
     const funding = snapshot.funding.obligations.filter(item => productOrganisations.some(org => org.id === item.organisation_id))
     queue.push({ label: 'Funding instructions to review', value: funding.filter(item => item.state !== 'RECONCILED' && item.state !== 'CANCELLED').length, description: 'Scoped test-token funding and reconciliation. Not bank cash, issued units or token holdings.' })
   }
-  if (productOrganisations.length && ['OfferingManager', 'IssuerFundManager'].includes(scope.role)) {
-    paths.push('/portal/products', '/portal/products/new')
+  if (productOrganisations.length && (scope.role === 'OfferingManager' || scope.role === 'IssuerFundManager' && !offering)
+    && (!isTestPasswordWorkflow(snapshot) || offering)) {
+    paths.push('/portal/products')
+    if (scope.role === 'OfferingManager' && (!offering || hasOfferingCommandAccess(snapshot, 'create_product', operatingContext))) paths.push('/portal/products/new')
     const products = snapshot.products.filter(item => productOrganisations.some(org => org.id === item.organisation_id))
     queue.push({ label: 'Draft products', value: products.filter(item => item.status === 'DRAFT' || item.status === 'CHANGES_REQUIRED').length, description: 'Products explicitly bound to this organisation and acting role.' },
       { label: 'Products in review', value: products.filter(item => item.status === 'IN_REVIEW').length, description: 'Submitted versions awaiting independent review.' })
+  }
+  if (offering && scope.role === 'IssuerFundManager') {
+    const products = appointedIssuerProducts(snapshot, operatingContext)
+    paths.push('/portal/products')
+    queue.push({ label: 'Appointed packages awaiting issuer review', value: products.filter(item => item.offering_package?.can_review_issuer === true && item.allowed_actions?.includes('review_offering_issuer')).length,
+      description: 'Only current product appointments returned for this issuer context. An approved package is not yet open for investment.' })
   }
   // Exact existing TEST adapter scope used by bx1_portal_read; not a new grant.
   if (scope.role === 'ComplianceOfficer' && snapshot.operating_context?.mode === 'ROLE' && snapshot.operating_context.organisationId === scope.organisationId && snapshot.operating_context.role === scope.role && snapshot.actor.can_review) {

@@ -6,6 +6,7 @@ import { test } from 'node:test'
 import { CLAMAV_EXECUTABLE, CLAMAV_EXECUTABLE_SHA256, CLAMAV_VERSION, RunnerError, TEST_ORIGIN, interpretClamavResult,
   recoverResult, runClamavProcess, runPinnedClamavProcess, runOnce, runnerConfig, sendSigned, signedRequest,
   validateManifest, verifyDocumentBytes } from './document-scanner-runner.mjs'
+import { recoverOfferingResult, runOfferingOnce, validateOfferingManifest } from './document-scanner-runner.mjs'
 
 // HTTP/subprocess mocks prove boundary negatives, NOT hosted Storage or malware detection.
 const now = Date.UTC(2026, 9, 11, 12)
@@ -47,6 +48,112 @@ function mockTransport({ job = manifest(), byteReply = () => binary(), callback,
   }
   return { calls, fetchImpl }
 }
+
+const offeringManifest = () => ({ file_id: ids.document, product_id: '00000000-0000-4000-8000-000000000005',
+  offering_revision_id: '00000000-0000-4000-8000-000000000006', uploader_id: ids.actor,
+  attempt_id: ids.attempt, authority_epoch: 1, scanner_authority_epoch: 2, attempt_number: 1,
+  worker_id: config.workerId, scanner_id: config.scannerId, reference: `bx1-offering-scan:${ids.attempt}`,
+  lease_expires_at: new Date(now + 119_000).toISOString(),
+  storage_path: `00000000-0000-4000-8000-000000000006/${ids.actor}/${ids.document}`,
+  sha256: hash(bytes), size: bytes.length, mime_type: 'application/pdf', kind: 'MEMORANDUM' })
+function mockOfferingTransport({ job = offeringManifest(), byteReply = () => binary(), callback } = {}) {
+  const calls = []
+  const fetchImpl = async (url, init) => {
+    const body = JSON.parse(init.body.toString()); calls.push({ url, init, body })
+    if (init.method === 'PATCH') return callback ? callback(calls) : json({ id: ids.document,
+      state: body.verdict === 'CLEAN' ? 'PROMOTED_CLEAN' : 'REJECTED' })
+    if (body.command === 'CLAIM') return json({ job })
+    if (body.command === 'BYTES') return byteReply()
+    if (body.command === 'FAIL') return json({ file_id: ids.document, attempt_id: ids.attempt,
+      state: ['HASH_MISMATCH', 'INVALID_DOCUMENT'].includes(body.code) ? 'EXHAUSTED' : 'RETRY_WAIT',
+      attempt_number: 1, next_attempt_at: ['HASH_MISMATCH', 'INVALID_DOCUMENT'].includes(body.code) ? null : new Date(now + 30_000).toISOString() })
+    assert.fail('Unexpected offering fixture command')
+  }
+  return { calls, fetchImpl }
+}
+
+test('offering manifests bind product, revision, uploader and both epochs without accepting admission shape', () => {
+  assert.deepEqual(validateOfferingManifest(offeringManifest(), config, now), offeringManifest())
+  const base = offeringManifest()
+  for (const delta of [{ storage_path: `${ids.actor}/${ids.document}` }, { product_id: 'unknown' },
+    { uploader_id: ids.request }, { offering_revision_id: ids.request }, { file_id: ids.request },
+    { authority_epoch: 0 }, { scanner_authority_epoch: 0 }, { attempt_number: 6 },
+    { mime_type: 'image/png' }, { kind: 'UNKNOWN' }, { source_bucket: 'public' }, { document_id: ids.document },
+    { lease_expires_at: new Date(now).toISOString() }, { worker_id: 'different-worker' }, { scanner_id: 'different-scanner' }]) {
+    assert.throws(() => validateOfferingManifest({ ...base, ...delta }, config, now), errorCode('INVALID_MANIFEST'))
+  }
+  assert.throws(() => validateOfferingManifest(manifest(), config, now), errorCode('INVALID_MANIFEST'))
+  assert.throws(() => validateManifest(base, config, now), errorCode('INVALID_MANIFEST'))
+})
+
+test('offering and admission HMAC domains differ and fixed service endpoints reject arbitrary kinds', async () => {
+  const body = { command: 'CLAIM', request_id: ids.request }
+  const original = signedRequest(body, config, 'processing', now)
+  const offering = signedRequest(body, config, 'offering-processing', now)
+  assert.notEqual(offering.signature, original.signature)
+  const expected = `sha256=${createHmac('sha256', config.signingKey).update('bx1-offering-document-processing-v1:')
+    .update(offering.timestamp).update('.').update(offering.raw).digest('hex')}`
+  assert.equal(offering.signature, expected)
+  const transport = mockOfferingTransport()
+  await sendSigned(config, offering, 'offering-processing', { fetchImpl: transport.fetchImpl })
+  assert.equal(transport.calls[0].url, `${TEST_ORIGIN}/api/portal/offering-documents/processing`)
+  for (const kind of ['https://untrusted.invalid', '__proto__', 'toString', 'offering-public']) {
+    await assert.rejects(() => sendSigned(config, offering, kind, { fetchImpl: transport.fetchImpl }), errorCode('INVALID_DESTINATION'))
+  }
+})
+
+test('offering worker proves bound transport and promotion acknowledgement without touching admission endpoints', async () => {
+  const transport = mockOfferingTransport()
+  const result = await runOfferingOnce(config, { fetchImpl: transport.fetchImpl, engine, clock, requestId: ids.request })
+  assert.equal(result.outcome, 'RESULT_ACCEPTED')
+  assert.equal(result.verdict, 'CLEAN')
+  assert.deepEqual(transport.calls.map(call => call.url), [
+    `${TEST_ORIGIN}/api/portal/offering-documents/processing`, `${TEST_ORIGIN}/api/portal/offering-documents/processing`,
+    `${TEST_ORIGIN}/api/portal/offering-documents`])
+  assert.deepEqual(transport.calls[1].body, { command: 'BYTES', file_id: ids.document, attempt_id: ids.attempt,
+    authority_epoch: 1, scanner_authority_epoch: 2, sha256: hash(bytes) })
+  assert.deepEqual(Object.keys(transport.calls[2].body).sort(), ['authority_epoch', 'file_id', 'observed_at', 'reference',
+    'scanner_authority_epoch', 'sha256', 'verdict'])
+  assert.equal(transport.calls[2].init.method, 'PATCH')
+  assert.equal(transport.calls[2].init.credentials, 'omit')
+  assert.equal(transport.calls[2].init.redirect, 'error')
+})
+
+test('offering hash mismatch creates a fatal attempt failure, never a scan result', async () => {
+  const transport = mockOfferingTransport({ byteReply: () => binary(Buffer.alloc(bytes.length)) })
+  let scanned = 0
+  const result = await runOfferingOnce(config, { fetchImpl: transport.fetchImpl, engine: async value => { scanned++; return engine(value) }, clock, requestId: ids.request })
+  assert.equal(result.outcome, 'PROCESSING_FAILED')
+  assert.equal(result.code, 'HASH_MISMATCH'); assert.equal(result.state, 'EXHAUSTED'); assert.equal(scanned, 0)
+  assert.equal(transport.calls.some(call => call.init.method === 'PATCH'), false)
+})
+
+test('unknown offering result requires exact recovery, not FAIL, rescan or a second claim', async () => {
+  const transport = mockOfferingTransport({ callback: () => { throw new Error('unknown transport outcome') } })
+  let scans = 0
+  const outcome = await runOfferingOnce(config, { fetchImpl: transport.fetchImpl,
+    engine: async value => { scans++; return engine(value) }, clock, requestId: ids.request })
+  assert.equal(outcome.outcome, 'RESULT_RECOVERY_REQUIRED'); assert.equal(scans, 1)
+  assert.equal(transport.calls.filter(call => call.body.command === 'CLAIM').length, 1)
+  assert.equal(transport.calls.filter(call => call.init.method === 'PATCH').length, 3)
+  assert.equal(transport.calls.some(call => call.body.command === 'FAIL'), false)
+  const accepted = mockOfferingTransport()
+  assert.equal((await recoverOfferingResult(outcome.recovery, config, { fetchImpl: accepted.fetchImpl, clock })).outcome, 'RESULT_ACCEPTED')
+  assert.equal(accepted.calls.length, 1)
+  assert.deepEqual(accepted.calls[0].init.body, outcome.recovery.request.raw)
+  await assert.rejects(() => recoverOfferingResult({ ...outcome.recovery, kind: 'RESULT_RECOVERY' }, config, { fetchImpl: accepted.fetchImpl, clock }), errorCode('INVALID_RECOVERY'))
+})
+
+test('offering malicious result is rejected and empty queue never scans', async () => {
+  const transport = mockOfferingTransport()
+  const outcome = await runOfferingOnce(config, { fetchImpl: transport.fetchImpl,
+    engine: async value => ({ ...await engine(value), verdict: 'MALICIOUS' }), clock, requestId: ids.request })
+  assert.equal(outcome.outcome, 'RESULT_ACCEPTED'); assert.equal(outcome.verdict, 'MALICIOUS')
+  const empty = mockOfferingTransport({ job: null })
+  assert.equal((await runOfferingOnce(config, { fetchImpl: empty.fetchImpl, engine: async () => { assert.fail('Empty queue scanned') }, clock,
+    requestId: ids.request })).outcome, 'EMPTY_QUEUE')
+  assert.equal(empty.calls.length, 1)
+})
 
 test('configuration is canonical TEST only with fixed identities and canonical private key', () => {
   for (const delta of [{ BLOCKXONE_ENVIRONMENT: 'MAINNET' }, { BLOCKXONE_APP_ORIGIN: 'https://bx1.co.za' },

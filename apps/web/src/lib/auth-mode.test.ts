@@ -6,6 +6,36 @@ const service = '/api/portal/documents/processing'
 const blocked = (path: string, server = 'supabase', browser = 'supabase') =>
   isProductionWebPathBlocked(path, 'production', 'production', 'production', server, browser)
 
+describe('exact offering-document service routing', () => {
+  const offeringServices = ['/api/portal/offering-documents', '/api/portal/offering-documents/processing'] as const
+
+  it.each(offeringServices)('admits only canonical offering service %s in paired Supabase mode', path => {
+    expect(SUPABASE_ALLOWED_PATHS.filter(value => value === path)).toHaveLength(1)
+    expect(isSupabaseWebPathAllowed(path)).toBe(true)
+    expect(blocked(path)).toBe(false)
+    // Reachability does not grant document access, a scanner verdict or business
+    // authority; the unchanged scoped/session/origin/HMAC handlers still decide.
+  })
+
+  it.each(offeringServices.flatMap(path => [
+    `${path}/`, `${path}/extra`, `${path}-admin`, `${path}.json`, path.toUpperCase(),
+    path.replace('/offering', '/Offering'), path.replace('/offering', '/%6fffering'),
+    path.replace('/portal/', '/portal//'), `/${path}`, path.replaceAll('/', '\\'),
+    `${path}/../command`, `${path}/%2e%2e/command`, `${path}/*`,
+  ]))('denies raw offering lookalike %s without a document-service wildcard', path => {
+    expect(isSupabaseWebPathAllowed(path)).toBe(false)
+    expect(blocked(path)).toBe(true)
+  })
+
+  it.each(offeringServices.flatMap(path => [
+    ['supabase', ''], ['', 'supabase'], ['Supabase', 'Supabase'],
+    ['supabase', 'legacy'], ['legacy', 'supabase'], ['invalid', 'supabase'],
+    ['legacy', 'legacy'], ['', ''],
+  ].map(([server, browser]) => [path, server, browser])))('denies offering service %s under mode %s/%s', (path, server, browser) => {
+    expect(blocked(path, server, browser)).toBe(true)
+  })
+})
+
 describe('exact applicant draft service routing', () => {
   const draftService = '/api/portal/application-drafts'
 

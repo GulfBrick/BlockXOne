@@ -15,12 +15,13 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllEnvs())
 
 describe('offering PDF admission', () => {
-  it('rejects a direct POST before reservation or Storage while verification is unavailable', async () => {
+  it('rejects an unscoped direct POST before any reservation, even when a browser supplies an enabled flag', async () => {
     const request = new NextRequest(`${origin}/api/portal/offering-documents`, { method: 'POST',
-      headers: { origin, host: new URL(origin).host, 'content-type': 'multipart/form-data; boundary=x' },
+      headers: { origin, host: new URL(origin).host, 'content-type': 'multipart/form-data; boundary=x',
+        'x-bx1-document-intake-enabled': 'true', 'x-bx1-document-status': 'CLEAN' },
       body: '--x--' })
     const response = await POST(request)
-    expect(response.status).toBe(503)
-    expect((await response.json()).error).toContain('independent file verification')
+    expect(response.status).toBe(403)
+    expect((await response.json()).error).toContain('operating context')
   })
 })

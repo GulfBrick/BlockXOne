@@ -65,7 +65,7 @@ function assertScanReceipt(result, verdict, bytes, databaseSha256) {
   assert.equal(result.sha256, sha256(bytes), 'Real engine document identity mismatch.');
 }
 
-export async function runCloudEngineProof() {
+export async function runCloudEngineProof(withOfferingFixture) {
   // These are an execution guard, not a claim that environment values attest the package.
   // CI separately verifies its pinned package hash before this proof can run.
   assertCloudProofEnvironment();
@@ -101,6 +101,13 @@ export async function runCloudEngineProof() {
     assertScanReceipt(benign, 'CLEAN', benignPdf, databaseSha256);
     const detected = await scanWithClamav(detectionPdf, { databasePath, databaseSha256 });
     assertScanReceipt(detected, 'MALICIOUS', detectionPdf, databaseSha256);
+
+    // Additive connected SQL proof borrows this pinned fixture only while its
+    // private signature database exists. Original real-engine checks remain.
+    if (withOfferingFixture !== undefined) {
+      assert.equal(typeof withOfferingFixture, 'function', 'Invalid offering engine proof callback.');
+      await withOfferingFixture({ databasePath, databaseSha256, benignPdf, detectionPdf });
+    }
 
     return {
       ok: true,

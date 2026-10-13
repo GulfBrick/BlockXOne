@@ -3,10 +3,14 @@
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import type { PlatformEnvironment } from '@/lib/platform-release'
-import { applicationDetailsSchema, investingProposalDocumentLookupSchema, isFundTermsV2, isRealEstateTermsV2, isOfferingSubscribable, isWealthManagerDetailsV2, subscriptionQuote, validatedEntityProductEligibility, type LegacyApplicationDetails, type PortalApplication, type PortalEntityInvestmentAccount, type PortalEntityProductEligibility, type PortalInvestmentAccount, type PortalInvestingRepresentativeMandate, type PortalProduct, type PortalProductEligibility, type PortalSnapshot } from '@/lib/portal/contracts'
+import { applicationDetailsSchema, investingProposalDocumentLookupSchema, isFundTermsTyped, isRealEstateTermsTyped, isFundTermsV3, isRealEstateTermsV3, isOfferingSubscribable, offeringDocumentApprovalBlocked, isWealthManagerDetailsV2, productTermsSchema, subscriptionQuote, validatedEntityProductEligibility, type LegacyApplicationDetails, type PortalApplication, type PortalEntityInvestmentAccount, type PortalEntityProductEligibility, type PortalInvestmentAccount, type PortalInvestingRepresentativeMandate, type PortalProduct, type PortalProductEligibility, type PortalSnapshot } from '@/lib/portal/contracts'
+import { offeringDocumentEvidenceSchema } from '@/lib/portal/offering-files'
+import { reviewCommonEnvelopeBindings } from '@/lib/portal/product-common-envelope'
+import { ImmutableCommonEnvelopeSummary } from './product-common-envelope'
 import { portalContextKey, portalScopeHref, type PortalOperatingContext } from '@/lib/portal/operating-context'
-import { hasStage2CommandAccess, isTestPasswordAdmission, validatedStage2Access } from '@/lib/portal/stage2-access'
-import { CommandFeedback, usePortalCommand } from './portal-client'
+import { hasStage2CommandAccess, validatedStage2Access } from '@/lib/portal/stage2-access'
+import { isTestPasswordWorkflow } from '@/lib/portal/offering-access'
+import { CommandFeedback, usePortalCommand, usePortalCommandAllowed } from './portal-client'
 import { ApplicationDetailsSummary, ApplicationDocumentHistory, PrivateDocument } from './onboarding-form'
 import { ProviderEvidenceReview } from './kyc-verification'
 import { DetailList, EmptyState, Field, Notice, Panel, StatusBadge, dateLabel, money } from './portal-primitives'
@@ -57,7 +61,7 @@ function IndividualInvestmentAccountPanel({ snapshot, onSaved, operatingContext 
   const accounts = activeIndividualAccounts(snapshot)
   const ownAccounts = (snapshot.accounts ?? []).filter(account => account.holder_user_id === snapshot.actor.id)
   const command = usePortalCommand(onSaved)
-  const mayOpen = !isTestPasswordAdmission(snapshot) || hasStage2CommandAccess(snapshot, 'create_investment_account', operatingContext)
+  const mayOpen = !isTestPasswordWorkflow(snapshot) || hasStage2CommandAccess(snapshot, 'create_investment_account', operatingContext)
   return <Panel title="Your investment account" description="The account identifies who holds the investment. Your sign-in identifies who submits the instruction.">
     <CommandFeedback command={command} />
     {accounts.length ? <DetailList rows={accounts.map((account, index) => ({ label: `Active individual account ${index + 1}`, value: <span className={styles.mono}>{account.id}</span> }))} />
@@ -143,7 +147,7 @@ function RepresentativeProposalCase({ mandate, snapshot, operatingContext, onSav
     && Date.parse(mandate.requested_until) > Date.now()
   const canRespond = current && mandate.status === 'PROPOSED' && mandate.can_respond === true
     && !mandate.consent_decision && !mandate.consent_receipt_id
-    && (!isTestPasswordAdmission(snapshot) || hasStage2CommandAccess(snapshot, 'respond_investing_representative_proposal', operatingContext))
+    && (!isTestPasswordWorkflow(snapshot) || hasStage2CommandAccess(snapshot, 'respond_investing_representative_proposal', operatingContext))
   const canAccept = canRespond && evidenceIdentity === representativeAppointmentIdentity(mandate, operatingContext)
   function respond(decision: 'ACCEPT' | 'DECLINE') {
     if (!canRespond || decision === 'ACCEPT' && !canAccept || command.busy || command.unknown) return
@@ -182,7 +186,7 @@ function EntityInvestmentAccountPanel({ snapshot, onSaved, operatingContext }: {
   const ownApplicationIds = new Set(ownEntityApplications.map(item => item.id))
   const accounts = (accountRows ?? []).filter(account => account.can_view || ownApplicationIds.has(account.application_id))
   const canCreate = snapshot.entity_account_route_available === true && Array.isArray(accountRows)
-    && (!isTestPasswordAdmission(snapshot) || hasStage2CommandAccess(snapshot, 'create_entity_investment_account', operatingContext))
+    && (!isTestPasswordWorkflow(snapshot) || hasStage2CommandAccess(snapshot, 'create_entity_investment_account', operatingContext))
     ? currentApplications.filter(item => item.can_create_entity_account === true && !accounts.some(account => account.application_id === item.id)) : []
   return <div className={styles.stack}>
     <Panel title="Entity investment account" description="The legal entity holds the account. The signed-in person needs a separately reviewed mandate to act for it.">
@@ -216,7 +220,7 @@ function EntityAccountCase({ snapshot, account, mandates, actorId, application, 
   const mandate = [...cases].sort((a, b) => b.cycle - a.cycle || b.revision - a.revision)[0]
   const newCycle = !mandate || mandate.status === 'REVOKED' || mandate.status === 'APPLIED' && !mandate.effective
   const mayRequest = account.status === 'ACTIVE' && account.can_request_mandate && Boolean(application) && Boolean(companyDocuments.length)
-    && (!isTestPasswordAdmission(snapshot) || hasStage2CommandAccess(snapshot, 'request_investing_representative_mandate', snapshot.operating_context))
+    && (!isTestPasswordWorkflow(snapshot) || hasStage2CommandAccess(snapshot, 'request_investing_representative_mandate', snapshot.operating_context))
     && (newCycle || mandate?.can_request === true)
   return <section className={styles.stack} aria-label={`${account.entity_name} investment account`}>
     <CommandFeedback command={command} />
@@ -262,7 +266,7 @@ function AdditionalRepresentativeProposal({ snapshot, account, application, onSa
   const mayPropose = account.can_propose_representative === true && account.status === 'ACTIVE'
     && application.user_id === snapshot.actor.id && application.status === 'APPROVED' && application.revision === account.admission_revision
     && Boolean(application.approved_until) && Date.parse(application.approved_until!) > Date.now() && documents.length > 0
-    && (!isTestPasswordAdmission(snapshot) || hasStage2CommandAccess(snapshot, 'request_investing_representative_mandate', snapshot.operating_context))
+    && (!isTestPasswordWorkflow(snapshot) || hasStage2CommandAccess(snapshot, 'request_investing_representative_mandate', snapshot.operating_context))
   if (!mayPropose) return null
   return <Panel title="Propose another representative" description="Only the original entity applicant can propose a named person. That person must consent, Compliance must review, and a different Super Admin must apply the limited mandate.">
     <CommandFeedback command={command} />
@@ -418,12 +422,13 @@ export function OfferingDocuments({ product }: { product: PortalProduct }) {
   const current = pkg?.origin === 'SUBMITTED' && pkg.terms_hash === product.terms_hash
   return <Panel title="Offering documents" description={current ? `In-form text disclosures · immutable package ${pkg.package_number}` : 'In-form text disclosures · not a current submitted package'}>
     <div className={styles.stack}>{([{ key: 'memorandum', label: 'Offering memorandum' }, { key: 'risks', label: 'Risk disclosures' }, { key: 'subscription_terms', label: 'Subscription agreement' }] as const).map(document => <details key={document.key}><summary className={styles.textLink}>{document.label}</summary><p className={styles.copy}>{product.terms.documents[document.key]}</p></details>)}</div>
-    <p className={`${styles.muted} ${styles.sectionGap}`}>These disclosures are saved text, not signed documents or evidence of an e-signature. Their digests bind submitted text to the package. Separately staged PDFs remain quarantined and unscanned; signature evidence is not connected.</p>
+    <p className={`${styles.muted} ${styles.sectionGap}`}>These disclosures are saved text, not signed documents or evidence of an e-signature. Their digests bind submitted text to the package. PDF byte hashes, independent scan evidence and a sealed manifest are separate bindings; signature evidence is not connected.</p>
   </Panel>
 }
 
 export function OfferingPackageEvidence({ product, showIssuerRationale = false }: { product: PortalProduct; showIssuerRationale?: boolean }) {
   const pkg = product.offering_package
+  const documents = offeringDocumentEvidenceSchema.safeParse(pkg?.document_evidence)
   const history = (product.offering_history ?? []).filter(item => item.id !== pkg?.id)
   return <Panel title="Offering package and decision trail" description="One immutable submission reference follows the manager, issuer, Compliance and investor hand-offs.">
     {!pkg ? <Notice title="No current submitted package" tone="warning">This product is a draft or a preserved historical record. A workflow revision or old review cannot stand in for an approved offering package.</Notice>
@@ -441,28 +446,30 @@ export function OfferingPackageEvidence({ product, showIssuerRationale = false }
           { label: 'Independent Compliance decision', value: <StatusBadge status={pkg.compliance_status} /> },
           { label: 'Technical readiness', value: <StatusBadge status={pkg.technical_readiness_status} /> },
         ]} />
+        <ImmutableCommonEnvelopeSummary pkg={pkg} expectedV3={product.terms.terms_version === 3} />
+        {pkg.document_evidence !== undefined ? <Notice title="Signature not connected" tone="warning">{documents.success ? <>Saved document readiness: {documents.data.state.replaceAll('_', ' ').toLowerCase()}.{documents.data.manifest_hash ? <> Sealed manifest: <span className={styles.mono}>{documents.data.manifest_hash}</span>.</> : null}</> : 'The document readiness summary could not be verified. Refresh this package.'} Use Refresh saved state for current hand-off permissions. Approval stays unavailable for this profiled revision. A clean scan or sealed manifest is not legal sign-off. Request changes or use a permitted same-terms document correction; the next integration owner must connect genuine signatures.</Notice> : null}
         {showIssuerRationale && pkg.issuer_review_notes ? <Notice title="Issuer decision rationale" tone={pkg.issuer_status === 'CHANGES_REQUIRED' ? 'warning' : 'info'}>{pkg.issuer_review_notes}</Notice> : null}
         {pkg.terms_hash !== product.terms_hash ? <Notice title="Current terms do not match this package" tone="warning">Refresh the saved record. No decision, publication or subscription should rely on a mismatched product snapshot.</Notice> : null}
         {pkg.issuer_status !== 'APPROVED' ? <Notice title="Issuer decision outstanding">A separately appointed Issuer Fund Manager must review this exact package. A wealth-manager application does not grant issuer authority, and new customer organisations do not receive that appointment automatically.</Notice> : null}
         {pkg.technical_readiness_status !== 'VERIFIED' ? <Notice title="Awaiting technical readiness" tone="warning">Independently verified deployment and its governing authority are not connected to this package. It cannot be opened for subscriptions; no manager checkbox can attest this gate.</Notice> : null}
       </div>}
-    {history.length ? <details className={styles.sectionGap}><summary className={styles.textLink}>Earlier preserved packages ({history.length})</summary><ul>{history.map(item => <li key={item.id}><strong>Package {item.package_number}</strong> · {item.origin !== 'SUBMITTED' ? 'Historical snapshot, approvals unverified' : 'Superseded submission'} · <span className={styles.mono}>{item.id}</span><br /><span className={styles.mono}>{item.terms_hash}</span></li>)}</ul></details> : null}
+    {history.length ? <details className={styles.sectionGap}><summary className={styles.textLink}>Earlier preserved packages ({history.length})</summary><ul>{history.map(item => <li key={item.id}><strong>Package {item.package_number}</strong> · {item.origin !== 'SUBMITTED' ? 'Historical snapshot, approvals unverified' : 'Superseded submission'} · <span className={styles.mono}>{item.id}</span><br /><span className={styles.mono}>{item.terms_hash}</span><ImmutableCommonEnvelopeSummary pkg={item} /></li>)}</ul></details> : null}
   </Panel>
 }
 
 export function ProductFacts({ product }: { product: PortalProduct }) {
   const terms = product.terms
   const legacySnapshot = product.offering_package?.origin === 'LEGACY_PRODUCT_SNAPSHOT' || product.offering_package?.origin === 'LEGACY_ORDER_SNAPSHOT'
-  const versionLabel = isFundTermsV2(terms) ? 'Fund policy v2' : isRealEstateTermsV2(terms) ? 'Real-estate policy v2' : terms.asset_type === 'FUND' ? 'Historical fund terms v1' : legacySnapshot ? 'Historical property snapshot v1' : 'Preliminary property terms v1'
-  const denominationLabel = isFundTermsV2(terms) || isRealEstateTermsV2(terms) ? 'Valueless TST · 6 decimal places' : terms.asset_type === 'FUND' ? 'Historical ZAR_TEST · 2 decimal places' : 'Historical ZAR_TEST · 2 decimal places'
+  const versionLabel = isFundTermsV3(terms) ? 'Fund policy v3 · declared common package' : isRealEstateTermsV3(terms) ? 'Real-estate policy v3 · declared common package' : isFundTermsTyped(terms) ? 'Fund policy v2' : isRealEstateTermsTyped(terms) ? 'Real-estate policy v2' : terms.asset_type === 'FUND' ? 'Historical fund terms v1' : legacySnapshot ? 'Historical property snapshot v1' : 'Preliminary property terms v1'
+  const denominationLabel = isFundTermsTyped(terms) || isRealEstateTermsTyped(terms) ? 'Valueless TST · 6 decimal places' : terms.asset_type === 'FUND' ? 'Historical ZAR_TEST · 2 decimal places' : 'Historical ZAR_TEST · 2 decimal places'
   const description = legacySnapshot ? 'Preserved historical package snapshot' : product.offering_package?.origin === 'SUBMITTED' ? `Current submitted package ${product.offering_package.package_number}` : product.status === 'DRAFT' ? 'Current editable draft; not submitted' : 'Saved terms without a current submitted package'
   return <Panel title="Offering terms" description={description}><DetailList rows={[{ label: 'Asset type', value: terms.asset_type === 'FUND' ? 'Investment fund' : 'Real-estate investment' }, { label: 'Terms version', value: versionLabel }, { label: 'Issuer name (unverified)', value: terms.issuer_name }, { label: 'Share class', value: terms.share_class }, { label: 'Settlement denomination', value: denominationLabel }, { label: 'Price per whole unit', value: money(terms.unit_price_minor, terms.currency) }, { label: 'Minimum subscription', value: `${terms.minimum_units} units` }, { label: 'Offering capacity', value: `${terms.cap_units} units` }, ...(terms.asset_type === 'REAL_ESTATE' ? [{ label: 'Illustrative property valuation (separate from offering cap)', value: money(terms.property_valuation_minor, terms.currency) }] : []), { label: 'Reserved subscriptions', value: `${product.reserved_units} units` }, { label: 'Eligible countries', value: terms.eligible_countries.join(', ') }, { label: 'Investor types', value: terms.eligible_investor_types.map(value => value === 'ENTITY' ? 'Entity' : 'Individual').join(', ') }, { label: 'Workflow status', value: product.status === 'PUBLISHED' && !isOfferingSubscribable(product) ? 'Historical PUBLISHED state; not open for new subscriptions' : <StatusBadge status={product.status} /> }, { label: 'Workflow revision', value: product.revision }]} /></Panel>
 }
 
 export function ProductNarrative({ product }: { product: PortalProduct }) {
   const terms = product.terms
-  const fund = isFundTermsV2(terms) ? terms.fund : null
-  const property = isRealEstateTermsV2(terms) ? terms.real_estate : null
+  const fund = isFundTermsTyped(terms) ? terms.fund : null
+  const property = isRealEstateTermsTyped(terms) ? terms.real_estate : null
   return <Panel title={fund ? 'Fund mandate and operating terms' : property ? 'Property interest and operating terms' : 'Investment mandate'}>
     {fund ? <Notice title="Disclosed policy, not completed servicing">These terms describe the fictional fund package submitted for review. They do not prove a calculated NAV, available liquidity, a completed distribution or an executable redemption.</Notice> : null}
     {property ? <Notice title="Disclosed property policy, not title or cash evidence">The references and terms below are proposed for review. They do not prove legal title, property control, an independent valuation, rent received, consent, payment or an executable exit.</Notice> : null}
@@ -513,21 +520,27 @@ export function ProductNarrative({ product }: { product: PortalProduct }) {
 
 export function ProductActions({ product, onSaved, availableCommands }: { product: PortalProduct; onSaved: (snapshot: PortalSnapshot) => void; availableCommands?: readonly string[] }) {
   const command = usePortalCommand(onSaved)
+  const submitAvailable = usePortalCommandAllowed('submit_product')
+  const saveAvailable = usePortalCommandAllowed('save_product')
+  const publishAvailable = usePortalCommandAllowed('publish_product')
+  const reopenAvailable = usePortalCommandAllowed('reopen_offering_review')
+  const amendAvailable = usePortalCommandAllowed('begin_offering_amendment')
   const [reopenReason, setReopenReason] = useState('')
   const [amendReason, setAmendReason] = useState('')
-  const legacyFundDraft = product.terms.asset_type === 'FUND' && !isFundTermsV2(product.terms) && ['DRAFT', 'CHANGES_REQUIRED'].includes(product.status)
-  const legacyPropertyDraft = product.terms.asset_type === 'REAL_ESTATE' && !isRealEstateTermsV2(product.terms) && ['DRAFT', 'CHANGES_REQUIRED'].includes(product.status)
-  const canSubmit = !legacyFundDraft && !legacyPropertyDraft && ['DRAFT', 'CHANGES_REQUIRED'].includes(product.status)
+  const legacyFundDraft = product.terms.asset_type === 'FUND' && product.terms.currency === 'ZAR_TEST' && ['DRAFT', 'CHANGES_REQUIRED'].includes(product.status)
+  const legacyPropertyDraft = product.terms.asset_type === 'REAL_ESTATE' && product.terms.currency === 'ZAR_TEST' && ['DRAFT', 'CHANGES_REQUIRED'].includes(product.status)
+  const canSubmit = submitAvailable && !legacyFundDraft && !legacyPropertyDraft && ['DRAFT', 'CHANGES_REQUIRED'].includes(product.status)
+    && (product.terms.terms_version !== 3 || productTermsSchema.safeParse(product.terms).success && product.terms.common_envelope.manager_organisation_id === product.organisation_id)
     && availableCommands?.includes('submit_product') === true
     && product.allowed_actions?.includes('submit_product') === true
-  const canEditLegacyFund = availableCommands?.includes('save_product') === true
+  const canEditLegacyFund = saveAvailable && availableCommands?.includes('save_product') === true
     && product.allowed_actions?.includes('save_product') === true
   const pkg = product.offering_package
-  const canPublish = product.status === 'APPROVED' && pkg?.origin === 'SUBMITTED' && pkg.terms_hash === product.terms_hash && pkg.issuer_status === 'APPROVED' && pkg.compliance_status === 'APPROVED' && pkg.technical_readiness_status === 'VERIFIED' && pkg.publishable === true && product.allowed_actions?.includes('publish_product') === true && (availableCommands === undefined || availableCommands.includes('publish_product'))
-  const canReopen = product.status === 'APPROVED'
+  const canPublish = !offeringDocumentApprovalBlocked(product) && publishAvailable && product.status === 'APPROVED' && pkg?.origin === 'SUBMITTED' && pkg.terms_hash === product.terms_hash && pkg.issuer_status === 'APPROVED' && pkg.compliance_status === 'APPROVED' && pkg.technical_readiness_status === 'VERIFIED' && pkg.publishable === true && product.allowed_actions?.includes('publish_product') === true && (availableCommands === undefined || availableCommands.includes('publish_product'))
+  const canReopen = reopenAvailable && (product.status === 'APPROVED' || offeringDocumentApprovalBlocked(product) && ['IN_REVIEW', 'CHANGES_REQUIRED'].includes(product.status))
     && availableCommands?.includes('reopen_offering_review') === true
     && product.allowed_actions?.includes('reopen_offering_review') === true
-  const canAmend = product.status === 'APPROVED'
+  const canAmend = amendAvailable && product.status === 'APPROVED'
     && availableCommands?.includes('begin_offering_amendment') === true
     && product.allowed_actions?.includes('begin_offering_amendment') === true
   return <Panel title="Offering hand-offs" description="Each action uses a server-checked organisation, actor and immutable package."><CommandFeedback command={command} />{product.review_notes ? <Notice title="Compliance notes" tone="warning">{product.review_notes}</Notice> : null}
@@ -543,7 +556,7 @@ export function ProductActions({ product, onSaved, availableCommands }: { produc
       event.preventDefault()
       if (reopenReason.trim().length < 20) return
       void command.submit('reopen_offering_review', { product_id: product.id, expected_revision: product.revision, reason: reopenReason.trim() })
-    }}><h3>Reopen this package for independent review</h3><p className={styles.muted}>Creates a new immutable package revision with the same terms. Earlier decisions remain historical evidence and cannot approve the new revision. Use this when an appointment has ended or the package requires fresh issuer and Compliance decisions; it does not reopen funding.</p><Field label="Reason for re-review" hint="20 to 1,000 characters recorded with the new revision."><textarea required minLength={20} maxLength={1000} value={reopenReason} onChange={event => setReopenReason(event.target.value)} /></Field><button type="submit" className={styles.buttonSecondary} disabled={command.busy || command.unknown || reopenReason.trim().length < 20}>Create new review revision</button></form> : null}
+    }}><h3>Reopen this package for independent review</h3><p className={styles.muted}>Creates a new immutable package revision with the same terms. Earlier decisions remain historical evidence and cannot approve the new revision. For a document correction, first resolve every current intent and active scan; the new revision inherits no earlier PDF manifest or signature. It does not reopen funding.</p><Field label="Reason for re-review" hint="20 to 1,000 characters recorded with the new revision."><textarea required minLength={20} maxLength={1000} value={reopenReason} onChange={event => setReopenReason(event.target.value)} /></Field><button type="submit" className={styles.buttonSecondary} disabled={command.busy || command.unknown || reopenReason.trim().length < 20}>Create new review revision</button></form> : null}
     {canAmend ? <form className={`${styles.form} ${styles.sectionGap}`} onSubmit={event => {
       event.preventDefault()
       if (amendReason.trim().length < 20) return
@@ -564,7 +577,7 @@ export function ApplicationReview({ application, snapshot, onSaved, environment 
   const [decision, setDecision] = useState(approvalBlocked ? 'CHANGES_REQUIRED' : 'APPROVED'), [notes, setNotes] = useState('')
   const command = usePortalCommand(onSaved)
   const permitted = snapshot.actor.can_review && application.user_id !== snapshot.actor.id && application.status === 'SUBMITTED'
-    && (!isTestPasswordAdmission(snapshot) || hasStage2CommandAccess(snapshot, 'review_application', snapshot.operating_context))
+    && (!isTestPasswordWorkflow(snapshot) || hasStage2CommandAccess(snapshot, 'review_application', snapshot.operating_context))
   const allChecked = Object.values(checks).every(Boolean)
   if ('rehearsal' in snapshot || snapshot.stage2_access !== undefined && !validatedStage2Access(snapshot, snapshot.operating_context, environment)) return <Notice title="Saved admission state unavailable" tone="warning">Refresh this case through the normal application workspace before continuing. Its saved history has not changed.</Notice>
   return <div className={styles.wideGrid}><div className={styles.stack}>
@@ -589,27 +602,39 @@ export function ProductReview({ product, snapshot, onSaved }: { product: PortalP
   const [checks, setChecks] = useState({ issuer: false, terms: false, disclosures: false, eligibility: false })
   const [decision, setDecision] = useState('APPROVED'), [notes, setNotes] = useState('')
   const command = usePortalCommand(onSaved)
+  const reviewAvailable = usePortalCommandAllowed('review_product')
   const pkg = product.offering_package
-  const permitted = snapshot.actor.can_review && product.created_by !== snapshot.actor.id && product.status === 'IN_REVIEW' && pkg?.origin === 'SUBMITTED' && pkg.can_review_compliance === true && product.allowed_actions?.includes('review_product') === true && pkg.compliance_status === 'PENDING' && pkg.terms_hash === product.terms_hash
-  return <div className={styles.wideGrid}><div className={styles.stack}><ProductFacts product={product} /><OfferingPackageEvidence product={product} /><ProductNarrative product={product} /><OfferingDocuments product={product} /></div><Panel title="Independent Compliance decision" description="Record the decision against the immutable package reference and terms fingerprint."><CommandFeedback command={command} />{permitted ? <form className={styles.form} onSubmit={event => { event.preventDefault(); void command.submit('review_product', { product_id: product.id, offering_revision_id: pkg.id, expected_revision: product.revision, terms_hash: pkg.terms_hash, decision, notes, checks }) }}><fieldset className={styles.fieldset} disabled={command.busy || command.unknown}><legend>Compliance checks</legend>{([{ key: 'issuer', label: 'Fictional issuer and asset mandate evidence reviewed (not issuer approval)' }, { key: 'terms', label: 'Economic and exit terms reviewed' }, { key: 'disclosures', label: 'In-form disclosures reviewed' }, { key: 'eligibility', label: 'Investor eligibility rules reviewed' }] as const).map(item => <label key={item.key} className={styles.check}><input type="checkbox" checked={checks[item.key]} onChange={event => setChecks(current => ({ ...current, [item.key]: event.target.checked }))} />{item.label}</label>)}<Field label="Decision"><select value={decision} onChange={event => setDecision(event.target.value)}><option value="APPROVED">Approve Compliance review of this package</option><option value="CHANGES_REQUIRED">Request changes</option></select></Field><Field label="Review rationale"><textarea required minLength={20} maxLength={3000} value={notes} onChange={event => setNotes(event.target.value)} /></Field><button type="submit" className={styles.button} disabled={decision === 'APPROVED' && !Object.values(checks).every(Boolean)}>Record Compliance decision</button></fieldset></form> : <Notice title="Independent decision required">{product.created_by === snapshot.actor.id ? 'You created this product and cannot approve it. A separate authorised reviewer must act.' : !pkg ? 'No current immutable package is awaiting Compliance review.' : 'This package is not awaiting your review, or its current terms do not match.'}</Notice>}</Panel></div>
+  const approvalBlocked = offeringDocumentApprovalBlocked(product)
+  const currentDecision = approvalBlocked ? 'CHANGES_REQUIRED' : decision
+  const commonBindings = reviewCommonEnvelopeBindings(product)
+  const permitted = reviewAvailable && snapshot.actor.can_review && product.created_by !== snapshot.actor.id && product.status === 'IN_REVIEW' && pkg?.origin === 'SUBMITTED' && pkg.can_review_compliance === true && product.allowed_actions?.includes('review_product') === true && pkg.compliance_status === 'PENDING' && pkg.terms_hash === product.terms_hash
+    && commonBindings !== null && (product.terms.terms_version !== 3 || productTermsSchema.safeParse(product.terms).success)
+  return <div className={styles.wideGrid}><div className={styles.stack}><ProductFacts product={product} /><OfferingPackageEvidence product={product} /><ProductNarrative product={product} /><OfferingDocuments product={product} /></div><Panel title="Independent Compliance decision" description="Record the decision against the immutable package reference and terms fingerprint."><CommandFeedback command={command} />{approvalBlocked ? <Notice title="Signature not connected" tone="warning">Approval of this PDF-profiled revision is unavailable, even after sealing. Request changes; genuine signature integration remains the next owner.</Notice> : null}{permitted ? <form className={styles.form} onSubmit={event => { event.preventDefault(); if (commonBindings === null) return; void command.submit('review_product', { product_id: product.id, offering_revision_id: pkg.id, expected_revision: product.revision, terms_hash: pkg.terms_hash, ...commonBindings, decision: currentDecision, notes, checks }) }}><fieldset className={styles.fieldset} disabled={command.busy || command.unknown}><legend>Compliance checks</legend>{([{ key: 'issuer', label: 'Fictional issuer and asset mandate evidence reviewed (not issuer approval)' }, { key: 'terms', label: product.terms.terms_version === 3 ? 'Economic, common-envelope and proposed configuration terms reviewed' : 'Economic and exit terms reviewed' }, { key: 'disclosures', label: 'In-form disclosures reviewed' }, { key: 'eligibility', label: 'Investor eligibility rules reviewed' }] as const).map(item => <label key={item.key} className={styles.check}><input type="checkbox" checked={checks[item.key]} onChange={event => setChecks(current => ({ ...current, [item.key]: event.target.checked }))} />{item.label}</label>)}<Field label="Decision"><select value={currentDecision} onChange={event => setDecision(event.target.value)}><option value="APPROVED" disabled={approvalBlocked}>Approve Compliance review of this package</option><option value="CHANGES_REQUIRED">Request changes</option></select></Field><Field label="Review rationale"><textarea required minLength={20} maxLength={3000} value={notes} onChange={event => setNotes(event.target.value)} /></Field><button type="submit" className={styles.button} disabled={currentDecision === 'APPROVED' && !Object.values(checks).every(Boolean)}>Record Compliance decision</button></fieldset></form> : <Notice title="Independent decision required">{product.created_by === snapshot.actor.id ? 'You created this product and cannot approve it. A separate authorised reviewer must act.' : !pkg ? 'No current immutable package is awaiting Compliance review.' : 'This package is not awaiting your review, or its current terms or declared bindings do not match.'}</Notice>}</Panel></div>
 }
 
 export function IssuerOfferingReview({ product, snapshot, onSaved }: { product: PortalProduct; snapshot: PortalSnapshot; onSaved: (snapshot: PortalSnapshot) => void }) {
   const [checks, setChecks] = useState({ issuer_authority: false, terms: false, rights: false })
   const [decision, setDecision] = useState('APPROVED'), [notes, setNotes] = useState('')
   const command = usePortalCommand(onSaved)
+  const reviewAvailable = usePortalCommandAllowed('review_offering_issuer')
   const pkg = product.offering_package
-  const permitted = pkg?.origin === 'SUBMITTED' && pkg.can_review_issuer === true && product.allowed_actions?.includes('review_offering_issuer') === true
+  const approvalBlocked = offeringDocumentApprovalBlocked(product)
+  const currentDecision = approvalBlocked ? 'CHANGES_REQUIRED' : decision
+  const commonBindings = reviewCommonEnvelopeBindings(product)
+  const permitted = reviewAvailable && pkg?.origin === 'SUBMITTED' && pkg.can_review_issuer === true && product.allowed_actions?.includes('review_offering_issuer') === true
     && product.status === 'IN_REVIEW' && pkg.issuer_status === 'PENDING' && pkg.terms_hash === product.terms_hash && product.created_by !== snapshot.actor.id
+    && commonBindings !== null && (product.terms.terms_version !== 3 || productTermsSchema.safeParse(product.terms).success)
   return <Panel title="Appointed issuer decision" description="Issuer authority is separate from the manager who prepared this package and from Compliance review.">
     <CommandFeedback command={command} />
+    {approvalBlocked ? <Notice title="Signature not connected" tone="warning">Approval of this PDF-profiled revision is unavailable, even after sealing. You may request changes. Genuine signature integration is the next responsible owner's action.</Notice> : null}
     <Notice title="TEST package review only">The typed fund or property policies are proposed package disclosures, not a complete legal rights schedule or e-signature package. Property title and control evidence are not independently checked here. A manual test issuer decision is not legal sign-off, verified deployment or permission to open subscriptions.</Notice>
-    {permitted ? <form className={styles.form} onSubmit={event => { event.preventDefault(); void command.submit('review_offering_issuer', { product_id: product.id, offering_revision_id: pkg.id, expected_revision: product.revision, terms_hash: pkg.terms_hash, decision, notes, checks }) }}>
+    {pkg && product.terms.terms_version === 3 ? <ImmutableCommonEnvelopeSummary pkg={pkg} expectedV3 /> : null}
+    {permitted ? <form className={styles.form} onSubmit={event => { event.preventDefault(); if (commonBindings === null) return; void command.submit('review_offering_issuer', { product_id: product.id, offering_revision_id: pkg.id, expected_revision: product.revision, terms_hash: pkg.terms_hash, ...commonBindings, decision: currentDecision, notes, checks }) }}>
       <fieldset className={styles.fieldset} disabled={command.busy || command.unknown}><legend>Issuer evidence checks</legend>
-        {([{ key: 'issuer_authority', label: 'Appointed issuer authority and product mandate verified for this test' }, { key: 'terms', label: 'Exact preliminary package economics and exit terms reviewed' }, { key: 'rights', label: 'Rights and obligations represented in these preliminary terms reviewed' }] as const).map(item => <label key={item.key} className={styles.check}><input type="checkbox" checked={checks[item.key]} onChange={event => setChecks(current => ({ ...current, [item.key]: event.target.checked }))} />{item.label}</label>)}
-        <Field label="Issuer decision"><select value={decision} onChange={event => setDecision(event.target.value)}><option value="APPROVED">Approve this exact package</option><option value="CHANGES_REQUIRED">Request changes</option></select></Field>
+        {([{ key: 'issuer_authority', label: 'Appointed issuer authority and product mandate verified for this test' }, { key: 'terms', label: product.terms.terms_version === 3 ? 'Exact package economics, common-envelope and proposed configuration reviewed' : 'Exact preliminary package economics and exit terms reviewed' }, { key: 'rights', label: product.terms.terms_version === 3 ? 'Declared issuer, class, custody, register and governance rights reviewed' : 'Rights and obligations represented in these preliminary terms reviewed' }] as const).map(item => <label key={item.key} className={styles.check}><input type="checkbox" checked={checks[item.key]} onChange={event => setChecks(current => ({ ...current, [item.key]: event.target.checked }))} />{item.label}</label>)}
+        <Field label="Issuer decision"><select value={currentDecision} onChange={event => setDecision(event.target.value)}><option value="APPROVED" disabled={approvalBlocked}>Approve this exact package</option><option value="CHANGES_REQUIRED">Request changes</option></select></Field>
         <Field label="Issuer rationale" hint="Record the authority and evidence considered; at least 20 characters."><textarea required minLength={20} maxLength={3000} value={notes} onChange={event => setNotes(event.target.value)} /></Field>
-        <button type="submit" className={styles.button} disabled={decision === 'APPROVED' && !Object.values(checks).every(Boolean)}>Record issuer decision</button>
+        <button type="submit" className={styles.button} disabled={currentDecision === 'APPROVED' && !Object.values(checks).every(Boolean)}>Record issuer decision</button>
       </fieldset>
     </form> : <Notice title="Issuer action unavailable">{product.created_by === snapshot.actor.id ? 'A package creator cannot independently approve their own submission.' : 'A current, separately appointed Issuer Fund Manager must receive backend review authority for this exact package. An issuer name in a form is not an appointment.'}</Notice>}
   </Panel>

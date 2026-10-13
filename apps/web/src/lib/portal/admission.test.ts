@@ -19,7 +19,7 @@ vi.mock('@/components/portal/entry-screen', () => ({ EntryScreen: () => createEl
 
 import RegisterPage, { generateMetadata as registrationMetadata } from '@/app/register/page'
 import { PortalPage } from '@/components/portal/portal-page'
-import { isPortalSnapshot, loadPortalPage, readPortal } from './server'
+import { isPortalSnapshot, loadPortalPage, PackageReaderUnavailable, readPortal } from './server'
 import { APPLICANT_CONTEXT } from './operating-context'
 
 const origin = 'https://block-x-one-admission-test.vercel.app'
@@ -58,6 +58,36 @@ beforeEach(() => {
   mocks.rpc.mockImplementation((name: string) => ({ abortSignal: vi.fn().mockResolvedValue({ data: name === 'bx1_entry_read' ? entrySnapshot : snapshot, error: null }) }))
 })
 afterEach(() => vi.unstubAllEnvs())
+
+describe('bounded package read boundary and pre-cutover compatibility', () => {
+  const manager = { mode: 'ROLE' as const, organisationId: organisation, role: 'OfferingManager' as const }
+  const access = { version: 1, environment: 'TESTNET', actor_id: user.id, operating_context: manager, session_mode: 'TEST_PASSWORD', allowed_commands: ['submit_product'] }
+  const marked = { ...snapshot, operating_context: manager, offering_access: access }
+  it('validates a package marker against the authenticated reader and selected context', async () => {
+    mocks.rpc.mockReturnValue({ abortSignal: vi.fn().mockResolvedValue({ data: marked, error: null }) })
+    expect((await readPortal({ rpc: mocks.rpc } as never, manager)).snapshot).toEqual(marked)
+    for (const change of [{ actor_id: organisation }, { environment: 'MAINNET' }, { session_mode: 'STANDARD' },
+      { operating_context: { ...manager, organisationId: user.id } }, { allowed_commands: ['publish_product'] }]) {
+      expect(isPortalSnapshot({ ...marked, offering_access: { ...access, ...change } }, user.id)).toBe(false)
+    }
+    expect(isPortalSnapshot({ ...marked, stage2_access: { version: 1, environment: 'TESTNET', actor_id: user.id, operating_context: manager, session_mode: 'STANDARD', allowed_commands: [] } }, user.id)).toBe(false)
+  })
+  it.each(['OfferingManager', 'IssuerFundManager'] as const)('signals only the exact old-reader %s failure under trusted TEST pause configuration', async role => {
+    vi.stubEnv('BLOCKXONE_APP_ORIGIN', 'https://testnet.bx1.co.za')
+    vi.stubEnv('BLOCKXONE_TESTNET_ORDINARY_ENTRY_MFA_PAUSED', 'enabled')
+    mocks.rpc.mockReturnValue({ abortSignal: vi.fn().mockResolvedValue({ data: null, error: { code: '42501', message: 'admission_read_scope_denied' } }) })
+    await expect(readPortal({ rpc: mocks.rpc } as never, { ...manager, role })).rejects.toBeInstanceOf(PackageReaderUnavailable)
+    vi.stubEnv('BLOCKXONE_TESTNET_ORDINARY_ENTRY_MFA_PAUSED', 'disabled')
+    await expect(readPortal({ rpc: mocks.rpc } as never, { ...manager, role })).rejects.toMatchObject({ status: 403 })
+  })
+  it.each([{ code: '42501', message: 'native_membership_revoked' }, { code: '57014', message: 'admission_read_scope_denied' },
+    { code: '42501', message: 'admission_read_scope_denied\nextra' }])('never turns other backend failures into pre-cutover availability %#', async error => {
+    vi.stubEnv('BLOCKXONE_APP_ORIGIN', 'https://testnet.bx1.co.za')
+    vi.stubEnv('BLOCKXONE_TESTNET_ORDINARY_ENTRY_MFA_PAUSED', 'enabled')
+    mocks.rpc.mockReturnValue({ abortSignal: vi.fn().mockResolvedValue({ data: null, error }) })
+    await expect(readPortal({ rpc: mocks.rpc } as never, manager)).rejects.not.toBeInstanceOf(PackageReaderUnavailable)
+  })
+})
 
 describe('actual customer page admission', () => {
   it('rejects malformed guarded monitoring data instead of treating it as an empty Compliance queue', () => {
