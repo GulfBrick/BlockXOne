@@ -307,6 +307,7 @@
 .accountMenuBody[hidden] { display: none !important; }
 .accountEmail { margin: 0 0 12px; overflow-wrap: anywhere; color: var(--portal-muted); font-size: 16px; }
 .accountMenuBody .navLink { font-size: 16px; min-height: 44px; }
+.accountMenuBody button.textLink { min-width: 44px; min-height: 44px; padding: 6px; border: 0; background: transparent; cursor: pointer; }
 .accountMenuBody form { margin-top: 12px; }
 .accountMenuBody .buttonSecondary { width: 100%; }
 .applicantNotice { display: flex; flex-wrap: wrap; gap: 4px 10px; margin: 0 0 16px; color: var(--portal-muted); font-size: 16px; line-height: 1.4; }

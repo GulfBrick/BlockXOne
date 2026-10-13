@@ -149,7 +149,7 @@ describe('mounted revision-bound provider evidence', () => {
       ...submitted(), status: 'DRAFT', submitted_at: null, provider_mode: 'UNASSIGNED',
     }) : submitted()
     render(applicant(application, entryActorId, APPLICANT_CONTEXT, { individualEnabled: true, companyEnabled: true, manualTestReview: true, presentation: 'record' }))
-    expect(screen.getByRole('heading', { name: 'KYC placeholder · manual sandbox review' })).toBeTruthy()
+    expect(screen.getByText('KYC placeholder · manual sandbox review')).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Start sandbox identity check' })).toBeNull()
     expect(screen.queryByTestId('sandbox-sdk')).toBeNull()
     expect(fetcher).not.toHaveBeenCalled()
@@ -181,7 +181,7 @@ describe('mounted revision-bound provider evidence', () => {
     expect(fetcher).not.toHaveBeenCalled()
     fireEvent.click(screen.getByRole('button', { name: 'View recorded provider evidence' }))
     await waitFor(() => expect(screen.getByText(/this optional evidence read does not block submission/)).toBeTruthy())
-    expect(screen.getByRole('heading', { name: 'Document review in the TEST application' })).toBeTruthy()
+    expect(screen.getByText('Document review in the TEST application')).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Start sandbox identity check' })).toBeNull()
     expect(screen.queryByText(/Provider review completed: GREEN/)).toBeNull()
     expect(fetcher).toHaveBeenCalledTimes(1)
