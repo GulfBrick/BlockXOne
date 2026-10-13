@@ -68,7 +68,7 @@ beforeEach(() => {
 })
 afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals() })
 
-describe('restricted signature server boundary — synthetic external dependencies only', () => {
+describe('restricted signature server boundary - synthetic external dependencies only', () => {
   it('pins worker identity, project, TLS and database role with no owner/service-role fallback', () => {
     expect(signatureWorkerDatabaseConfig(env)).toMatchObject({ user: 'bx1_offering_signature_worker', max: 1, ssl: { rejectUnauthorized: true, servername: 'db.fegnnnlseuejkrusbbkv.supabase.co' } })
     for (const url of [env.BLOCKXONE_OFFERING_SIGNATURE_DATABASE_URL.replace('bx1_offering_signature_worker', 'postgres'), env.BLOCKXONE_OFFERING_SIGNATURE_DATABASE_URL.replace('bx1_offering_signature_worker', 'service_role'),
