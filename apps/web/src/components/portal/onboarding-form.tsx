@@ -18,6 +18,7 @@ import { saveDraftBeforeExit, useApplicationDraft } from './application-draft-cl
 import type { ApplicationDraftAnswers } from '@/lib/portal/application-drafts'
 import { CountrySelector } from './country-selector'
 import { countryName } from '@/lib/portal/countries'
+import { fictionalTestAnswers, fictionalTestEvidence } from '@/lib/portal/test-onboarding-samples'
 import styles from './portal.module.css'
 import flowStyles from './onboarding-flow.module.css'
 
@@ -228,6 +229,7 @@ export function OnboardingForm({ application, environment, onSaved, receipts, ha
   const [file, setFile] = useState<File | null>(null)
   const [uploadBusy, setUploadBusy] = useState(false)
   const [uploadMessage, setUploadMessage] = useState('')
+  const [sampleMessage, setSampleMessage] = useState('')
   const [scanQueue, setScanQueue] = useState<ScanQueueItem[] | null>(null)
   const [scanMessage, setScanMessage] = useState('')
   const [scanBusy, setScanBusy] = useState(false)
@@ -428,20 +430,43 @@ export function OnboardingForm({ application, environment, onSaved, receipts, ha
     // including an unknown outcome, never releases the unsaved-answer warning.
     if (!saved) setConfirmedSubmission(false)
   }
-  async function upload() {
-    if (!file || !uploadTitle.trim()) { setUploadMessage('Choose a file and give the evidence a descriptive title.'); return }
-    if (!['application/pdf', 'image/png', 'image/jpeg'].includes(file.type) || file.size > 4_194_304 || file.size === 0) { setUploadMessage('Use a PDF, PNG or JPEG between 1 byte and 4 MiB.'); return }
+  function useFictionalDetails() {
+    if (environment !== 'TESTNET' || locked || transition.current) return
+    if (!window.confirm('Replace the current application answers with fictional TEST examples? Selected evidence and stored history will be kept. Nothing is submitted or approved.')) return
+    setConfirmedSubmission(false); setAcknowledged(false); setOwnershipInputs({}); setCountrySearchPending(false)
+    setDetails(fictionalTestAnswers(persona, details.investor_type, details.documents))
+    setSampleMessage('Fictional answers filled in. Review them, generate missing evidence in Supporting evidence, and confirm the TEST declaration yourself. Nothing has been submitted.')
+  }
+  async function generateSampleEvidence() {
+    if (environment !== 'TESTNET' || locked || transition.current) return
+    const kind = evidenceSchema.shape.kind.parse(uploadKind)
+    const scope = scanScope
+    setUploadBusy(true); setUploadMessage('Generating a fictional sample…')
+    try {
+      const sample = await fictionalTestEvidence(kind)
+      if (activeScanScope.current !== scope) return
+      await upload({ file: sample, kind, title: `Fictional TEST ${kind.replaceAll('_', ' ')} sample` })
+    } catch (error) {
+      if (activeScanScope.current === scope) setUploadMessage(error instanceof Error ? error.message : 'Sample generation failed. Try Generate sample evidence again.')
+    } finally { if (activeScanScope.current === scope) setUploadBusy(false) }
+  }
+  async function upload(sample?: { file: File; kind: EvidenceDocument['kind']; title: string }) {
+    const selectedFile = sample?.file ?? file
+    const selectedTitle = sample?.title ?? uploadTitle
+    const selectedKind = sample?.kind ?? uploadKind
+    if (!selectedFile || !selectedTitle.trim()) { setUploadMessage('Choose a file and give the evidence a descriptive title.'); return }
+    if (!['application/pdf', 'image/png', 'image/jpeg'].includes(selectedFile.type) || selectedFile.size > 4_194_304 || selectedFile.size === 0) { setUploadMessage('Use a PDF, PNG or JPEG between 1 byte and 4 MiB.'); return }
     if (details.documents.length + pendingForApplication.length >= 8) { setUploadMessage('A maximum of eight evidence files can be attached or awaiting a scan.'); return }
     const scope = scanScope
     setUploadBusy(true); setUploadMessage('')
     try {
-      const body = new FormData(); body.set('file', file); body.set('kind', uploadKind); body.set('title', uploadTitle.trim())
+      const body = new FormData(); body.set('file', selectedFile); body.set('kind', selectedKind); body.set('title', selectedTitle.trim())
       const response = await fetch('/api/portal/documents', { method: 'POST', body, headers: { 'x-bx1-operating-context': JSON.stringify(operatingContext), 'x-bx1-expected-actor': expectedActor }, credentials: 'same-origin', cache: 'no-store', redirect: 'error', signal: AbortSignal.timeout(45000) })
       const result = await response.json()
       if (activeScanScope.current !== scope) return
       const upload = classifyDocumentUpload(response.status, result)
       if (!response.ok || !upload) throw new Error(typeof result.error === 'string' ? result.error : 'The upload state was not confirmed. Do not submit this file.')
-      setFile(null); setUploadTitle('')
+      if (!sample) { setFile(null); setUploadTitle('') }
       if (upload.kind === 'QUARANTINED') {
         setPendingForApplication(current => current.includes(upload.document.id) ? current : [...current, upload.document.id])
         setScanQueue(current => current ? [
@@ -450,7 +475,7 @@ export function OnboardingForm({ application, environment, onSaved, receipts, ha
         ] : [{ id: upload.document.id, kind: upload.document.kind, title: upload.document.title, state: 'QUARANTINED', created_at: new Date().toISOString() }])
         setUploadMessage('File quarantined for an independent scan. It is not attached to this application and cannot satisfy a submission requirement. Check the scan queue before submitting.')
       } else {
-        change('documents', [...details.documents, upload.document]); setUploadMessage('File uploaded privately. Save the draft to keep this selection, then send the completed application for review.')
+        change('documents', [...details.documents.filter(document => document.id !== upload.document.id), upload.document]); setUploadMessage('File uploaded privately. Save the draft to keep this selection, then send the completed application for review.')
       }
     } catch (error) { if (activeScanScope.current === scope) setUploadMessage(error instanceof Error ? error.message : 'The upload was not confirmed.'); }
     finally { if (activeScanScope.current === scope) setUploadBusy(false) }
@@ -511,6 +536,7 @@ export function OnboardingForm({ application, environment, onSaved, receipts, ha
         {application.review_notes ? <Notice title={application.status === 'CHANGES_REQUIRED' ? 'Changes requested by your reviewer' : 'Recorded review rationale'} tone="warning">{application.review_notes}</Notice> : null}
         {unconfirmedResult ? <Notice title="Application submission not confirmed" tone="warning">{unconfirmedResult}</Notice> : <CommandFeedback command={command} />}
         {editable ? <>
+        {environment === 'TESTNET' ? <section className={styles.sectionGap} aria-label="Fictional TEST helpers"><h3>No real documents needed in TEST</h3><p className={styles.muted}>Use fictional answers and clearly marked sample evidence. These helpers do not verify identity, approve an application or grant operating authority.</p><button type="button" className={styles.buttonSecondary} disabled={locked || draft.busy} onClick={useFictionalDetails}>Use fictional TEST details</button><p className={styles.muted}>For an organisation or entity, select the returned beneficial-ownership evidence in the ownership step. Your final declaration and submission remain separate.</p><p role="status" aria-live="polite" className={styles.muted}>{sampleMessage}</p></section> : null}
         {!reviewAvailable ? <div className={styles.sectionGap}><Notice title={next.title} tone="warning">{next.description}<p>{handoff ? 'Submission remains disabled until the saved workflow confirms an eligible review route. Use Refresh review availability to recheck without discarding these unsaved answers; do not create a replacement application.' : 'After the review route is ready, select Check review route and submit. The server rechecks its current assignment without reloading or discarding these fields.'}</p></Notice></div> : null}
         <form className={`${styles.form} ${flowStyles.questions}`} noValidate onSubmit={event => { event.preventDefault(); if (activeStep.id === 'review') void submitApplication(); else void nextStep() }}>
           <div className={flowStyles.stepMeta}><span>Step {currentIndex + 1} of {steps.length}</span><span className={flowStyles.draftBadge}>{application.status === 'CHANGES_REQUIRED' ? 'Changes requested' : 'Draft · Not submitted'}</span></div>
@@ -545,6 +571,7 @@ export function OnboardingForm({ application, environment, onSaved, receipts, ha
             <div className={styles.formRow}><Field label="Evidence type"><select value={uploadKind} onChange={event => setUploadKind(event.target.value)}><option value="IDENTITY">Identity evidence</option><option value="ADDRESS">Address evidence</option><option value="COMPANY">Company evidence</option><option value="BENEFICIAL_OWNERS">Beneficial ownership</option></select></Field><Field label="Document title"><input value={uploadTitle} onChange={event => setUploadTitle(event.target.value)} maxLength={160} placeholder="Fictional proof of identity" /></Field></div>
             <Field label="Choose fictional evidence"><input key={resumeVersion} type="file" accept="application/pdf,image/png,image/jpeg" onChange={event => setFile(event.target.files?.[0] ?? null)} /></Field>
             <div><button type="button" className={styles.buttonSecondary} disabled={!file || uploadBusy} onClick={() => void upload()}><Upload size={16} aria-hidden="true" />{uploadBusy ? 'Uploading…' : 'Upload private evidence'}</button></div>
+            {environment === 'TESTNET' ? <div><button type="button" className={styles.buttonSecondary} disabled={locked || draft.busy} onClick={() => void generateSampleEvidence()}>{uploadBusy ? 'Preparing evidence…' : 'Generate sample evidence'}</button><p className={styles.muted}>Generates and uploads a PNG for the selected evidence type, marked TEST ONLY / NOT A REAL DOCUMENT. Repeat for each required type. Only the server receipt can make it attachable; a quarantined file still needs its scan. If generation or upload fails, retry this action. Your device-file selection is kept.</p></div> : null}
           </fieldset>
           <div role="status" aria-live="polite" className={styles.muted}>{uploadMessage}</div>
           {details.documents.map(document => <div key={document.id}><PrivateDocument document={document} /><button type="button" className={styles.textLink} disabled={locked} onClick={() => change('documents', withoutDraftEvidence(details.documents, document.id))}>Exclude from this submission</button></div>)}

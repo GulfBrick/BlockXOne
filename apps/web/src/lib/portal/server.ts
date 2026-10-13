@@ -8,6 +8,7 @@ import { portalContextMatches, type PortalOperatingContext } from './operating-c
 import { fundingSnapshotSchema } from './funding-contracts'
 import { validatedStage2Access } from './stage2-access'
 import { validatedOfferingAccess } from './offering-access'
+import { validatedEvaluationAccess } from './evaluation-access'
 import { platformRelease } from '@/lib/platform-release'
 import { testOrdinaryEntryMfaPaused } from '@/lib/supabase/test-ordinary-entry'
 
@@ -39,6 +40,7 @@ export async function readPortal(client: SupabaseClient, operatingContext?: Port
   if (operatingContext && !portalContextMatches(data.operating_context, operatingContext)) throw new PortalError('The operating context could not be verified.', 503)
   if (data.stage2_access !== undefined && !validatedStage2Access(data, operatingContext, platformRelease(process.env)?.environment)) throw new PortalError('The admission context could not be verified.', 503)
   if (data.offering_access !== undefined && !validatedOfferingAccess(data, operatingContext, platformRelease(process.env)?.environment)) throw new PortalError('The package context could not be verified.', 503)
+  if (data.evaluation_access !== undefined && !validatedEvaluationAccess(data, operatingContext, platformRelease(process.env)?.environment)) throw new PortalError('Your TEST workspace access could not be verified.', 503)
   return { user: { id: user.id, email: user.email }, snapshot: data }
 }
 export function isPortalSnapshot(value: unknown, userId: string): value is PortalSnapshot {
@@ -50,6 +52,7 @@ export function isPortalSnapshot(value: unknown, userId: string): value is Porta
     && (v.funding === undefined || fundingSnapshotSchema.safeParse(v.funding).success)
     && (v.stage2_access === undefined || validatedStage2Access(v as PortalSnapshot) !== null)
     && (v.offering_access === undefined || validatedOfferingAccess(v as PortalSnapshot) !== null)
+    && (v.evaluation_access === undefined || validatedEvaluationAccess(v as PortalSnapshot) !== null)
 }
 export async function loadPortalPage(): Promise<PortalPageData> {
   requirePortalEnvironment()

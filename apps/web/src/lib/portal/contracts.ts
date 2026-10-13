@@ -4,6 +4,7 @@ import { fundingCommandOptions, type FundingSnapshot } from './funding-contracts
 import fundV2LegacyCrossrefs from './fund-v2-legacy-crossrefs.json'
 import type { Stage2Access } from './stage2-access'
 import type { OfferingAccess } from './offering-access'
+import type { EvaluationAccess } from './evaluation-access'
 import { offeringDocumentEvidenceSchema, type OfferingDocumentEvidence } from './offering-files'
 import { commonEnvelopeUuidSchema, productCommonEnvelopeSchema, productDeploymentConfigurationSchema, strictProductText, validateCommonEnvelopeReferences, type ProductCommonEnvelope, type ProductDeploymentConfiguration } from './product-common-envelope'
 
@@ -67,7 +68,7 @@ export type PortalCapability = 'create_product' | 'save_product' | 'submit_produ
 export type PortalOrganisation = {
   id: string; name: string; roles: string[]; status: string;
   native_organisation_id?: string | null; capabilities?: PortalCapability[];
-  authority_source?: 'NATIVE_BINDING' | 'LEGACY_OWNER';
+  authority_source?: 'NATIVE_BINDING' | 'LEGACY_OWNER' | 'TEST_EVALUATION';
 }
 export type PortalInvestmentAccount = {
   id: string; holder_user_id: string; application_id: string; kind: 'INDIVIDUAL';
@@ -269,6 +270,7 @@ export const customerMonitoringSnapshotSchema = z.array(z.object({
   }
 })
 export type PortalSnapshot = {
+  evaluation_access?: EvaluationAccess;
   stage2_access?: Stage2Access;
   offering_access?: OfferingAccess;
   rehearsal?: { version: 1; environment: 'TESTNET'; mode: 'SYNTHETIC_COMPLIANCE'; actor_id: string; operating_context: PortalOperatingContext };

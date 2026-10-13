@@ -1,5 +1,12 @@
 # BlockXOne platform releases
 
+## 1.2.0-rc.6 - TEST customer workspace access
+
+- Give explicitly invited TEST participants their existing manager or investor workspace through an audited, expiring TEST_EVALUATION source. Keep their real application decisions and MAIN unchanged.
+- Managers use the normal fund/property package create, save and submit commands. Investor workspaces are read-only; listing readiness, purchasing, funding, signing and holdings are not manufactured.
+- Add fictional draft answers and visibly watermarked sample evidence to the existing onboarding form. Evidence is uploaded using actual scoped server receipts, not invented verification results.
+- Preserve the earlier signature source and its failed acceptance history; this increment does not install or activate the unaccepted signature worker. No new test suites are run under the user's direction. Source review, a necessary cloud build and hosted access verification are recorded separately.
+
 ## 1.2.0-rc.5 — connected issuer-package signatures candidate
 
 - Connect both submitted v3 fund and property packages to a purpose-specific manager → Compliance → appointed issuer signing flow in the existing dashboards. Historical v1/v2 packages and ordinary review corrections remain unchanged.

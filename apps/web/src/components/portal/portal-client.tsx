@@ -6,6 +6,7 @@ import { APPLICANT_CONTEXT, portalContextKey, portalContextMatches, type PortalO
 import type { PlatformEnvironment } from '@/lib/platform-release'
 import { hasStage2CommandAccess, validatedStage2Access, type Stage2Access } from '@/lib/portal/stage2-access'
 import { hasOfferingCommandAccess, isTestPasswordWorkflow, validatedOfferingAccess, type OfferingAccess } from '@/lib/portal/offering-access'
+import { hasEvaluationCommandAccess, sameEvaluationGrant, validatedEvaluationAccess, type EvaluationAccess } from '@/lib/portal/evaluation-access'
 import styles from './portal.module.css'
 
 type Marker = { key: string; command: string; payloadHash: string }
@@ -14,18 +15,21 @@ type MarkerScope = { operatingContext: PortalOperatingContext; environment: Plat
 const markerKey = (actorId: string, scope?: MarkerScope) => scope
   ? `bx1-portal:${scope.environment}:${actorId}:${portalContextKey(scope.operatingContext)}:pending-request`
   : `bx1-portal:fegnnnlseuejkrusbbkv:${actorId}:pending-request`
-const PortalCommandContext = createContext<{ actorId: string; requests: { key: string; command: string }[]; snapshot?: PortalSnapshot; stage2Access?: Stage2Access; offeringAccess?: OfferingAccess; invalidAdmission?: boolean } & MarkerScope>({ actorId: '', requests: [], operatingContext: APPLICANT_CONTEXT, environment: 'TESTNET' })
+const PortalCommandContext = createContext<{ actorId: string; requests: { key: string; command: string }[]; snapshot?: PortalSnapshot; stage2Access?: Stage2Access; offeringAccess?: OfferingAccess; evaluationAccess?: EvaluationAccess; invalidAdmission?: boolean } & MarkerScope>({ actorId: '', requests: [], operatingContext: APPLICANT_CONTEXT, environment: 'TESTNET' })
 export function PortalCommandProvider({ snapshot, children, operatingContext = APPLICANT_CONTEXT, environment = 'TESTNET' }: { snapshot: PortalSnapshot; children: ReactNode; operatingContext?: PortalOperatingContext; environment?: PlatformEnvironment }) {
   const stage2Access = validatedStage2Access(snapshot, operatingContext, environment)
   const offeringAccess = validatedOfferingAccess(snapshot, operatingContext, environment)
+  const evaluationAccess = validatedEvaluationAccess(snapshot, operatingContext, environment)
   const invalidAdmission = 'rehearsal' in snapshot || snapshot.stage2_access !== undefined && !stage2Access
     || snapshot.offering_access !== undefined && !offeringAccess
-  return <PortalCommandContext.Provider value={{ actorId: snapshot.actor.id, requests: snapshot.requests ?? [], snapshot, operatingContext, environment, stage2Access: stage2Access ?? undefined, offeringAccess: offeringAccess ?? undefined, invalidAdmission }}>{children}</PortalCommandContext.Provider>
+    || snapshot.evaluation_access !== undefined && !evaluationAccess
+  return <PortalCommandContext.Provider value={{ actorId: snapshot.actor.id, requests: snapshot.requests ?? [], snapshot, operatingContext, environment, stage2Access: stage2Access ?? undefined, offeringAccess: offeringAccess ?? undefined, evaluationAccess: evaluationAccess ?? undefined, invalidAdmission }}>{children}</PortalCommandContext.Provider>
 }
 export function usePortalOperatingContext() { return useContext(PortalCommandContext).operatingContext }
 export function usePortalActorId() { return useContext(PortalCommandContext).actorId }
 function commandAllowed(context: ContextType<typeof PortalCommandContext>, command: string) {
   if (context.invalidAdmission) return false
+  if (context.snapshot?.evaluation_access !== undefined) return hasEvaluationCommandAccess(context.snapshot, command, context.operatingContext)
   return !context.snapshot || !isTestPasswordWorkflow(context.snapshot)
     || hasStage2CommandAccess(context.snapshot, command, context.operatingContext)
     || hasOfferingCommandAccess(context.snapshot, command, context.operatingContext)
@@ -71,7 +75,7 @@ export function mayDiscardDeniedPortalRequest(definitive: boolean, hadPendingAtt
   return definitive && !hadPendingAttempt
 }
 
-export async function postPortalCommand(command: PortalCommand, operatingContext: PortalOperatingContext = APPLICANT_CONTEXT, expectedActor?: string, expectedStage2Access?: Stage2Access, expectedOfferingAccess?: OfferingAccess): Promise<PortalSnapshot> {
+export async function postPortalCommand(command: PortalCommand, operatingContext: PortalOperatingContext = APPLICANT_CONTEXT, expectedActor?: string, expectedStage2Access?: Stage2Access, expectedOfferingAccess?: OfferingAccess, expectedEvaluationAccess?: EvaluationAccess): Promise<PortalSnapshot> {
   const response = await fetch('/api/portal/command', { method: 'POST', credentials: 'same-origin', cache: 'no-store', redirect: 'error', headers: { 'Content-Type': 'application/json', ...(expectedActor ? { 'x-bx1-expected-actor': expectedActor } : {}) }, body: JSON.stringify({ ...command, operating_context: operatingContext }), signal: AbortSignal.timeout(45000) })
   const contentType = response.headers.get('content-type') ?? ''
   if (!contentType.includes('application/json')) throw new Error('The platform did not confirm the outcome. Retry the saved request, not a new application.')
@@ -85,6 +89,9 @@ export async function postPortalCommand(command: PortalCommand, operatingContext
   if ('rehearsal' in result.snapshot) throw new Error('The saved result is not a normal admission record. Refresh to reconcile the original request.')
   const savedAccess = validatedStage2Access(result.snapshot, operatingContext)
   const savedOfferingAccess = validatedOfferingAccess(result.snapshot, operatingContext)
+  const savedEvaluation = validatedEvaluationAccess(result.snapshot, operatingContext)
+  if (result.snapshot.evaluation_access !== undefined && (!savedEvaluation || !hasEvaluationCommandAccess(result.snapshot, command.command, operatingContext))) throw new Error('The saved TEST workspace result could not be verified. Refresh to reconcile the original request.')
+  if (expectedEvaluationAccess && (!savedEvaluation || !sameEvaluationGrant(expectedEvaluationAccess, savedEvaluation))) throw new Error('Your TEST workspace access changed. Refresh to reconcile the original request.')
   if (result.snapshot.stage2_access !== undefined && !savedAccess) throw new Error('The saved admission context could not be verified. Refresh to reconcile the original request.')
   if (result.snapshot.offering_access !== undefined && !savedOfferingAccess) throw new Error('The saved offering context could not be verified. Refresh to reconcile the original request.')
   if (isTestPasswordWorkflow(result.snapshot) && !hasStage2CommandAccess(result.snapshot, command.command, operatingContext)
@@ -133,7 +140,7 @@ export function usePortalCommand(onSaved: (snapshot: PortalSnapshot) => void) {
       if (!isCurrent()) return false
       savedRequest.current = prepared
       sent = true
-      const snapshot = await postPortalCommand(prepared, context.operatingContext, context.actorId, context.stage2Access, context.offeringAccess)
+      const snapshot = await postPortalCommand(prepared, context.operatingContext, context.actorId, context.stage2Access, context.offeringAccess, context.evaluationAccess)
       clearPortalMarker(sessionStorage, context.actorId, prepared, context)
       if (!isCurrent()) return false
       savedRequest.current = null; setUnknown(false); onSaved(snapshot); setMessage('Saved to your hosted workspace.'); return true

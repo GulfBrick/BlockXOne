@@ -10,6 +10,7 @@ import { getRoleDashboard } from '@/lib/portal/role-dashboards'
 import { APPLICANT_CONTEXT, appointedIssuerProducts, portalContextKey, portalContextMatches, portalScopeHref, portalViewAllowed, type PortalOperatingContext } from '@/lib/portal/operating-context'
 import { hasStage2CommandAccess, isTestPasswordAdmission, stage2AccessSchema } from '@/lib/portal/stage2-access'
 import { hasOfferingCommandAccess, isTestPasswordOffering, isTestPasswordWorkflow, validatedOfferingAccess } from '@/lib/portal/offering-access'
+import { sameEvaluationGrant, validatedEvaluationAccess } from '@/lib/portal/evaluation-access'
 import { CommandFeedback, PortalCommandProvider, usePortalCommand } from './portal-client'
 import { CustomerMonitoringDecision, CustomerMonitoringQueue } from './customer-monitoring'
 import { ProductForm } from './product-form'
@@ -279,6 +280,12 @@ function OperatingPortalScreen({ data, view, id, operatingContext, release, scop
   const lostAccess = data.snapshot.stage2_access !== undefined && (snapshot.stage2_access === undefined
     || snapshot.stage2_access.session_mode !== data.snapshot.stage2_access.session_mode)
   const offeringAccess = validatedOfferingAccess(snapshot, operatingContext, release?.environment)
+  const evaluation = validatedEvaluationAccess(snapshot, operatingContext, release?.environment)
+  const initialEvaluation = validatedEvaluationAccess(data.snapshot, operatingContext, release?.environment)
+  const invalidEvaluation = snapshot.evaluation_access !== undefined && (!evaluation || !release || !operatingContext || evaluation.actor_id !== data.user.id
+    || !evaluation.allowed_views.some(path => path === view))
+  const lostEvaluation = data.snapshot.evaluation_access !== undefined && (!initialEvaluation || !evaluation
+    || !sameEvaluationGrant(evaluation, initialEvaluation))
   const invalidOfferingAccess = snapshot.offering_access !== undefined && (!offeringAccess || !operatingContext || !release
     || offeringAccess.actor_id !== data.user.id || !portalContextMatches(snapshot.operating_context, operatingContext))
   const initialOfferingAccess = validatedOfferingAccess(data.snapshot, operatingContext, release?.environment)
@@ -286,17 +293,19 @@ function OperatingPortalScreen({ data, view, id, operatingContext, release, scop
     || offeringAccess.actor_id !== initialOfferingAccess.actor_id || offeringAccess.environment !== initialOfferingAccess.environment
     || offeringAccess.session_mode !== initialOfferingAccess.session_mode
     || !portalContextMatches(offeringAccess.operating_context, initialOfferingAccess.operating_context))
-  if ('rehearsal' in data.snapshot || 'rehearsal' in snapshot || invalidAccess || lostAccess || invalidOfferingAccess || lostOfferingAccess) return <Notice title="Saved admission state unavailable" tone="warning">The saved state does not match this signed-in person, environment and operating capacity. Refresh saved state before continuing; your application history is unchanged.</Notice>
+  if ('rehearsal' in data.snapshot || 'rehearsal' in snapshot || invalidAccess || lostAccess || invalidOfferingAccess || lostOfferingAccess || invalidEvaluation || lostEvaluation) return <Notice title="Saved admission state unavailable" tone="warning">The saved state does not match this signed-in person, environment and operating capacity. Refresh saved state before continuing; your application history is unchanged.</Notice>
   const passwordAdmission = isTestPasswordAdmission(snapshot)
   const passwordOffering = isTestPasswordOffering(snapshot)
   const passwordWorkflow = isTestPasswordWorkflow(snapshot)
-  const workflowPermits = (command: string) => !passwordWorkflow || hasStage2CommandAccess(snapshot, command, operatingContext) || hasOfferingCommandAccess(snapshot, command, operatingContext)
-  if (passwordWorkflow && operatingContext?.mode === 'ROLE' && !['ComplianceOfficer', 'SuperAdmin'].includes(operatingContext.role)
+  const workflowPermits = (command: string) => evaluation ? evaluation.allowed_commands.some(allowed => allowed === command) : !passwordWorkflow || hasStage2CommandAccess(snapshot, command, operatingContext) || hasOfferingCommandAccess(snapshot, command, operatingContext)
+  if (!evaluation && passwordWorkflow && operatingContext?.mode === 'ROLE' && !['ComplianceOfficer', 'SuperAdmin'].includes(operatingContext.role)
     && !(passwordOffering && ['OfferingManager', 'IssuerFundManager'].includes(operatingContext.role))) return <Notice title="Action unavailable in this capacity" tone="warning">Password-only workflow access does not open this operating role. Open your personal application capacity; financial and signing powers remain separately guarded.</Notice>
   if (passwordWorkflow && (!operatingContext || !portalViewAllowed(view, operatingContext, snapshot, id))) return <Notice title="Action unavailable in this capacity" tone="warning">Open your assigned workflow workspace. Financial and signing actions are not granted by customer admission or package preparation.</Notice>
-  const organisations = productManagementOrganisations(snapshot, operatingContext)
+  const organisations = evaluation ? snapshot.organisations.filter(org => evaluation.operating_context.role === 'OfferingManager'
+    && org.id === evaluation.product_organisation_id && org.authority_source === 'TEST_EVALUATION' && org.status === 'ACTIVE'
+    && org.native_organisation_id === evaluation.operating_context.organisationId && org.roles.includes('OfferingManager')) : productManagementOrganisations(snapshot, operatingContext)
   const managerContext = operatingContext?.mode !== 'ROLE' || operatingContext.role === 'OfferingManager'
-  const createOrganisations = managerContext && workflowPermits('create_product') ? organisations.filter(org => permits(org, 'create_product', operatingContext)) : []
+  const createOrganisations = managerContext && workflowPermits('create_product') && (!evaluation || evaluation.allowed_views.includes('/portal/products/new')) ? organisations.filter(org => permits(org, 'create_product', operatingContext)) : []
   const canReview = snapshot.actor.can_review && operatingContext?.mode === 'ROLE' && operatingContext.role === 'ComplianceOfficer'
   const role = operatingContext?.mode === 'ROLE' ? operatingContext.role : undefined
   const ownApplications = snapshot.applications.filter(item => item.user_id === snapshot.actor.id)
@@ -311,7 +320,8 @@ function OperatingPortalScreen({ data, view, id, operatingContext, release, scop
   const hasNamedRepresentativeProposal = operatingContext?.mode === 'APPLICANT' && snapshot.investing_representative_mandates?.some(item => item.representative_user_id === snapshot.actor.id && item.applicant_user_id !== snapshot.actor.id && Boolean(item.proposal_hash))
   const entityOnly = !hasCurrentIndividualInvestor && (hasEntityInvestorCapacity || hasEntityAccountView)
   const canInvest = role === 'Investor' || (operatingContext?.mode !== 'ROLE' && (hasInvestorCapacity || hasEntityAccountView))
-  const capabilities = { manageProducts: !passwordWorkflow && organisations.length > 0 || passwordOffering && (role === 'OfferingManager' || role === 'IssuerFundManager'), reviewCompliance: canReview, invest: !passwordWorkflow && canInvest }
+  const capabilities = evaluation ? { manageProducts: role === 'OfferingManager' && organisations.length > 0, reviewCompliance: false, invest: false, evaluationInvestor: role === 'Investor', evaluationViews: evaluation.allowed_views }
+    : { manageProducts: !passwordWorkflow && organisations.length > 0 || passwordOffering && (role === 'OfferingManager' || role === 'IssuerFundManager'), reviewCompliance: canReview, invest: !passwordWorkflow && canInvest }
   const ownSubscriptions = snapshot.subscriptions.filter(item => item.investor_id === snapshot.actor.id)
   const managedProducts = passwordOffering && operatingContext?.mode === 'ROLE' && role === 'IssuerFundManager'
     ? appointedIssuerProducts(snapshot, operatingContext)
@@ -330,7 +340,7 @@ function OperatingPortalScreen({ data, view, id, operatingContext, release, scop
   const selectedProductAppointment = id ? snapshot.product_appointments?.find(item => item.id === id) : undefined
   const reviewSnapshot = canReview ? snapshot : { ...snapshot, actor: { ...snapshot.actor, can_review: false } }
   const config = PAGE[view]
-  const roleTitle = role === 'Investor' ? 'Your investments and orders.' : passwordOffering && role === 'OfferingManager' ? 'Your products and offering packages.' : passwordOffering && role === 'IssuerFundManager' ? 'Your appointed offering packages.' : role === 'OfferingManager' || role === 'IssuerFundManager' ? 'Your products and incoming orders.' : role === 'ComplianceOfficer' ? 'Your compliance work queue.' : role === 'SuperAdmin' ? 'Your platform administration queue.' : role === 'TreasuryOperator' ? 'Your funding operations.' : role === 'FinancialController' ? 'Your independent reconciliation queue.' : undefined
+  const roleTitle = evaluation ? role === 'OfferingManager' ? 'Your TEST fund and property drafts.' : 'Your TEST investor workspace.' : role === 'Investor' ? 'Your investments and orders.' : passwordOffering && role === 'OfferingManager' ? 'Your products and offering packages.' : passwordOffering && role === 'IssuerFundManager' ? 'Your appointed offering packages.' : role === 'OfferingManager' || role === 'IssuerFundManager' ? 'Your products and incoming orders.' : role === 'ComplianceOfficer' ? 'Your compliance work queue.' : role === 'SuperAdmin' ? 'Your platform administration queue.' : role === 'TreasuryOperator' ? 'Your funding operations.' : role === 'FinancialController' ? 'Your independent reconciliation queue.' : undefined
   const title = selected && ['/portal/products/detail', '/portal/opportunities/detail'].includes(view) ? selected.terms.name : selectedApplication && view === '/portal/compliance/detail' ? selectedApplication.details.full_name : selectedEligibility && view === '/portal/compliance/detail' ? `Eligibility: ${selectedEligibility.product_name ?? snapshot.products.find(product => product.id === selectedEligibility.product_id)?.terms.name ?? 'offering'}` : selectedEntityMandate && view === '/portal/compliance/detail' ? `Entity mandate: ${selectedEntityMandate.entity_name}` : selectedMandate && view === '/portal/compliance/detail' ? `Representative appointment: ${selectedMandate.organisation_name}` : selectedProductAppointment && view === '/portal/compliance/detail' ? 'Product service appointment' : view === '/portal' && roleTitle ? roleTitle : config.title
   const href = (path: PortalPath, recordId?: string) => portalScopeHref(path, operatingContext, recordId)
   const parentPath: PortalPath = config.active === 'products' ? '/portal/products' : config.active === 'compliance' ? '/portal/compliance' : config.active === 'portfolio' ? '/portal/portfolio' : config.active === 'onboarding' ? '/portal/onboarding' : '/portal/opportunities'
@@ -357,6 +367,27 @@ function OperatingPortalScreen({ data, view, id, operatingContext, release, scop
     return <div className={styles.stack}>{productStats()}{role === 'IssuerFundManager' ? <Panel title="Packages awaiting your issuer decision" description="Only server-authorised packages appear; preparing a product does not grant the right to approve it.">{issuerCases.length ? <ul>{issuerCases.map(product => <li key={product.id}><Link href={href('/portal/products/detail', product.id)} className={styles.textLink}>{product.terms.name} · package {product.offering_package?.package_number}</Link></li>)}</ul> : <p className={styles.muted}>No package is currently assigned to this issuer context for a decision. An issuer appointment is separate from a manager relationship.</p>}</Panel> : null}<ProductRegister products={managedProducts} canCreate={createOrganisations.length > 0} operatingContext={operatingContext} />{passwordWorkflow ? <Notice title="Package preparation and review">This connected workflow prepares and reviews the exact offering package. An approved package is still unopened; actual e-signature evidence and verified technical readiness remain separate requirements before payment or issuance.</Notice> : orderOrganisations.length ? <SubscriptionOrders subscriptions={incomingSubscriptions} products={managedProducts} incoming onSaved={setSnapshot} operatingContext={operatingContext} funding={snapshot.funding} /> : <Notice title="Order access unavailable">Your current mandate does not provide an incoming-order view. This is not an empty order book or a zero balance.</Notice>}</div>
   }
   function content() {
+    if (evaluation) {
+      if (view === '/portal/onboarding') return <Link href="/portal/onboarding?mode=applicant" className={styles.button}>View my separate application</Link>
+      if (role === 'OfferingManager') {
+        if (!organisations.length) return unavailable()
+        if (view === '/portal/products/new') return createOrganisations.length ? <ProductForm organisations={createOrganisations} onSaved={setSnapshot} operatingContext={operatingContext} /> : unavailable()
+        if (view === '/portal/products/detail') {
+          if (!selected) return unavailable()
+          const organisation = organisations.find(org => org.id === selected.organisation_id)
+          if (!organisation) return unavailable()
+          const commands = (organisation.capabilities ?? []).filter(command => workflowPermits(command) && ['create_product', 'save_product', 'submit_product'].includes(command))
+          return <div className={styles.stack}><ProductFacts product={selected} /><ProductNarrative product={selected} /><ProductActions product={selected} onSaved={setSnapshot} availableCommands={commands} />{commands.includes('save_product') && selected.allowed_actions?.includes('save_product') && ['DRAFT', 'CHANGES_REQUIRED'].includes(selected.status) ? <ProductForm key={`${selected.id}-${selected.revision}`} organisations={[organisation]} product={selected} onSaved={setSnapshot} operatingContext={operatingContext} /> : null}</div>
+        }
+        if (view === '/portal' || view === '/portal/products') return <ProductRegister products={managedProducts} canCreate={createOrganisations.length > 0} operatingContext={operatingContext} />
+      }
+      if (role === 'Investor') {
+        if (view === '/portal/portfolio') return <Panel title="Your TEST portfolio"><EmptyState title="Holdings are not enabled in this TEST workspace" description="Evaluation access does not create investments, balances or performance history. Buying, funding and issuance are not enabled here." href={href('/portal/opportunities')} action="Browse TEST offerings" /></Panel>
+        if (view === '/portal/opportunities/detail') return selected && isOfferingSubscribable(selected) ? <div className={styles.stack}><ProductFacts product={selected} /><ProductNarrative product={selected} /><Notice title="Read-only TEST offering">Purchasing, eligibility requests and investment-account creation are not enabled in this evaluation workspace.</Notice></div> : unavailable()
+        if (view === '/portal' || view === '/portal/opportunities') return <Panel title="Browse TEST offerings" description="Only currently published, technically verified offerings returned by the server appear. Browsing does not grant purchase eligibility.">{published.length ? <div className={styles.productGrid}>{published.map(product => <ProductCard key={product.id} product={product} operatingContext={operatingContext} />)}</div> : <EmptyState title="No published TEST offerings yet" description="Managers can prepare fund and property drafts. Those drafts are not investments and will not appear here until the existing publication requirements are met." />}</Panel>
+      }
+      return unavailable()
+    }
     if (view === '/portal/orders/detail') {
       const subscription = snapshot.subscriptions.find(item => item.id === id)
       const context = operatingContext ?? APPLICANT_CONTEXT
@@ -399,10 +430,11 @@ function OperatingPortalScreen({ data, view, id, operatingContext, release, scop
   }
 
   return <PortalCommandProvider snapshot={snapshot} operatingContext={operatingContext} environment={release?.environment}><PortalShell user={data.user} organisationName={scope?.organisationName ?? organisations[0]?.name} capabilities={capabilities} active={config.active} title={title} description={config.description} eyebrow={config.eyebrow} breadcrumbs={breadcrumbs} release={release} operatingContext={operatingContext} actions={<a href={href(view, id)} className={styles.buttonSecondary}>Refresh saved state</a>}>
-    {scopes?.length ? <nav aria-label="Assigned role and organisation" className={`${styles.scopeSelector} ${styles.sectionGap}`}>
+    {evaluation ? <Notice title="Your TEST workspace">{role === 'OfferingManager' ? 'Create, save and submit fictional fund or property drafts.' : 'Browse published TEST offerings and inspect the portfolio workspace without placing orders.'} This access is separate from your application decision; identity verification, production admission and signing authority are not implied. <Link href="/portal/onboarding?mode=applicant" className={styles.textLink}>View my application status</Link></Notice> : null}
+    {scopes?.length ? <nav aria-label={evaluation ? 'TEST workspace and organisation' : 'Assigned role and organisation'} className={`${styles.scopeSelector} ${styles.sectionGap}`}>
       {scope ? <p>Working as <strong>{getRoleDashboard(scope.role)?.title ?? scope.role}</strong> in <strong>{scope.organisationName}</strong></p> : <p>Working with your <strong>personal and applicant relationships</strong>. An approved product-owner relationship here does not grant a native organisation role.</p>}
       <div className={styles.actions}><Link href={portalScopeHref('/portal', APPLICANT_CONTEXT)} className={styles.buttonSecondary} aria-current={operatingContext?.mode === 'APPLICANT' ? 'page' : undefined}>My personal / applicant relationships</Link>{scopes.map(item => <Link key={`${item.organisationId}-${item.role}`} href={portalScopeHref('/portal', { mode: 'ROLE', organisationId: item.organisationId, role: item.role })} className={styles.buttonSecondary} aria-current={item.organisationId === scope?.organisationId && item.role === scope?.role ? 'page' : undefined}>{item.organisationName} · {getRoleDashboard(item.role)?.title ?? item.role}</Link>)}</div>
     </nav> : null}
-    <div className={styles.stack}>{operatingContext?.mode === 'APPLICANT' && (view === '/portal' || view === '/portal/portfolio') ? <RepresentativeProposalInbox snapshot={snapshot} operatingContext={operatingContext} onSaved={setSnapshot} /> : null}{content()}<RoleHelp operatingContext={operatingContext} /></div>
+    <div className={styles.stack}>{operatingContext?.mode === 'APPLICANT' && (view === '/portal' || view === '/portal/portfolio') ? <RepresentativeProposalInbox snapshot={snapshot} operatingContext={operatingContext} onSaved={setSnapshot} /> : null}{content()}{!evaluation ? <RoleHelp operatingContext={operatingContext} /> : null}</div>
   </PortalShell></PortalCommandProvider>
 }

@@ -1,8 +1,9 @@
 {
   "product": "BlockXOne",
-  "version": "1.2.0-rc.5",
+  "version": "1.2.0-rc.6",
   "status": "release-candidate",
-  "baseSource": "4ae9c15b03a01b25a294c40a16eb838c4cc42f40",
+  "baseSource": "fe14412f33a7060ba5310830412851de7a0d6d57",
+  "testWorkspaceAccess": {"source": "TEST_EVALUATION", "roles": ["OfferingManager", "Investor"], "managerCommands": ["create_product", "save_product", "submit_product"], "investorReadOnly": true, "customerApprovalInferred": false, "mainnetAllowed": false, "acceptance": "bounded source review and TEST-only cloud build/hosted verification; no new test suites"},
   "sourceIdentity": "VERCEL_GIT_COMMIT_SHA",
   "environmentSource": "validated deployment target, canonical origin and Supabase project",
   "sharedEntry": "/login",

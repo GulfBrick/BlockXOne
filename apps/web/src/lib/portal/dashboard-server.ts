@@ -13,6 +13,7 @@ import { selectEntryApplication } from './entry-contracts'
 import { customerScopedReadAvailable } from './customer-handoff'
 import { validatedStage2Access } from './stage2-access'
 import { validatedOfferingAccess } from './offering-access'
+import { evaluationContextMatches, sameEvaluationGrant, validatedEvaluationAccess } from './evaluation-access'
 
 export async function loadRoleDashboard(query: DashboardQuery) {
   const release = platformRelease(process.env)
@@ -36,6 +37,14 @@ export async function loadRoleDashboard(query: DashboardQuery) {
     if (!applicant && !scope) throw new PortalError('This role or organisation is not assigned to you.', 403)
     if (query.application !== undefined && (!applicant || !selectEntryApplication(entry, query.application))) throw new PortalError('This application is not available to your signed-in account.', 403)
     const operatingContext: PortalOperatingContext = scope ? { mode: 'ROLE', organisationId: scope.organisationId, role: scope.role } : APPLICANT_CONTEXT
+    const entryEvaluation = (entry.evaluation_access ?? []).find(item => evaluationContextMatches(item, operatingContext))
+    if (entryEvaluation) {
+      const portal = await readPortal(client, operatingContext)
+      const evaluation = validatedEvaluationAccess(portal.snapshot, operatingContext, release.environment)
+      if (!scope || portal.user.id !== user.id || !evaluation || !sameEvaluationGrant(entryEvaluation, evaluation)
+        || !await isMfaContextCurrent(client, context)) throw new PortalError('Refresh your TEST workspace access.', 403)
+      return { kind: 'role' as const, user: entry.actor, release, scope, operatingContext, portal, scopes, ...dashboardProjection(scope, release.environment, portal.snapshot) }
+    }
     const packageScope = scope && ['OfferingManager', 'IssuerFundManager'].includes(scope.role)
       && (entry.stage2_access?.session_mode === 'TEST_PASSWORD' || !hasRequiredMfa(context))
     const ordinaryPackageEntry = async () => {

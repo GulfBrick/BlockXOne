@@ -3,6 +3,7 @@ import { BX1_ROLES } from '@/lib/supabase/contracts'
 import { applicationDetailsSchema, applicationDraftDetailsSchema, applicationStatuses } from './contracts'
 import { customerHandoffSchema, customerWorkflowSchema } from './customer-handoff'
 import { stage2AccessSchema } from './stage2-access'
+import { evaluationAccessSchema } from './evaluation-access'
 
 const id = z.string().uuid()
 export const entryApplicationSchema = z.object({
@@ -39,6 +40,7 @@ export const entrySnapshotSchema = z.object({
   admission: z.object({ manual_test_review: z.boolean() }),
   workflow: customerWorkflowSchema.optional(),
   stage2_access: stage2AccessSchema.optional(),
+  evaluation_access: z.array(evaluationAccessSchema).optional(),
   organisation_mandates: z.array(entryMandateSchema).optional(),
   requests: z.array(z.object({ key: id, command: z.enum(['start_application', 'submit_application', 'request_representative_mandate']), application_id: id })).optional(),
 })

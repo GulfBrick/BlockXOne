@@ -3,6 +3,7 @@ import type { PlatformEnvironment } from '../platform-release'
 import type { PortalSnapshot } from './contracts'
 import { hasOfferingCommandAccess, isTestPasswordWorkflow, validatedOfferingAccess } from './offering-access'
 import { appointedIssuerProducts } from './operating-context'
+import { validatedEvaluationAccess } from './evaluation-access'
 
 export type DashboardScope = { organisationId: string; organisationName: string; role: Bx1Role }
 export type DashboardQuery = Record<string, string | string[] | undefined>
@@ -28,6 +29,20 @@ export function dashboardProjection(scope: DashboardScope, environment: Platform
   if (environment !== 'TESTNET') return { availablePaths: paths, queue, queueMessage: 'Live business services are not connected in this release. No balances or completed activity are inferred.' }
   if (!snapshot) return { availablePaths: paths, queue, queueMessage: 'Saved test-environment records could not be loaded. This is not a zero balance or an empty work queue.' }
   const operatingContext = { mode: 'ROLE' as const, organisationId: scope.organisationId, role: scope.role }
+  const evaluation = validatedEvaluationAccess(snapshot, operatingContext, environment)
+  if (snapshot.evaluation_access !== undefined) {
+    if (!evaluation) return { availablePaths: paths, queue, queueMessage: 'The TEST workspace permission could not be verified. Refresh your signed-in context.' }
+    paths.push(...evaluation.allowed_views)
+    if (scope.role === 'OfferingManager') {
+      const organisation = snapshot.organisations.find(org => org.id === evaluation.product_organisation_id && org.authority_source === 'TEST_EVALUATION'
+        && org.status === 'ACTIVE' && org.native_organisation_id === scope.organisationId && org.roles.includes('OfferingManager'))
+      if (!organisation) return { availablePaths: ['/workspace/security'], queue, queueMessage: 'The TEST product organisation could not be verified.' }
+      const products = snapshot.products.filter(product => product.organisation_id === organisation.id)
+      queue.push({ label: 'TEST product drafts', value: products.filter(product => ['DRAFT', 'CHANGES_REQUIRED'].includes(product.status)).length, description: 'Fictional fund and property drafts in this TEST organisation.' },
+        { label: 'Submitted TEST drafts', value: products.filter(product => product.status === 'IN_REVIEW').length, description: 'Submitted for review, not published or open for investment.' })
+    }
+    return { availablePaths: [...new Set(paths)], queue, queueMessage: 'TEST evaluation access is separate from your application decision. No purchase, funding, holdings or production authority is granted.' }
+  }
   const offering = validatedOfferingAccess(snapshot, operatingContext, environment)
   if (snapshot.offering_access !== undefined && !offering) return { availablePaths: paths, queue, queueMessage: 'The current package context could not be verified. Refresh your signed-in context.' }
   paths.push('/portal/onboarding')

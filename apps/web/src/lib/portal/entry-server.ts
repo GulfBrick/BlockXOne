@@ -9,6 +9,7 @@ import { customerWorkflowSchema, validatedCustomerHandoff } from './customer-han
 import { testOrdinaryEntryMfaPaused } from '@/lib/supabase/test-ordinary-entry'
 import { validatedStage2Access } from './stage2-access'
 import { APPLICANT_CONTEXT } from './operating-context'
+import { validatedEvaluationAccess } from './evaluation-access'
 
 export function requireEntryEnvironment() {
   if (!identityEnvironmentEnabled(process.env)) throw new PortalError('The identity environment is not configured.', 503)
@@ -32,6 +33,12 @@ export async function readEntry(client: SupabaseClient): Promise<EntrySnapshot> 
   if (!release || !workflow.success || workflow.data.environment !== release.environment || workflow.data.actor_id !== user.id) throw new PortalError('The customer workflow configuration could not be verified.', 503)
   const access = validatedStage2Access(snapshot.data, APPLICANT_CONTEXT, release.environment)
   if (snapshot.data.stage2_access !== undefined && !access) throw new PortalError('The admission context could not be verified.', 503)
+  const evaluations = snapshot.data.evaluation_access ?? []
+  if (new Set(evaluations.map(item => item.entitlement_id)).size !== evaluations.length || evaluations.some(item =>
+    !validatedEvaluationAccess({ actor: snapshot.data.actor, evaluation_access: item }, item.operating_context, release.environment)
+    || !snapshot.data.contexts.some(context => context.organisation_id === item.operating_context.organisationId && context.roles.includes(item.operating_context.role)))) {
+    throw new PortalError('Your TEST workspace access could not be verified.', 503)
+  }
   if (mfa && !hasRequiredMfa(mfa) && (!testPause || access?.session_mode !== 'TEST_PASSWORD')) throw new PortalError('Complete multi-factor authentication.', 403)
   if (snapshot.data.applications.some(application => application.handoff != null && !validatedCustomerHandoff(snapshot.data, application, release.environment))) throw new PortalError('The saved customer handoff could not be verified.', 503)
   if (mfa && !await isMfaContextCurrent(client, mfa)) throw new PortalError('Complete sign-in again.', 403)

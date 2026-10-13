@@ -3,6 +3,7 @@ import { BX1_ROLES } from '@/lib/supabase/contracts'
 import type { PortalPath, PortalSnapshot } from './contracts'
 import { hasStage2CommandAccess, validatedStage2Access } from './stage2-access'
 import { hasOfferingCommandAccess, isTestPasswordWorkflow, validatedOfferingAccess } from './offering-access'
+import { validatedEvaluationAccess } from './evaluation-access'
 
 export const portalOperatingContextSchema = z.discriminatedUnion('mode', [
   z.object({ mode: z.literal('ROLE'), organisationId: z.string().uuid(), role: z.enum(BX1_ROLES) }).strict(),
@@ -87,6 +88,13 @@ export function portalViewAllowed(view: PortalPath, context: PortalOperatingCont
   }
   if (snapshot.stage2_access !== undefined && !validatedStage2Access(snapshot, context)) return false
   if (snapshot.offering_access !== undefined && !validatedOfferingAccess(snapshot, context)) return false
+  if (snapshot.evaluation_access !== undefined) {
+    const evaluation = validatedEvaluationAccess(snapshot, context)
+    if (!evaluation || !evaluation.allowed_views.some(path => path === view)) return false
+    if (view === '/portal/products/detail') return snapshot.products.some(product => product.id === id && product.organisation_id === evaluation.product_organisation_id)
+    if (view === '/portal/opportunities/detail') return snapshot.products.some(product => product.id === id && product.status === 'PUBLISHED')
+    return true
+  }
   if (isTestPasswordWorkflow(snapshot)) {
     if (view === '/portal' || view === '/portal/onboarding') return true
     if (view === '/portal/portfolio') return context.mode === 'APPLICANT'
