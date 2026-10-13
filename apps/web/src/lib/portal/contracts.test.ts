@@ -27,6 +27,20 @@ const propertyV2: RealEstateTermsV2 = { ...oldProperty, ...REAL_ESTATE_V2_CANONI
 const product: PortalProduct = { id, organisation_id: id, created_by: id, revision: 4, status: 'PUBLISHED', terms, terms_hash: 'a'.repeat(64), reserved_units: '20', created_at: '2026-09-21T00:00:00Z', reviewer_id: null, review_notes: null, reviewed_at: null, published_at: null, review_checks: {}, offering_package: { id: key, package_number: 1, origin: 'SUBMITTED', terms_hash: 'a'.repeat(64), document_hashes: { memorandum: 'b'.repeat(64), risks: 'c'.repeat(64), subscription_terms: 'd'.repeat(64) }, submitted_at: '2026-09-21T00:00:00Z', issuer_status: 'APPROVED', compliance_status: 'APPROVED', technical_readiness_status: 'VERIFIED', publishable: false, subscribable: true, can_review_issuer: false } }
 
 describe('customer portal contracts', () => {
+  it('releases only the signature fence for valid v2 retained evidence, never the other publication gates', () => {
+    const current: PortalProduct = { ...product, status: 'IN_REVIEW', offering_package: { ...product.offering_package!,
+      issuer_status: 'PENDING', compliance_status: 'PENDING', technical_readiness_status: 'NOT_VERIFIED',
+      document_evidence: { version: 2, profile: 'PDF_SIGNATURE_REQUIRED_V1', state: 'SEALED_SIGNATURE_REQUIRED',
+        manifest_id: id, manifest_hash: 'e'.repeat(64), signature_status: 'EVIDENCE_RETAINED', approval_allowed: true } } }
+    expect(offeringDocumentApprovalBlocked(current)).toBe(false)
+    expect(isOfferingSubscribable(current)).toBe(false)
+    for (const evidence of [
+      { ...current.offering_package!.document_evidence, version: 3 },
+      { ...current.offering_package!.document_evidence, signature_status: 'NON_CURRENT' },
+      { ...current.offering_package!.document_evidence, manifest_hash: null },
+      { ...current.offering_package!.document_evidence, approval_allowed: 'true' },
+    ]) expect(offeringDocumentApprovalBlocked({ ...current, offering_package: { ...current.offering_package!, document_evidence: evidence } } as PortalProduct)).toBe(true)
+  })
   it('preserves legacy approved reads but never turns a profiled clean manifest into subscription/signature authority', () => {
     expect(offeringDocumentApprovalBlocked(product)).toBe(false)
     expect(isOfferingSubscribable(product)).toBe(true)

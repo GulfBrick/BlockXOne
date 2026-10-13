@@ -1,5 +1,13 @@
 # BlockXOne platform releases
 
+## 1.2.0-rc.5 — connected issuer-package signatures candidate
+
+- Connect both submitted v3 fund and property packages to a purpose-specific manager → Compliance → appointed issuer signing flow in the existing dashboards. Historical v1/v2 packages and ordinary review corrections remain unchanged.
+- Reuse the existing DocuSign developer app/account through a server-only, pinned sandbox adapter. Persist the exact request and irreversible create checkpoint; unknown outcomes reconcile the same operation and never blindly resend.
+- Add default-off, function-only signature processing, durable one-use HTTP checkpoints, full authenticated completion/audit evidence and separately retained signed PDFs/certificate. Protected approvals bind the exact current operation and purpose; revocation preserves historical evidence without granting current reliance.
+- Retain the FAQ and optional individual Sumsub sandbox discovery. Company Sumsub entitlement remains unavailable in the observed account; no paid upgrade is performed.
+- Static independent review is complete; exact-head cloud, managed installation/configuration, genuine signing and branded hand-offs remain acceptance gates. No MAIN activation, role grants, finance or chain operations occur in this candidate. The eight-stage platform plan is not complete.
+
 ## 1.2.0-rc.4 — FAQ and optional Sumsub sandbox discovery candidate
 
 - Add a public FAQ, linked from existing public and role/applicant navigation. Visible topic answers explain onboarding, both product templates, investment/valuation/exit steps, fees, provider evidence, wallets and environment boundaries; no new application or dropdown design.

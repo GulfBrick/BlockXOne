@@ -49,7 +49,7 @@ export const offeringFileLookupSchema = z.object({
 })
 
 export const offeringDocumentStateSchema = z.enum(['LEGACY_TEXT_ONLY', 'NOT_ADMITTED', 'PENDING_SCAN', 'REJECTED_OR_EXCLUDED', 'READY_TO_SEAL', 'SEALED_SIGNATURE_REQUIRED'])
-export const offeringDocumentEvidenceSchema = z.object({
+const legacyOfferingDocumentEvidenceSchema = z.object({
   profile: z.literal('PDF_SIGNATURE_REQUIRED_V1'),
   state: offeringDocumentStateSchema.exclude(['LEGACY_TEXT_ONLY']),
   manifest_id: id.nullable(), manifest_hash: hash.nullable(),
@@ -58,20 +58,37 @@ export const offeringDocumentEvidenceSchema = z.object({
   if ((value.state === 'SEALED_SIGNATURE_REQUIRED') !== Boolean(value.manifest_id && value.manifest_hash)
     || (value.manifest_id === null) !== (value.manifest_hash === null)) ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Invalid manifest readiness.' })
 })
+export const offeringSignatureStatusSchema = z.enum(['NOT_ADMITTED', 'PURPOSE_REQUIRED', 'SIGNATURE_REQUIRED', 'PENDING', 'EVIDENCE_RETAINED', 'NON_CURRENT', 'RECOVERY_REQUIRED'])
+const currentOfferingDocumentEvidenceSchema = z.object({
+  version: z.literal(2), profile: z.literal('PDF_SIGNATURE_REQUIRED_V1'),
+  state: offeringDocumentStateSchema.exclude(['LEGACY_TEXT_ONLY']),
+  manifest_id: id.nullable(), manifest_hash: hash.nullable(),
+  signature_status: offeringSignatureStatusSchema, approval_allowed: z.boolean(),
+}).strict().superRefine((value, ctx) => {
+  if ((value.state === 'SEALED_SIGNATURE_REQUIRED') !== Boolean(value.manifest_id && value.manifest_hash)
+    || (value.manifest_id === null) !== (value.manifest_hash === null)
+    || value.approval_allowed !== (value.signature_status === 'EVIDENCE_RETAINED')
+    || value.approval_allowed && value.state !== 'SEALED_SIGNATURE_REQUIRED') ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Invalid current signature readiness.' })
+})
+export const offeringDocumentEvidenceSchema = z.union([legacyOfferingDocumentEvidenceSchema, currentOfferingDocumentEvidenceSchema])
 export type OfferingDocumentEvidence = z.infer<typeof offeringDocumentEvidenceSchema>
 
 const documentAction = z.enum(['resolve_offering_file_intent', 'seal_offering_document_manifest'])
+const documentAccessFields = {
+  actor_id: id, environment: z.enum(['TESTNET', 'MAINNET']), context: portalOperatingContextSchema, session_id: id, revision_id: id, product_id: id,
+  allowed_commands: documentAction.array().max(2), can_upload: z.boolean(), can_read_clean: z.boolean(),
+}
+export const offeringDocumentAccessSchema = z.discriminatedUnion('version', [
+  z.object({ ...documentAccessFields, version: z.literal(1), approval_allowed: z.literal(false), approval_blocker: z.literal('signature-not-connected').nullable() }).strict(),
+  z.object({ ...documentAccessFields, version: z.literal(2), signature_status: offeringSignatureStatusSchema,
+    approval_allowed: z.boolean(), approval_blocker: z.enum(['signature-not-admitted', 'signature-required', 'signature-noncurrent']).nullable() }).strict(),
+])
 export const offeringDocumentSnapshotSchema = z.object({
   revision_id: id, product_id: id, profile: z.literal('PDF_SIGNATURE_REQUIRED_V1').nullable(),
   state: offeringDocumentStateSchema,
   manifest: z.object({ id, hash, sealed_at: at, file_ids: z.tuple([id, id, id]), correspondence_statement: actionText(20, 3000) }).strict().nullable(),
   files: offeringFileListItemSchema.array().max(100),
-  document_access: z.object({
-    version: z.literal(1), actor_id: id, environment: z.enum(['TESTNET', 'MAINNET']),
-    context: portalOperatingContextSchema, session_id: id, revision_id: id, product_id: id,
-    allowed_commands: documentAction.array().max(2), can_upload: z.boolean(), can_read_clean: z.boolean(),
-    approval_allowed: z.literal(false), approval_blocker: z.literal('signature-not-connected').nullable(),
-  }).strict(),
+  document_access: offeringDocumentAccessSchema,
 }).strict().superRefine((value, ctx) => {
   const access = value.document_access
   const uniqueFiles = new Set(value.files.map(file => file.id))
@@ -79,7 +96,10 @@ export const offeringDocumentSnapshotSchema = z.object({
     || uniqueFiles.size !== value.files.length || value.files.some(file => file.revision_id !== value.revision_id)
     || new Set(access.allowed_commands).size !== access.allowed_commands.length
     || (value.profile === null) !== (value.state === 'LEGACY_TEXT_ONLY')
-    || access.approval_blocker !== (value.profile ? 'signature-not-connected' : null)
+    || access.version === 1 && access.approval_blocker !== (value.profile ? 'signature-not-connected' : null)
+    || access.version === 2 && (access.approval_allowed !== (access.signature_status === 'EVIDENCE_RETAINED')
+      || access.approval_allowed && (value.state !== 'SEALED_SIGNATURE_REQUIRED' || !value.manifest || access.approval_blocker !== null)
+      || value.profile !== null && !access.approval_allowed && access.approval_blocker === null)
     || (value.state === 'SEALED_SIGNATURE_REQUIRED') !== (value.manifest !== null)
     || (['NOT_ADMITTED', 'LEGACY_TEXT_ONLY', 'SEALED_SIGNATURE_REQUIRED'].includes(value.state) && access.can_upload)
     || access.can_read_clean && value.state !== 'SEALED_SIGNATURE_REQUIRED'

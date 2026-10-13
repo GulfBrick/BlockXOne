@@ -4,7 +4,8 @@ import React from 'react'
 import { webcrypto } from 'node:crypto'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { portalCommandSchema, type PortalCommand, type PortalOfferingPackage, type PortalProduct, type PortalProductServiceAppointment, type PortalSnapshot, type ProductTerms } from '@/lib/portal/contracts'
+import { portalCommandSchema, type FundTermsV2, type RealEstateTermsV2, type PortalCommand, type PortalOfferingPackage, type PortalProduct, type PortalProductServiceAppointment, type PortalSnapshot, type ProductTerms } from '@/lib/portal/contracts'
+import { prepareCommonEnvelopeUpgrade } from '@/lib/portal/product-common-envelope'
 import { portalScopeHref, type PortalOperatingContext } from '@/lib/portal/operating-context'
 import { OFFERING_COMMANDS, type OfferingAccess } from '@/lib/portal/offering-access'
 import type { PlatformRelease } from '@/lib/platform-release'
@@ -378,6 +379,58 @@ describe('profiled document review remains signature-blocked', () => {
     await saved()
     recorded('reopen_offering_review', { product_id: productId, expected_revision: 1 })
     expect(screen.getByText(/new revision inherits no earlier PDF manifest/)).toBeTruthy()
+  })
+})
+
+describe('connected v3 issuer execution in existing dashboards', () => {
+  function signatureProduct(kind: 'FUND' | 'REAL_ESTATE'): PortalProduct {
+    const item = product(kind)
+    const terms = prepareCommonEnvelopeUpgrade(item.terms as FundTermsV2 | RealEstateTermsV2, productOrganisation, issuerOrganisation, receiptId)
+    if (terms.asset_type === 'REAL_ESTATE') { terms.issuer_name = terms.real_estate.spv.legal_name; terms.common_envelope.issuer.legal_name = terms.real_estate.spv.legal_name }
+    const pkg = packageRecord({ can_review_issuer: true, can_review_compliance: true, common_envelope: terms.common_envelope,
+      deployment_configuration: terms.deployment_configuration, common_envelope_hash: 'b'.repeat(64), deployment_configuration_hash: 'c'.repeat(64),
+      document_evidence: { version: 2, profile: 'PDF_SIGNATURE_REQUIRED_V1', state: 'SEALED_SIGNATURE_REQUIRED', manifest_id: receiptId,
+        manifest_hash: hash, signature_status: 'EVIDENCE_RETAINED', approval_allowed: true } })
+    return { ...item, terms, status: 'IN_REVIEW', offering_package: pkg, allowed_actions: ['review_product', 'review_offering_issuer'] }
+  }
+
+  it.each(['FUND', 'REAL_ESTATE'] as const)('mounts actual %s signature reads in manager, appointed issuer and Compliance screens', async kind => {
+    for (const role of ['OfferingManager', 'IssuerFundManager', 'ComplianceOfficer'] as const) {
+      const item = signatureProduct(kind), value = snapshot(role, [item], [appointment('IssuerFundManager', { status: 'APPLIED', effective: true, approval_receipt_id: receiptId })])
+      const signatureFetch = vi.fn(async (url: string, init?: RequestInit) => {
+        expect(url).toContain('/api/portal/offering-signatures?revision_id=')
+        expect(init?.headers).toEqual({ 'x-bx1-expected-actor': actorFor(role) })
+        return new Response(JSON.stringify({ version: 1, actor_id: actorFor(role), session_id: receiptId, context: context(role), environment: 'TESTNET',
+          product_id: productId, revision_id: firstPackageId, expected_revision: item.revision, purpose: 'ISSUER_PACKAGE_EXECUTION', admitted: false,
+          authorisations: [], operations: [], allowed_commands: [], blocker: 'Synthetic unadmitted fixture; not provider acceptance.' }))
+      })
+      vi.stubGlobal('fetch', signatureFetch)
+      const page = mount(value, role === 'ComplianceOfficer' ? '/portal/compliance/detail' : '/portal/products/detail', productId)
+      await screen.findByText('Signature processing not admitted')
+      expect(screen.getByRole('heading', { name: 'Issuer package execution' })).toBeTruthy()
+      expect(signatureFetch).toHaveBeenCalledTimes(1)
+      expect(screen.queryByRole('button', { name: 'Get my DocuSign signing link' })).toBeNull()
+      page.unmount()
+    }
+  })
+
+  it.each(['FUND', 'REAL_ESTATE'] as const)('releases the exact %s review fence only for current evidence and keeps changes available', async kind => {
+    for (const role of ['IssuerFundManager', 'ComplianceOfficer'] as const) {
+      const item = signatureProduct(kind), value = snapshot(role, [item])
+      const Review = role === 'IssuerFundManager' ? IssuerOfferingReview : ProductReview
+      const page = render(<PortalCommandProvider snapshot={value} operatingContext={value.operating_context} environment="TESTNET"><Review product={item} snapshot={value} onSaved={() => {}} /></PortalCommandProvider>)
+      const choice = screen.getByLabelText(role === 'IssuerFundManager' ? 'Issuer decision' : 'Decision') as HTMLSelectElement
+      expect((choice.querySelector('option[value="APPROVED"]') as HTMLOptionElement).disabled).toBe(false)
+      expect(choice.querySelector('option[value="CHANGES_REQUIRED"]')).not.toBeNull()
+      expect(screen.getByRole('button', { name: role === 'IssuerFundManager' ? 'Record issuer decision' : 'Record Compliance decision' }).hasAttribute('disabled')).toBe(true)
+      page.unmount()
+      const stale = { ...item, offering_package: { ...item.offering_package!, document_evidence: { ...item.offering_package!.document_evidence!, version: 2 as const, signature_status: 'NON_CURRENT' as const, approval_allowed: false } } } as PortalProduct
+      const stalePage = render(<PortalCommandProvider snapshot={value} operatingContext={value.operating_context} environment="TESTNET"><Review product={stale} snapshot={value} onSaved={() => {}} /></PortalCommandProvider>)
+      const staleChoice = screen.getByLabelText(role === 'IssuerFundManager' ? 'Issuer decision' : 'Decision') as HTMLSelectElement
+      expect(staleChoice.value).toBe('CHANGES_REQUIRED')
+      expect((staleChoice.querySelector('option[value="APPROVED"]') as HTMLOptionElement).disabled).toBe(true)
+      stalePage.unmount()
+    }
   })
 })
 

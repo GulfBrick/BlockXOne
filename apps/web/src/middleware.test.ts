@@ -11,11 +11,14 @@ describe('exact offering-document middleware boundary', () => {
     ['https://testnet.bx1.co.za', 'https://fegnnnlseuejkrusbbkv.supabase.co', 'preview'],
     ['https://bx1.co.za', 'https://oqkevkjbkpugjotihtda.supabase.co', 'production'],
   ] as const
-  const services = ['/api/portal/offering-documents', '/api/portal/offering-documents/processing'] as const
+  const services = ['/api/portal/offering-documents', '/api/portal/offering-documents/processing',
+    '/api/portal/offering-signatures', '/api/portal/offering-signatures/processing'] as const
   const operations = [
     ['/api/portal/offering-documents', 'GET'], ['/api/portal/offering-documents', 'POST'],
     ['/api/portal/offering-documents', 'PUT'], ['/api/portal/offering-documents', 'PATCH'],
     ['/api/portal/offering-documents/processing', 'POST'],
+    ['/api/portal/offering-signatures', 'GET'], ['/api/portal/offering-signatures', 'POST'],
+    ['/api/portal/offering-signatures/processing', 'POST'],
   ] as const
   const modes = [
     ['supabase', ''], ['', 'supabase'], ['Supabase', 'Supabase'],

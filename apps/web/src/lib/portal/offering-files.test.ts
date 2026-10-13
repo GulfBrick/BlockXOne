@@ -51,6 +51,22 @@ describe('strict offering document authority and immutable manifest', () => {
       manifest_id: product, manifest_hash: 'b'.repeat(64), signature_status: 'NOT_CONNECTED', approval_allowed: false }).success).toBe(true)
   })
 
+  it('accepts strict v2 signature capability while rejecting unknown versions and noncurrent approval', () => {
+    const current = { ...sealed, document_access: { ...sealed.document_access, version: 2, signature_status: 'EVIDENCE_RETAINED', approval_allowed: true, approval_blocker: null } }
+    expect(offeringDocumentSnapshotSchema.safeParse(current).success).toBe(true)
+    for (const access of [
+      { ...current.document_access, version: 3 },
+      { ...current.document_access, signature_status: 'PENDING' },
+      { ...current.document_access, approval_blocker: 'signature-noncurrent' },
+      { ...current.document_access, envelope_id: actor },
+      { ...sealed.document_access, version: 2 },
+    ]) expect(offeringDocumentSnapshotSchema.safeParse({ ...current, document_access: access }).success).toBe(false)
+    expect(offeringDocumentEvidenceSchema.safeParse({ version: 2, profile: 'PDF_SIGNATURE_REQUIRED_V1', state: sealed.state,
+      manifest_id: product, manifest_hash: 'b'.repeat(64), signature_status: 'EVIDENCE_RETAINED', approval_allowed: true }).success).toBe(true)
+    expect(offeringDocumentEvidenceSchema.safeParse({ version: 9, profile: 'PDF_SIGNATURE_REQUIRED_V1', state: sealed.state,
+      manifest_id: product, manifest_hash: 'b'.repeat(64), signature_status: 'EVIDENCE_RETAINED', approval_allowed: true }).success).toBe(false)
+  })
+
   it('rejects coerced, added, stale, duplicate, missing and reordered document authority/bindings', () => {
     const access = sealed.document_access
     const mutations = [

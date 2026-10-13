@@ -30,7 +30,7 @@ function requireCloudFixture(db, clients) {
   }
 }
 
-export async function proveOfferingDocuments(db, clients, featureSql) {
+export async function proveOfferingDocuments(db, clients, featureSql, proveConnectedSignatures) {
   requireCloudFixture(db, clients)
   let checks = 0, savepointSequence = 0, begun = false, phase = 'baseline', primaryFailure
   const proofStarted=Date.now()
@@ -761,6 +761,7 @@ export async function proveOfferingDocuments(db, clients, featureSql) {
       await claims(3);eq((await snapshot(target.p,3,context('IssuerFundManager'))).document_access.can_read_clean,false,'policy epoch drift closes old clean byte authority without erasing manifest')
     })
     eq(await state(installedSpecs),retryState,'policy epoch negative restores exact evidence and policy')
+    if(proveConnectedSignatures) checks+=await proveConnectedSignatures(db,clients,{products:sealedProducts,manager})
     for(const item of sealedProducts){
       let p=item.p
       await bind(p)

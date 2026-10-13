@@ -7,7 +7,8 @@ const blocked = (path: string, server = 'supabase', browser = 'supabase') =>
   isProductionWebPathBlocked(path, 'production', 'production', 'production', server, browser)
 
 describe('exact offering-document service routing', () => {
-  const offeringServices = ['/api/portal/offering-documents', '/api/portal/offering-documents/processing'] as const
+  const offeringServices = ['/api/portal/offering-documents', '/api/portal/offering-documents/processing',
+    '/api/portal/offering-signatures', '/api/portal/offering-signatures/processing'] as const
 
   it.each(offeringServices)('admits only canonical offering service %s in paired Supabase mode', path => {
     expect(SUPABASE_ALLOWED_PATHS.filter(value => value === path)).toHaveLength(1)

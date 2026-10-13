@@ -25,6 +25,7 @@ describe('native Auth admission', () => {
       '/api/portal/kyc/session', '/api/portal/kyc/webhook', '/api/portal/kyc/evidence',
       '/api/portal/documents/processing',
       '/api/portal/offering-documents', '/api/portal/offering-documents/processing',
+      '/api/portal/offering-signatures', '/api/portal/offering-signatures/processing',
       '/api/portal/application-drafts',
     ])
   })

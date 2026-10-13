@@ -38,6 +38,15 @@ beforeEach(() => { fetcher.mockReset(); sessionStorage.clear(); vi.stubGlobal('f
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 
 describe('connected offering document panel (synthetic transport, not hosted/scanner proof)', () => {
+  it('shows current v2 signature handoffs without rewriting legacy sealed evidence', async () => {
+    const current = cleanSnapshot(true)
+    fetcher.mockResolvedValue(reply({ ...current, document_access: { ...current.document_access, version: 2,
+      signature_status: 'EVIDENCE_RETAINED', approval_allowed: true, approval_blocker: null } }))
+    render(<OfferingFilePanel product={product} context={context} actorId={actorId} />)
+    await screen.findByText(/Current signature evidence is retained/)
+    expect(screen.getByText(/Publication remains a separate gate/)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Stage in quarantine' })).toBeNull()
+  })
   it('has no upload action before a current authoritative register has been checked', () => {
     const html = renderToStaticMarkup(<OfferingFilePanel product={product} context={context} actorId={actorId} />)
     expect(html).toContain('Checking current document authority')

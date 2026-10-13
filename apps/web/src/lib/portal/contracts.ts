@@ -562,12 +562,14 @@ export function isOfferingSubscribable(product: PortalProduct): boolean {
     && pkg.technical_readiness_status === 'VERIFIED' && pkg.issuer_status === 'APPROVED'
     && pkg.compliance_status === 'APPROVED' && pkg.terms_hash === product.terms_hash
 }
-/** A malformed profiled summary also fails closed. CLEAN/sealed is not signed. */
+/** Only versioned current evidence may release the signature fence. All other
+ * review, technical-readiness, publication and subscription gates stay separate. */
 export function offeringDocumentApprovalBlocked(product: PortalProduct): boolean {
   const evidence = product.offering_package?.document_evidence
   if (evidence === undefined) return false
   const parsed = offeringDocumentEvidenceSchema.safeParse(evidence)
-  return !parsed.success || parsed.data.approval_allowed === false
+  return !parsed.success || !('version' in parsed.data) || parsed.data.version !== 2
+    || parsed.data.signature_status !== 'EVIDENCE_RETAINED' || parsed.data.approval_allowed !== true
 }
 export function subscriptionQuote(product: PortalProduct, units: string): { amount_minor: string } | { error: string } {
   if (!/^[1-9][0-9]{0,19}$/.test(units)) return { error: 'Enter a positive whole-unit quantity.' }

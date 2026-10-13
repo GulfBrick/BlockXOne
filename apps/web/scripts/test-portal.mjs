@@ -15,6 +15,7 @@ import { proveAccountRepresentatives } from './account-representatives-proof.mjs
 import { proveOfferingWorkflow } from './offering-workflow-proof.mjs'
 import { proveProductCommonEnvelope } from './product-common-envelope-proof.mjs'
 import { proveOfferingDocuments } from './offering-document-processing-proof.mjs'
+import { proveOfferingSignatures } from './offering-signature-processing-proof.mjs'
 import { proveAdmissionDocumentReceipts } from './admission-document-receipts-proof.mjs'
 import { proveApplicationDrafts } from './application-drafts-proof.mjs'
 import { installAcceptedAdmissionReceiptsBaseline } from './accepted-admission-receipts-baseline.mjs'
@@ -2854,7 +2855,9 @@ try {
     await source('../../../supabase/features/bx1_product_common_envelope.sql'), fundV2LegacyCrossrefs)
   phase = 'offering-document-processing-proof'
   checks += await proveOfferingDocuments(db, proofClients,
-    await source('../../../supabase/features/bx1_offering_documents.sql'))
+    await source('../../../supabase/features/bx1_offering_documents.sql'),
+    async (connection,clients,fixture) => proveOfferingSignatures(connection,clients,
+      await source('../../../supabase/features/bx1_offering_signatures.sql'),fixture))
   phase = 'accepted-admission-receipts-post-overlay-parity'
   checks += await acceptedReceiptBaseline.provePostOverlay()
   checks += await acceptedReceiptBaseline.verifyInstalled()
