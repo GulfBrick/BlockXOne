@@ -4,8 +4,9 @@ import Image from 'next/image'
 import { PLATFORM_VERSION, type PlatformRelease } from '@/lib/platform-release'
 import { portalScopeHref, type PortalOperatingContext } from '@/lib/portal/operating-context'
 import { getRoleDashboard } from '@/lib/portal/role-dashboards'
-import { ArrowUpRight, BriefcaseBusiness, Building2, ChevronDown, CircleHelp, CircleUserRound, LayoutDashboard, ShieldCheck, WalletCards } from 'lucide-react'
+import { ArrowUpRight, BriefcaseBusiness, Building2, CircleHelp, CircleUserRound, LayoutDashboard, ShieldCheck, WalletCards } from 'lucide-react'
 import { applicantSectionHref, type ApplicantSection } from './applicant-presentation'
+import { ApplicantAccountMenu } from './applicant-account-menu'
 import styles from './portal.module.css'
 
 export type PortalNavigationCapabilities = { manageProducts: boolean; reviewCompliance: boolean; invest: boolean }
@@ -57,23 +58,19 @@ export function PortalShell({ user, organisationName, capacityName, capabilities
       <header className={styles.topbar}>
         {compactApplicant ? <>
           <div className={styles.mobileBrand}>{brand}</div>
-          <Link href={applicantSectionHref('applications')} className={styles.applicationSwitchLink} aria-label="Switch application or workspace" title={`${organisationName || 'Personal account'} · ${workspaceLabel}`}><span className={styles.switcherWorkspaceLabel}>Current context: {organisationName || 'Personal account'} · {workspaceLabel}</span><span className={styles.switcherMobileLabel}>Applications</span><ChevronDown aria-hidden="true" /></Link>
-          <details className={styles.accountMenu}><summary>Account</summary><div className={styles.accountMenuBody}>
-            <p className={styles.accountEmail}>{user.email}</p>
-            <nav aria-label="Account navigation" className={styles.nav}><a href="/workspace/security" className={styles.navLink}><ShieldCheck aria-hidden="true" />Account security</a><a href="/workspace" className={styles.navLink}>Account workspace</a><Link href="/register" className={styles.navLink}>Account options</Link></nav>
-            <form action="/auth/logout" method="post"><button className={styles.buttonSecondary} type="submit">Sign out</button></form>
-          </div></details>
+          <Link href={applicantSectionHref('applications')} className={styles.applicationSwitchLink} aria-label="Switch application or workspace" title={`${organisationName || 'Personal account'} · ${workspaceLabel}`}><span className={styles.switcherWorkspaceLabel}>{workspaceLabel === 'Personal account' ? 'My applications' : `Viewing: ${workspaceLabel}`}</span><span className={styles.switcherMobileLabel}>Applications</span></Link>
+          <ApplicantAccountMenu email={user.email} />
         </> : <>
           <div className={styles.topbarContext}><strong>{organisationName || 'Your BlockXOne account'}</strong><span>Current workspace: {workspaceLabel}</span><Link href="/portal?mode=applicant">Switch application or workspace</Link></div>
           <div className={styles.userArea}><span className={styles.environmentPill}>{testnet ? 'Testnet' : 'Mainnet'} environment</span><span className={styles.userEmail}>{user.email}</span><form action="/auth/logout" method="post"><button className={styles.buttonSecondary} type="submit">Sign out</button></form></div>
         </>}
       </header>
-      {compactApplicant ? <nav aria-label="Applicant sections on mobile" className={styles.applicantMobileNav}>{applicantNavigation.map(item => <Link key={item.key} href={applicantSectionHref(item.key)} aria-current={(applicantSection ?? 'applications') === item.key ? 'page' : undefined}>{item.label}</Link>)}</nav> : null}
+      {compactApplicant ? <nav aria-label="Applicant sections on mobile" className={styles.applicantMobileNav}>{applicantNavigation.map(item => <Link key={item.key} href={applicantSectionHref(item.key)} aria-current={(applicantSection ?? 'applications') === item.key ? 'page' : undefined}>{item.key === 'applications' ? 'Applications' : item.label}</Link>)}</nav> : null}
       <main id="portal-content" tabIndex={-1} className={styles.content}>
         {compactApplicant ? <p className={styles.applicantNotice} role="note"><strong>{testnet ? 'TEST environment' : 'MAIN environment'}</strong><span>{testnet ? 'Fictional data only.' : 'Approved admission is required.'}</span></p> : <nav aria-label="Breadcrumb"><ol className={styles.breadcrumbs}><li><Link href={portalScopeHref('/portal', operatingContext)}>Portal</Link></li>{breadcrumbs.map((item, index) => <li key={`${item.label}-${index}`}>{item.href ? <Link href={portalScopeHref(item.href, operatingContext)}>{item.label}</Link> : <span aria-current="page">{item.label}</span>}</li>)}</ol></nav>}
         <div className={styles.pageHeading}><div>{eyebrow ? <p className={styles.eyebrow}>{eyebrow}</p> : null}<h1 className={styles.title}>{title}</h1>{description ? <p className={styles.subtitle}>{description}</p> : null}</div>{actions ? <div className={styles.actions}>{actions}</div> : null}</div>
         {children}
-        {compactApplicant ? <footer className={styles.boundary}><span>BlockXOne · Multi-asset tokenisation</span><details className={styles.releaseDetails}><summary>Environment and release details</summary><p>{testnet ? 'Testnet · Test environment. Synthetic cash is not a bank balance.' : 'Mainnet · Live environment. Real-world operations require their own approved mandates, providers and production admission.'}</p><p>Version {release?.version ?? PLATFORM_VERSION}{release ? ` · Source ${release.source}` : ''}</p></details></footer> : <footer className={styles.boundary}><span>BlockXOne · Multi-asset tokenisation · {release?.version ?? PLATFORM_VERSION}</span><span>{testnet ? 'Fictional data only · Synthetic cash is not a bank balance' : 'Dashboard access is not approval to move funds or issue tokens'}</span></footer>}
+        {compactApplicant ? <footer className={styles.boundary}><span>BlockXOne · {testnet ? 'Testnet' : 'Mainnet'} · {release?.version ?? PLATFORM_VERSION}</span>{release ? <span className={styles.releaseIdentity}>Release {release.source}</span> : null}</footer> : <footer className={styles.boundary}><span>BlockXOne · Multi-asset tokenisation · {release?.version ?? PLATFORM_VERSION}</span><span>{testnet ? 'Fictional data only · Synthetic cash is not a bank balance' : 'Dashboard access is not approval to move funds or issue tokens'}</span></footer>}
       </main>
     </div>
   </div>

@@ -45,7 +45,7 @@ function Scope({ children, actor = entryActorId, context = APPLICANT_CONTEXT }: 
   return <PortalCommandProvider snapshot={snapshot} operatingContext={context} environment="TESTNET">{children}</PortalCommandProvider>
 }
 function applicant(application = submitted(), actor = entryActorId, context = APPLICANT_CONTEXT,
-  availability: { sandboxEnabled?: boolean; individualEnabled?: boolean; companyEnabled?: boolean; manualTestReview?: boolean } = { individualEnabled: true, companyEnabled: true }) {
+  availability: { sandboxEnabled?: boolean; individualEnabled?: boolean; companyEnabled?: boolean; manualTestReview?: boolean; presentation?: 'task' | 'record' } = { individualEnabled: true, companyEnabled: true }) {
   return <Scope actor={actor} context={context}><KycVerification application={application} actorId={entryActorId}
     environment="TESTNET" sandboxEnabled {...availability} /></Scope>
 }
@@ -75,13 +75,80 @@ function serveEvents(events: unknown[]) {
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.unstubAllEnvs() })
 
 describe('mounted revision-bound provider evidence', () => {
+  it('keeps technical facts in a plain applicant record while task-record switching preserves the bound session and request scope', async () => {
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => String(input) === '/api/portal/kyc/session'
+      ? token() : evidence(entryApplicationId, [event()]))
+    vi.stubGlobal('fetch', fetcher)
+    const availability = { individualEnabled: true, companyEnabled: true }
+    const mounted = render(applicant(submitted(), entryActorId, APPLICANT_CONTEXT, availability))
+    await waitFor(() => expect(screen.getByText('Provider check complete · independent BlockXOne review required')).toBeTruthy())
+    expect(screen.getByText(/Wait for independent BlockXOne review/)).toBeTruthy()
+    for (const technical of [entryApplicationId, 'applicantReviewed', 'Synthetic-Exact-Level', 'EFFECTIVE', 'GREEN'])
+      expect(mounted.container.textContent).not.toContain(technical)
+    expect(mounted.container.querySelector('details, summary')).toBeNull()
+    expect(fetcher).toHaveBeenCalledTimes(1)
+    fireEvent.click(screen.getByRole('button', { name: 'Start sandbox identity check' }))
+    await waitFor(() => expect(screen.getByTestId('sandbox-sdk')).toBeTruthy())
+    act(() => { screen.getByTestId('sandbox-sdk').appendChild(document.createElement('iframe')) })
+    await waitFor(() => expect(screen.getByTestId('sandbox-sdk').querySelector('iframe')?.getAttribute('title')).toBe('Sumsub sandbox identity verification'))
+    expect(fetcher).toHaveBeenCalledTimes(2)
+
+    mounted.rerender(applicant(submitted(), entryActorId, APPLICANT_CONTEXT, { ...availability, presentation: 'record' }))
+    expect(screen.getByRole('heading', { name: 'Identity verification record' })).toBeTruthy()
+    expect(screen.getByText('Provider review completed: GREEN - independent BlockXOne review required')).toBeTruthy()
+    expect(screen.getByText('Provider answer only')).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'Provider evidence history (1)' })).toBeTruthy()
+    expect(screen.getByText('Current provider evidence only')).toBeTruthy()
+    expect(mounted.container.textContent).toContain(entryApplicationId)
+    expect(mounted.container.querySelector('details, summary')).toBeNull()
+    expect(screen.queryByRole('button', { name: /^(Start|Restart) sandbox identity check$/ })).toBeNull()
+    expect(screen.queryByTestId('sandbox-sdk')).toBeNull()
+    expect(fetcher).toHaveBeenCalledTimes(2)
+
+    mounted.rerender(applicant(submitted(), entryActorId, APPLICANT_CONTEXT, availability))
+    act(() => { screen.getByTestId('sandbox-sdk').appendChild(document.createElement('iframe')) })
+    await waitFor(() => expect(screen.getByTestId('sandbox-sdk').querySelector('iframe')?.getAttribute('title')).toBe('Sumsub sandbox identity verification'))
+    expect(screen.getByTestId('sandbox-sdk').getAttribute('data-synthetic-token')).toBe('synthetic-bound-sdk-token')
+    expect(screen.getByText('Provider check complete · independent BlockXOne review required')).toBeTruthy()
+    expect(fetcher).toHaveBeenCalledTimes(2)
+    expect(fetcher).toHaveBeenCalledWith('/api/portal/kyc/session', expect.objectContaining({ method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-bx1-expected-actor': entryActorId },
+      body: JSON.stringify({ application_id: entryApplicationId, expected_revision: 3 }) }))
+  })
+
+  it('does not fetch optional manual evidence merely because task and record presentation changes', async () => {
+    const fetcher = serveEvents([event()])
+    const availability = { manualTestReview: true, individualEnabled: true, companyEnabled: true }
+    const mounted = render(applicant(submitted(), entryActorId, APPLICANT_CONTEXT, availability))
+    mounted.rerender(applicant(submitted(), entryActorId, APPLICANT_CONTEXT, { ...availability, presentation: 'record' }))
+    expect(fetcher).not.toHaveBeenCalled()
+    expect(screen.queryByRole('button', { name: 'Start sandbox identity check' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'View recorded provider evidence' }))
+    await waitFor(() => expect(screen.getByText('Provider review completed: GREEN - independent BlockXOne review required')).toBeTruthy())
+    expect(fetcher).toHaveBeenCalledTimes(1)
+    mounted.rerender(applicant(submitted(), entryActorId, APPLICANT_CONTEXT, availability))
+    expect(screen.getByText('Provider check complete · independent BlockXOne review required')).toBeTruthy()
+    expect(screen.getByText(/Provider information is optional and does not establish completed KYC/)).toBeTruthy()
+    expect(screen.queryByTestId('sandbox-sdk')).toBeNull()
+    expect(fetcher).toHaveBeenCalledTimes(1)
+  })
+
+  it('retains the native provider-history disclosure for staff review only', async () => {
+    serveEvents([event()])
+    const mounted = render(reviewer())
+    await waitFor(() => expect(screen.getByText('Provider review completed: GREEN - independent BlockXOne review required')).toBeTruthy())
+    expect(mounted.container.querySelector('details > summary')?.textContent).toBe('Provider evidence history (1)')
+    expect(screen.getByText('Provider answer only')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Start sandbox identity check' })).toBeNull()
+  })
+
   it.each(['draft', 'individual', 'company'] as const)('keeps manual %s sandbox KYC non-blocking while preserving optional authentic evidence', async subject => {
     const fetcher = serveEvents([event(subject === 'company' ? { applicant_type: 'company' }
       : subject === 'draft' ? { application_revision: 2, projection_state: 'REVISION_STALE' } : {})])
     const application = subject === 'company' ? submittedEntity() : subject === 'draft' ? entryApplication({
       ...submitted(), status: 'DRAFT', submitted_at: null, provider_mode: 'UNASSIGNED',
     }) : submitted()
-    render(applicant(application, entryActorId, APPLICANT_CONTEXT, { individualEnabled: true, companyEnabled: true, manualTestReview: true }))
+    render(applicant(application, entryActorId, APPLICANT_CONTEXT, { individualEnabled: true, companyEnabled: true, manualTestReview: true, presentation: 'record' }))
     expect(screen.getByRole('heading', { name: 'KYC placeholder · manual sandbox review' })).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Start sandbox identity check' })).toBeNull()
     expect(screen.queryByTestId('sandbox-sdk')).toBeNull()
@@ -114,7 +181,7 @@ describe('mounted revision-bound provider evidence', () => {
     expect(fetcher).not.toHaveBeenCalled()
     fireEvent.click(screen.getByRole('button', { name: 'View recorded provider evidence' }))
     await waitFor(() => expect(screen.getByText(/this optional evidence read does not block submission/)).toBeTruthy())
-    expect(screen.getByRole('heading', { name: 'KYC placeholder · manual sandbox review' })).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'Document review in the TEST application' })).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Start sandbox identity check' })).toBeNull()
     expect(screen.queryByText(/Provider review completed: GREEN/)).toBeNull()
     expect(fetcher).toHaveBeenCalledTimes(1)
@@ -126,11 +193,11 @@ describe('mounted revision-bound provider evidence', () => {
     const selected = subject === 'individual' ? submitted() : submittedEntity()
     const unrelated = subject === 'individual' ? submittedEntity() : submitted()
     const mounted = render(applicant(selected, entryActorId, APPLICANT_CONTEXT, availability))
-    await waitFor(() => expect(screen.getByText('No provider evidence received yet')).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('No provider verification result recorded')).toBeTruthy())
     expect(screen.getByRole('button', { name: 'Start sandbox identity check' })).toBeTruthy()
     mounted.rerender(applicant(unrelated, entryActorId, APPLICANT_CONTEXT, availability))
     expect(screen.queryByRole('button', { name: 'Start sandbox identity check' })).toBeNull()
-    expect(screen.getByText(subject === 'individual' ? 'Company sandbox verification unavailable' : 'Individual sandbox verification unavailable')).toBeTruthy()
+    expect(screen.getByText(subject === 'individual' ? 'Company verification is unavailable' : 'Identity verification is unavailable')).toBeTruthy()
     expect(fetcher.mock.calls.every(([input]) => String(input).startsWith('/api/portal/kyc/evidence?'))).toBe(true)
   })
   it.each(['individual', 'company'] as const)('keeps %s start unavailable when its switch is absent or the global gate is closed', async subject => {
@@ -139,12 +206,12 @@ describe('mounted revision-bound provider evidence', () => {
     const fetcher = serveEvents([])
     const application = subject === 'individual' ? submitted() : submittedEntity()
     const mounted = render(applicant(application, entryActorId, APPLICANT_CONTEXT, {}))
-    await waitFor(() => expect(screen.getByText('No provider evidence received yet')).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('No provider verification result recorded')).toBeTruthy())
     expect(screen.queryByRole('button', { name: 'Start sandbox identity check' })).toBeNull()
     mounted.rerender(applicant(application, entryActorId, APPLICANT_CONTEXT,
       { sandboxEnabled: false, individualEnabled: true, companyEnabled: true }))
     expect(screen.queryByRole('button', { name: 'Start sandbox identity check' })).toBeNull()
-    expect(screen.getByText('Sandbox identity check not connected')).toBeTruthy()
+    expect(screen.getByText('Identity verification is unavailable')).toBeTruthy()
     expect(fetcher.mock.calls.every(([input]) => String(input).startsWith('/api/portal/kyc/evidence?'))).toBe(true)
   })
   it.each([
@@ -155,7 +222,7 @@ describe('mounted revision-bound provider evidence', () => {
       event({ id: 'f2222222-2222-4222-8222-222222222222', event_type: eventType, evidence_kind: 'LIFECYCLE',
         event_at: '2026-10-07T10:02:00Z' })]
     serveEvents(events)
-    const mounted = render(applicant())
+    const mounted = render(applicant(submitted(), entryActorId, APPLICANT_CONTEXT, { individualEnabled: true, companyEnabled: true, presentation: 'record' }))
     await waitFor(() => expect(screen.getByText(label)).toBeTruthy())
     expect(screen.queryByText(/Provider review completed: GREEN/)).toBeNull()
     expect(screen.queryByText('Provider answer only')).toBeNull()
@@ -173,7 +240,7 @@ describe('mounted revision-bound provider evidence', () => {
     serveEvents([event(), event({ id: 'f2222222-2222-4222-8222-222222222222', event_type: eventType,
       event_at: '2026-10-07T10:03:00Z', evidence_kind: 'LIFECYCLE', projection_state: 'MANUAL_TEST',
       manual_webhook_test: true, ordering_state: 'MANUAL_TEST' })])
-    render(applicant())
+    render(applicant(submitted(), entryActorId, APPLICANT_CONTEXT, { individualEnabled: true, companyEnabled: true, presentation: 'record' }))
     await waitFor(() => expect(screen.getByText('Provider review completed: GREEN - independent BlockXOne review required')).toBeTruthy())
     expect(screen.getByText('Sandbox simulation only')).toBeTruthy()
     expect(screen.queryByText(/^Provider verification (inactive|deleted)$/)).toBeNull()
@@ -197,7 +264,7 @@ describe('mounted revision-bound provider evidence', () => {
     ['applicantActivated', 'Provider verification in progress - no completed review'],
   ])('renders %s as lifecycle even with completed/GREEN provider snapshot fields', async (eventType, label) => {
     serveEvents([event({ event_type: eventType, evidence_kind: 'LIFECYCLE' })])
-    render(applicant())
+    render(applicant(submitted(), entryActorId, APPLICANT_CONTEXT, { individualEnabled: true, companyEnabled: true, presentation: 'record' }))
     await waitFor(() => expect(screen.getByText(label)).toBeTruthy())
     expect(screen.queryByText(/Provider review completed: GREEN/)).toBeNull()
     expect(screen.queryByText('Provider answer only')).toBeNull()
@@ -228,7 +295,7 @@ describe('mounted revision-bound provider evidence', () => {
   it.each(['DRAFT', 'CHANGES_REQUIRED'] as const)('requires submission first for %s and offers no start action', async status => {
     const fetcher = serveEvents([])
     render(applicant(entryApplication({ status, revision: 3 })))
-    await waitFor(() => expect(screen.getByText('No provider evidence received yet')).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('No provider verification result recorded')).toBeTruthy())
     expect(screen.queryByRole('button', { name: 'Start sandbox identity check' })).toBeNull()
     expect(screen.getByText(status === 'DRAFT' ? /Submit the application for review first/ : /Update and resubmit the application first/)).toBeTruthy()
     expect(fetcher.mock.calls.every(([input]) => String(input).startsWith('/api/portal/kyc/evidence?'))).toBe(true)
@@ -239,7 +306,7 @@ describe('mounted revision-bound provider evidence', () => {
       ? token() : evidence(entryApplicationId, []))
     vi.stubGlobal('fetch', fetcher)
     render(applicant())
-    await waitFor(() => expect(screen.getByText('No provider evidence received yet')).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('No provider verification result recorded')).toBeTruthy())
     expect(screen.queryByTestId('sandbox-sdk')).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Start sandbox identity check' }))
     await waitFor(() => expect(screen.getByTestId('sandbox-sdk').getAttribute('data-synthetic-token')).toBe('synthetic-bound-sdk-token'))
@@ -247,7 +314,7 @@ describe('mounted revision-bound provider evidence', () => {
       headers: { 'Content-Type': 'application/json', 'x-bx1-expected-actor': entryActorId },
       body: JSON.stringify({ application_id: entryApplicationId, expected_revision: 3 }) }))
     expect(screen.getByText(/Completion is not an admission decision/)).toBeTruthy()
-    expect(screen.queryByText(/Provider review completed:/)).toBeNull()
+    expect(screen.queryByText(/Provider check complete/)).toBeNull()
   })
 
   it('refuses a returned token for a different revision without mounting the SDK', async () => {
@@ -269,7 +336,7 @@ describe('mounted revision-bound provider evidence', () => {
       return evidence(applicationId, evidenceCalls === 1 ? [event()] : [])
     }))
     const mounted = render(applicant())
-    await waitFor(() => expect(screen.getByText(/Provider review completed: GREEN/)).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('Provider check complete · independent BlockXOne review required')).toBeTruthy())
     fireEvent.click(screen.getByRole('button', { name: 'Start sandbox identity check' }))
     const changedApplication = change === 'application' ? { ...submitted(), id: entryOrganisationId }
       : change === 'revision' ? { ...submitted(), revision: 4 }
@@ -284,9 +351,9 @@ describe('mounted revision-bound provider evidence', () => {
     expect(screen.queryByText(/Sandbox verification opened/)).toBeNull()
     if (change === 'actor' || change === 'context') {
       expect(screen.queryByRole('button', { name: 'Start sandbox identity check' })).toBeNull()
-      expect(screen.queryByText(/Provider review completed: GREEN/)).toBeNull()
+      expect(screen.queryByText(/Provider check complete/)).toBeNull()
     }
-    if (change === 'application' || change === 'revision' || change === 'state' || change === 'subject' || change === 'availability') expect(screen.queryByText(/Provider review completed: GREEN/)).toBeNull()
+    if (change === 'application' || change === 'revision' || change === 'state' || change === 'subject' || change === 'availability') expect(screen.queryByText(/Provider check complete/)).toBeNull()
     if (change === 'state' || change === 'availability') expect(screen.queryByRole('button', { name: 'Start sandbox identity check' })).toBeNull()
   })
 

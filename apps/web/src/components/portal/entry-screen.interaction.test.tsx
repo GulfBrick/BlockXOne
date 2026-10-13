@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { createElement } from 'react'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { entrySnapshotSchema, type EntryApplication, type EntrySnapshot } from '@/lib/portal/entry-contracts'
 import { entryActorId, entryApplication, entryFixture, entryHandoff } from '@/lib/portal/entry-test-fixtures'
@@ -93,7 +93,12 @@ describe('real entry-screen review-availability interaction', () => {
     expect(acknowledgement.checked).toBe(true)
     expect((screen.getByLabelText('Investor classification') as HTMLSelectElement).value).toBe('INDIVIDUAL')
     expect(screen.getByText(/Your browser answers are retained; nothing was submitted/)).toBeTruthy()
-    expect(screen.getByText(/Saved record: revision 1/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'History & support' }))
+    const record = screen.getByRole('region', { name: 'Application record' })
+    expect(within(record).getByText('Saved revision').parentElement?.querySelector('dd')?.textContent).toBe('1')
+    fireEvent.click(screen.getByRole('button', { name: 'Back to application' }))
+    expect(screen.getByLabelText(/^Full name/)).toBe(fullName)
+    expect(screen.getByRole('checkbox', { name: /I confirm this application and all evidence are fictional test data/ })).toBe(acknowledgement)
     expect(sessionStorage.getItem(markerStorageKey)).toBe(pendingMarker)
     expect(fetchMock).toHaveBeenCalledTimes(1)
     expect(fetchMock).toHaveBeenCalledWith('/api/portal/entry', expect.objectContaining({ credentials: 'same-origin', cache: 'no-store', redirect: 'error', headers: { 'x-bx1-expected-actor': entryActorId } }))
@@ -114,7 +119,12 @@ describe('real entry-screen review-availability interaction', () => {
     expect(acknowledgement.checked).toBe(true)
     expect((screen.getByRole('button', { name: 'Submission unavailable; review route required' }) as HTMLButtonElement).disabled).toBe(true)
     expect(screen.queryByRole('button', { name: 'Submit for review' })).toBeNull()
-    expect(screen.getByText(/Saved record: revision 1/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'History & support' }))
+    const record = screen.getByRole('region', { name: 'Application record' })
+    expect(within(record).getByText('Saved revision').parentElement?.querySelector('dd')?.textContent).toBe('1')
+    fireEvent.click(screen.getByRole('button', { name: 'Back to application' }))
+    expect(screen.getByLabelText(/^Full name/)).toBe(fullName)
+    expect(acknowledgement.checked).toBe(true)
     expect(sessionStorage.getItem(markerStorageKey)).toBe(pendingMarker)
     expect(fetchMock).toHaveBeenCalledTimes(1)
     expect(fetchMock.mock.calls.every(([, init]) => (init?.method ?? 'GET') === 'GET')).toBe(true)

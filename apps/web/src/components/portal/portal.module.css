@@ -222,6 +222,7 @@
 
 /* Presentation-only modifier for a selected, editable applicant flow. */
 .applicantOnboarding { font-size: 16px; }
+.applicantOnboarding [hidden] { display: none !important; }
 .applicantOnboarding .frame {
   /* V3 workspace aliases stop here; the sidebar and other role screens retain
      the approved dark brand system. The master artwork is not recoloured. */
@@ -238,6 +239,7 @@
   --bxo-success: color-mix(in srgb, var(--bxo-success-dark) 60%, var(--bxo-midnight));
   --portal-canvas: color-mix(in srgb, var(--bxo-frost) 90%, var(--bxo-chrome));
   --portal-panel: var(--bxo-surface);
+  --portal-paper: color-mix(in srgb, var(--bxo-frost) 25%, white);
   --portal-ink: var(--bxo-text-primary);
   --portal-muted: var(--bxo-text-secondary);
   --portal-line: var(--bxo-border-default);
@@ -252,7 +254,7 @@
 .applicantOnboarding .topbar { min-height: 64px; padding: 10px 32px; flex-wrap: nowrap; background: var(--bxo-midnight); color: var(--bxo-frost); }
 .applicantOnboarding .topbar .applicationSwitchLink { color: var(--bxo-frost); background: var(--bxo-deep-teal); border-color: var(--bxo-structural-blue); }
 .applicantOnboarding .topbar .applicationSwitchLink:hover { border-color: var(--bxo-electric-cyan); }
-.applicantOnboarding .accountMenu > summary { color: var(--bxo-frost); }
+.applicantOnboarding .accountMenuTrigger { color: var(--bxo-frost); }
 .applicantOnboarding .frame .accountMenuBody { color: var(--portal-ink); box-shadow: 0 12px 28px color-mix(in srgb, var(--bxo-midnight) 18%, transparent); }
 .applicantOnboarding .frame .button { border-color: var(--portal-link); }
 .applicantOnboarding .frame .textLink, .applicantOnboarding .frame .applicationHistory summary,
@@ -261,7 +263,7 @@
 .applicantOnboarding .frame .notice[data-tone=danger] { background: color-mix(in srgb, var(--bxo-danger-light) 12%, var(--bxo-frost)); }
 .applicantOnboarding .frame :is(a, button, input, select, textarea, summary):focus-visible { outline: 3px solid var(--portal-link); outline-offset: 4px; }
 .applicantOnboarding .topbar > .applicationSwitchLink:focus-visible,
-.applicantOnboarding .accountMenu > summary:focus-visible,
+.applicantOnboarding .accountMenuTrigger:focus-visible,
 .applicantOnboarding .mobileBrand a:focus-visible { outline-color: var(--bxo-electric-cyan); }
 .applicantOnboarding .content { max-width: 804px; padding: 24px 32px 36px; }
 .applicantOnboarding .pageHeading { margin-bottom: 18px; }
@@ -299,8 +301,10 @@
 .switcherWorkspaceLabel { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .switcherMobileLabel { display: none; }
 .accountMenu { position: relative; min-width: 0; margin-left: auto; }
-.accountMenu > summary { min-height: 44px; padding: 8px; align-content: center; cursor: pointer; color: var(--portal-ink); font-size: 16px; white-space: nowrap; }
+.accountMenuTrigger { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 8px; border: 0; background: transparent; cursor: pointer; color: var(--portal-ink); font: inherit; font-size: 16px; white-space: nowrap; }
+.accountMenuTrigger svg { width: 18px; height: 18px; }
 .accountMenuBody { position: absolute; z-index: 30; top: calc(100% + 8px); right: 0; width: min(300px, calc(100vw - 32px)); padding: 16px; border: 1px solid var(--portal-line); border-radius: 8px; background: var(--portal-panel); box-shadow: 0 12px 28px var(--bxo-carbon); }
+.accountMenuBody[hidden] { display: none !important; }
 .accountEmail { margin: 0 0 12px; overflow-wrap: anywhere; color: var(--portal-muted); font-size: 16px; }
 .accountMenuBody .navLink { font-size: 16px; min-height: 44px; }
 .accountMenuBody form { margin-top: 12px; }
@@ -310,21 +314,22 @@
 .releaseDetails { flex-basis: 100%; font-size: 14px; }
 .releaseDetails summary { min-height: 44px; align-content: center; cursor: pointer; color: var(--portal-muted); }
 .releaseDetails p { margin: 8px 0 0; overflow-wrap: anywhere; }
+.releaseIdentity { font-size: 12px; color: var(--portal-muted); }
 @media (max-width: 760px) {
   .applicantOnboarding .sidebar { display: none; }
-  .applicantOnboarding .topbar { display: grid; grid-template-columns: 128px minmax(0, 1fr) auto; gap: 8px; padding: 10px 12px; }
+  .applicantOnboarding .topbar { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding: 10px 12px; }
   .applicantOnboarding .content { padding: 16px 16px 28px; }
   .applicantCardGrid { grid-template-columns: minmax(0, 1fr); }
   .applicantCard { padding: 16px; }
-  .applicantMobileNav { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--portal-line); background: var(--portal-panel); }
-  .applicantMobileNav a { display: flex; align-items: center; justify-content: center; min-width: 0; min-height: 44px; padding: 6px 2px; border-bottom: 3px solid transparent; color: var(--portal-muted); font-size: 14px; line-height: 1.35; text-align: center; text-decoration: none; overflow-wrap: anywhere; }
+  .applicantMobileNav { display: grid; grid-template-columns: minmax(44px, 1fr) minmax(80px, 1.4fr) minmax(80px, 1.3fr) minmax(44px, .7fr); gap: 4px; padding: 8px 12px; border-bottom: 1px solid var(--portal-line); background: var(--portal-panel); }
+  .applicantMobileNav a { display: flex; align-items: center; justify-content: center; min-width: 44px; min-height: 44px; padding: 6px 0; border-bottom: 3px solid transparent; color: var(--portal-muted); font-size: 14px; line-height: 1.35; text-align: center; text-decoration: none; white-space: nowrap; }
   .applicantMobileNav a[aria-current=page] { color: var(--portal-link); border-bottom-color: var(--portal-link); font-weight: 600; }
   .applicantMobileNav a:hover { color: var(--portal-link); }
   .applicantOnboarding .title { font-size: 26px; }
   .mobileBrand { display: block; min-width: 0; }
   .mobileBrand .brandArtwork { width: 128px; height: auto; }
-  .applicationSwitchLink { gap: 6px; padding-inline: 8px; }
+  .applicationSwitchLink { display: none; }
   .switcherWorkspaceLabel { display: none; }
   .switcherMobileLabel { display: inline; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .accountMenu > summary { padding-inline: 6px; }
+  .accountMenuTrigger { padding-inline: 4px; }
 }

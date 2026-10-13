@@ -13,7 +13,7 @@ import { portalScopeHref } from '@/lib/portal/operating-context'
 import { installOnboardingTraversalGuard, onboardingDiscardMessage, onboardingHasUnsavedAnswers, onboardingHistoryUnavailableMessage, onboardingLinkDiscardsAnswers, onboardingNavigationFor, onboardingRemainingItems, onboardingSteps, onboardingSubmissionConfirmed, type OnboardingAnswers, type OnboardingRemainingItem, type OnboardingStepId } from '@/lib/portal/onboarding-flow'
 import { DetailList, Field, Notice, Panel, dateLabel } from './portal-primitives'
 import { KycVerification } from './kyc-verification'
-import { customerHandoffPresentation } from './customer-handoff'
+import { CustomerHandoffPanel, customerHandoffPresentation } from './customer-handoff'
 import { saveDraftBeforeExit, useApplicationDraft } from './application-draft-client'
 import type { ApplicationDraftAnswers } from '@/lib/portal/application-drafts'
 import { CountrySelector } from './country-selector'
@@ -245,6 +245,11 @@ export function OnboardingForm({ application, environment, onSaved, receipts, ha
   const [countrySearchPending, setCountrySearchPending] = useState(false)
   const [resumeVersion, setResumeVersion] = useState(0)
   const [continuing, setContinuing] = useState(false)
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const [verificationRecordRequested, setVerificationRecordRequested] = useState(false)
+  const historyHeading = useRef<HTMLHeadingElement>(null)
+  const historyTrigger = useRef<HTMLButtonElement>(null)
+  const openedHistory = useRef(false)
   const transition = useRef<object | null>(null)
   const currentAnswers = useRef(details); currentAnswers.current = details
   const currentStep = useRef(step); currentStep.current = step
@@ -255,6 +260,7 @@ export function OnboardingForm({ application, environment, onSaved, receipts, ha
   const confirmedTarget = useRef<{ url: string; expiresAt: number } | null>(null)
   const submissionAttempt = useRef<{ application: EntryApplication; details: ApplicationDetails } | null>(null)
   const scanScope = `${environment}:${expectedActor}:${application.id}:${application.revision}`
+  const historyContext = JSON.stringify(operatingContext)
   const activeScanScope = useRef(scanScope)
   const scanQueueLoaded = useRef<string | null>(null)
   activeScanScope.current = scanScope
@@ -262,6 +268,13 @@ export function OnboardingForm({ application, environment, onSaved, receipts, ha
     setScanQueue(null); setScanMessage(''); setScanBusy(false); setAttachingScan(''); setPendingForApplication([]); setOwnershipInputs({}); scanQueueLoaded.current = null
     transition.current = null; setContinuing(false)
   }, [scanScope])
+  useEffect(() => {
+    openedHistory.current = false; setHistoryOpen(false); setVerificationRecordRequested(false)
+  }, [scanScope, historyContext])
+  useEffect(() => {
+    if (historyOpen) { openedHistory.current = true; historyHeading.current?.focus() }
+    else if (openedHistory.current) { openedHistory.current = false; historyTrigger.current?.focus() }
+  }, [historyOpen])
   const editable = handoff ? customerHandoffHasAction(handoff, 'PREPARE_APPLICATION') : ['DRAFT', 'CHANGES_REQUIRED'].includes(application.status)
   const draftAnswers = Object.fromEntries(Object.entries(details).filter(([key]) => key !== 'test_data_acknowledged')) as ApplicationDraftAnswers
   const draft = useApplicationDraft({ application, actorId: expectedActor, environment, answers: draftAnswers, step, enabled: editable,
@@ -486,6 +499,7 @@ export function OnboardingForm({ application, environment, onSaved, receipts, ha
     finally { if (activeScanScope.current === scope) setAttachingScan('') }
   }
   return <div className={`${styles.stack} ${flowStyles.flow}`}>
+      <div className={styles.stack} hidden={historyOpen}>
       {!editable ? handoffPanel : null}
       <div className={editable ? flowStyles.workspace : undefined}>
       {editable ? <nav className={flowStyles.stepRail} aria-label="Application steps"><p>Your application</p><ol>{steps.map((item, index) => <li key={item.id}><button type="button" aria-current={item.id === activeStep.id ? 'step' : undefined} disabled={locked || countrySearchPending || unfinishedOwnership.length > 0} onClick={() => void navigateStep(item.id)}><span aria-hidden="true">{index + 1}</span>{item.title}</button></li>)}</ol></nav> : null}
@@ -497,7 +511,6 @@ export function OnboardingForm({ application, environment, onSaved, receipts, ha
         {application.review_notes ? <Notice title={application.status === 'CHANGES_REQUIRED' ? 'Changes requested by your reviewer' : 'Recorded review rationale'} tone="warning">{application.review_notes}</Notice> : null}
         {unconfirmedResult ? <Notice title="Application submission not confirmed" tone="warning">{unconfirmedResult}</Notice> : <CommandFeedback command={command} />}
         {editable ? <>
-        {legacyManager ? <details className={`${styles.applicationHistory} ${styles.sectionGap}`}><summary>View original legacy answers</summary><div className={styles.sectionGap}><ApplicationDetailsSummary persona={persona} details={application.details} /></div></details> : null}
         {!reviewAvailable ? <div className={styles.sectionGap}><Notice title={next.title} tone="warning">{next.description}<p>{handoff ? 'Submission remains disabled until the saved workflow confirms an eligible review route. Use Refresh review availability to recheck without discarding these unsaved answers; do not create a replacement application.' : 'After the review route is ready, select Check review route and submit. The server rechecks its current assignment without reloading or discarding these fields.'}</p></Notice></div> : null}
         <form className={`${styles.form} ${flowStyles.questions}`} noValidate onSubmit={event => { event.preventDefault(); if (activeStep.id === 'review') void submitApplication(); else void nextStep() }}>
           <div className={flowStyles.stepMeta}><span>Step {currentIndex + 1} of {steps.length}</span><span className={flowStyles.draftBadge}>{application.status === 'CHANGES_REQUIRED' ? 'Changes requested' : 'Draft · Not submitted'}</span></div>
@@ -547,7 +560,7 @@ export function OnboardingForm({ application, environment, onSaved, receipts, ha
           </div>
           <section hidden={activeStep.id !== 'review'} className={styles.stack} aria-label="Check your application before submission">
             <p className={styles.muted}>Check your answers and selected evidence. No approval, operating role or signing authority is created by submitting.</p>
-            <details className={styles.applicationHistory}><summary>Review answers and evidence selections</summary><ApplicationDetailsSummary persona={persona} details={applicationSubmissionDetails(persona, details)} /><ul>{details.documents.map(document => <li key={document.id}>{document.title} · {document.kind.replaceAll('_', ' ')}</li>)}</ul></details>
+            <section aria-label="Review answers and evidence selections"><h3>Your answers and selected documents</h3><ApplicationDetailsSummary persona={persona} details={applicationSubmissionDetails(persona, details)} /><ul>{details.documents.map(document => <li key={document.id}>{document.title} · {document.kind.replaceAll('_', ' ')}</li>)}</ul></section>
             <div className={flowStyles.remaining} aria-live="polite"><h4>{remaining.length ? `${remaining.length} remaining item${remaining.length === 1 ? '' : 's'} before submission` : 'All required answers and evidence are ready'}</h4>{remaining.length ? <ul>{remaining.map(item => <li key={item.key}><button type="button" disabled={locked} onClick={() => void navigateStep(item.step, item.key)}>{item.message}</button></li>)}</ul> : <p>An independent reviewer must make the decision.</p>}{handoff && !customerHandoffHasAction(handoff, 'SUBMIT_APPLICATION') ? <p>Submission is unavailable: {next.description}</p> : null}{command.unknown ? <p>The previous submission outcome is unknown. Keep the original request reference and use the available reconciliation guidance before sending another request.</p> : null}</div>
             <label className={styles.check}><input id={questionId('acknowledged')} type="checkbox" required checked={acknowledged} disabled={locked} onChange={event => { setConfirmedSubmission(false); setAcknowledged(event.target.checked) }} /><span>I confirm this application and all evidence are fictional test data. I understand a manual test approval does not establish legal identity, investment eligibility or production authority.</span></label>
           </section>
@@ -555,12 +568,21 @@ export function OnboardingForm({ application, environment, onSaved, receipts, ha
           {draft.message ? <p className={flowStyles.saveError} role="status">{draft.message}</p> : null}
           {activeStep.id !== 'review' ? <button type="button" className={`${styles.textLink} ${flowStyles.remainingLink}`} disabled={locked} onClick={() => void navigateStep('review')}>View remaining items</button> : null}
         </form>
-        </> : <div className={`${styles.stack} ${styles.sectionGap}`}><p className={styles.muted}>Read-only saved application, revision {application.revision}. {application.status === 'SUBMITTED' ? 'A request for changes will reopen editing.' : 'The recorded decision does not alter these submitted answers.'}</p><ApplicationDetailsSummary persona={persona} details={application.details} /><section><h3>Submitted private evidence</h3>{application.details.documents?.length ? application.details.documents.map(document => <PrivateDocument key={document.id} document={document} />) : <p className={styles.muted}>No evidence is recorded.</p>}</section></div>}
+        </> : <div className={`${styles.stack} ${styles.sectionGap}`}><p className={styles.muted}>These are your saved application answers. {application.status === 'SUBMITTED' ? 'You can make changes if your reviewer requests them.' : previouslySubmitted ? 'Your review decision is recorded separately.' : 'This application has not been submitted.'}</p><ApplicationDetailsSummary persona={persona} details={application.details} /><section><h3>{previouslySubmitted ? 'Submitted private evidence' : 'Saved private evidence'}</h3>{application.details.documents?.length ? application.details.documents.map(document => <PrivateDocument key={document.id} document={document} />) : <p className={styles.muted}>No evidence is recorded.</p>}</section></div>}
       </section>
       </div>
       {editable && (application.status !== 'DRAFT' || !reviewAvailable || handoff?.blocker !== 'NONE') ? handoffPanel : null}
-      <details className={`${styles.applicationHistory} ${flowStyles.technical}`}><summary>Application details</summary><p className={styles.muted}>Saved record: revision {application.revision}. Draft saves are separate from submitted evidence and decisions.</p><DetailList rows={[{ label: 'Application reference', value: application.id }, { label: 'Saved revision', value: application.revision }, { label: 'Draft version', value: draft.revision }, { label: 'Submitted', value: dateLabel(application.submitted_at) }, { label: 'Decision recorded', value: dateLabel(application.reviewed_at) }, { label: 'Review provider', value: application.provider_mode === 'MANUAL_TEST_REVIEW' ? 'Manual test review' : 'Not assigned to this application yet' }]} /></details>
-      {!handoff || ['NONE', 'REVIEWER_UNAVAILABLE'].includes(handoff.blocker) ? <details className={`${styles.applicationHistory} ${flowStyles.technical}`}><summary>Optional identity-provider information</summary><KycVerification key={`${environment}:${expectedActor}:${application.id}:${application.revision}`} application={application} environment={environment} actorId={expectedActor} manualTestReview={environment === 'TESTNET' && (application.provider_mode === 'MANUAL_TEST_REVIEW' || handoff?.gates.intake_admitted === true)} /></details> : null}
-      {application.status !== 'DRAFT' || application.submitted_at ? <details className={`${styles.applicationHistory} ${flowStyles.technical}`}><summary>Previous submitted evidence versions</summary><ApplicationDocumentHistory key={application.id} applicationId={application.id} /></details> : null}
+      <div className={flowStyles.recordTools}><button ref={historyTrigger} type="button" className={styles.textLink} onClick={() => setHistoryOpen(true)}>History &amp; support</button><span>View your application reference and previous submissions.</span></div>
+      </div>
+      <section hidden={!historyOpen} className={styles.stack} aria-label="Application history and support">
+        <div className={flowStyles.historyHeading}><h2 ref={historyHeading} tabIndex={-1} className={flowStyles.heading}>History &amp; support</h2><button type="button" className={styles.buttonSecondary} onClick={() => setHistoryOpen(false)}>Back to application</button></div>
+        <p className={styles.muted}>Use this record when contacting BlockXOne. Viewing history does not submit or change your application.</p>
+        <section className={flowStyles.card} aria-label="Application record"><h3>Application record</h3><DetailList rows={[{ label: 'Application reference', value: application.id }, { label: 'Saved revision', value: application.revision }, { label: 'Draft version', value: draft.revision }, { label: 'Submitted', value: dateLabel(application.submitted_at) }, { label: 'Decision recorded', value: dateLabel(application.reviewed_at) }, { label: 'Review provider', value: application.provider_mode === 'MANUAL_TEST_REVIEW' ? 'Manual test review' : 'Not assigned to this application yet' }]} /></section>
+        {legacyManager ? <section className={flowStyles.card}><h3>Earlier application answers</h3><ApplicationDetailsSummary persona={persona} details={application.details} /></section> : null}
+        {handoff ? <CustomerHandoffPanel application={application} handoff={handoff} presentation="history" /> : null}
+        {previouslySubmitted ? <ApplicationDocumentHistory key={application.id} applicationId={application.id} /> : null}
+        {!previouslySubmitted && !verificationRecordRequested && (!handoff || ['NONE', 'REVIEWER_UNAVAILABLE'].includes(handoff.blocker)) ? <button type="button" className={styles.buttonSecondary} onClick={() => setVerificationRecordRequested(true)}>View verification record</button> : null}
+      </section>
+      {(!handoff || ['NONE', 'REVIEWER_UNAVAILABLE'].includes(handoff.blocker)) && (previouslySubmitted || verificationRecordRequested) ? <div hidden={!historyOpen && application.status !== 'SUBMITTED'}><KycVerification key={`${environment}:${expectedActor}:${application.id}:${application.revision}`} application={application} environment={environment} actorId={expectedActor} presentation={historyOpen ? 'record' : 'task'} manualTestReview={environment === 'TESTNET' && (application.provider_mode === 'MANUAL_TEST_REVIEW' || handoff?.gates.intake_admitted === true)} /></div> : null}
   </div>
 }

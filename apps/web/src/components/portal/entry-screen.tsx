@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { entryApplicationHref, selectEntryApplication, type EntryApplication, type EntrySnapshot } from '@/lib/portal/entry-contracts'
 import { customerHandoffHasAction, customerHandoffHref, customerScopedReadAvailable, validatedCustomerHandoff, type CustomerHandoff } from '@/lib/portal/customer-handoff'
 import type { PlatformRelease } from '@/lib/platform-release'
@@ -12,7 +12,7 @@ import { getRoleDashboard } from '@/lib/portal/role-dashboards'
 import { PortalShell } from './portal-shell'
 import { CommandFeedback, PortalIdentityProvider } from './portal-client'
 import { useEntryAvailabilityRefresh, useEntryCommand, useEntryStatusRefresh } from './entry-client'
-import { OnboardingForm } from './onboarding-form'
+import { ApplicationDocumentHistory, OnboardingForm } from './onboarding-form'
 import { CustomerHandoffPanel, customerHandoffPresentation } from './customer-handoff'
 import { applicantSectionHref, type ApplicantSection } from './applicant-presentation'
 import { DetailList, Field, Notice, Panel, StatusBadge, dateLabel } from './portal-primitives'
@@ -34,7 +34,7 @@ function RepresentativeMandatePanel({ application, snapshot, command, handoff }:
   const assignedContext = customerHandoffHasAction(handoff, 'ENTER_OPERATING_WORKSPACE') && handoff?.mandate?.id === mandate?.id && mandate?.status === 'APPLIED' && mandate.effective && Date.parse(mandate.requested_until) > Date.now() && mandate.native_organisation_id
     ? snapshot.contexts.find(item => item.organisation_id === mandate.native_organisation_id && item.roles.includes('OfferingManager')) : undefined
 
-  return <Panel title="Initial representative mandate and operating access" description="This workflow appoints only the applying customer organisation's first representative. Customer admission, representative authority and a platform role are separate decisions; additional representatives require a later controlled workflow.">
+  return <Panel title="Your representative appointment" description="Request your organisation's first representative appointment. Approval of the organisation, the appointment and the operating role are separate decisions. Additional representatives follow a separate process.">
     {mandates === undefined ? <Notice title="Mandate records unavailable" tone="warning">Refresh saved state before requesting or assuming operating access. No role is inferred from customer admission.</Notice> : mandate ? <>
       <DetailList rows={[{ label: 'Mandate reference', value: mandate.id }, { label: 'Customer organisation', value: mandate.organisation_name }, { label: 'Requested role', value: 'Offering Manager' }, { label: 'Submitted synthetic evidence reference', value: mandate.evidence_reference }, { label: 'Status', value: <StatusBadge status={mandate.status} /> }, { label: 'Revision', value: mandate.revision }, { label: 'Requested expiry', value: dateLabel(mandate.requested_until) }, { label: 'Next responsible owner', value: representativeMandateNextOwnerLabel(mandate.next_owner) }]} />
       {mandate.review_notes ? <p className={styles.sectionGap}>Decision notes: {mandate.review_notes}</p> : null}
@@ -49,7 +49,7 @@ function RepresentativeMandatePanel({ application, snapshot, command, handoff }:
     }}>
       <Notice title="Fictional test appointment only">Use a synthetic appointment reference, not a real identity document or confidential customer record. This reference is not verified KYC or authority by itself.</Notice>
       <Field label="Synthetic appointment evidence reference" hint="20 to 400 characters. Identify the fictional appointment evidence for independent review."><textarea required minLength={20} maxLength={400} value={evidenceReference} disabled={command.busy || command.unknown} onChange={event => setEvidenceReference(event.target.value)} /></Field>
-      <Field label="Requested mandate expiry" hint="The backend limits this to your current admission approval and at most 30 days."><input type="datetime-local" required value={requestedUntil} disabled={command.busy || command.unknown} onChange={event => setRequestedUntil(event.target.value)} /></Field>
+      <Field label="Requested mandate expiry" hint="The appointment is limited to 30 days and cannot extend beyond your current approval."><input type="datetime-local" required value={requestedUntil} disabled={command.busy || command.unknown} onChange={event => setRequestedUntil(event.target.value)} /></Field>
       <button className={styles.button} type="submit" disabled={command.busy || command.unknown}>{mandate ? mandate.status === 'CHANGES_REQUIRED' ? 'Resubmit appointment request' : 'Renew appointment request for review' : 'Request Offering Manager appointment review'}</button>
       {inputError ? <p role="alert">{inputError}</p> : null}
       <CommandFeedback command={command} />
@@ -88,7 +88,7 @@ function ApplicantApplicationCard({ application, snapshot, release }: { applicat
     <p className={styles.muted}>{nextDescription ?? 'Your saved record remains available. Open it to inspect its status and contact the onboarding owner; no submission or operating access is inferred.'}</p>
     <p className={styles.muted}>Next owner: {next?.owner ?? 'BlockXOne onboarding owner'}</p>
     <Link href={directHref ?? entryApplicationHref(application.id)} className={styles.button}>{action}</Link>
-    <details className={styles.applicationHistory}><summary>Saved application details</summary><DetailList rows={[{ label: 'Application reference', value: <span className={styles.mono}>{application.id}</span> }, { label: 'Saved revision', value: application.revision }, { label: 'Submitted', value: dateLabel(application.submitted_at) }, { label: 'Admission expiry', value: dateLabel(application.approved_until) }]} /></details>
+    {directHref ? <Link href={entryApplicationHref(application.id)} className={styles.textLink}>Application record</Link> : null}
   </article>
 }
 
@@ -100,12 +100,21 @@ export function EntryScreen({ initial, release, applicationId, addCapacity = fal
   const [savedMessage, setSavedMessage] = useState('')
   const [applicationActivity, setApplicationActivity] = useState(false)
   const [applicationDirty, setApplicationDirty] = useState(false)
+  const [showHistory, setShowHistory] = useState(false)
+  const historyControl = useRef<HTMLButtonElement>(null)
+  const historyHeading = useRef<HTMLHeadingElement>(null)
+  const historyWasOpened = useRef(false)
   const command = useEntryCommand(snapshot.actor.id, release.environment, setSnapshot, snapshot.requests)
   const application = !section && !chooseContext && !addCapacity ? selectEntryApplication(snapshot, applicationId) : null
   const directorySection = section ?? (chooseContext ? 'overview' : !application ? 'applications' : undefined)
   const handoff = application ? validatedCustomerHandoff(snapshot, application, release.environment) : null
   const preparingApplication = customerHandoffHasAction(handoff, 'PREPARE_APPLICATION')
   useEffect(() => { setApplicationDirty(false) }, [application?.id, application?.revision])
+  useEffect(() => { historyWasOpened.current = false; setShowHistory(false) }, [application?.id, application?.revision, snapshot.actor.id, release.environment])
+  useEffect(() => {
+    if (showHistory) historyHeading.current?.focus()
+    else if (historyWasOpened.current) { historyControl.current?.focus(); historyWasOpened.current = false }
+  }, [showHistory])
   const admissionReadAvailable = customerScopedReadAvailable(snapshot, release.environment)
   const mayStart = !isTestPasswordAdmission(snapshot) || hasStage2CommandAccess(snapshot, 'start_application', APPLICANT_CONTEXT)
   const maySubmit = !isTestPasswordAdmission(snapshot) || hasStage2CommandAccess(snapshot, 'submit_application', APPLICANT_CONTEXT)
@@ -153,16 +162,19 @@ export function EntryScreen({ initial, release, applicationId, addCapacity = fal
       {directorySection === 'applications' ? applicationOptions : null}
       {directorySection === 'workspaces' ? workspaces : null}
       {directorySection === 'help' ? <div className={styles.stack}>
-        <Panel title="Saving and leaving an application"><p>Open the exact application from My applications. Read its save indicator before leaving: a browser answer or a pending upload is not a confirmed saved record. Save and exit must confirm the current draft; resolve unknown outcomes or conflicts before continuing.</p><p>If server draft saving is unavailable, the form shows prepare-only mode. Browser answers are not a saved draft.</p><p>Use the named steps to move through questions. Recent uploads belong to your account, not automatically to an application. Deliberately include a clean file and any required relationship link before submission; a browser file selection cannot be resumed after leaving.</p></Panel>
-        <Panel title="Submission and independent review"><p>A draft is not submitted. Only the returned application status and revision confirm submission. When review is pending, refresh the saved status rather than create a duplicate. Changes or reapplication stay on the same application with its recorded feedback and history.</p><p>Application admission, investment-account opening, representative appointment and an operating role are separate guarded decisions. Signing authority, product eligibility, funding and ownership are separate again.</p></Panel>
-        <Panel title="Get help with a blocked next step"><p>Open the application to inspect its next responsible owner and reference. Contact BlockXOne onboarding if the saved handoff is unavailable; do not send real identity documents through a substitute route.</p><a href="mailto:daniel@bx1.co.za" className={styles.buttonSecondary}>Contact BlockXOne onboarding</a><p className={styles.muted}>Opens your email app. Application details are not included automatically.</p><Link href="/workspace/security" className={styles.textLink}>Account security</Link></Panel>
+        <Panel title="Saving your application"><p>Open your application from My applications and check the save indicator. A browser answer or a pending upload is not a confirmed saved record. Resolve any unknown save or conflict before leaving.</p><p>Use Save and exit when it is available. If draft saving is unavailable, keep the application open: prepare-only answers are not saved. Include each clean uploaded file deliberately; selecting a file in your browser does not include it in the application.</p></Panel>
+        <Panel title="After you submit"><p>Saving a draft does not submit it. After submission, the independent reviewer handles the next step. Refresh status for a decision or requested changes; do not create a duplicate application.</p><p>Approval of your application is separate from opening an account or receiving a representative appointment and operating workspace. Product eligibility, funding and signing require their own checks.</p></Panel>
+        <Panel title="Need help?"><p>Open the application and read its next step. History & support contains your application reference and saved records. Contact BlockXOne onboarding if you cannot continue; do not send real documents through a substitute route.</p><a href="mailto:daniel@bx1.co.za" className={styles.buttonSecondary}>Contact BlockXOne onboarding</a><p className={styles.muted}>Opens your email app. Application details are not included automatically.</p><Link href="/workspace/security" className={styles.textLink}>Account security</Link></Panel>
       </div> : null}
       {application ? <>
         <div role="status" aria-live="polite" className={styles.statusRegion}>{savedMessage}</div>
         {refresh.available ? <div className={styles.applicationRefresh}><button type="button" className={styles.buttonSecondary} disabled={refresh.busy || command.busy || command.unknown} onClick={() => void refresh.refresh()}>{refresh.busy ? 'Refreshing saved status…' : 'Refresh application status'}</button><p className={styles.muted}>Refresh this saved application to see the review handoff or decision. Editing requires a current preparation or reapplication action from the saved workflow.</p><div role="status" aria-live="polite">{refresh.message}</div></div> : null}
-        {!formVisible ? <CustomerHandoffPanel application={application} handoff={handoff} /> : null}
+        {!formVisible ? <div className={styles.stack}>
+          <div className={styles.actions}><button ref={historyControl} type="button" className={styles.buttonSecondary} hidden={showHistory} onClick={() => { historyWasOpened.current = true; setShowHistory(true) }}>History &amp; support</button>{showHistory ? <button type="button" className={styles.buttonSecondary} onClick={() => setShowHistory(false)}>Back to application</button> : null}</div>
+          {showHistory ? <section aria-labelledby="entry-history-heading" className={styles.stack}><h2 id="entry-history-heading" ref={historyHeading} tabIndex={-1}>History &amp; support</h2><CustomerHandoffPanel application={application} handoff={handoff} presentation="history" />{application.status !== 'DRAFT' || application.submitted_at ? <ApplicationDocumentHistory key={application.id} applicationId={application.id} /> : null}</section> : <CustomerHandoffPanel application={application} handoff={handoff} />}
+        </div> : null}
         {intakeVisible ? preparingApplication && !maySubmit ? <Notice title="Submission action unavailable" tone="warning">The saved application can be viewed, but no submission action was returned for this capacity. Contact the BlockXOne onboarding owner with the application reference.</Notice> : <OnboardingForm key={`${application.id}:${application.revision}`} application={application} environment={release.environment} onSaved={applicationSaved} receipts={snapshot.requests} handoff={handoff} onActivityChange={setApplicationActivity} onDirtyChange={setApplicationDirty} handoffPanel={<CustomerHandoffPanel application={application} handoff={handoff} />} /> : null}
-        {availability.available ? <details className={styles.applicationSwitcher} open={handoff?.gates.reviewer_available !== true}><summary>Review availability</summary><div className={`${styles.applicationRefresh} ${styles.sectionGap}`}><button type="button" className={styles.buttonSecondary} disabled={availability.busy || command.busy || command.unknown || applicationActivity} onClick={() => void availability.refresh()}>{availability.busy ? 'Refreshing review availability…' : 'Refresh review availability'}</button><p className={styles.muted}>Recheck the saved review route without submitting or replacing your unsaved answers. If the saved application changes, the check stops instead of overwriting this draft.</p><div role="status" aria-live="polite">{availability.message}</div></div></details> : null}
+        {availability.available ? <div className={styles.applicationRefresh}><button type="button" className={styles.buttonSecondary} disabled={availability.busy || command.busy || command.unknown || applicationActivity} onClick={() => void availability.refresh()}>{availability.busy ? 'Refreshing review availability…' : 'Refresh review availability'}</button><p className={styles.muted}>Check whether an independent reviewer is available, without submitting or replacing your unsaved answers. If the saved application changes, the check stops instead of overwriting this draft.</p><div role="status" aria-live="polite">{availability.message}</div></div> : null}
         {application.persona === 'WEALTH_MANAGER' && application.admission_purpose === 'CUSTOMER_ORGANISATION_ADMISSION' && (application.status === 'APPROVED' || snapshot.organisation_mandates?.some(item => item.application_id === application.id && item.applicant_user_id === snapshot.actor.id)) ? <RepresentativeMandatePanel key={application.id} application={application} snapshot={snapshot} command={command} handoff={handoff} /> : null}
       </> : directorySection === 'applications' && !adding && !chooseContext ? <Notice title="Select the application you want to continue">Each application stays separate. No first application or investor capacity has been selected automatically.</Notice> : null}
     </div>

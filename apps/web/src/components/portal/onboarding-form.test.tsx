@@ -10,7 +10,8 @@ import { applicationDetailsSchema, type LegacyApplicationDetails, type Ownership
 import { ApplicationDetailsSummary, ApplicationHistoryFailureNotice, OnboardingForm, applicationFormDetails, applicationHistoryFailure, applicationNextStep, applicationSubmissionDetails, applicationSubmissionReady, applicationSubmitLabel, classifyDocumentUpload, ownershipPercentInputValid, requiredApplicationEvidence, withoutDraftEvidence } from './onboarding-form'
 import { ApplicationReview } from './portal-workflows'
 import { dateLabel } from './portal-primitives'
-import { PortalIdentityProvider } from './portal-client'
+import { PortalCommandProvider, PortalIdentityProvider } from './portal-client'
+import { APPLICANT_CONTEXT, type PortalOperatingContext } from '@/lib/portal/operating-context'
 import { CustomerHandoffPanel } from './customer-handoff'
 import { onboardingHistoryUnavailableMessage, type OnboardingHistoryEntry, type OnboardingNavigation } from '@/lib/portal/onboarding-flow'
 import { applicationDraftAnswersSchema } from '@/lib/portal/application-drafts'
@@ -49,14 +50,22 @@ function reviewer(persona: PortalApplication['persona'], details: PortalApplicat
 }
 
 describe('persona-specific application preparation', () => {
-  it.each(['INVESTOR', 'WEALTH_MANAGER'] as const)('connects the admitted %s draft to manual sandbox KYC without changing submission authority', persona => {
+  it.each(['INVESTOR', 'WEALTH_MANAGER'] as const)('keeps manual sandbox KYC in an explicit %s record without changing submission authority', persona => {
     const application = entryApplication({ persona, review_route: 'AVAILABLE' })
     const network = rejectUnexpectedFetch()
     const blank = mountedForm(application)
     const html = blank.container.innerHTML
-    expect(html).toContain('KYC placeholder · manual sandbox review')
-    expect(html).toContain('View recorded provider evidence')
+    expect(html).not.toContain('KYC placeholder · manual sandbox review')
+    expect(html).not.toContain('View recorded provider evidence')
     expect(html).not.toContain('Start sandbox identity check')
+    expect(blank.container.querySelector('details, summary')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'History & support' }))
+    fireEvent.click(screen.getByRole('button', { name: 'View verification record' }))
+    expect(blank.container.innerHTML).toContain('KYC placeholder · manual sandbox review')
+    expect(blank.container.innerHTML).toContain('View recorded provider evidence')
+    expect(blank.container.innerHTML).not.toContain('Start sandbox identity check')
+    expect(network).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Back to application' }))
     expect(html).toContain('fictional test data')
     fireEvent.click(screen.getByRole('button', { name: 'View remaining items' }))
     expect(screen.getByRole('button', { name: 'Submit for review' }).matches(':disabled')).toBe(true)
@@ -204,7 +213,8 @@ describe('truthful application state and handoff', () => {
   })
   it('renders a submitted revision read-only with its saved evidence and next owner', () => {
     const html = form({ persona: 'WEALTH_MANAGER', details: manager, status: 'SUBMITTED', revision: 2, submitted_at: '2026-09-22T09:30:00Z', provider_mode: 'MANUAL_TEST_REVIEW' })
-    expect(html).toContain('Read-only saved application, revision 2')
+    expect(html).toContain('These are your saved application answers.')
+    expect(html).toContain('Saved revision</dt><dd>2</dd>')
     expect(html).toContain('BlockXOne independent compliance review')
     expect(html).toContain(dateLabel('2026-09-22T09:30:00Z'))
     expect(html).toContain(manager.authority_basis)
@@ -254,7 +264,7 @@ describe('truthful application state and handoff', () => {
     expect(html).toContain('Reapplication does not reverse rejection into approval')
     expect(html).toContain('Clarify the source of these fictional funds.')
     expect(html).toContain(application.id)
-    expect(html).toContain('Saved record: revision 4')
+    expect(html).toContain('Saved revision</dt><dd>4</dd>')
     expect(html).toContain('View submitted versions')
     expect(html).toContain('<textarea')
     expect(screen.queryByRole('button', { name: 'Reapply for independent review' })).toBeNull()
@@ -283,7 +293,10 @@ describe('truthful application state and handoff', () => {
     const handoff = entryHandoff(application, { state: 'UNAVAILABLE', blocker: 'MONITORING_ON_HOLD', next_owner: 'COMPLIANCE', allowed_actions: [], gates: { intake_admitted: true, reviewer_available: true, monitoring_allows_new_actions: false } })
     const html = renderToStaticMarkup(createElement(OnboardingForm, { application, handoff, environment: 'TESTNET', onSaved: save }))
     expect(html).toContain('Customer relationship on hold')
-    expect(html).toContain('Read-only saved application')
+    expect(html).toContain('These are your saved application answers.')
+    expect(html).toContain('This application has not been submitted.')
+    expect(html).not.toContain('These are the answers you submitted.')
+    expect(html).not.toContain('Submitted private evidence')
     expect(html).not.toContain('<form')
     expect(html).not.toContain('type="file"')
     expect(html).not.toContain('Sumsub sandbox')
@@ -371,6 +384,67 @@ function unloadPrevented() {
 }
 
 describe('draft reliability in the applicant form', () => {
+  it('resets local history and its explicit verification view when the operating context changes', () => {
+    const application = entryApplication({ review_route: 'AVAILABLE' })
+    const network = rejectUnexpectedFetch()
+    const snapshot: PortalSnapshot = { actor: { id: entryActorId, email: 'applicant@example.invalid', display_name: null, can_review: false }, applications: [], organisations: [], products: [], subscriptions: [], events: [] }
+    const scoped = (context: PortalOperatingContext) => <PortalCommandProvider snapshot={snapshot} operatingContext={context} environment="TESTNET"><OnboardingForm application={application} environment="TESTNET" onSaved={vi.fn()} handoff={entryHandoff(application)} /></PortalCommandProvider>
+    const view = render(scoped(APPLICANT_CONTEXT))
+    fireEvent.click(screen.getByRole('button', { name: 'History & support' }))
+    fireEvent.click(screen.getByRole('button', { name: 'View verification record' }))
+    expect(view.container.innerHTML).toContain('KYC placeholder · manual sandbox review')
+    view.rerender(scoped({ mode: 'ROLE', organisationId: '33333333-3333-4333-8333-333333333333', role: 'ComplianceOfficer' }))
+    expect(screen.getByRole('button', { name: 'History & support' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Back to application' })).toBeNull()
+    expect(view.container.innerHTML).not.toContain('KYC placeholder · manual sandbox review')
+    expect(boundary.submit).not.toHaveBeenCalled()
+    expect(draftBoundary.save).not.toHaveBeenCalled()
+    expect(network).not.toHaveBeenCalled()
+  })
+  it('opens history without replacing the form, losing answers or writing anything', () => {
+    const network = rejectUnexpectedFetch()
+    const view = mountedForm(entryApplication({ persona: 'WEALTH_MANAGER', review_route: 'AVAILABLE' }))
+    const name = screen.getByLabelText('Representative full name *') as HTMLInputElement
+    fireEvent.change(name, { target: { value: 'Alex Unsaved Example' } })
+    expect(unloadPrevented()).toBe(true)
+    const history = screen.getByRole('button', { name: 'History & support' })
+    history.focus()
+    fireEvent.click(history)
+    expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'History & support' }))
+    expect(screen.queryByRole('button', { name: /^Continue$/ })).toBeNull()
+    expect(view.container.contains(name)).toBe(true)
+    expect(name.value).toBe('Alex Unsaved Example')
+    expect(unloadPrevented()).toBe(true)
+    expect(view.container.querySelector('details, summary')).toBeNull()
+    expect(boundary.submit).not.toHaveBeenCalled()
+    expect(draftBoundary.save).not.toHaveBeenCalled()
+    expect(network).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Back to application' }))
+    expect(document.activeElement).toBe(history)
+    expect(screen.getByLabelText('Representative full name *')).toBe(name)
+    expect(name.value).toBe('Alex Unsaved Example')
+    expect(screen.getByRole('heading', { name: 'Your details' })).toBeTruthy()
+    expect(unloadPrevented()).toBe(true)
+    expect(boundary.submit).not.toHaveBeenCalled()
+    expect(draftBoundary.save).not.toHaveBeenCalled()
+    expect(network).not.toHaveBeenCalled()
+  })
+  it('does not clear an unknown command or draft conflict by visiting history', () => {
+    boundary.unknown = true
+    Object.assign(draftBoundary, { status: 'CONFLICT', available: true, dirty: true })
+    const network = rejectUnexpectedFetch()
+    mountedForm(entryApplication({ review_route: 'AVAILABLE' }))
+    fireEvent.click(screen.getByRole('button', { name: 'History & support' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Back to application' }))
+    expect(screen.getByRole('button', { name: /^Continue$/ }).matches(':disabled')).toBe(true)
+    expect(screen.getByRole('button', { name: 'Save and exit' }).matches(':disabled')).toBe(true)
+    expect(screen.getByText('Draft changed; your new answers are retained')).toBeTruthy()
+    expect(boundary.unknown).toBe(true)
+    expect(draftBoundary.status).toBe('CONFLICT')
+    expect(boundary.submit).not.toHaveBeenCalled()
+    expect(draftBoundary.save).not.toHaveBeenCalled()
+    expect(network).not.toHaveBeenCalled()
+  })
   it('offers named step navigation without changing application authority or sending a submission', () => {
     mountedForm(entryApplication({ persona: 'WEALTH_MANAGER', review_route: 'AVAILABLE' }))
     const rail = within(screen.getByRole('navigation', { name: 'Application steps' }))
