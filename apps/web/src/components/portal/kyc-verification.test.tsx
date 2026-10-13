@@ -168,18 +168,22 @@ describe('application-scoped sandbox identity verification', () => {
     expect(main).not.toContain('Refresh signed provider evidence')
   })
 
-  it('labels manual TEST KYC as a placeholder without changing MAIN or offering a provider session', () => {
+  it('offers optional manual TEST verification only for a submitted revision, keeping records and MAIN closed', () => {
     for (const status of ['DRAFT', 'SUBMITTED', 'CHANGES_REQUIRED'] as const) {
       const application = entryApplication({ status, revision: 3, submitted_at: status === 'DRAFT' ? null : '2026-10-07T10:00:00Z',
         details: { full_name: 'Synthetic Individual', country: 'ZA', investor_type: 'INDIVIDUAL' } })
       const html = renderKyc({ application, actorId: entryActorId, environment: 'TESTNET', manualTestReview: true,
         sandboxEnabled: true, individualEnabled: true, companyEnabled: true })
       expect(html).toContain('Document review in the TEST application')
-      expect(html).toContain('No separate identity check is required for this fictional TEST application')
+      expect(html).toContain('Optional Sumsub sandbox check')
+      expect(html).toContain('Compliance still reviews your submitted documents independently')
       expect(html).toContain('This is not completed KYC or production clearance')
       expect(html).toContain('View recorded provider evidence')
-      expect(html).not.toContain('Start sandbox identity check')
-      expect(html).not.toContain('Submit the application for review first')
+      if (status === 'SUBMITTED') expect(html).toContain('Start sandbox identity check')
+      else {
+        expect(html).not.toContain('Start sandbox identity check')
+        expect(html).toContain(status === 'DRAFT' ? 'Submit the application for review first' : 'Update and resubmit the application first')
+      }
       expect(html).not.toContain('Sandbox identity check not connected')
       const record = renderKyc({ application, actorId: entryActorId, environment: 'TESTNET', manualTestReview: true,
         sandboxEnabled: true, individualEnabled: true, companyEnabled: true, presentation: 'record' })
@@ -196,5 +200,30 @@ describe('application-scoped sandbox identity verification', () => {
     expect(review).toContain('Sumsub is not a required step for this manual TEST case')
     expect(review).toContain('View recorded provider evidence')
     expect(review).not.toContain('Record review decision')
+  })
+
+  it('keeps manual TEST optional checks closed without exact flags, submitted facts or a supported subject', () => {
+    const application = entryApplication({ status: 'SUBMITTED', revision: 3, submitted_at: '2026-10-07T10:00:00Z',
+      details: { full_name: 'Synthetic Individual', country: 'ZA', investor_type: 'INDIVIDUAL' } })
+    const props = { application, actorId: entryActorId, environment: 'TESTNET' as const, manualTestReview: true,
+      sandboxEnabled: true, individualEnabled: true, companyEnabled: false }
+    for (const overrides of [{ sandboxEnabled: false }, { individualEnabled: false },
+      { application: { ...application, submitted_at: null } },
+      { application: { ...application, context_kind: 'ORGANISATION' as const } },
+      { application: { ...application, details: {} } },
+      { application: { ...application, details: { ...application.details, investor_type: 'ENTITY',
+        details_version: 3, company_name: 'Synthetic Company', registration_reference: 'SYNTHETIC-REG' } } }]) {
+      const html = renderKyc({ ...props, ...overrides })
+      expect(html).not.toContain('Start sandbox identity check')
+      expect(html).toContain('your manual TEST review can continue independently')
+      expect(html).not.toContain('Sumsub sandbox identity verification')
+    }
+    const companyClosed = renderKyc({ ...props, application: { ...application, details: {
+      ...application.details, investor_type: 'ENTITY', details_version: 3,
+      company_name: 'Synthetic Company', registration_reference: 'SYNTHETIC-REG',
+    } } })
+    expect(companyClosed).toContain('Company verification is unavailable')
+    expect(companyClosed).toContain('An individual check cannot verify this company application')
+    expect(companyClosed).toContain('this optional check does not block it')
   })
 })

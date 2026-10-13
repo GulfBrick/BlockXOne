@@ -1,5 +1,12 @@
 # BlockXOne platform releases
 
+## 1.2.0-rc.4 — FAQ and optional Sumsub sandbox discovery candidate
+
+- Add a public FAQ, linked from existing public and role/applicant navigation. Visible topic answers explain onboarding, both product templates, investment/valuation/exit steps, fees, provider evidence, wallets and environment boundaries; no new application or dropdown design.
+- Allow the existing optional Sumsub sandbox step in manual TEST review only for the same authorised submitted application and configured subject. Preserve the independent review, immutable revision, current-session and scope-change checks. No server/database permission or provider configuration is changed.
+- Build on accepted 1.2.0-rc.3 source d42c09a48de06d3f27e1b1b04b8820c5401c24b3. Independent static review and exact-head cloud checks are required; source/UI availability does not prove genuine provider events, hosted signatures, financial journeys or Stage 3 completion.
+- Existing DocuSign sandbox settings are retained. Connected signing and immutable signed-package evidence remain the next Stage 3 implementation unit. No new account/key, production admission, role/factor change, fund movement or contract write.
+
 ## 1.1.0-rc.28 — Connected Stage 2 handoff correction candidate
 
 - Continue the existing Stage 2 workflow from exact rc.27 source `0f749e2c8ca94309ffafe2cdcec115b51b668947`; no new platform or roadmap.

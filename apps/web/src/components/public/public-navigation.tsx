@@ -17,6 +17,7 @@ const NAV_LINKS = [
   { href: '/for-investors', label: 'Investors' },
   { href: '/for-operators', label: 'Institutions' },
   { href: '/security-and-compliance', label: 'Security' },
+  { href: '/faq', label: 'FAQ' },
 ]
 
 export function PublicNavigation({ showPortalAccess, environment, variant = 'default' }: { showPortalAccess: boolean; environment?: PlatformEnvironment; variant?: 'default' | 'homepage' }) {

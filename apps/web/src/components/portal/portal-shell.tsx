@@ -46,12 +46,13 @@ export function PortalShell({ user, organisationName, capacityName, capabilities
       {brand}
       <p className={styles.sidebarCaption}>Ownership, reimagined</p>
       {links}
-      {!compactApplicant ? <details className={styles.mobileNav}><summary>Navigate your workspace</summary>{links}<nav aria-label="Account navigation" className={styles.nav}><a href="/workspace/security" className={styles.navLink}><ShieldCheck aria-hidden="true" />Account security<ArrowUpRight aria-hidden="true" /></a><a href="/workspace" className={styles.navLink}>Account workspace<ArrowUpRight aria-hidden="true" /></a></nav></details> : null}
+      {!compactApplicant ? <details className={styles.mobileNav}><summary>Navigate your workspace</summary>{links}<nav aria-label="Account navigation" className={styles.nav}><a href="/workspace/security" className={styles.navLink}><ShieldCheck aria-hidden="true" />Account security<ArrowUpRight aria-hidden="true" /></a><a href="/workspace" className={styles.navLink}>Account workspace<ArrowUpRight aria-hidden="true" /></a><Link href="/faq" className={styles.navLink}>FAQ</Link></nav></details> : null}
       <p className={styles.navRestricted}>Workspace tools reflect your assigned access. Signing authority is managed separately.</p>
       {!compactApplicant ? <div className={styles.sidebarFoot}>
         <div className={styles.environmentCard}><strong>{testnet ? 'Testnet · Test environment' : 'Mainnet · Live environment'}</strong><p>{testnet ? 'Fictional products and synthetic settlement. Test tokens have no investment value.' : 'Real-world operations require their own approved mandates, providers and production admission.'}</p><p>Version {release?.version ?? PLATFORM_VERSION}{release ? ` · ${release.source}` : ''}</p></div>
         <a href="/workspace/security" className={styles.navLink}><ShieldCheck aria-hidden="true" />Account security<ArrowUpRight aria-hidden="true" /></a>
         <a href="/workspace" className={styles.navLink}>Account workspace<ArrowUpRight aria-hidden="true" /></a>
+        <Link href="/faq" className={styles.navLink}>FAQ</Link>
       </div> : null}
     </aside>
     <div className={styles.frame}>

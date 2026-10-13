@@ -15,6 +15,17 @@ import { PublicNavigation } from './public-navigation'
 beforeEach(() => { state.mobileOpen = false; state.pathname = '/' })
 
 describe('branded Mainnet and Testnet public navigation', () => {
+  it.each(['MAINNET', 'TESTNET'] as const)('exposes the active FAQ in both navigation sizes and variants on %s', environment => {
+    state.pathname = '/faq'
+    state.mobileOpen = true
+    for (const variant of ['default', 'homepage'] as const) {
+      const html = renderToStaticMarkup(<PublicNavigation showPortalAccess={false} environment={environment} variant={variant} />)
+      for (const label of ['Primary navigation', 'Mobile public navigation']) {
+        const nav = html.match(new RegExp(`<nav aria-label="${label}"[\\s\\S]*?</nav>`))?.[0] ?? ''
+        expect(nav).toMatch(/href="\/faq"[^>]*aria-current="page"/)
+      }
+    }
+  })
   it('keeps the Stage 3 Mainnet controls and exposes the branded Testnet login on desktop', () => {
     const html = renderToStaticMarkup(<PublicNavigation showPortalAccess environment="MAINNET" />)
     const desktop = html.match(/<nav aria-label="Primary navigation"[\s\S]*?<\/nav>/)?.[0] ?? ''

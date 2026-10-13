@@ -572,6 +572,7 @@ export async function runProductionContainmentProbe() {
     await waitUntilReady(origin, child, () => logs, () => childSpawnError)
     await assertStatus(origin, '/', 200)
     await assertStatus(origin, '/request-demo', 200)
+    await assertStatus(origin, '/faq', 200)
     await assertStatus(origin, '/guided-demo', 200)
 
     const enquiryPage = await fetch(`${origin}/request-demo`, { signal: AbortSignal.timeout(5_000) })

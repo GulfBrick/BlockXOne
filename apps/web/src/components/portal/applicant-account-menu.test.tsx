@@ -18,6 +18,7 @@ describe('applicant account controls', () => {
     expect(screen.getByRole('link', { name: 'Account security' }).getAttribute('href')).toBe('/workspace/security')
     expect(screen.getByRole('link', { name: 'Account workspace' }).getAttribute('href')).toBe('/workspace')
     expect(screen.getByRole('link', { name: 'Account options' }).getAttribute('href')).toBe('/register')
+    expect(screen.getByRole('link', { name: 'FAQ' }).getAttribute('href')).toBe('/faq')
     const logout = screen.getByRole('button', { name: 'Sign out' })
     expect(logout.getAttribute('type')).toBe('submit')
     expect(logout.closest('form')?.getAttribute('action')).toBe('/auth/logout')

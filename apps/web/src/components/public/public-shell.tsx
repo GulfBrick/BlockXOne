@@ -65,7 +65,7 @@ export function PublicShell({
                 <div className={homepageStyles.footerBrand}><BrandLockup presentation="navigation" /><p>Private-market infrastructure.</p></div>
                 <nav className={homepageStyles.footerNav} aria-labelledby="home-footer-platform"><h2 id="home-footer-platform">Platform</h2><Link href="/how-it-works">Workflow</Link><Link href="/asset-classes">Asset classes</Link><Link href="/security-and-compliance">Security</Link></nav>
                 <nav className={homepageStyles.footerNav} aria-labelledby="home-footer-participants"><h2 id="home-footer-participants">Participants</h2><Link href="/for-operators">Institutions</Link><Link href="/for-investors">Investors</Link></nav>
-                <nav className={homepageStyles.footerNav} aria-labelledby="home-footer-access"><h2 id="home-footer-access">Access</h2><Link href="/request-demo">Contact</Link>{showPortalAccess ? <Link href="/login">Sign in</Link> : null}{environment ? <Link href="/register">Register</Link> : null}</nav>
+                <nav className={homepageStyles.footerNav} aria-labelledby="home-footer-access"><h2 id="home-footer-access">Access</h2><Link href="/faq">FAQ</Link><Link href="/request-demo">Contact</Link>{showPortalAccess ? <Link href="/login">Sign in</Link> : null}{environment ? <Link href="/register">Register</Link> : null}</nav>
               </div>
               <div className={homepageStyles.footerMeta}><span>BlockXOne</span><span>Fictional examples, not investment offers.</span></div>
             </div>
@@ -115,6 +115,7 @@ export function PublicShell({
                 <div className="grid gap-2 text-sm text-bxo-text-secondary">
                   {showPortalAccess ? <Link href="/login" className="bxo-footer-link">Sign in</Link> : null}
                   <Link href="/how-it-works" className="bxo-footer-link">Platform workflow</Link>
+                  <Link href="/faq" className="bxo-footer-link">FAQ</Link>
                 </div>
               </nav>
             </div>

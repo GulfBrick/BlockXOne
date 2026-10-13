@@ -10,6 +10,11 @@ import { PublicShell } from './public-shell'
 afterEach(() => vi.unstubAllEnvs())
 
 describe('opt-in Homepage V4 public shell', () => {
+  it.each(['default', 'homepage'] as const)('keeps FAQ reachable in the %s footer', variant => {
+    const html = renderToStaticMarkup(<PublicShell variant={variant}><main id="main-content">Content</main></PublicShell>)
+    const footer = html.match(/<footer[\s\S]*?<\/footer>/)?.[0] ?? ''
+    expect(footer).toMatch(/href="\/faq"[^>]*>FAQ<\/a>/)
+  })
   it('preserves the default secondary-page shell and primary workflow destination', () => {
     const html = renderToStaticMarkup(<PublicShell><main id="main-content">Secondary page</main></PublicShell>)
     const explicitDefault = renderToStaticMarkup(<PublicShell variant="default"><main id="main-content">Secondary page</main></PublicShell>)

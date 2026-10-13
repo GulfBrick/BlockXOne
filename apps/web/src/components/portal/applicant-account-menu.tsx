@@ -36,7 +36,7 @@ export function ApplicantAccountMenu({ email }: { email: string }) {
     <button ref={trigger} type="button" className={styles.accountMenuTrigger} aria-expanded={open} aria-controls={id} onClick={() => setOpen(value => !value)}><CircleUserRound aria-hidden="true" />Account</button>
     <div ref={body} id={id} className={styles.accountMenuBody} role="region" aria-label="Account options" hidden={!open}>
       <div className={styles.actions}><p className={styles.accountEmail}>{email}</p><button type="button" className={styles.textLink} onClick={() => close(true)}>Close</button></div>
-      <nav aria-label="Account navigation" className={styles.nav}><a href="/workspace/security" className={styles.navLink}><ShieldCheck aria-hidden="true" />Account security</a><a href="/workspace" className={styles.navLink}>Account workspace</a><Link href="/register" className={styles.navLink}>Account options</Link></nav>
+      <nav aria-label="Account navigation" className={styles.nav}><a href="/workspace/security" className={styles.navLink}><ShieldCheck aria-hidden="true" />Account security</a><a href="/workspace" className={styles.navLink}>Account workspace</a><Link href="/register" className={styles.navLink}>Account options</Link><Link href="/faq" className={styles.navLink}>FAQ</Link></nav>
       <form action="/auth/logout" method="post"><button className={styles.buttonSecondary} type="submit">Sign out</button></form>
     </div>
   </div>

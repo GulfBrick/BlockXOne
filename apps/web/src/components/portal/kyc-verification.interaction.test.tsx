@@ -11,9 +11,16 @@ import { PortalCommandProvider } from './portal-client'
 
 // Mount the real portal component and real account/context providers. Only the
 // external vendor iframe is replaced; all HTTP responses are synthetic fixtures.
-vi.mock('next/dynamic', () => ({ default: () => (props: { accessToken: string }) => createElement('div', {
-  'data-testid': 'sandbox-sdk', 'data-synthetic-token': props.accessToken,
-}) }))
+const sdkCallbacks = vi.hoisted(() => ({ renew: undefined as (() => Promise<string>) | undefined,
+  error: undefined as (() => void) | undefined }))
+vi.mock('next/dynamic', () => ({ default: () => (props: { accessToken: string; config: { theme: string };
+  expirationHandler: () => Promise<string>; onError: () => void }) => {
+  sdkCallbacks.renew = props.expirationHandler
+  sdkCallbacks.error = props.onError
+  return createElement('div', {
+    'data-testid': 'sandbox-sdk', 'data-synthetic-token': props.accessToken, 'data-theme': props.config.theme,
+  })
+} }))
 import { KycVerification, ProviderEvidenceReview } from './kyc-verification'
 
 const submitted = () => entryApplication({ status: 'SUBMITTED', revision: 3, submitted_at: '2026-10-07T10:00:00Z',
@@ -72,7 +79,7 @@ function serveEvents(events: unknown[]) {
   vi.stubGlobal('fetch', fetcher)
   return fetcher
 }
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.unstubAllEnvs() })
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); sdkCallbacks.renew = undefined; sdkCallbacks.error = undefined })
 
 describe('mounted revision-bound provider evidence', () => {
   it('keeps technical facts in a plain applicant record while task-record switching preserves the bound session and request scope', async () => {
@@ -186,6 +193,93 @@ describe('mounted revision-bound provider evidence', () => {
     expect(screen.queryByText(/Provider review completed: GREEN/)).toBeNull()
     expect(fetcher).toHaveBeenCalledTimes(1)
   })
+
+  it.each(['individual', 'company'] as const)('starts an optional manual %s check only on click, without a review mutation', async subject => {
+    const application = subject === 'company' ? submittedEntity() : submitted()
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => String(input) === '/api/portal/kyc/session'
+      ? token(application) : evidence(application.id, []))
+    vi.stubGlobal('fetch', fetcher)
+    const availability = { manualTestReview: true, individualEnabled: subject === 'individual', companyEnabled: subject === 'company' }
+    const mounted = render(applicant(application, entryActorId, APPLICANT_CONTEXT, availability))
+    expect(screen.getByText(/Optional Sumsub sandbox check/)).toBeTruthy()
+    expect(fetcher).not.toHaveBeenCalled()
+    expect(screen.queryByTestId('sandbox-sdk')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Start sandbox identity check' }))
+    await waitFor(() => expect(screen.getByTestId('sandbox-sdk').getAttribute('data-theme')).toBe('light'))
+    expect(fetcher).toHaveBeenCalledTimes(1)
+    expect(fetcher).toHaveBeenCalledWith('/api/portal/kyc/session', expect.objectContaining({ method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-bx1-expected-actor': entryActorId },
+      body: JSON.stringify({ application_id: application.id, expected_revision: application.revision }) }))
+    expect(screen.getByText(/Completion is not an admission decision/)).toBeTruthy()
+    expect(screen.queryByText(/Provider check complete/)).toBeNull()
+    expect(screen.queryByRole('button', { name: /Approve|Record review decision|Submit application/ })).toBeNull()
+    mounted.rerender(applicant(application, entryActorId, APPLICANT_CONTEXT, { ...availability, presentation: 'record' }))
+    expect(screen.queryByTestId('sandbox-sdk')).toBeNull()
+    expect(screen.queryByRole('button', { name: /^(Start|Restart) sandbox identity check$/ })).toBeNull()
+    expect(fetcher).toHaveBeenCalledTimes(1)
+  })
+
+  it.each(['DRAFT', 'CHANGES_REQUIRED'] as const)('never starts an optional manual check for editable %s', status => {
+    const fetcher = serveEvents([])
+    render(applicant({ ...submitted(), status }, entryActorId, APPLICANT_CONTEXT,
+      { manualTestReview: true, individualEnabled: true, companyEnabled: true }))
+    expect(screen.queryByRole('button', { name: 'Start sandbox identity check' })).toBeNull()
+    expect(screen.getByText(status === 'DRAFT' ? /Submit the application for review first/ : /Update and resubmit the application first/)).toBeTruthy()
+    expect(fetcher).not.toHaveBeenCalled()
+  })
+
+  it.each(['actor', 'context', 'revision', 'state', 'global', 'subject', 'company-unavailable'] as const)(
+    'drops an optional manual session response after %s changes', async change => {
+      const pending = deferred<Response>()
+      const fetcher = vi.fn(() => pending.promise)
+      vi.stubGlobal('fetch', fetcher)
+      const availability = { manualTestReview: true, individualEnabled: true, companyEnabled: false }
+      const mounted = render(applicant(submitted(), entryActorId, APPLICANT_CONTEXT, availability))
+      fireEvent.click(screen.getByRole('button', { name: 'Start sandbox identity check' }))
+      const application = change === 'revision' ? { ...submitted(), revision: 4 }
+        : change === 'state' ? { ...submitted(), status: 'CHANGES_REQUIRED' as const }
+          : change === 'company-unavailable' ? submittedEntity() : submitted()
+      mounted.rerender(applicant(application, change === 'actor' ? otherActor : entryActorId,
+        change === 'context' ? reviewerContext : APPLICANT_CONTEXT,
+        { ...availability, sandboxEnabled: change !== 'global', individualEnabled: change !== 'subject' }))
+      await act(async () => { pending.resolve(token()); await pending.promise })
+      expect(screen.queryByTestId('sandbox-sdk')).toBeNull()
+      expect(screen.queryByText(/Sandbox verification opened/)).toBeNull()
+      expect(screen.queryByText(/Provider check complete/)).toBeNull()
+      if (change !== 'revision') expect(screen.queryByRole('button', { name: 'Start sandbox identity check' })).toBeNull()
+      expect(fetcher).toHaveBeenCalledTimes(1)
+    })
+
+  it('keeps manual review independent when the optional session request fails', async () => {
+    const fetcher = vi.fn(async () => json({ error: 'The sandbox identity check is unavailable.' }, 503))
+    vi.stubGlobal('fetch', fetcher)
+    render(applicant(submitted(), entryActorId, APPLICANT_CONTEXT, { manualTestReview: true, individualEnabled: true }))
+    fireEvent.click(screen.getByRole('button', { name: 'Start sandbox identity check' }))
+    await waitFor(() => expect(screen.getByText('The sandbox identity check is unavailable.')).toBeTruthy())
+    expect(screen.getByText(/your manual TEST review can continue independently/)).toBeTruthy()
+    expect(screen.queryByTestId('sandbox-sdk')).toBeNull()
+    expect(screen.queryByText(/Provider check complete/)).toBeNull()
+    expect(fetcher).toHaveBeenCalledTimes(1)
+  })
+
+  it.each(['actor', 'context', 'revision', 'availability'] as const)(
+    'removes a mounted manual session and rejects its old SDK callbacks after %s changes', async change => {
+      const fetcher = vi.fn(async () => token())
+      vi.stubGlobal('fetch', fetcher)
+      const availability = { manualTestReview: true, individualEnabled: true }
+      const mounted = render(applicant(submitted(), entryActorId, APPLICANT_CONTEXT, availability))
+      fireEvent.click(screen.getByRole('button', { name: 'Start sandbox identity check' }))
+      await waitFor(() => expect(screen.getByTestId('sandbox-sdk')).toBeTruthy())
+      const renew = sdkCallbacks.renew!, reportError = sdkCallbacks.error!
+      mounted.rerender(applicant(change === 'revision' ? { ...submitted(), revision: 4 } : submitted(),
+        change === 'actor' ? otherActor : entryActorId, change === 'context' ? reviewerContext : APPLICANT_CONTEXT,
+        { ...availability, individualEnabled: change !== 'availability' }))
+      expect(screen.queryByTestId('sandbox-sdk')).toBeNull()
+      await act(async () => { await expect(renew()).rejects.toThrow('no longer available'); reportError() })
+      expect(screen.queryByText(/provider widget reported a problem/)).toBeNull()
+      expect(screen.queryByText(/Sandbox verification opened/)).toBeNull()
+      expect(fetcher).toHaveBeenCalledTimes(1)
+    })
 
   it.each(['individual', 'company'] as const)('offers only the enabled %s subject, while the other subject stays unavailable', async subject => {
     const fetcher = serveEvents([])

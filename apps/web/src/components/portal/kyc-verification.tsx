@@ -234,7 +234,7 @@ export function KycVerification({ application, environment, actorId,
   const [evidenceMessage, setEvidenceMessage] = useState('')
   const testnet = environment === 'TESTNET'
   const mayRead = testnet && applicantContext && Boolean(actorId)
-  const mayStart = mayRead && !manualPlaceholder && sandboxEnabled && subjectEnabled && application.context_kind === 'PERSONAL'
+  const mayStart = mayRead && sandboxEnabled && subjectEnabled && application.context_kind === 'PERSONAL'
     && application.status === 'SUBMITTED' && Boolean(application.submitted_at)
     && ['INVESTOR_ADMISSION', 'CUSTOMER_ORGANISATION_ADMISSION'].includes(application.admission_purpose)
 
@@ -336,13 +336,13 @@ export function KycVerification({ application, environment, actorId,
 
   const currentSession = mayStart && session?.scope === scope ? session : null
   const currentEvidence = evidence?.scope === scope ? evidence.events : null
-  return <Panel title={presentation === 'record' ? 'Identity verification record' : 'Identity verification'} description={presentation === 'record' ? manualPlaceholder ? 'Sumsub is not required to complete this fictional sandbox application.' : 'A sandbox provider check and the BlockXOne admission decision are separate records.' : manualPlaceholder ? 'Identity documents are reviewed with your submitted fictional application.' : 'A provider check and independent BlockXOne review are separate decisions.'}>
+  return <Panel title={presentation === 'record' ? 'Identity verification record' : 'Identity verification'} description={presentation === 'record' ? manualPlaceholder ? 'Sumsub is not required to complete this fictional sandbox application.' : 'A sandbox provider check and the BlockXOne admission decision are separate records.' : manualPlaceholder ? 'Optional Sumsub sandbox check · your manual TEST review can continue independently.' : 'A provider check and independent BlockXOne review are separate decisions.'}>
     {presentation === 'record' ? <DetailList rows={[{ label: 'Application reference', value: application.id }, { label: 'Application revision', value: application.revision }, { label: 'Submitted', value: dateLabel(application.submitted_at) }]} /> : null}
     {testnet ? <>
-      {manualPlaceholder ? <Notice title={presentation === 'record' ? 'KYC placeholder · manual sandbox review' : 'Document review in the TEST application'}>{presentation === 'record' ? 'Complete the required application facts and upload fictional supporting evidence, then submit for Compliance review. The reviewer can request information, review your resubmission and record a manual TEST decision. This placeholder is not completed KYC and does not grant eligibility, a role or signing authority. Do not upload real identity documents.' : 'No separate identity check is required for this fictional TEST application; Compliance reviews the submitted documents. This is not completed KYC or production clearance and does not grant eligibility, a role or signing authority. Do not upload real identity documents.'}</Notice>
+      {manualPlaceholder ? <Notice title={presentation === 'record' ? 'KYC placeholder · manual sandbox review' : 'Document review in the TEST application'}>{presentation === 'record' ? 'Complete the required application facts and upload fictional supporting evidence, then submit for Compliance review. The reviewer can request information, review your resubmission and record a manual TEST decision. This placeholder is not completed KYC and does not grant eligibility, a role or signing authority. Do not upload real identity documents.' : 'When available below, you can try Sumsub with fictional identity information after submitting your application. It is optional: Compliance still reviews your submitted documents independently. This is not completed KYC or production clearance and does not grant eligibility, a role or signing authority. Do not upload real identity documents.'}</Notice>
         : <Notice title="Sandbox: fictional identity information only">{presentation === 'record' ? 'When enabled, the Sumsub check opens inside your application. Do not submit a real identity document here. A provider result is evidence for an independent reviewer; it never grants account, role, product eligibility or signing authority.' : 'When available, the sandbox identity check opens here. Use fictional identity information only. A provider result is evidence for independent review; it never grants account, role, product eligibility or signing authority.'}</Notice>}
-      {!manualPlaceholder && !sandboxEnabled ? <Notice title={presentation === 'record' ? 'Sandbox identity check not connected' : 'Identity verification is unavailable'}>{presentation === 'record' ? 'The provider session is unavailable until the TEST sandbox credentials, webhook and evidence writer are verified. Your application and its recorded review state remain available.' : 'An identity check cannot be started for this application yet. Your application and its saved review state are preserved. Contact BlockXOne onboarding for the next step.'}</Notice> : null}
-      {!manualPlaceholder && sandboxEnabled && applicantType && !subjectEnabled ? <Notice title={presentation === 'record' ? applicantType === 'company'
+      {!sandboxEnabled ? <Notice title={presentation === 'record' ? 'Sandbox identity check not connected' : 'Identity verification is unavailable'}>{presentation === 'record' ? 'The provider session is unavailable until the TEST sandbox credentials, webhook and evidence writer are verified. Your application and its recorded review state remain available.' : 'An identity check cannot be started for this application yet. Your application and its saved review state are preserved. Contact BlockXOne onboarding for the next step.'}{manualPlaceholder ? ' Continue the manual TEST review; this optional check does not block it.' : ''}</Notice> : null}
+      {sandboxEnabled && applicantType && !subjectEnabled ? <Notice title={presentation === 'record' ? applicantType === 'company'
         ? 'Company sandbox verification unavailable' : 'Individual sandbox verification unavailable' : applicantType === 'company' ? 'Company verification is unavailable' : 'Identity verification is unavailable'}>
         {presentation === 'record' ? applicantType === 'company'
           ? 'Company verification remains unavailable until sandbox KYB entitlement, the exact company level and its evidence connection are verified. An individual check cannot verify this company application.'
@@ -350,6 +350,7 @@ export function KycVerification({ application, environment, actorId,
             ? 'A company identity check cannot be started yet. An individual check cannot verify this company application. Contact BlockXOne onboarding for the next step.'
             : 'An identity check cannot be started yet. Contact BlockXOne onboarding for the next step.'}
         {' Your application and historical provider evidence remain available; no clearance is inferred.'}
+        {manualPlaceholder ? ' Continue the manual TEST review; this optional check does not block it.' : ''}
       </Notice> : null}
       <div className={styles.sectionGap} role="status" aria-live="polite">
         <strong>{currentEvidence ? presentation === 'record' ? providerEvidenceLabel(currentEvidence, application.revision) : identityVerificationTaskLabel(currentEvidence, application.revision) : evidenceBusy ? 'Checking provider evidence...' : manualPlaceholder ? 'Recorded provider facts are optional evidence, not a submission requirement.' : 'Provider evidence has not been checked'}</strong>
@@ -360,14 +361,15 @@ export function KycVerification({ application, environment, actorId,
         {presentation === 'task' && mayStart ? <button type="button" className={styles.button} disabled={starting} onClick={() => void start()}>{starting ? 'Starting sandbox verification...' : currentSession ? 'Restart sandbox identity check' : 'Start sandbox identity check'}</button> : null}
         <button type="button" className={styles.buttonSecondary} disabled={evidenceBusy || !mayRead} onClick={() => void refreshEvidence()}>{evidenceBusy ? 'Checking evidence...' : manualPlaceholder ? 'View recorded provider evidence' : 'Refresh recorded evidence'}</button>
       </div>
-      {presentation === 'task' && !mayStart && !manualPlaceholder ? <p className={`${styles.muted} ${styles.sectionGap}`}>{['DRAFT', 'CHANGES_REQUIRED'].includes(application.status)
+      {presentation === 'task' && !mayStart && (sandboxEnabled && (!applicantType || subjectEnabled)
+        || ['DRAFT', 'CHANGES_REQUIRED'].includes(application.status) || !applicantContext) ? <p className={`${styles.muted} ${styles.sectionGap}`}>{['DRAFT', 'CHANGES_REQUIRED'].includes(application.status)
         ? application.status === 'DRAFT' ? 'Submit the application for review first. Identity verification must use its immutable submitted revision.' : 'Update and resubmit the application first. Identity verification cannot use an editable changes-required revision.'
         : !applicantContext ? 'Return to this signed-in applicant context before starting verification. No result from another account or capacity is retained.'
           : 'A new provider session is not available for this application state or configuration. Historical evidence remains visible to authorised readers.'}</p> : null}
       {presentation === 'task' && sessionMessage ? <p className={`${styles.muted} ${styles.sectionGap}`} role="status">{sessionMessage}</p> : null}
       {presentation === 'task' && currentSession ? <div ref={sdkContainer} className={`${styles.kycWidget} ${styles.sectionGap}`} role="region" aria-label="Sumsub sandbox identity verification">
         <SumsubWebSdk accessToken={currentSession.token} expirationHandler={renewToken}
-          config={{ lang: 'en', theme: 'dark' }} options={{ addViewportTag: false, adaptIframeHeight: true }}
+          config={{ lang: 'en', theme: 'light' }} options={{ addViewportTag: false, adaptIframeHeight: true }}
           onError={() => { if (activeScope.current === scope) setSessionMessage('The provider widget reported a problem. Restart this application check or refresh recorded evidence.') }} />
       </div> : null}
     </> : <Notice title="Production identity provider not admitted">The same identity workflow will run here when the live provider and operating controls are approved. No sandbox session or verification claim is available on MAINNET.</Notice>}
