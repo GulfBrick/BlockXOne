@@ -792,7 +792,7 @@ export async function proveOfferingWorkflow(db, clients, offeringSql, proofLinea
     await lineageRefusal('both known predecessors matching the authority pin are rejected',
       () => proofLineage === 'STOCK' ? addStockP2(acceptedAuthorityBody) : replaceLineageBody(nominalAuthoritySignature, acceptedAuthorityBody))
     if (proofLineage === 'STOCK') {
-      await lineageRefusal('stock authority plus an unexpected funding alternate is rejected', () => addStockP2(protectedFundingBody))
+      await lineageRefusal('stock authority plus an unexpected unsupported alternate is rejected', () => addStockP2(`${acceptedAuthorityBody}\n-- fictional unsupported alternate`))
     } else {
       await lineageRefusal('funding predecessor complete-body drift is rejected',
         () => replaceLineageBody(nominalAuthoritySignature, nominalAuthorityCatalog.prosrc.replace(/\bbegin\b/i, 'begin\n-- fictional funding body drift')))

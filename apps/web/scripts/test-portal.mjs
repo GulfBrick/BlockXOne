@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
 import pg from 'pg'
 import { proveProviderEvidence } from './provider-evidence-proof.mjs'
 import { proveProviderBinding } from './provider-binding-proof.mjs'
@@ -151,6 +152,126 @@ async function scopedRead(n, context, client = db) {
 async function scopedCommand(n, context, kind, payload, requestKey = key(), client = db) {
   await actor(n, {}, client)
   return scalar('select public.bx1_portal_command_scoped($1,$2,$3::jsonb,$4::jsonb)', [kind, requestKey, JSON.stringify(payload), JSON.stringify(context)], client)
+}
+// Only two historical fixture windows use the already accepted v1.2 leaf.
+// This does not accept legacy SQL performance or change a hosted installation.
+async function withTargetVersionMandateLeaf(label, run) {
+  if (proofLineage === 'STOCK') return run()
+  assert.ok(['workspace-create', 'fund-v2-own-manager'].includes(label), 'only the two bounded target-version windows are supported')
+  const signature = 'bx1_portal.representative_mandate_effective_at(uuid,timestamptz)'
+  const originalHash = '934f86f41419d13fa60ddc71f18efb8f2c3eedb21b5d9ae789a0c6903d830c1c'
+  const wrappedHash = 'd0eaa7a7589711c812cc1ad5a5b2ef387a5db3e7abaa51093ce056da4ea2896f'
+  const sourceHash = 'c14a7cf144a91f982957a1920323375178aadc2a6ba6341fc84b264b9203f05e'
+  const hash = value => createHash('sha256').update(value, 'utf8').digest('hex')
+  const normalizeBody = value => value.replace(/\r\n/g, '\n').replace(/^[ \n\t]+|[ \n\t]+$/g, '')
+  const offeringSource = (await source('../../../supabase/features/bx1_offering_workflow.sql')).replace(/\r\n/g, '\n')
+  const blocks = [...offeringSource.matchAll(/^do \$offering_mandate_leaf_cutover\$[\s\S]*?^end \$offering_mandate_leaf_cutover\$;/gm)]
+  eq(blocks.length, 1, `${label}: one complete unchanged target-version leaf cutover`)
+  const cutover = blocks[0][0]
+  eq([Buffer.byteLength(cutover, 'utf8'), hash(cutover)], [2901, sourceHash], `${label}: complete LF source pin is independent of Windows line endings`)
+  eq([options.statement_timeout, options.query_timeout], [15000, 20000], `${label}: original SQL and client deadlines are unchanged`)
+  const caller = async () => (await db.query("select current_setting('role') as role,current_setting('request.jwt.claims',true) as claims")).rows[0]
+  const restoreCallerRole = async expectedCaller => {
+    await db.query("select set_config('role',$1,true)", [expectedCaller.role])
+    eq(await caller(), expectedCaller, `${label}: metadata reads preserve the operation's exact physical role and claims`)
+  }
+  const capture = async () => {
+    await admin()
+    const leaf = await scalar(`select (select jsonb_build_object('catalog',to_jsonb(p),'definition',pg_get_functiondef(p.oid),
+      'language',l.lanname) from pg_proc p join pg_language l on l.oid=p.prolang
+      where p.oid=to_regprocedure($1))`, [signature])
+    const functions = (await db.query(`select to_jsonb(p)-'prosrc'||jsonb_build_object('schema',n.nspname,
+      'prosrc_sha256',encode(sha256(convert_to(p.prosrc,'UTF8')),'hex')) as catalog
+      from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+      where n.nspname in ('auth','public','bx1_private','bx1_portal') order by p.oid`)).rows
+    const tables = (await db.query(`select n.nspname,c.relname,c.oid::text from pg_class c
+      join pg_namespace n on n.oid=c.relnamespace where c.relkind='r'
+      and (n.nspname in ('auth','storage','bx1_private','bx1_portal') or n.nspname='public' and c.relname like 'bx1_%')
+      order by n.nspname,c.relname`)).rows
+    const rows = {}
+    for (const table of tables) {
+      assert.match(table.nspname, /^[a-z0-9_]+$/)
+      assert.match(table.relname, /^[a-z0-9_]+$/)
+      rows[`${table.nspname}.${table.relname}`] = await scalar(`select jsonb_build_object('count',count(*),
+        'sha256',encode(sha256(convert_to(coalesce(jsonb_agg(to_jsonb(t) order by to_jsonb(t)::text),'[]')::text,'UTF8')),'hex'))
+        from ${table.nspname}.${table.relname} t`)
+    }
+    const security = await scalar(`select jsonb_build_object(
+      'roles',(select jsonb_agg(to_jsonb(v) order by oid) from (select oid,rolname,rolsuper,rolinherit,rolcreaterole,
+        rolcreatedb,rolcanlogin,rolreplication,rolbypassrls,rolconnlimit,rolvaliduntil,rolconfig from pg_roles) v),
+      'edges',(select jsonb_agg(to_jsonb(v) order by roleid,member,grantor) from pg_auth_members v),
+      'schemas',(select jsonb_agg(to_jsonb(v) order by oid) from (select oid,nspname,nspowner,nspacl from pg_namespace
+        where nspname in ('auth','storage','public','bx1_private','bx1_portal')) v),
+      'relations',(select jsonb_agg(to_jsonb(v) order by oid) from (select c.oid,c.relname,c.relowner,c.relacl,c.relrowsecurity,c.relforcerowsecurity
+        from pg_class c join pg_namespace n on n.oid=c.relnamespace where c.relkind='r'
+        and n.nspname in ('auth','storage','public','bx1_private','bx1_portal')) v),
+      'policies',(select jsonb_agg(to_jsonb(v) order by schemaname,tablename,policyname) from pg_policies v),
+      'triggers',(select jsonb_agg(to_jsonb(v) order by oid) from (select t.oid,t.tgrelid,t.tgname,t.tgenabled,t.tgfoid,pg_get_triggerdef(t.oid) definition
+        from pg_trigger t join pg_class c on c.oid=t.tgrelid join pg_namespace n on n.oid=c.relnamespace
+        where not t.tgisinternal and n.nspname in ('auth','storage','public','bx1_private','bx1_portal')) v),
+      'constraints',(select jsonb_agg(to_jsonb(v) order by oid) from (select k.oid,k.conrelid,k.conname,k.contype,k.convalidated,pg_get_constraintdef(k.oid) definition
+        from pg_constraint k join pg_class c on c.oid=k.conrelid join pg_namespace n on n.oid=c.relnamespace
+        where n.nspname in ('auth','storage','public','bx1_private','bx1_portal')) v),
+      'defaults',(select jsonb_agg(to_jsonb(v) order by oid) from pg_default_acl v))`)
+    const settings = (await db.query(`select name,setting,unit,reset_val,source,pending_restart
+      from pg_settings order by name`)).rows
+    return { leaf, functions, tables, rows, security, settings }
+  }
+  const nonLeafFunctions = footprint => footprint.functions.filter(value => value.catalog.oid !== footprint.leaf.catalog.oid)
+  const leafMetadata = ({ prosrc, prolang, ...metadata }) => metadata
+  const initialCaller = await caller()
+  const savepoint = label === 'workspace-create' ? 'v12_mandate_leaf_workspace' : 'v12_mandate_leaf_fund'
+  await db.query(`savepoint ${savepoint}`)
+  let before, operationStartedAt, elapsedMs
+  try {
+    before = await capture()
+    truth(before.leaf, `${label}: original leaf exists`)
+    eq([before.leaf.language, hash(normalizeBody(before.leaf.catalog.prosrc))], ['sql', originalHash], `${label}: original complete SQL authority query is pinned`)
+    eq(before.settings.find(value => value.name === 'statement_timeout')?.setting, '15000', `${label}: actual SQL deadline remains fifteen seconds`)
+    await db.query(cutover)
+    const installed = await capture()
+    eq([installed.leaf.language, hash(normalizeBody(installed.leaf.catalog.prosrc))], ['plpgsql', wrappedHash], `${label}: exact accepted v1.2 wrapper is installed`)
+    eq(leafMetadata(installed.leaf.catalog), leafMetadata(before.leaf.catalog), `${label}: only the leaf's exact language/body change`)
+    eq(nonLeafFunctions(installed), nonLeafFunctions(before), `${label}: all non-leaf functions retain complete catalogs and source hashes`)
+    for (const field of ['tables', 'rows', 'security', 'settings']) eq(installed[field], before[field], `${label}: temporary cutover preserves complete ${field}`)
+    // No authority warm-up: the first business call is the original callback.
+    operationStartedAt = Date.now()
+    const result = await run()
+    elapsedMs = Date.now() - operationStartedAt
+    const successfulCaller = await caller()
+    const successful = await capture()
+    eq(successful.functions, installed.functions, `${label}: successful business operations do not alter any function catalog/body`)
+    eq(successful.leaf, installed.leaf, `${label}: successful business operations retain the exact accepted leaf definition`)
+    for (const field of ['tables', 'security', 'settings']) eq(successful[field], installed[field], `${label}: successful business operations retain complete ${field}`)
+    await db.query(before.leaf.definition)
+    const restored = await capture()
+    eq(restored.leaf, before.leaf, `${label}: complete original leaf definition/catalog is restored`)
+    eq(restored.functions, before.functions, `${label}: every original function catalog/source hash is restored`)
+    for (const field of ['tables', 'rows', 'security', 'settings']) eq(restored[field], successful[field], `${label}: restoration preserves successful business ${field}`)
+    await restoreCallerRole(successfulCaller)
+    await db.query(`release savepoint ${savepoint}`)
+    console.log('BX1_TARGET_VERSION_MANDATE_LEAF_RESTORED', JSON.stringify({ window: label, outcome: 'SUCCESS',
+      elapsedMs, source_sha256: sourceHash, original_body_sha256: originalHash, target_body_sha256: wrappedHash,
+      full_catalog_restored: true, business_effects_preserved: true, rows_security_settings_preserved: true,
+      sql_deadline_ms: 15000, client_deadline_ms: 20000, hosted_installation_changed: false, legacy_performance_accepted: false }))
+    return result
+  } catch (error) {
+    try {
+      // Roll back FIRST, including a timeout-aborted transaction and any business
+      // effects. Diagnostic work must never replace the original failure.
+      await db.query(`rollback to savepoint ${savepoint}`)
+      const restored = await capture()
+      if (before) eq(restored, before, `${label}: failure rollback restores the complete original definition/functions/rows/security/settings`)
+      await restoreCallerRole(initialCaller)
+      await db.query(`release savepoint ${savepoint}`)
+      console.error('BX1_TARGET_VERSION_MANDATE_LEAF_RESTORED', JSON.stringify({ window: label, outcome: 'ORIGINAL_ERROR',
+        elapsedMs: operationStartedAt === undefined ? null : Date.now() - operationStartedAt,
+        full_original_footprint_restored: Boolean(before), sql_deadline_ms: 15000, client_deadline_ms: 20000 }))
+    } catch {
+      console.error(`BX1_TARGET_VERSION_MANDATE_LEAF_CLEANUP_FAILED window=${label} code=SAVEPOINT_RECOVERY`)
+    }
+    throw error
+  }
 }
 async function mandateScopedRead(n, context, client = db) {
   await actor(n, { aal: 'aal2' }, client)
@@ -1275,6 +1396,7 @@ try {
   eq([v3Mandate.status, v3Mandate.effective, v3Mandate.applied_by_user_id], ['APPLIED', true, uid(10)],
     'distinct assured Super Admin applies only the reviewed v3 appointment')
   const v3RoleContext = roleContext('OfferingManager', v3Mandate.native_organisation_id)
+  const v3Draft = await withTargetVersionMandateLeaf('workspace-create', async () => {
   const v3Workspace = await scopedRead(14, v3RoleContext)
   eq(v3Workspace.organisations.some(o => o.id === v3Admission.organisation_id), true,
     'applied v3 appointment opens the exact customer product workspace')
@@ -1283,6 +1405,8 @@ try {
     organisation_id: v3Admission.organisation_id, terms: { ...terms(), name: 'V3 ownership-governed synthetic draft' },
   })).products.find(p => p.terms.name === 'V3 ownership-governed synthetic draft')
   truth(v3Draft?.id, 'v3 customer can create a product only after the separate approved mandate is applied')
+  return v3Draft
+  })
   await admin()
   checks += await proveProviderEvidence(db)
   await admin()
@@ -1434,6 +1558,7 @@ try {
       values($1,$2,$3,$4,$5,$6::jsonb,true,true,1,10000000)`,
     [v2Reviewed.id, uid(3), orgId, v2Reviewed.revision, v2Reviewed.terms_hash, JSON.stringify(v2Reviewed.terms)])
   })
+  await withTargetVersionMandateLeaf('fund-v2-own-manager', async () => {
   phase = 'fund-v2-other-organisation-own-draft-read'
   const ownReadStartedAt = Date.now()
   const foreignManagerOwnDraft = (await scopedRead(14, v3RoleContext)).products.find(value => value.id === v3Draft.id)
@@ -1542,6 +1667,7 @@ try {
   }), '42501')
   await admin()
   eq(await scalar('select terms_hash from bx1_portal.products where id=$1', [v2Reviewed.id]), v2Reviewed.terms_hash, 'cross-org denied without package mutation')
+  })
   phase = 'stage3-property-v2-install-and-history'
   await sqlFile('../../../supabase/migrations/20260928161233_stage3_real_estate_terms_v2.sql')
   await sqlFile('../../../supabase/tests/stage3_real_estate_v2_acl.sql'); checks++
