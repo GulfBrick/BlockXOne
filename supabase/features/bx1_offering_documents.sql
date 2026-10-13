@@ -967,17 +967,17 @@ begin
     if bx1_private.offering_document_revision_terminal(r.id) is not true
       or (select count(distinct id) from pg_catalog.unnest(selected) id)<>3 then
       raise exception 'offering_document_manifest_not_ready' using errcode='23514'; end if;
-    select pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object('file_id',i.id,'kind',i.kind,'uploader_id',i.actor_id,
-      'size',i.byte_size,'sha256',i.sha256,'scan_event_id',clean.scan_event_id,'clean_receipt_id',clean.id)
-      order by case i.kind when 'MEMORANDUM' then 1 when 'RISKS' then 2 else 3 end) into entries
-      from bx1_portal.offering_file_upload_intents i join bx1_private.offering_document_intent_resolutions x
-        on x.intent_id=i.id and x.state='PROMOTED_CLEAN'
-      join bx1_private.offering_document_clean_receipts clean on clean.id=x.clean_receipt_id and clean.file_id=i.id
-      join bx1_private.offering_document_processing_jobs job on job.file_id=i.id and job.state='COMPLETED'
+    select pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object('file_id',upload_intent.id,'kind',upload_intent.kind,'uploader_id',upload_intent.actor_id,
+      'size',upload_intent.byte_size,'sha256',upload_intent.sha256,'scan_event_id',clean.scan_event_id,'clean_receipt_id',clean.id)
+      order by case upload_intent.kind when 'MEMORANDUM' then 1 when 'RISKS' then 2 else 3 end) into entries
+      from bx1_portal.offering_file_upload_intents upload_intent join bx1_private.offering_document_intent_resolutions x
+        on x.intent_id=upload_intent.id and x.state='PROMOTED_CLEAN'
+      join bx1_private.offering_document_clean_receipts clean on clean.id=x.clean_receipt_id and clean.file_id=upload_intent.id
+      join bx1_private.offering_document_processing_jobs job on job.file_id=upload_intent.id and job.state='COMPLETED'
       join bx1_private.offering_document_scan_events scan on scan.id=clean.scan_event_id and scan.verdict='CLEAN'
       join bx1_private.offering_document_policy op on op.singleton and op.authority_epoch=clean.authority_epoch
       join bx1_private.offering_document_scanner_policy sp on sp.singleton and sp.authority_epoch=clean.scanner_authority_epoch
-      where i.product_id=p.id and i.offering_revision_id=r.id and i.id=any(selected);
+      where upload_intent.product_id=p.id and upload_intent.offering_revision_id=r.id and upload_intent.id=any(selected);
     if entries is null or pg_catalog.jsonb_array_length(entries)<>3
       or entries->0->>'kind'<>'MEMORANDUM' or entries->1->>'kind'<>'RISKS' or entries->2->>'kind'<>'SUBSCRIPTION_TERMS'
       or pg_catalog.to_jsonb(selected) is distinct from pg_catalog.jsonb_build_array(entries->0->'file_id',entries->1->'file_id',entries->2->'file_id') then
