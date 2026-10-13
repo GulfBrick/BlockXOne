@@ -382,7 +382,7 @@ async function processSignatureAction(action: SignatureViewAction) {
           const other = await Promise.all(resources.filter(resource => resource !== 'envelope')
             .map(async resource => [resource, await provider.readEnvelopeResource(binding, resource, 0)] as const))
           await live()
-          const evidenceValues: [OfferingProviderResource, OfferingProviderRead][] = [['envelope', observation], ...other]
+          const evidenceValues: (readonly [OfferingProviderResource, OfferingProviderRead])[] = [['envelope', observation], ...other]
           const evidence = completionSchema.parse(Object.fromEntries(evidenceValues
             .map(([resource, observed]) => [resource, { value: observed.value, sha256: observed.sha256, observedAt: observed.observedAt }])))
           const assessed = assessOfferingCompletion(expected, binding, { envelope: evidence.envelope.value, recipients: evidence.recipients.value,

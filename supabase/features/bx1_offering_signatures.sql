@@ -867,9 +867,36 @@ end $$;
 
 create function bx1_private.offering_signature_require_decision(p_revision uuid,p_actor uuid,p_kind text) returns void
 language plpgsql volatile security definer set search_path='' as $$
-declare person uuid; eligible uuid;
+declare person uuid; eligible uuid; p bx1_portal.products; r bx1_portal.offering_revisions;
 begin
-  perform bx1_private.lock_offering_document_revision(p_revision);
+  -- Preserve the PDF revision lock order and every currentness predicate. The
+  -- canonical Compliance writer transitions the product BEFORE decision INSERT;
+  -- only its exact authenticated reviewer may use that post-transition state.
+  select product.* into p from bx1_portal.offering_revisions revision
+    join bx1_portal.products product on product.id=revision.product_id
+    where revision.id=p_revision for update of product;
+  select * into r from bx1_portal.offering_revisions where id=p_revision;
+  perform id from bx1_portal.organisations where id=p.organisation_id for share;
+  perform id from bx1_portal.representative_mandates where product_organisation_id=p.organisation_id order by id for share;
+  perform m.id from public.bx1_memberships m join bx1_portal.representative_mandates mandate
+    on mandate.native_membership_id=m.id where mandate.product_organisation_id=p.organisation_id order by m.id for share of m;
+  perform bx1_portal.admission_lock_people(array[r.submitted_by,p.created_by]);
+  if p.id is null or p.current_offering_revision_id is distinct from r.id
+    or (p.status in ('IN_REVIEW','CHANGES_REQUIRED')
+      or (p_kind='COMPLIANCE' and p.status='APPROVED' and auth.uid()=p_actor and p.reviewer_id=p_actor)) is not true
+    or r.terms is distinct from p.terms
+    or r.terms_hash is distinct from p.terms_hash
+    or bx1_portal.current_product_organisation(p.organisation_id) is not true
+    or bx1_portal.offering_workflow_person_current(r.submitted_by) is not true
+    or not exists(select 1 from bx1_portal.representative_mandates mandate
+      where mandate.product_organisation_id=p.organisation_id and mandate.applicant_user_id=r.submitted_by
+        and bx1_portal.offering_workflow_manager_current(r.submitted_by,p.organisation_id,mandate.native_organisation_id))
+    or not exists(select 1 from bx1_private.offering_document_profiles q
+      where q.offering_revision_id=r.id and q.product_id=p.id and q.organisation_id=p.organisation_id
+        and q.terms_hash=r.terms_hash and q.document_hashes=r.document_hashes
+        and q.common_envelope_hash is not distinct from r.common_envelope_hash
+        and q.deployment_configuration_hash is not distinct from r.deployment_configuration_hash) then
+    raise exception 'offering_document_current_revision_denied' using errcode='42501'; end if;
   person:=bx1_private.document_governance_trusted_person(p_actor,null);
   if person is null or p_kind not in ('ISSUER','COMPLIANCE') then
     raise exception 'offering_signature_decision_person_denied' using errcode='42501'; end if;

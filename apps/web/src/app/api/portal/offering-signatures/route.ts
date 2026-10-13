@@ -79,7 +79,8 @@ export async function POST(request: NextRequest) {
     if (currentSession.id !== session.id || currentSession.aal !== session.aal) throw new PortalError('The session changed during this operation; refresh its saved state.', 403)
     const snapshot = await readOfferingSignatures({ ...input, session: currentSession })
     if (view?.view_status === 'AVAILABLE' && instruction.request.command === 'REQUEST_SIGNING_VIEW') {
-      const operation = snapshot.operations.find(item => item.id === instruction.request.payload.operation_id)
+      const operationId = instruction.request.payload.operation_id
+      const operation = snapshot.operations.find(item => item.id === operationId)
       const authorisation = snapshot.authorisations.find(item => item.id === operation?.authorisation_id)
       if (!snapshot.admitted || !snapshot.allowed_commands.includes('REQUEST_SIGNING_VIEW')
         || operation?.state !== 'SENT' || operation.noncurrent_reason !== null || !operation.envelope_id

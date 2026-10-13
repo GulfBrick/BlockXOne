@@ -345,8 +345,42 @@ export async function proveOfferingSignatures(db, clients, featureSql, fixture) 
         await send(newerLease)
         await record(newerLease, 'CREATE_RESULT', { phase: 'SENT', envelope_id: randomUUID(), evidence_sha256: digest('synthetic second independently authorised operation') })
         eq((await complete(newerOperation)).result.current, true, 'second candidate has complete current evidence, not a dummy invalid row')
+        await admin()
+        const beforeCompliance = await scalar('select to_jsonb(p) from bx1_portal.products p where id=$1', [p.id])
+        eq(beforeCompliance.status, 'IN_REVIEW', 'canonical Compliance command starts at the existing review state')
         await publicCommand(p, 2, context('ComplianceOfficer'), 'review_product', 'APPROVED')
         await admin()
+        const afterCompliance = await scalar('select to_jsonb(p) from bx1_portal.products p where id=$1', [p.id])
+        eq([afterCompliance.status, afterCompliance.reviewer_id, afterCompliance.revision, afterCompliance.current_offering_revision_id],
+          ['APPROVED', actor(2), beforeCompliance.revision + 1, p.current_offering_revision_id],
+          `${p.terms.asset_type}: canonical Compliance advances exactly once with the exact reviewer and current package`)
+        const requireDecision = async (who, kind, claimant = 2, revision = p.current_offering_revision_id) => {
+          await admin()
+          await db.query("select set_config('request.jwt.claims',$1,true)", [JSON.stringify(claimant === null ? {} : attestation(claimant))])
+          return scalar('select bx1_private.offering_signature_require_decision($1,$2,$3)', [revision, who, kind])
+        }
+        for (const [label, who, kind, claimant] of [
+          ['wrong decision kind', actor(2), 'ISSUER', 2],
+          ['wrong declared actor', actor(3), 'COMPLIANCE', 2],
+          ['wrong authenticated actor', actor(2), 'COMPLIANCE', 3],
+          ['actor differs from current reviewer', actor(3), 'COMPLIANCE', 3],
+          ['NULL actor', null, 'COMPLIANCE', 2],
+          ['NULL authenticated actor', actor(2), 'COMPLIANCE', null],
+          ['NULL decision kind', actor(2), null, 2],
+        ]) await denied(`APPROVED transition denies ${label}`, () => requireDecision(who, kind, claimant))
+        await denied('APPROVED transition denies a noncurrent revision', () => requireDecision(actor(2), 'COMPLIANCE', 2, randomUUID()))
+        await denied('APPROVED transition does not admit the original PDF intake guard', async () => {
+          await admin(); await scalar('select bx1_private.lock_offering_document_revision($1)', [p.current_offering_revision_id])
+        })
+        await denied('APPROVED transition still rejects mismatched immutable profile hashes', async () => {
+          await admin()
+          // Corrupt only this savepoint-local negative fixture, then restore the
+          // immutable trigger BEFORE exercising the unchanged currentness gate.
+          await db.query('alter table bx1_private.offering_document_profiles disable trigger offering_document_profiles_immutable')
+          try { await db.query("update bx1_private.offering_document_profiles set terms_hash=$2 where offering_revision_id=$1", [p.current_offering_revision_id, '0'.repeat(64)]) }
+          finally { await db.query('alter table bx1_private.offering_document_profiles enable trigger offering_document_profiles_immutable') }
+          await requireDecision(actor(2), 'COMPLIANCE')
+        })
         eq(await scalar('select count(*)::int from bx1_private.offering_signature_decision_bindings where operation_id=$1', [operation]), 2, 'both existing decisions bind same retained operation')
         eq(await scalar('select count(*)::int from bx1_private.offering_signature_decision_bindings where operation_id=$1', [newerOperation]), 0, 'newer unchosen candidate cannot capture validated decision binding')
         eq(await scalar('select bx1_portal.offering_workflow_approved($1)', [p.id]), true, 'existing approved predicate retains all native conditions plus exact signature')
