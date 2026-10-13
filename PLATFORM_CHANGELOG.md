@@ -1,5 +1,13 @@
 # BlockXOne platform releases
 
+## 1.2.0-rc.7 - guided product setup and connected package work
+
+- Replace the overloaded customer form with guided product, issuer, rights, economics, documents and final-review steps. New customers author their own complete v3 terms; no example fund or property is created automatically.
+- Preserve saved v1/v2/v3 terms, historic identifiers, both asset templates and the original guarded commands. Keep unsaved edits when switching product sections; submission cannot silently use an unsaved edit.
+- Bring the normal document, signing and appointment panels into the manager product workspace with a clear next step. TEST appointment nomination is available only when its current backend grant explicitly permits it.
+- Install TEST signature definitions default-off. Provider activation, genuine signatures, deployment readiness and investor purchasing are not inferred from a source release or a saved product.
+- Preserve MAIN and unpublished worker changes. No new test suites or local runtime are run; source review, the necessary cloud build and hosted evidence are recorded separately.
+
 ## 1.2.0-rc.6 - TEST customer workspace access
 
 - Give explicitly invited TEST participants their existing manager or investor workspace through an audited, expiring TEST_EVALUATION source. Keep their real application decisions and MAIN unchanged.

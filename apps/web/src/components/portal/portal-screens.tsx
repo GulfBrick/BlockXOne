@@ -36,6 +36,64 @@ function permits(org: PortalOrganisation, command: PortalCapability, context?: P
   return org.capabilities?.includes(command) ?? !context
 }
 
+function ProductDetailWorkspace({ product, snapshot, organisations, operatingContext, onSaved, availableCommands, canEdit, canViewIssuerRationale, canReviewIssuer }: {
+  product: PortalProduct; snapshot: PortalSnapshot; organisations: PortalOrganisation[];
+  operatingContext?: PortalOperatingContext; onSaved: (snapshot: PortalSnapshot) => void;
+  availableCommands?: readonly string[]; canEdit: boolean; canViewIssuerRationale: boolean; canReviewIssuer: boolean;
+}) {
+  const [section, setSection] = useState<'DETAILS' | 'REVIEW' | 'DOCUMENTS' | 'APPOINTMENTS'>(canEdit ? 'DETAILS' : 'REVIEW')
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
+  const pkg = product.offering_package
+  const appointments = snapshot.product_appointments?.filter(item => item.product_id === product.id) ?? []
+  const issuerAssigned = appointments.some(item => item.role === 'IssuerFundManager' && item.effective)
+  const complianceAssigned = appointments.some(item => item.role === 'ComplianceOfficer' && item.effective)
+  const signatureStatus = pkg?.document_evidence?.signature_status
+  const nextStep = ['DRAFT', 'CHANGES_REQUIRED'].includes(product.status)
+    ? 'Complete and save the product details, then submit the saved version for review.'
+    : !pkg ? 'The submitted package is not available. Refresh the saved record before taking another action.'
+    : !issuerAssigned || !complianceAssigned ? 'Confirm the issuer and Compliance appointments for this product in Appointments. Submission alone does not assign a reviewer.'
+    : signatureStatus === 'NOT_CONNECTED' || signatureStatus === 'NOT_ADMITTED' ? 'Document signing is not connected for this package yet. The submission is saved, but approval is not available.'
+    : pkg.issuer_status !== 'APPROVED' ? 'The appointed issuer must complete the document and package review.'
+    : pkg.compliance_status !== 'APPROVED' ? 'The appointed Compliance Officer must review the same submitted package.'
+    : pkg.technical_readiness_status !== 'VERIFIED' ? 'The package still needs verified blockchain deployment before it can open to investors.'
+    : product.status !== 'PUBLISHED' ? 'Use the authorised opening action when the backend confirms every requirement.'
+    : 'The offering is published. Investor access remains subject to the current product and account requirements.'
+  const commands = hasUnsavedChanges ? (availableCommands ?? []).filter(command => command !== 'submit_product') : availableCommands
+  const sections = [
+    { id: 'DETAILS', label: canEdit ? 'Edit details' : 'Product details' },
+    { id: 'REVIEW', label: 'Review & next step' },
+    { id: 'DOCUMENTS', label: 'Documents & signing' },
+    { id: 'APPOINTMENTS', label: 'Appointments' },
+  ] as const
+  return <div className={styles.stack}>
+    <nav className={styles.actions} aria-label="Product workspace sections">
+      {sections.map(item => <button key={item.id} type="button" className={section === item.id ? styles.button : styles.buttonSecondary}
+        aria-pressed={section === item.id} aria-controls={`product-${product.id}-${item.id}`} onClick={() => setSection(item.id)}>{item.label}</button>)}
+    </nav>
+    <div id={`product-${product.id}-DETAILS`} hidden={section !== 'DETAILS'}>
+      {canEdit ? <ProductForm key={`${product.id}-${product.revision}`} organisations={organisations} product={product}
+        onSaved={onSaved} operatingContext={operatingContext} onUnsavedChange={setHasUnsavedChanges} />
+        : <div className={styles.stack}><ProductFacts product={product} /><ProductNarrative product={product} /></div>}
+    </div>
+    {section === 'REVIEW' ? <div id={`product-${product.id}-REVIEW`} className={styles.stack}>
+      <Panel title="Your next step"><p>{nextStep}</p><p className={styles.muted}>This page acts on the saved product version.</p>
+        {hasUnsavedChanges ? <p className={styles.fieldError} role="status">Save your changes in Edit details before submitting. They are not part of the saved package yet.</p> : null}
+      </Panel>
+      <ProductActions product={product} onSaved={onSaved} availableCommands={commands} />
+      {canReviewIssuer && pkg && product.status === 'IN_REVIEW' ? <IssuerOfferingReview product={product} snapshot={snapshot} onSaved={onSaved} /> : null}
+      {pkg ? <OfferingPackageEvidence product={product} showIssuerRationale={canViewIssuerRationale} /> : null}
+    </div> : null}
+    {section === 'DOCUMENTS' ? <div id={`product-${product.id}-DOCUMENTS`} className={styles.stack}>
+      {!pkg ? <Panel title="Documents & signing"><EmptyState title="Save and submit the product first" description="The submitted package connects its document versions, uploads and signature evidence. Saving a draft does not create signed documents." /></Panel>
+        : <><OfferingDocuments product={product} /><OfferingFilePanel product={product} context={operatingContext} actorId={snapshot.actor.id} />
+          <OfferingSignatures product={product} context={operatingContext} actorId={snapshot.actor.id} appointments={snapshot.product_appointments} /></>}
+    </div> : null}
+    {section === 'APPOINTMENTS' ? <div id={`product-${product.id}-APPOINTMENTS`}>
+      <ProductAppointmentRequest product={product} snapshot={snapshot} operatingContext={operatingContext} onSaved={onSaved} />
+    </div> : null}
+  </div>
+}
+
 function ProductCard({ product, operatingContext }: { product: PortalProduct; operatingContext?: PortalOperatingContext }) {
   return <article className={styles.productCard}>
     <div className={styles.productVisual} data-kind={product.terms.asset_type}>{product.terms.asset_type === 'FUND' ? <Layers3 aria-hidden="true" /> : <Building2 aria-hidden="true" />}<p>{product.terms.asset_type === 'FUND' ? 'Investment fund' : 'Real-estate investment'} · Fictional product</p></div>
@@ -376,8 +434,10 @@ function OperatingPortalScreen({ data, view, id, operatingContext, release, scop
           if (!selected) return unavailable()
           const organisation = organisations.find(org => org.id === selected.organisation_id)
           if (!organisation) return unavailable()
-          const commands = (organisation.capabilities ?? []).filter(command => workflowPermits(command) && ['create_product', 'save_product', 'submit_product'].includes(command))
-          return <div className={styles.stack}><ProductFacts product={selected} /><ProductNarrative product={selected} /><ProductActions product={selected} onSaved={setSnapshot} availableCommands={commands} />{commands.includes('save_product') && selected.allowed_actions?.includes('save_product') && ['DRAFT', 'CHANGES_REQUIRED'].includes(selected.status) ? <ProductForm key={`${selected.id}-${selected.revision}`} organisations={[organisation]} product={selected} onSaved={setSnapshot} operatingContext={operatingContext} /> : null}</div>
+          const commands = (organisation.capabilities ?? []).filter(command => workflowPermits(command) && ['create_product', 'save_product', 'submit_product', 'request_product_service_appointment'].includes(command))
+          const canEdit = commands.includes('save_product') && selected.allowed_actions?.includes('save_product') === true && ['DRAFT', 'CHANGES_REQUIRED'].includes(selected.status)
+          return <ProductDetailWorkspace key={selected.id} product={selected} snapshot={snapshot} organisations={[organisation]} operatingContext={operatingContext}
+            onSaved={setSnapshot} availableCommands={commands} canEdit={canEdit} canViewIssuerRationale canReviewIssuer={false} />
         }
         if (view === '/portal' || view === '/portal/products') return <ProductRegister products={managedProducts} canCreate={createOrganisations.length > 0} operatingContext={operatingContext} />
       }
@@ -406,7 +466,11 @@ function OperatingPortalScreen({ data, view, id, operatingContext, release, scop
       const canViewIssuerRationale = Boolean(managerContext && organisation && permits(organisation, 'save_product', operatingContext))
       const canEdit = Boolean(managerContext && workflowPermits('save_product') && organisation && permits(organisation, 'save_product', operatingContext)
         && selected.allowed_actions?.includes('save_product') === true)
-      return <div className={styles.stack}><div className={styles.wideGrid}><div className={styles.stack}><ProductFacts product={selected} /><OfferingPackageEvidence product={selected} showIssuerRationale={canViewIssuerRationale} /><ProductNarrative product={selected} /><OfferingDocuments product={selected} /><OfferingFilePanel product={selected} context={operatingContext} actorId={snapshot.actor.id} /><OfferingSignatures product={selected} context={operatingContext} actorId={snapshot.actor.id} appointments={snapshot.product_appointments} /></div><div className={styles.stack}>{managerContext && organisation ? <ProductActions product={selected} onSaved={setSnapshot} availableCommands={organisation.capabilities ?? (operatingContext ? [] : undefined)} /> : <Notice title="Read-only product access">No product-management mandate is available for this organisation.</Notice>}{role === 'IssuerFundManager' && selected.offering_package && selected.status === 'IN_REVIEW' ? <IssuerOfferingReview product={selected} snapshot={snapshot} onSaved={setSnapshot} /> : null}<ProductAppointmentRequest product={selected} snapshot={snapshot} operatingContext={operatingContext} onSaved={setSnapshot} /></div></div>{canEdit && ['DRAFT', 'CHANGES_REQUIRED'].includes(selected.status) ? <ProductForm key={`${selected.id}-${selected.revision}`} organisations={organisations.filter(org => permits(org, 'save_product', operatingContext))} product={selected} onSaved={setSnapshot} operatingContext={operatingContext} /> : null}{!passwordWorkflow ? organisation && permits(organisation, 'read_orders', operatingContext) ? <SubscriptionOrders subscriptions={incomingSubscriptions.filter(item => item.product_id === selected.id)} products={[selected]} incoming onSaved={setSnapshot} operatingContext={operatingContext} funding={snapshot.funding} /> : <Notice title="Order access unavailable">This product’s incoming-order book is not available under your current mandate.</Notice> : null}</div>
+      return <div className={styles.stack}><ProductDetailWorkspace key={selected.id} product={selected} snapshot={snapshot}
+        organisations={organisations.filter(org => permits(org, 'save_product', operatingContext))} operatingContext={operatingContext} onSaved={setSnapshot}
+        availableCommands={managerContext && organisation ? organisation.capabilities ?? (operatingContext ? [] : undefined) : []} canEdit={canEdit && ['DRAFT', 'CHANGES_REQUIRED'].includes(selected.status)}
+        canViewIssuerRationale={canViewIssuerRationale} canReviewIssuer={role === 'IssuerFundManager'} />
+        {!passwordWorkflow ? organisation && permits(organisation, 'read_orders', operatingContext) ? <SubscriptionOrders subscriptions={incomingSubscriptions.filter(item => item.product_id === selected.id)} products={[selected]} incoming onSaved={setSnapshot} operatingContext={operatingContext} funding={snapshot.funding} /> : <Notice title="Order access unavailable">This product’s incoming-order book is not available under your current mandate.</Notice> : null}</div>
     }
     if (view === '/portal/compliance') return canReview ? <ComplianceQueue snapshot={reviewSnapshot} operatingContext={operatingContext} /> : role === 'SuperAdmin' ? <div className={styles.stack}><RepresentativeMandateQueue snapshot={snapshot} operatingContext={operatingContext} /><EntityInvestingMandateQueue snapshot={snapshot} operatingContext={operatingContext} /><ProductAppointmentQueue snapshot={snapshot} operatingContext={operatingContext} /></div> : unavailable()
     if (view === '/portal/compliance/detail') {

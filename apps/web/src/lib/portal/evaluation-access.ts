@@ -2,7 +2,7 @@ import { z } from 'zod'
 import type { PortalOperatingContext } from './operating-context'
 
 /** A server-owned TEST workspace grant, not customer admission or signing authority. */
-export const EVALUATION_COMMANDS = ['create_product', 'save_product', 'submit_product'] as const
+export const EVALUATION_COMMANDS = ['create_product', 'save_product', 'submit_product', 'request_product_service_appointment'] as const
 const managerViews = ['/portal', '/portal/products', '/portal/products/new', '/portal/products/detail'] as const
 const investorViews = ['/portal', '/portal/opportunities', '/portal/opportunities/detail', '/portal/portfolio'] as const
 export const evaluationAccessSchema = z.object({

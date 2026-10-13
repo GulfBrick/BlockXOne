@@ -5,6 +5,7 @@ import Link from 'next/link'
 import type { PortalProduct, PortalProductServiceAppointment, PortalSnapshot } from '@/lib/portal/contracts'
 import { portalScopeHref, type PortalOperatingContext } from '@/lib/portal/operating-context'
 import { hasOfferingCommandAccess, isTestPasswordWorkflow } from '@/lib/portal/offering-access'
+import { validatedEvaluationAccess } from '@/lib/portal/evaluation-access'
 import { CommandFeedback, usePortalCommand, usePortalCommandAllowed } from './portal-client'
 import { DetailList, EmptyState, Field, Notice, Panel, StatusBadge, dateLabel } from './portal-primitives'
 import styles from './portal.module.css'
@@ -24,9 +25,13 @@ export function ProductAppointmentRequest({ product, snapshot, operatingContext,
   const appointments = snapshot.product_appointments?.filter(item => item.product_id === product.id) ?? []
   const candidates = snapshot.product_appointment_candidates?.filter(item => item.product_id === product.id && item.role === role) ?? []
   const candidate = candidates.find(item => item.membership_id === membershipId)
+  const evaluation = validatedEvaluationAccess(snapshot, operatingContext)
   const isManager = operatingContext?.mode === 'ROLE' && operatingContext.role === 'OfferingManager'
     && snapshot.organisations.some(org => org.id === product.organisation_id && org.status === 'ACTIVE'
-      && org.authority_source === 'NATIVE_BINDING' && org.native_organisation_id === operatingContext.organisationId
+      && (org.authority_source === 'NATIVE_BINDING' || org.authority_source === 'TEST_EVALUATION'
+        && evaluation?.product_organisation_id === product.organisation_id
+        && evaluation.allowed_commands.includes('request_product_service_appointment'))
+      && org.native_organisation_id === operatingContext.organisationId
       && org.roles.includes('OfferingManager'))
   const expiredPending = appointments.some(item => item.role === role && ['SUBMITTED', 'APPROVED'].includes(item.status)
     && Date.parse(item.requested_until) <= Date.now())

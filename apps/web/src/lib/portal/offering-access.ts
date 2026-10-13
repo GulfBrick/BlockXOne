@@ -19,7 +19,7 @@ const roleCommands: Record<typeof offeringRoles[number], readonly OfferingComman
 export const offeringAccessSchema = z.object({
   version: z.literal(1), environment: z.literal('TESTNET'), actor_id: z.string().uuid(),
   operating_context: z.object({ mode: z.literal('ROLE'), organisationId: z.string().uuid(), role: z.enum(offeringRoles) }).strict(),
-  session_mode: z.literal('TEST_PASSWORD'), allowed_commands: z.array(z.enum(OFFERING_COMMANDS)),
+  session_mode: z.enum(['TEST_PASSWORD', 'STANDARD']), allowed_commands: z.array(z.enum(OFFERING_COMMANDS)),
 }).strict().superRefine((value, ctx) => {
   if (new Set(value.allowed_commands).size !== value.allowed_commands.length) ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Duplicate package command.' })
   if (value.allowed_commands.some(command => !roleCommands[value.operating_context.role].includes(command))) ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Package commands do not match the operating context.' })
