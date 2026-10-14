@@ -2,6 +2,11 @@ name: BX1 canonical fund cloud compile
 
 on:
   workflow_dispatch:
+    inputs:
+      conformance:
+        description: Run selected canonical real-EVM proof in the cloud; no public-network writes
+        type: boolean
+        default: false
   push:
     branches: [codex/stage2-sandbox-completion-20261011]
     paths:
@@ -55,3 +60,22 @@ jobs:
           path: ${{ runner.temp }}/bx1-canonical-artifacts
           if-no-files-found: error
           retention-days: 30
+      - name: Prove selected canonical fund and official Safe behaviour in the in-process cloud EVM
+        if: github.event_name == 'workflow_dispatch' && inputs.conformance
+        shell: bash
+        run: |
+          set -euo pipefail
+          node contracts/canonical/conformance.mjs \
+            --packages "$RUNNER_TEMP/bx1-conformance-packages" \
+            --artifacts "$RUNNER_TEMP/bx1-canonical-artifacts" \
+            --out "$RUNNER_TEMP/bx1-canonical-conformance"
+
+      - name: Retain selected EVM proof, exact dependency lock and honest failure evidence
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.conformance
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: bx1-selected-canonical-conformance-${{ github.sha }}
+          path: ${{ runner.temp }}/bx1-canonical-conformance
+          if-no-files-found: error
+          retention-days: 30
+

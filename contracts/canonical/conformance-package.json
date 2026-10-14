@@ -1,0 +1,30 @@
+{
+  "name": "blockxone-canonical-conformance-proof",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": "22.23.1"
+  },
+  "dependencies": {
+    "ethers": "6.17.0",
+    "hardhat": "3.8.0"
+  },
+  "blockxone_proof": {
+    "schema_version": 1,
+    "scope": "SELECTED_CANONICAL_EVM_BEHAVIOURS_NOT_AUDIT_OR_AMOY_ACCEPTANCE",
+    "hardhat_integrity": "sha512-luWXeLA4dcEoj3QrJhmnf+kRyGn9SrrUN9zf2KlrysXt9U3VIhLYZ8vNIA8HP4fZuvrlKMXHRdLDu0+9Gnmrkg==",
+    "ethers_integrity": "sha512-BpyrpIPJ3ydEVow8zGaz1DuPS7YU8DcWxuBnY9a0UA/lvAPwrMr+EPXsfrul628SRaekPNeIM4UFh/91GWZang==",
+    "safe_source": {
+      "package": "@safe-global/safe-contracts",
+      "version": "1.4.1",
+      "source_commit": "382117f5d97745f611e05f827603aadb493dc620",
+      "integrity": "sha512-fP1jewywSwsIniM04NsqPyVRFKPMAuirC3ftA/TA4X3Zc5EnwQp/UCJUU2PL/37/z/jMo8UUaJ+pnFNWmMU7dQ=="
+    },
+    "safe_artifact_sha256": {
+      "SafeL2": "a57d54c0d757ca7fb86693480797de69c880878690b67061f6f9624e11def8bd",
+      "SafeProxy": "b05eaeaf7278097e52a9e9b38410de2a812c23fa3622373473e73eaa19646ecd",
+      "SafeProxyFactory": "f77ccb60e95345e6583216e82feb5430098679d62aa4aeda7388df3831476997"
+    }
+  }
+}
