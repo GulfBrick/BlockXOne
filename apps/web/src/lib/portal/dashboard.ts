@@ -52,7 +52,7 @@ export function dashboardProjection(scope: DashboardScope, environment: Platform
     && org.native_organisation_id === scope.organisationId && org.roles.includes(scope.role)
     && (org.authority_source === 'NATIVE_BINDING' || org.authority_source === 'TEST_ROLE_PLAY'
       && (['TreasuryOperator', 'FinancialController'].includes(scope.role)
-        || scope.role === 'OfferingManager' && offering?.session_mode === 'STANDARD'))))
+        || scope.role === 'OfferingManager' && offering?.session_mode === 'STANDARD')))
   if (scope.role === 'Investor') {
     paths.push('/portal/opportunities', '/portal/portfolio')
     const own = snapshot.subscriptions.filter(item => item.investor_id === snapshot.actor.id)
