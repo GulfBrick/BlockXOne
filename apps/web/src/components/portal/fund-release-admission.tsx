@@ -27,7 +27,7 @@ export function FundReleaseAdmission({ setupId, revision, actorId, operatingCont
       setReady(true)
     } catch (error) { setMessage(error instanceof Error ? error.message : 'Request recovery is unavailable.') }
     return () => { generation.current++; active.current = false; controller.current?.abort(); lock.current = false }
-  }, [key])
+  }, [key, authorised, currentActor, portalContextKey(currentContext)])
   async function verify() {
     if (lock.current || !authorised || !ready || admitted) return
     lock.current = true; setBusy(true); setMessage('Checking the saved contracts, signing keys and current fund approvals. No transaction is being sent.')

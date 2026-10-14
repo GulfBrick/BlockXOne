@@ -79,7 +79,7 @@ describe('canonical setup to truthful release candidate', () => {
   })
   it('retains the one-operator TEST assurance rather than inventing independent humans', async () => {
     const fixture = canonicalAdmissionFixture()
-    fixture.input.setup.roleplay_policy = { policy_id: testId(900), epoch: 1, expires_at: '2100-01-01T00:00:00Z', label: 'TEST ROLE PLAY — one operator; not independent human approval' }
+    fixture.input.setup.roleplay_policy = { policy_id: testId(900), epoch: 1, expires_at: '2100-01-01T00:00:00Z', label: 'TEST ROLE PLAY - one operator; not independent human approval' }
     const result = await buildFundAdmissionCandidate(fixture.input, { rpc: fixture.rpc })
     expect(result.roleplay_policy).toEqual(fixture.input.setup.roleplay_policy)
     expect(result.independent_audit_proven).toBe(false)

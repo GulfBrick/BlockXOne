@@ -29,6 +29,7 @@ type WorkerFunction = 'prepare_fund_operation' | 'claim_fund_observation' | 'rec
   | 'read_fund_admission' | 'record_fund_admission'
   | 'read_fund_recipient_preparation' | 'prepare_fund_recipient_operation' | 'read_fund_recipient_observation' | 'record_fund_recipient_observation'
   | 'read_fund_recipient_claim' | 'record_fund_recipient_claim' | 'read_fund_recipient_signature' | 'record_fund_recipient_signature'
+  | 'read_fund_recipient_execution'
 export async function callFundWorker(name: WorkerFunction, parameters: unknown[]): Promise<unknown> {
   pool ??= new Pool(fundWorkerDatabaseConfig())
   const statements: Record<WorkerFunction, string> = {
@@ -51,6 +52,7 @@ export async function callFundWorker(name: WorkerFunction, parameters: unknown[]
     record_fund_recipient_claim: 'select bx1_portal.record_fund_recipient_claim($1::jsonb,$2::jsonb) as result',
     read_fund_recipient_signature: 'select bx1_portal.read_fund_recipient_signature($1::uuid) as result',
     record_fund_recipient_signature: 'select bx1_portal.record_fund_recipient_signature($1::uuid,$2::jsonb) as result',
+    read_fund_recipient_execution: 'select bx1_portal.read_fund_recipient_execution($1::uuid,$2::integer,$3::uuid,$4::jsonb) as result',
   }
   try {
     const result = await pool.query(statements[name], parameters)
