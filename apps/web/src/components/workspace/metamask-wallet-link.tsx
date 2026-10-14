@@ -89,7 +89,7 @@ export function discoverMetaMask(target: EventTarget, onProvider: (provider: Met
 
 // A bounded controller makes the exact browser interaction testable without a DOM
 // shim. Signature/message values exist only in the lifetime of one user action.
-export function createWalletLinkController(deps: { post: WalletPost; refresh: () => void; onChange: (state: WalletLinkState) => void; now?: () => number }) {
+export function createWalletLinkController(deps: { post: WalletPost; refresh: () => void; onChange: (state: WalletLinkState) => void; now?: () => number; savedMessage?: string }) {
   let state: WalletLinkState = { ...initialState }
   let provider: MetaMaskProvider | null = null
   let organisationId = ''
@@ -202,74 +202,98 @@ export function createWalletLinkController(deps: { post: WalletPost; refresh: ()
       if (state.phase !== 'refreshing' || !expectedWallet) return
       const expected = expectedWallet
       if (wallets.some((wallet) => wallet.id === expected.id && wallet.verifiedAt === expected.verifiedAt && wallet.organisationId === expected.organisationId && wallet.status === 'PENDING')) {
-        expectedWallet = null; update({ phase: 'connected', message: 'Saved ownership is shown below. Compliance approval is still pending.' })
+        expectedWallet = null; update({ phase: 'connected', message: deps.savedMessage ?? 'Saved ownership is shown below. Compliance approval is still pending.' })
       }
     },
     dispose() { detach(); generation += 1; abort?.abort(); expectedWallet = null; disposed = true },
   }
 }
 
-async function postWallet(path: string, body: URLSearchParams, signal: AbortSignal): Promise<unknown> {
+async function postWallet(path: string, body: URLSearchParams, signal: AbortSignal, expectedActorId?: string): Promise<unknown> {
   const response = await fetch(path, { method: 'POST', body, signal, credentials: 'same-origin', cache: 'no-store', redirect: 'error',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' } })
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json',
+      ...(expectedActorId ? { 'X-BX1-Expected-Actor': expectedActorId } : {}) } })
   const value: unknown = await response.json()
   if (!record(value) || (response.ok !== (value.ok === true))) throw Error('Unconfirmed response')
   return value
 }
 
-type WalletLinkProps = { organisations: Array<{ id: string; name: string }>; wallets: LinkedWallet[]; configured: boolean; readUnavailable?: boolean }
-export function MetaMaskWalletLink({ organisations, wallets, configured, readUnavailable = false }: WalletLinkProps) {
+type WalletLinkProps = { organisations: Array<{ id: string; name: string }>; wallets: LinkedWallet[]; configured: boolean; readUnavailable?: boolean; onRefresh?: () => void; expectedActorId?: string; appearance?: 'workspace' | 'portal' }
+export function MetaMaskWalletLink({ organisations, wallets, configured, readUnavailable = false, onRefresh, expectedActorId, appearance = 'workspace' }: WalletLinkProps) {
   const [choices, setChoices] = useState<MetaMaskChoice[]>([])
   const [choiceId, setChoiceId] = useState('')
   const [organisationId, setOrganisationId] = useState(organisations.length === 1 ? organisations[0].id : '')
   const [state, setState] = useState<WalletLinkState>(initialState)
   const controller = useRef<ReturnType<typeof createWalletLinkController> | null>(null)
+  const refresh = useRef(onRefresh)
   const status = useRef<HTMLParagraphElement | null>(null)
   const available = configured && !readUnavailable
+  useEffect(() => { refresh.current = onRefresh }, [onRefresh])
+  useEffect(() => {
+    if (!organisations.some(organisation => organisation.id === organisationId)) {
+      setOrganisationId(organisations.length === 1 ? organisations[0].id : '')
+    }
+  }, [organisations, organisationId])
   useEffect(() => {
     if (!available) return
-    const instance = createWalletLinkController({ post: postWallet, refresh: () => window.location.reload(), onChange: setState })
+    setState({ ...initialState })
+    const instance = createWalletLinkController({ post: (path, body, signal) => postWallet(path, body, signal, expectedActorId),
+      savedMessage: appearance === 'portal' ? 'Wallet ownership saved. Choose this proof as your fund delivery wallet below.' : undefined, refresh: () => {
+      if (refresh.current) refresh.current()
+      else window.location.reload()
+    }, onChange: setState })
     controller.current = instance
     const stop = discoverMetaMask(window, (choice) => setChoices((current) => current.some((entry) => entry.id === choice.id) ? current : [...current, choice]))
     return () => { stop(); instance.dispose(); controller.current = null }
-  }, [available])
+  }, [available, expectedActorId, appearance])
   const selectedId = choiceId || (choices.length === 1 ? choices[0].id : '')
-  useEffect(() => { controller.current?.select(choices.find((entry) => entry.id === selectedId)?.provider ?? null, organisationId) }, [choices, selectedId, organisationId, available])
+  useEffect(() => { controller.current?.select(choices.find((entry) => entry.id === selectedId)?.provider ?? null, organisationId) }, [choices, selectedId, organisationId, available, expectedActorId, appearance])
   useEffect(() => { controller.current?.acceptReload(wallets) }, [wallets])
   useEffect(() => { if (state.phase === 'error') status.current?.focus() }, [state.phase, state.message])
   const busy = busyPhases.has(state.phase)
-  const controlClass = 'min-h-11 w-full min-w-0 rounded-xl border border-bxo-border-subtle bg-bxo-bg-primary px-3 py-2 text-base text-bxo-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bxo-accent-primary'
-  return <section aria-labelledby="workspace-wallet" className="mt-8 min-w-0 rounded-xl border border-bxo-border-subtle bg-bxo-surface p-6">
-    <h2 id="workspace-wallet" className="text-xl font-semibold text-bxo-text-primary">MetaMask wallet</h2>
-    <p className="mt-3 text-base leading-7 text-bxo-text-secondary">Ownership verification only. No payment, gas fee or token approval.</p>
-    <p className="mt-2 text-base text-bxo-text-secondary">Required network: {WALLET_CHAIN_NAME} · Chain ID {WALLET_CHAIN_ID}</p>
-    {!available ? <p role="status" className="mt-4 text-base text-bxo-text-secondary">{readUnavailable ? 'Wallet records are temporarily unavailable. Reload the workspace before linking a wallet.' : 'Wallet linking is being configured'}</p> : <>
+  const portal = appearance === 'portal'
+  const ink = portal ? 'text-[#102238]' : 'text-bxo-text-primary'
+  const muted = portal ? 'text-[#495b6d]' : 'text-bxo-text-secondary'
+  const line = portal ? 'border-[#d7e1e8]' : 'border-bxo-border-subtle'
+  const focus = portal ? 'focus-visible:ring-[#007780]' : 'focus-visible:ring-bxo-accent-primary'
+  const controlClass = `min-h-11 w-full min-w-0 rounded-xl border ${line} ${portal ? 'bg-white' : 'bg-bxo-bg-primary'} px-3 py-2 text-base ${ink} focus-visible:outline-none focus-visible:ring-2 ${focus}`
+  const buttonClass = `h-auto min-h-11 max-w-full whitespace-normal ${focus}`
+  const outlineClass = `${buttonClass} ${portal ? 'border-[#b8c8d4] bg-white text-[#102238] hover:border-[#718a9d] hover:bg-[#eaf2f6] hover:text-[#102238]' : ''}`
+  const primaryClass = `${buttonClass} ${portal ? 'bg-[#00e1ea] text-[#102238] hover:bg-[#a8f4f5]' : ''}`
+  return <section aria-labelledby="workspace-wallet" className={`mt-8 min-w-0 rounded-xl border ${line} ${portal ? 'bg-white' : 'bg-bxo-surface'} p-6`}>
+    <h2 id="workspace-wallet" className={`text-xl font-semibold ${ink}`}>MetaMask wallet</h2>
+    <p className={`mt-3 text-base leading-7 ${muted}`}>Ownership verification only. No payment, gas fee or token approval.</p>
+    <p className={`mt-2 text-base ${muted}`}>Required network: {WALLET_CHAIN_NAME} · Chain ID {WALLET_CHAIN_ID}</p>
+    {!available ? <p role="status" className={`mt-4 text-base ${muted}`}>{readUnavailable ? 'Wallet records are temporarily unavailable. Reload the workspace before linking a wallet.' : 'Wallet linking is being configured'}</p> : <>
       <div className="mt-6 grid min-w-0 gap-4 sm:grid-cols-2">
-        {organisations.length > 1 ? <div className="min-w-0"><label htmlFor="wallet-organisation" className="mb-2 block text-sm font-semibold text-bxo-text-primary">Organisation</label>
+        {organisations.length > 1 ? <div className="min-w-0"><label htmlFor="wallet-organisation" className={`mb-2 block ${portal ? 'text-base' : 'text-sm'} font-semibold ${ink}`}>Organisation</label>
           <select id="wallet-organisation" className={controlClass} value={organisationId} disabled={busy || state.mustReload} onChange={(event) => setOrganisationId(event.target.value)}>
             <option value="">Select organisation</option>{organisations.map((org) => <option key={org.id} value={org.id}>{org.name}</option>)}
-          </select></div> : <p className="break-words text-base text-bxo-text-secondary">Organisation: {organisations[0]?.name ?? 'No active organisation'}</p>}
-        {choices.length > 1 ? <div className="min-w-0"><label htmlFor="wallet-provider" className="mb-2 block text-sm font-semibold text-bxo-text-primary">MetaMask provider</label>
+          </select></div> : <p className={`break-words text-base ${muted}`}>Organisation: {organisations[0]?.name ?? 'No active organisation'}</p>}
+        {choices.length > 1 ? <div className="min-w-0"><label htmlFor="wallet-provider" className={`mb-2 block ${portal ? 'text-base' : 'text-sm'} font-semibold ${ink}`}>MetaMask provider</label>
           <select id="wallet-provider" className={controlClass} value={selectedId} disabled={busy || state.mustReload} onChange={(event) => setChoiceId(event.target.value)}>
             <option value="">Select MetaMask provider</option>{choices.map((choice, index) => <option key={choice.id} value={choice.id}>MetaMask {index + 1} ({choice.id.slice(0, 8)})</option>)}
           </select></div> : null}
       </div>
-      {choices.length === 0 ? <p className="mt-4 text-base leading-7 text-bxo-text-secondary">MetaMask was not detected. Open this site in your MetaMask-enabled browser, or install MetaMask from its official website and reload. Never share your secret recovery phrase.</p> : null}
-      {state.address ? <div className="mt-4 min-w-0 space-y-2 text-base text-bxo-text-secondary"><p>Connected account: <span className="block break-all font-mono text-bxo-text-primary">{state.address}</span></p><p>Current network: {state.chainId === WALLET_CHAIN_ID ? WALLET_CHAIN_NAME : 'Unsupported network'} · Chain ID {state.chainId}</p></div> : null}
+      {choices.length === 0 ? <p className={`mt-4 text-base leading-7 ${muted}`}>MetaMask was not detected. Open this site in your MetaMask-enabled browser, or install MetaMask from its official website and reload. Never share your secret recovery phrase.</p> : null}
+      {state.address ? <div className={`mt-4 min-w-0 space-y-2 text-base ${muted}`}><p>Connected account: <span className={`block break-all font-mono ${ink}`}>{state.address}</span></p><p>Current network: {state.chainId === WALLET_CHAIN_ID ? WALLET_CHAIN_NAME : 'Unsupported network'} · Chain ID {state.chainId}</p></div> : null}
       <div className="mt-6 flex flex-wrap gap-3">
-        <Button type="button" variant="outline" className="h-auto min-h-11 max-w-full whitespace-normal focus-visible:ring-bxo-accent-primary" disabled={busy || state.mustReload || !selectedId || !organisationId} onClick={() => void controller.current?.connect()}>Connect MetaMask</Button>
-        <Button type="button" className="h-auto min-h-11 max-w-full whitespace-normal focus-visible:ring-bxo-accent-primary" disabled={busy || state.mustReload || !state.address || state.chainId !== WALLET_CHAIN_ID} onClick={() => void controller.current?.verify()}>Verify wallet ownership</Button>
-        {state.mustReload || state.phase === 'refreshing' ? <Button type="button" variant="outline" className="h-auto min-h-11 max-w-full whitespace-normal" onClick={() => window.location.reload()}>Reload workspace</Button> : null}
+        <Button type="button" variant="outline" className={outlineClass} disabled={busy || state.mustReload || !selectedId || !organisationId} onClick={() => void controller.current?.connect()}>Connect MetaMask</Button>
+        <Button type="button" className={primaryClass} disabled={busy || state.mustReload || !state.address || state.chainId !== WALLET_CHAIN_ID} onClick={() => void controller.current?.verify()}>Verify wallet ownership</Button>
+        {state.mustReload || state.phase === 'refreshing' ? <Button type="button" variant="outline" className={outlineClass} onClick={() => {
+          if (state.mustReload || !refresh.current) window.location.reload()
+          else refresh.current()
+        }}>{state.mustReload ? 'Reload workspace' : 'Refresh saved wallets'}</Button> : null}
       </div>
-      <p ref={status} tabIndex={-1} role="status" aria-live="polite" aria-atomic="true" className="mt-4 break-words text-base leading-7 text-bxo-text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bxo-accent-primary">{state.message}</p>
+      <p ref={status} tabIndex={-1} role="status" aria-live="polite" aria-atomic="true" className={`mt-4 break-words text-base leading-7 ${muted} focus-visible:outline-none focus-visible:ring-2 ${focus}`}>{state.message}</p>
     </>}
-    {wallets.length > 0 ? <ul aria-label="Saved wallet ownership" className="mt-6 space-y-4">{wallets.map((wallet) => <li key={wallet.id} className="min-w-0 rounded-xl border border-bxo-border-subtle p-4">
-      <p className="text-base font-semibold text-bxo-text-primary">Ownership verified: compliance pending</p>
-      <p className="mt-2 break-words text-base text-bxo-text-secondary">{organisations.find((org) => org.id === wallet.organisationId)?.name}</p>
-      <p className="mt-2 break-all font-mono text-sm text-bxo-text-primary">{wallet.address}</p>
-      <p className="mt-2 text-base text-bxo-text-secondary">{WALLET_CHAIN_NAME} · Chain ID {wallet.chainId} · {wallet.status}</p>
-      <p className="mt-2 break-words text-sm text-bxo-text-secondary">Verified: <time dateTime={wallet.verifiedAt}>{wallet.verifiedAt}</time></p>
+    {wallets.length > 0 ? <ul aria-label="Saved wallet ownership" className="mt-6 space-y-4">{wallets.map((wallet) => <li key={wallet.id} className={`min-w-0 rounded-xl border ${line} p-4`}>
+      <p className={`text-base font-semibold ${ink}`}>{portal ? 'Saved ownership proof' : 'Ownership verified: compliance pending'}</p>
+      <p className={`mt-2 break-words text-base ${muted}`}>{organisations.find((org) => org.id === wallet.organisationId)?.name}</p>
+      <p className={`mt-2 break-all font-mono text-sm ${ink}`}>{wallet.address}</p>
+      <p className={`mt-2 text-base ${muted}`}>{WALLET_CHAIN_NAME} · Chain ID {wallet.chainId}{portal ? '' : ` · ${wallet.status}`}</p>
+      <p className={`mt-2 break-words text-sm ${muted}`}>Verified: <time dateTime={wallet.verifiedAt}>{wallet.verifiedAt}</time></p>
     </li>)}</ul> : null}
-    <p className="mt-4 text-sm leading-6 text-bxo-text-secondary">Wallet ownership does not approve transactions or grant financial access.</p>
+    <p className={`mt-4 text-sm leading-6 ${muted}`}>Wallet ownership does not approve transactions or grant financial access.</p>
   </section>
 }

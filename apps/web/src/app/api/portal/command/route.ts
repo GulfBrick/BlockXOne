@@ -8,6 +8,7 @@ import { portalContextMatches, portalOperatingContextSchema } from '@/lib/portal
 import { hasStage2CommandAccess, validatedStage2Access } from '@/lib/portal/stage2-access'
 import { hasOfferingCommandAccess, isTestPasswordWorkflow, validatedOfferingAccess } from '@/lib/portal/offering-access'
 import { hasEvaluationCommandAccess, sameEvaluationGrant, validatedEvaluationAccess } from '@/lib/portal/evaluation-access'
+import { executeFundCommand, FundLifecycleError, isFundCommand, readFundLifecycle, unavailableFundLifecycle } from '@/lib/portal/fund-lifecycle-server'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -33,6 +34,16 @@ export async function POST(request: NextRequest) {
     const { user, snapshot: before } = await readPortal(client, context.data)
     if (user.id !== expectedActor) throw new PortalError('The signed-in account changed. Reload before saving.', 403)
     if (!isPortalSnapshot(before, user.id) || !portalContextMatches(before.operating_context, context.data)) throw new PortalError('The current operating context could not be verified.', 503)
+    if (isFundCommand(command.data.command)) {
+      // The guarded database validates authority and transition before a new
+      // write. Discovery is not an authorization gate: an original idempotency
+      // key must still reach the database after its action has been consumed.
+      const lifecycle = await executeFundCommand(client, user.id, context.data, command.data.command, command.data.key, command.data.payload)
+      // The durable command result is authoritative for this extension. Other
+      // record families are refreshed together by the existing page reader.
+      return jar.finish(privateResponse(NextResponse.json({ snapshot: { ...before, fund_lifecycle: lifecycle,
+        requests: [...(before.requests ?? []), ...(lifecycle.requests ?? [])] } })))
+    }
     if (before.evaluation_access !== undefined && !hasEvaluationCommandAccess(before, command.data.command, context.data)) throw new PortalError('This action is not available in your TEST workspace.', 403)
     if (isTestPasswordWorkflow(before) && !hasStage2CommandAccess(before, command.data.command, context.data)
       && !hasOfferingCommandAccess(before, command.data.command, context.data)) throw new PortalError('This action is not available in your current workflow context.', 403)
@@ -52,6 +63,11 @@ export async function POST(request: NextRequest) {
     const priorEvaluation = validatedEvaluationAccess(before, context.data)
     const savedEvaluation = validatedEvaluationAccess(data, context.data)
     if (priorEvaluation && (!savedEvaluation || !sameEvaluationGrant(priorEvaluation, savedEvaluation))) throw new PortalError('The saved TEST workspace result could not be verified. Refresh before retrying.', 503)
-    return jar.finish(privateResponse(NextResponse.json({ snapshot: data })))
-  } catch (error) { return jar.finish(portalFailure(error)) }
+    // The native command has already committed. Failure to enrich its display
+    // must not tell a customer that the command itself failed or invite a new key.
+    const lifecycle = await readFundLifecycle(client, user.id, context.data)
+      .catch(() => unavailableFundLifecycle(user.id, context.data, 'LIFECYCLE_REFRESH_REQUIRED'))
+    return jar.finish(privateResponse(NextResponse.json({ snapshot: { ...data, fund_lifecycle: lifecycle,
+      requests: [...(data.requests ?? []), ...(lifecycle.requests ?? [])] } })))
+  } catch (error) { return jar.finish(portalFailure(error instanceof FundLifecycleError ? new PortalError(error.message, error.status) : error)) }
 }

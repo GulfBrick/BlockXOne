@@ -7,6 +7,7 @@ import type { PlatformEnvironment } from '@/lib/platform-release'
 import { hasStage2CommandAccess, validatedStage2Access, type Stage2Access } from '@/lib/portal/stage2-access'
 import { hasOfferingCommandAccess, isTestPasswordWorkflow, validatedOfferingAccess, type OfferingAccess } from '@/lib/portal/offering-access'
 import { hasEvaluationCommandAccess, sameEvaluationGrant, validatedEvaluationAccess, type EvaluationAccess } from '@/lib/portal/evaluation-access'
+import { fundLifecycleSnapshotSchema, fundOperationSchema, hasFundLifecycleCommand, isFundLifecycleCommand, validatedFundLifecycle, type FundLifecycleOperation } from '@/lib/portal/fund-lifecycle-contracts'
 import styles from './portal.module.css'
 
 type Marker = { key: string; command: string; payloadHash: string }
@@ -29,6 +30,10 @@ export function usePortalOperatingContext() { return useContext(PortalCommandCon
 export function usePortalActorId() { return useContext(PortalCommandContext).actorId }
 function commandAllowed(context: ContextType<typeof PortalCommandContext>, command: string) {
   if (context.invalidAdmission) return false
+  if (isFundLifecycleCommand(command)) {
+    const fund = validatedFundLifecycle(context.snapshot?.fund_lifecycle, context.actorId, context.operatingContext, context.environment)
+    return Boolean(fund && hasFundLifecycleCommand(fund, command))
+  }
   if (context.snapshot?.evaluation_access !== undefined) return hasEvaluationCommandAccess(context.snapshot, command, context.operatingContext)
   return !context.snapshot || !isTestPasswordWorkflow(context.snapshot)
     || hasStage2CommandAccess(context.snapshot, command, context.operatingContext)
@@ -75,7 +80,7 @@ export function mayDiscardDeniedPortalRequest(definitive: boolean, hadPendingAtt
   return definitive && !hadPendingAttempt
 }
 
-export async function postPortalCommand(command: PortalCommand, operatingContext: PortalOperatingContext = APPLICANT_CONTEXT, expectedActor?: string, expectedStage2Access?: Stage2Access, expectedOfferingAccess?: OfferingAccess, expectedEvaluationAccess?: EvaluationAccess): Promise<PortalSnapshot> {
+export async function postPortalCommand(command: PortalCommand, operatingContext: PortalOperatingContext = APPLICANT_CONTEXT, expectedActor?: string, expectedStage2Access?: Stage2Access, expectedOfferingAccess?: OfferingAccess, expectedEvaluationAccess?: EvaluationAccess, expectedEnvironment: PlatformEnvironment = 'TESTNET'): Promise<PortalSnapshot> {
   const response = await fetch('/api/portal/command', { method: 'POST', credentials: 'same-origin', cache: 'no-store', redirect: 'error', headers: { 'Content-Type': 'application/json', ...(expectedActor ? { 'x-bx1-expected-actor': expectedActor } : {}) }, body: JSON.stringify({ ...command, operating_context: operatingContext }), signal: AbortSignal.timeout(45000) })
   const contentType = response.headers.get('content-type') ?? ''
   if (!contentType.includes('application/json')) throw new Error('The platform did not confirm the outcome. Retry the saved request, not a new application.')
@@ -90,11 +95,16 @@ export async function postPortalCommand(command: PortalCommand, operatingContext
   const savedAccess = validatedStage2Access(result.snapshot, operatingContext)
   const savedOfferingAccess = validatedOfferingAccess(result.snapshot, operatingContext)
   const savedEvaluation = validatedEvaluationAccess(result.snapshot, operatingContext)
-  if (result.snapshot.evaluation_access !== undefined && (!savedEvaluation || !hasEvaluationCommandAccess(result.snapshot, command.command, operatingContext))) throw new Error('The saved TEST workspace result could not be verified. Refresh to reconcile the original request.')
+  const fundCommand = isFundLifecycleCommand(command.command)
+  if (fundCommand) {
+    const fund = fundLifecycleSnapshotSchema.safeParse(result.snapshot.fund_lifecycle)
+    if (!fund.success || !validatedFundLifecycle(fund.data, result.snapshot.actor.id, operatingContext, expectedEnvironment)) throw new Error('The saved fund result could not be verified. Refresh the original request before retrying.')
+  }
+  if (result.snapshot.evaluation_access !== undefined && (!savedEvaluation || !fundCommand && !hasEvaluationCommandAccess(result.snapshot, command.command, operatingContext))) throw new Error('The saved TEST workspace result could not be verified. Refresh to reconcile the original request.')
   if (expectedEvaluationAccess && (!savedEvaluation || !sameEvaluationGrant(expectedEvaluationAccess, savedEvaluation))) throw new Error('Your TEST workspace access changed. Refresh to reconcile the original request.')
   if (result.snapshot.stage2_access !== undefined && !savedAccess) throw new Error('The saved admission context could not be verified. Refresh to reconcile the original request.')
   if (result.snapshot.offering_access !== undefined && !savedOfferingAccess) throw new Error('The saved offering context could not be verified. Refresh to reconcile the original request.')
-  if (isTestPasswordWorkflow(result.snapshot) && !hasStage2CommandAccess(result.snapshot, command.command, operatingContext)
+  if (!fundCommand && isTestPasswordWorkflow(result.snapshot) && !hasStage2CommandAccess(result.snapshot, command.command, operatingContext)
     && !hasOfferingCommandAccess(result.snapshot, command.command, operatingContext)) throw new Error('The saved result did not confirm this workflow action. Refresh to reconcile the original request.')
   if (expectedStage2Access && (!savedAccess || savedAccess.actor_id !== expectedStage2Access.actor_id
     || savedAccess.environment !== expectedStage2Access.environment || savedAccess.session_mode !== expectedStage2Access.session_mode
@@ -123,9 +133,29 @@ export function usePortalCommand(onSaved: (snapshot: PortalSnapshot) => void) {
       if (marker && !savedRequest.current) setMessage(`A previous ${marker.command.replaceAll('_', ' ')} request needs reconciliation. Re-enter its original values to retry the same saved key, or refresh saved state.`)
     } catch (error) { setMessage(error instanceof Error ? error.message : 'Request recovery is unavailable.') }
   }, [context.actorId, context.requests, identity])
-  async function dispatch(request: PortalCommand) {
+  async function dispatch(request: PortalCommand, executionLease?: FundLifecycleOperation) {
     if (lock.current) return false
-    if (!commandAllowed(context, request.command)) {
+    let originalFundReplay = false
+    if (isFundLifecycleCommand(request.command)) {
+      try {
+        const marker = reconcilePortalMarker(sessionStorage, context.actorId, context.requests, context)
+        originalFundReplay = Boolean(marker && marker.command === request.command)
+      } catch (error) { setMessage(error instanceof Error ? error.message : 'Original request recovery is unavailable.'); return false }
+    }
+    // Retained markers are scoped by actor/environment/context. The durable
+    // preparation checks the payload hash; the database rechecks live authority.
+    const leased = fundOperationSchema.safeParse(executionLease)
+    const reference = request.command === 'record_fund_transaction' ? request.payload : null
+    const leasedMetadata = Boolean(reference && leased.success && leased.data.state === 'UNKNOWN'
+      && leased.data.id === reference.operation_id && leased.data.revision === reference.expected_revision
+      && context.operatingContext.mode === 'ROLE' && context.operatingContext.role === 'TokenisationAgent'
+      && context.snapshot?.fund_lifecycle?.availability === 'AVAILABLE'
+      && context.snapshot.fund_lifecycle.products.some(product => product.product_id === leased.data.product_id
+        && product.operations.some(operation => operation.id === leased.data.id && operation.intent_hash === leased.data.intent_hash)))
+    // The returned one-time UNKNOWN lease may be newer than the displayed
+    // SIGNING record. It permits recording the already-broadcast hash only;
+    // it supplies neither a signature nor an executable transaction.
+    if (!originalFundReplay && !leasedMetadata && !commandAllowed(context, request.command)) {
       setMessage('This action is not available in your current workflow capacity. Refresh saved state or contact the responsible BlockXOne owner.')
       return false
     }
@@ -140,7 +170,7 @@ export function usePortalCommand(onSaved: (snapshot: PortalSnapshot) => void) {
       if (!isCurrent()) return false
       savedRequest.current = prepared
       sent = true
-      const snapshot = await postPortalCommand(prepared, context.operatingContext, context.actorId, context.stage2Access, context.offeringAccess, context.evaluationAccess)
+      const snapshot = await postPortalCommand(prepared, context.operatingContext, context.actorId, context.stage2Access, context.offeringAccess, context.evaluationAccess, context.environment)
       clearPortalMarker(sessionStorage, context.actorId, prepared, context)
       if (!isCurrent()) return false
       savedRequest.current = null; setUnknown(false); onSaved(snapshot); setMessage('Saved to your hosted workspace.'); return true
@@ -159,7 +189,13 @@ export function usePortalCommand(onSaved: (snapshot: PortalSnapshot) => void) {
     if (!parsed.success) { setMessage(parsed.error.issues.map(issue => `${issue.path.filter(part => part !== 'payload').join(' ')}: ${issue.message}`).slice(0, 4).join(' · ')); return false }
     return dispatch(parsed.data)
   }
-  return { busy, message, unknown, submit, retry: () => savedRequest.current ? dispatch(savedRequest.current) : Promise.resolve(false) }
+  async function recordFundTransaction(payload: Record<string, unknown>, lease: FundLifecycleOperation) {
+    if (savedRequest.current) { setMessage('Resolve the original saved request before starting a new action.'); return false }
+    const parsed = portalCommandSchema.safeParse({ command: 'record_fund_transaction', key: crypto.randomUUID(), payload })
+    if (!parsed.success) { setMessage('The existing transaction hash and leased operation do not match. Refresh without executing again.'); return false }
+    return dispatch(parsed.data, lease)
+  }
+  return { busy, message, unknown, submit, recordFundTransaction, retry: () => savedRequest.current ? dispatch(savedRequest.current) : Promise.resolve(false) }
 }
 
 export function CommandFeedback({ command }: { command: Pick<ReturnType<typeof usePortalCommand>, 'busy' | 'message' | 'unknown' | 'retry'> }) {

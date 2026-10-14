@@ -518,7 +518,7 @@ export function ProductNarrative({ product }: { product: PortalProduct }) {
   </Panel>
 }
 
-export function ProductActions({ product, onSaved, availableCommands }: { product: PortalProduct; onSaved: (snapshot: PortalSnapshot) => void; availableCommands?: readonly string[] }) {
+export function ProductActions({ product, onSaved, availableCommands, compact = false }: { product: PortalProduct; onSaved: (snapshot: PortalSnapshot) => void; availableCommands?: readonly string[]; compact?: boolean }) {
   const command = usePortalCommand(onSaved)
   const submitAvailable = usePortalCommandAllowed('submit_product')
   const saveAvailable = usePortalCommandAllowed('save_product')
@@ -543,13 +543,13 @@ export function ProductActions({ product, onSaved, availableCommands }: { produc
   const canAmend = amendAvailable && product.status === 'APPROVED'
     && availableCommands?.includes('begin_offering_amendment') === true
     && product.allowed_actions?.includes('begin_offering_amendment') === true
-  return <Panel title="Offering hand-offs" description="Each action uses a server-checked organisation, actor and immutable package."><CommandFeedback command={command} />{product.review_notes ? <Notice title="Compliance notes" tone="warning">{product.review_notes}</Notice> : null}
-    <ol className={`${styles.timeline} ${styles.sectionGap}`}>
+  return <Panel title={compact ? 'Offering actions' : 'Offering hand-offs'} description={compact ? undefined : 'Each action uses a server-checked organisation, actor and immutable package.'}><CommandFeedback command={command} />{product.review_notes ? <Notice title="Compliance notes" tone="warning">{product.review_notes}</Notice> : null}
+    {!compact ? <ol className={`${styles.timeline} ${styles.sectionGap}`}>
       <li><strong>Manager submits the package</strong><p>Submission fixes the terms and in-form document digests under one package reference.</p></li>
       <li><strong>Appointed issuer decides</strong><p>The Issuer Fund Manager reviews rights and authority for that exact package.</p></li>
       <li><strong>Compliance decides separately</strong><p>An independent Compliance Officer records checks against the same reference.</p></li>
       <li><strong>Technical readiness and opening</strong><p>Publication needs verified deployment evidence. Orders remain unavailable until the backend opens this exact package.</p></li>
-    </ol>
+    </ol> : null}
     <div className={styles.sectionGap}>{legacyFundDraft || legacyPropertyDraft ? <Notice title={legacyFundDraft ? 'Fund terms upgrade required' : 'Property terms upgrade required'} tone="warning">The historical ZAR_TEST draft cannot be submitted as a new package. {canEditLegacyFund ? <a href={legacyFundDraft ? '#fund-draft-editor' : '#property-draft-editor'} className={styles.textLink}>Open the draft editor and upgrade to the v2 TST {legacyFundDraft ? 'fund' : 'property'} policy.</a> : 'An authorised Offering Manager must upgrade and save the draft before submission.'}</Notice> : canSubmit ? <button className={styles.button} disabled={command.busy || command.unknown} onClick={() => void command.submit('submit_product', { product_id: product.id, expected_revision: product.revision })}>Submit immutable offering package</button> : canPublish ? <button className={styles.button} disabled={command.busy || command.unknown} onClick={() => void command.submit('publish_product', { product_id: product.id, expected_revision: product.revision })}>Open approved offering</button> : product.status === 'PUBLISHED' && !isOfferingSubscribable(product) ? <Notice title="Historical opening is not current" tone="warning">This row retains its recorded PUBLISHED status, but the backend has not verified its present package and readiness for new subscriptions.</Notice> : <StatusBadge status={product.status} />}</div>
     {product.status === 'APPROVED' && !canPublish ? <div className={styles.sectionGap}><Notice title="Opening is not available" tone="warning">The backend has not confirmed a current issuer decision, independent Compliance decision and technical-readiness evidence for this package. An APPROVED workflow status alone is not permission to publish.</Notice></div> : null}
     {canReopen ? <form className={`${styles.form} ${styles.sectionGap}`} onSubmit={event => {

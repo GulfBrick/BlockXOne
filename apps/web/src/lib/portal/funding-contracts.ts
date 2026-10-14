@@ -11,7 +11,7 @@ const observationStatus = z.enum(['UNVERIFIED', 'VERIFIED', 'INVALID', 'PENDING'
 
 export const fundingCommandOptions = [
   z.object({ command: z.literal('propose_funding_route'), key: id, payload: z.object({
-    product_id: id, expected_revision: revision, token_address: address, token_runtime_hash: hash,
+    product_id: id, expected_revision: revision, token_address: address, token_runtime_hash: hash, currency: z.enum(['ZAR_TEST', 'TST']).optional(),
     token_decimals: z.number().int().min(2).max(18), receiving_address: address,
     authority_reference: reason, code_review_reference: reason, valid_until: z.string().datetime({ offset: true }),
     standard_immutable_token_acknowledged: z.literal(true), synthetic_conversion_acknowledged: z.literal(true),
@@ -37,15 +37,22 @@ export const fundingRouteSchema = z.object({
   token_runtime_hash: hash, token_decimals: z.number().int().min(2).max(18), receiving_address: address,
   authority_reference: z.string(), code_review_reference: z.string(), valid_until: z.string(),
   verification_status: observationStatus, proposed_by: id, approved_by: id.nullable(), allowed_actions: actions,
+  currency: z.enum(['ZAR_TEST', 'TST']).optional(),
+  conversion_policy: z.enum(['ZAR_TEST_1_TO_1_V1', 'TST_BASE_UNITS_V1']).optional(),
+}).superRefine((route, ctx) => {
+  if (route.currency === 'TST' && (route.token_decimals !== 6 || route.conversion_policy !== 'TST_BASE_UNITS_V1')) ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'TST requires its six-decimal base-unit settlement policy.' })
+  if (route.currency !== 'TST' && route.conversion_policy === 'TST_BASE_UNITS_V1') ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Historical ZAR_TEST funding cannot use the TST conversion policy.' })
 })
 export type FundingRoute = z.infer<typeof fundingRouteSchema>
 
 export const fundingObligationSchema = z.object({
   id, subscription_id: id, investment_account_id: id, investor_id: id, product_id: id, organisation_id: id, route_id: id,
   revision, state: z.enum(['AWAITING_FUNDING', 'EVIDENCE_REVIEW', 'PARTIAL', 'OVERPAID', 'RECONCILED', 'UNAPPLIED', 'REVERSED', 'CANCELLED']),
-  amount_minor: units, currency: z.literal('ZAR_TEST'), token_amount_base_units: units, token_decimals: z.number().int().min(2).max(18),
+  amount_minor: units, currency: z.enum(['ZAR_TEST', 'TST']), token_amount_base_units: units, token_decimals: z.number().int().min(2).max(18),
   observed_amount_base_units: units, posted_amount_base_units: units, reservation_status: z.enum(['AWAITING_FUNDING', 'CANCELLED']),
   evidence_set_hash: z.string().regex(/^[0-9a-f]{64}$/), created_at: z.string(), allowed_actions: actions,
+}).superRefine((obligation, ctx) => {
+  if (obligation.currency === 'TST' && (obligation.token_decimals !== 6 || obligation.token_amount_base_units !== obligation.amount_minor)) ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'The TST obligation must retain the exact six-decimal accepted amount.' })
 })
 export type FundingObligation = z.infer<typeof fundingObligationSchema>
 
@@ -63,6 +70,8 @@ export const fundingJournalSchema = z.object({
   id, obligation_id: id, reference_id: id, kind: z.enum(['FUNDING', 'REVERSAL']), amount_base_units: units,
   token_address: address, token_decimals: z.number().int().min(2).max(18), created_at: z.string(),
   original_journal_id: id.nullable(), posted_by: id, allowed_actions: actions,
+  currency: z.enum(['ZAR_TEST', 'TST']).optional(),
+  posting_policy: z.enum(['TEST_ASSET_LIABILITY_V1', 'TEST_TST_ASSET_LIABILITY_V1']).optional(),
   lines: z.array(z.object({ account: z.enum(['TEST_SETTLEMENT_TOKEN_ASSET', 'TEST_CUSTOMER_FUNDING_LIABILITY']), side: z.enum(['DEBIT', 'CREDIT']), amount_base_units: units })).length(2),
 })
 export type FundingJournal = z.infer<typeof fundingJournalSchema>

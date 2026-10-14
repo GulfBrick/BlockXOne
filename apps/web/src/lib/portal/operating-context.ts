@@ -88,6 +88,15 @@ export function portalViewAllowed(view: PortalPath, context: PortalOperatingCont
   }
   if (snapshot.stage2_access !== undefined && !validatedStage2Access(snapshot, context)) return false
   if (snapshot.offering_access !== undefined && !validatedOfferingAccess(snapshot, context)) return false
+  const fund = snapshot.fund_lifecycle
+  if (fund?.schema_version === 1 && fund.actor_id === snapshot.actor.id && portalContextMatches(fund.operating_context, context)
+    && fund.availability === 'AVAILABLE' && Array.isArray(fund.products)) {
+    if (view === '/portal/products/detail' && context.mode === 'ROLE' && fund.products.some(product => product.product_id === id)) return true
+    if (view === '/portal/orders/detail' && fund.products.some(product => Array.isArray(product.orders) && product.orders.some(order => order.subscription_id === id))) return true
+    if (snapshot.base_records_available === false) return view === '/portal'
+      || view === '/portal/products' && context.mode === 'ROLE'
+      || view === '/portal/portfolio' && (context.mode === 'APPLICANT' || context.role === 'Investor')
+  }
   if (snapshot.evaluation_access !== undefined) {
     const evaluation = validatedEvaluationAccess(snapshot, context)
     if (!evaluation || !evaluation.allowed_views.some(path => path === view)) return false

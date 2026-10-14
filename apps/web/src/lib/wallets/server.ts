@@ -11,6 +11,7 @@ import { hasCanonicalOrigin, readAuthForm, responseCookieAdapter } from '@/lib/s
 import { hasRequiredMfa, isMfaContextCurrent, readMfaContext } from '@/lib/supabase/mfa'
 import { WALLET_CHAIN_ID, WALLET_ORIGIN, type LinkedWallet, type WalletActor, type WalletChallenge, type WalletErrorCode } from './contracts'
 import { getWalletDatabase, isWalletDatabaseConfigured, WalletDatabaseError } from './database'
+import { walletEnvironmentProfile, type WalletEnvironmentProfile } from './profile'
 
 type Context = { params: Promise<{ action: string }> }
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -48,7 +49,7 @@ function requireUnexpired(exp: number): void {
   if (!Number.isSafeInteger(exp) || exp <= Math.floor(Date.now() / 1000)) throw new WalletRequestError('unauthorised', 401)
 }
 
-async function verifiedActor(client: SupabaseClient, organisationId: string, action: 'wallet.ownership.challenge' | 'wallet.ownership.verify'): Promise<{ actor: WalletActor; exp: number }> {
+async function verifiedActor(client: SupabaseClient, organisationId: string, action: 'wallet.read_own' | 'wallet.ownership.challenge' | 'wallet.ownership.verify', profile: WalletEnvironmentProfile): Promise<{ actor: WalletActor; exp: number }> {
   // Session storage is only a token source. No claims below are trusted until
   // this exact token has been verified by Supabase Auth's user endpoint.
   const session = await client.auth.getSession()
@@ -81,15 +82,33 @@ async function verifiedActor(client: SupabaseClient, organisationId: string, act
   // This uses only the caller's normal RLS client. The immutable platform UUID
   // comes from bx1_profiles, never email or editable user metadata.
   const workspace = await readWorkspace(client)
-  if (!workspace || workspace.user.id !== user.id || !validUuid(workspace.user.platformUserId)
-    || !workspace.organisations.some((organisation) => organisation.id === organisationId)) throw new WalletRequestError('unauthorised', 403)
-  if (!evaluateActionPermission(workspace, action, { userId: user.id, organisationId }).allowed) throw new WalletRequestError('unauthorised', 403)
+  if (workspace && (workspace.user.id !== user.id || !validUuid(workspace.user.platformUserId))) throw new WalletRequestError('unauthorised', 403)
+  let platformUserId: string
+  if (workspace?.organisations.some((organisation) => organisation.id === organisationId)) {
+    if (!evaluateActionPermission(workspace, action, { userId: user.id, organisationId }).allowed) throw new WalletRequestError('unauthorised', 403)
+    platformUserId = workspace.user.platformUserId
+  } else {
+    // An individual investor is not staff of the issuer. Resolve ownership-only
+    // scope from the current approved account/product relation, not a fabricated
+    // organisation membership. This authenticated RPC and the existing private
+    // challenge writer both repeat the same narrow TEST account guard.
+    if (profile.environment !== 'TESTNET') throw new WalletRequestError('unauthorised', 403)
+    const { data, error } = await client.rpc('bx1_portal_fund_wallet_context_scoped', { organisation_id: organisationId }).abortSignal(AbortSignal.timeout(8000))
+    if (error) throw new WalletRequestError(error.code === '42501' ? 'unauthorised' : 'unavailable')
+    if (!data || typeof data !== 'object' || Array.isArray(data)) throw new WalletRequestError('unauthorised', 403)
+    const scope = data as Record<string, unknown>
+    if (scope.actor_id !== user.id || scope.session_id !== claims.session_id
+      || scope.organisation_id !== organisationId || scope.chain_id !== WALLET_CHAIN_ID
+      || scope.environment !== profile.environment || !validUuid(scope.platform_user_id)
+      || (workspace && scope.platform_user_id !== workspace.user.platformUserId)) throw new WalletRequestError('unauthorised', 403)
+    platformUserId = scope.platform_user_id
+  }
   if (!await isMfaContextCurrent(client, mfa)) throw new WalletRequestError('unauthorised', 401)
   const current = await client.auth.getSession()
   providerError(current.error)
   if (current.data.session?.access_token !== accessToken) throw new WalletRequestError('unauthorised', 401)
   requireUnexpired(claims.exp)
-  return { actor: { userId: user.id, platformUserId: workspace.user.platformUserId, sessionId: claims.session_id, organisationId }, exp: claims.exp }
+  return { actor: { userId: user.id, platformUserId, sessionId: claims.session_id, organisationId }, exp: claims.exp }
 }
 
 function canonicalSignature(value: string): void {
@@ -124,6 +143,28 @@ function checkedWallet(value: LinkedWallet, actor: WalletActor, challenge: Walle
   return { id: value.id, organisationId: actor.organisationId, address: challenge.address, chainId: WALLET_CHAIN_ID, verifiedAt: value.verifiedAt, status: 'PENDING' }
 }
 
+function checkedWalletContext(value: unknown, actor: WalletActor, profile: WalletEnvironmentProfile): { organisation: { id: string; name: string }; wallets: LinkedWallet[] } {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new WalletRequestError('unavailable')
+  const scope = value as Record<string, unknown>
+  if (scope.actor_id !== actor.userId || scope.platform_user_id !== actor.platformUserId
+    || scope.session_id !== actor.sessionId || scope.organisation_id !== actor.organisationId
+    || scope.chain_id !== WALLET_CHAIN_ID || scope.environment !== profile.environment
+    || typeof scope.organisation_name !== 'string' || !scope.organisation_name.trim() || scope.organisation_name.length > 200
+    || !Array.isArray(scope.wallets) || scope.wallets.length > 500) throw new WalletRequestError('unavailable')
+  const ids = new Set<string>()
+  const wallets: LinkedWallet[] = scope.wallets.map((value: unknown) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new WalletRequestError('unavailable')
+    const wallet = value as Record<string, unknown>
+    if (!validUuid(wallet.id) || ids.has(wallet.id) || wallet.organisationId !== actor.organisationId
+      || typeof wallet.address !== 'string' || wallet.chainId !== WALLET_CHAIN_ID || wallet.status !== 'PENDING'
+      || typeof wallet.verifiedAt !== 'string' || !Number.isFinite(Date.parse(wallet.verifiedAt))) throw new WalletRequestError('unavailable')
+    ids.add(wallet.id)
+    return { id: wallet.id, organisationId: actor.organisationId, address: normalizeAddress(wallet.address),
+      chainId: WALLET_CHAIN_ID, verifiedAt: wallet.verifiedAt, status: 'PENDING' }
+  })
+  return { organisation: { id: actor.organisationId, name: scope.organisation_name }, wallets }
+}
+
 export async function handleWalletRequest(request: NextRequest, context: Context): Promise<NextResponse> {
   const jar = responseCookieAdapter(request)
   const fail = (code: WalletErrorCode, status = errorStatus[code]) => jar.finish(NextResponse.json({ ok: false, error: code }, { status }))
@@ -131,17 +172,20 @@ export async function handleWalletRequest(request: NextRequest, context: Context
     const mode = resolveAuthMode()
     if (mode !== 'supabase') return fail(mode === 'invalid' ? 'unavailable' : 'unauthorised', mode === 'invalid' ? 503 : 404)
     const { action } = await context.params
-    if (action !== 'challenge' && action !== 'verify') return fail('invalid_request', 404)
+    if (action !== 'challenge' && action !== 'verify' && action !== 'context') return fail('invalid_request', 404)
     if (request.method !== 'POST') {
       const response = fail('invalid_request', 405)
       response.headers.set('Allow', 'POST')
       return response
     }
-    if (canonicalAppOrigin() !== WALLET_ORIGIN) return fail('unavailable')
+    const profile = walletEnvironmentProfile()
+    if (!profile || canonicalAppOrigin() !== profile.applicationOrigin) return fail('unavailable')
     if (!hasCanonicalOrigin(request)) return fail('invalid_request', 403)
+    const expectedActor = request.headers.get('x-bx1-expected-actor')
+    if ((action === 'context' && !validUuid(expectedActor)) || (expectedActor !== null && !validUuid(expectedActor))) return fail('unauthorised', 403)
     let form: URLSearchParams
     try { form = await readAuthForm(request) } catch { return fail('invalid_request') }
-    const fields = action === 'challenge' ? ['organisationId', 'address', 'chainId'] : ['organisationId', 'challengeId', 'signature']
+    const fields = action === 'challenge' ? ['organisationId', 'address', 'chainId'] : action === 'context' ? ['organisationId'] : ['organisationId', 'challengeId', 'signature']
     if ([...form.keys()].some((key) => !fields.includes(key)) || fields.some((key) => !form.has(key))) return fail('invalid_request')
     const organisationId = form.get('organisationId')!
     if (!validUuid(organisationId)) return fail('invalid_request')
@@ -151,13 +195,23 @@ export async function handleWalletRequest(request: NextRequest, context: Context
     if (action === 'challenge') {
       if (form.get('chainId') !== String(WALLET_CHAIN_ID)) return fail('invalid_request')
       address = normalizeAddress(form.get('address')!)
-    } else {
+    } else if (action === 'verify') {
       if (!validUuid(challengeId)) return fail('invalid_request')
       canonicalSignature(signature!)
     }
-    if (!isWalletDatabaseConfigured()) return fail('unavailable')
+    const configured = isWalletDatabaseConfigured()
+    if (action !== 'context' && !configured) return fail('unavailable')
     const client = createRequestSupabaseClient(jar.adapter)
-    const { actor, exp } = await verifiedActor(client, organisationId, action === 'challenge' ? 'wallet.ownership.challenge' : 'wallet.ownership.verify')
+    const { actor, exp } = await verifiedActor(client, organisationId,
+      action === 'challenge' ? 'wallet.ownership.challenge' : action === 'context' ? 'wallet.read_own' : 'wallet.ownership.verify', profile)
+    if (expectedActor !== null && expectedActor !== actor.userId) return fail('unauthorised', 403)
+    if (action === 'context') {
+      const { data, error } = await client.rpc('bx1_portal_fund_wallet_context_scoped', { organisation_id: actor.organisationId }).abortSignal(AbortSignal.timeout(8000))
+      if (error) throw new WalletRequestError(error.code === '42501' ? 'unauthorised' : 'unavailable')
+      const context = checkedWalletContext(data, actor, profile)
+      requireUnexpired(exp)
+      return jar.finish(NextResponse.json({ ok: true, context: { ...context, configured } }))
+    }
     const database = getWalletDatabase()
     if (action === 'challenge') {
       requireUnexpired(exp)

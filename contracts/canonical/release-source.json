@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "status": "SOURCE_SELECTED_NOT_DEPLOYED_OR_ADMITTED",
+  "official_contracts": {
+    "repository": "https://github.com/ERC-3643/ERC-3643",
+    "commit": "b6c5fabf86e733ede017fef754d59eeb8f80e3f4",
+    "release": "4.1.3",
+    "package": "@erc3643org/erc-3643@4.1.3",
+    "integrity": "sha512-ckq3bHUnw5vzi5hHBQOQHCSo4BSyMxjl7IarJvNovUBsRLqlZX3eqTaLXQpn2r6L7Ob1k+Au5MSxEg0zDW4wIA==",
+    "onchainid": "2.2.1",
+    "openzeppelin_contracts": "4.9.6",
+    "openzeppelin_upgradeable": "4.9.6",
+    "compiler": "0.8.17",
+    "optimizer": { "enabled": true, "runs": 200 },
+    "license": "GPL-3.0-or-later OR separately obtained proprietary licence"
+  },
+  "controller": {
+    "source": "contracts/canonical/Bx1FundController.sol",
+    "version": "BX1_FUND_CONTROLLER_V1",
+    "status": "UNCOMPILED_SOURCE_CANDIDATE",
+    "runtime_hash": null,
+    "deployed_address": null,
+    "audit_evidence_id": null
+  },
+  "signing": { "mechanism": "SAFE_TRANSACTION", "human_interface": "METAMASK", "eoa_fallback": false },
+  "network_addresses": {},
+  "admission_requirements": [
+    "Actual independently verified factory/controller/Safe/suite addresses and bytecode; documentation addresses are not defaults",
+    "Factory ownership by controller and full atomic IRS handoff; sole routine token-agent history",
+    "Safe human owners, threshold, no modules, declared guard/fallback, separate governance evidence and current nonce",
+    "Implementation-authority governance, actual implementation addresses/version/runtime hashes and governed upgrades",
+    "Required claim topics, authorised cryptographic claim issuers and actual recipient identities; sandbox KYC alone is not an on-chain claim",
+    "Dependency release/governance evidence and exact management/claim-key readbacks; ONCHAINID proxies bind authority owner, effective implementation/runtime and version 2.2.1; undeclared proxy/delegate mechanisms fail closed",
+    "Reviewed product/class/offering/terms bindings, service appointments, signature evidence and operation limits",
+    "Admitted six-decimal TST route, independent money posting/reconciliation and allocation/wallet binding",
+    "Dual-provider canonical receipt plus Safe INNER success and operation-bound effects/finality",
+    "Supply/balance/event/indexer reconciliation to legal register and accounting before ownership",
+    "Exact-release conformance/security review and cloud build before publication; no audit claimed from source pinning"
+  ]
+}

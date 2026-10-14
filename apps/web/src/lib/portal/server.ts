@@ -4,7 +4,9 @@ import { createPageSupabaseClient } from '@/lib/supabase/page'
 import { readVerifiedUser } from '@/lib/supabase/server'
 import { isDemoEnvironment } from '@/lib/testnet-fund/contracts'
 import { customerMonitoringSnapshotSchema, type PortalPageData, type PortalSnapshot } from './contracts'
-import { portalContextMatches, type PortalOperatingContext } from './operating-context'
+import { APPLICANT_CONTEXT, portalContextMatches, type PortalOperatingContext } from './operating-context'
+import { fundLifecycleSnapshotSchema, validatedFundLifecycle } from './fund-lifecycle-contracts'
+import { FundLifecycleError, readFundLifecycle } from './fund-lifecycle-server'
 import { fundingSnapshotSchema } from './funding-contracts'
 import { validatedStage2Access } from './stage2-access'
 import { validatedOfferingAccess } from './offering-access'
@@ -31,7 +33,25 @@ export async function readPortal(client: SupabaseClient, operatingContext?: Port
   const result = operatingContext
     ? client.rpc('bx1_portal_read_scoped', { operating_context: operatingContext })
     : client.rpc('bx1_portal_read')
+  const lifecycleRead = operatingContext
+    ? readFundLifecycle(client, user.id, operatingContext).then(value => ({ value, error: null as unknown })).catch(error => ({ value: null, error }))
+    : null
   const { data, error } = await result.abortSignal(AbortSignal.timeout(12000))
+  if (error?.code === '42501' && error.message === 'admission_read_scope_denied'
+    && operatingContext?.mode === 'ROLE' && ['TokenisationAgent', 'TransferAgent', 'TreasuryOperator', 'FinancialController'].includes(operatingContext.role)) {
+    // The new reader must independently admit this exact live session/role.
+    // A legacy-reader denial never grants authority or supplies empty balances.
+    const read = await lifecycleRead!
+    if (read.error) throw read.error
+    const lifecycle = read.value!
+    if (lifecycle.availability === 'AVAILABLE') return {
+      user: { id: user.id, email: user.email }, snapshot: {
+        actor: { id: user.id, email: user.email, display_name: null, can_review: false },
+        operating_context: operatingContext, applications: [], organisations: [], products: [], subscriptions: [], events: [],
+        base_records_available: false, fund_lifecycle: lifecycle, requests: lifecycle.requests ?? [],
+      },
+    }
+  }
   if (error?.code === '42501' && error.message === 'admission_read_scope_denied'
     && testOrdinaryEntryMfaPaused(process.env) && platformRelease(process.env)?.environment === 'TESTNET'
     && operatingContext?.mode === 'ROLE' && ['OfferingManager', 'IssuerFundManager'].includes(operatingContext.role)) throw new PackageReaderUnavailable()
@@ -41,7 +61,21 @@ export async function readPortal(client: SupabaseClient, operatingContext?: Port
   if (data.stage2_access !== undefined && !validatedStage2Access(data, operatingContext, platformRelease(process.env)?.environment)) throw new PortalError('The admission context could not be verified.', 503)
   if (data.offering_access !== undefined && !validatedOfferingAccess(data, operatingContext, platformRelease(process.env)?.environment)) throw new PortalError('The package context could not be verified.', 503)
   if (data.evaluation_access !== undefined && !validatedEvaluationAccess(data, operatingContext, platformRelease(process.env)?.environment)) throw new PortalError('Your TEST workspace access could not be verified.', 503)
-  return { user: { id: user.id, email: user.email }, snapshot: data }
+  const context = operatingContext ?? data.operating_context ?? APPLICANT_CONTEXT
+  let lifecycle
+  try {
+    if (lifecycleRead) {
+      const read = await lifecycleRead
+      if (read.error) throw read.error
+      lifecycle = read.value!
+    } else lifecycle = await readFundLifecycle(client, user.id, context)
+  }
+  catch (error) {
+    if (error instanceof FundLifecycleError) throw new PortalError(error.message, error.status)
+    throw error
+  }
+  return { user: { id: user.id, email: user.email }, snapshot: { ...data, fund_lifecycle: lifecycle,
+    requests: [...(data.requests ?? []), ...(lifecycle.requests ?? [])] } }
 }
 export function isPortalSnapshot(value: unknown, userId: string): value is PortalSnapshot {
   if (!value || typeof value !== 'object') return false
@@ -53,6 +87,9 @@ export function isPortalSnapshot(value: unknown, userId: string): value is Porta
     && (v.stage2_access === undefined || validatedStage2Access(v as PortalSnapshot) !== null)
     && (v.offering_access === undefined || validatedOfferingAccess(v as PortalSnapshot) !== null)
     && (v.evaluation_access === undefined || validatedEvaluationAccess(v as PortalSnapshot) !== null)
+    && (v.fund_lifecycle === undefined || fundLifecycleSnapshotSchema.safeParse(v.fund_lifecycle).success
+      && Boolean(v.operating_context && platformRelease(process.env)
+        && validatedFundLifecycle(v.fund_lifecycle, userId, v.operating_context, platformRelease(process.env)!.environment)))
 }
 export async function loadPortalPage(): Promise<PortalPageData> {
   requirePortalEnvironment()

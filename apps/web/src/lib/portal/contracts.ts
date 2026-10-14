@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import type { PortalOperatingContext } from './operating-context'
 import { fundingCommandOptions, type FundingSnapshot } from './funding-contracts'
+import { fundCommandOptions, type FundLifecycleSnapshot } from './fund-lifecycle-contracts'
 import fundV2LegacyCrossrefs from './fund-v2-legacy-crossrefs.json'
 import type { Stage2Access } from './stage2-access'
 import type { OfferingAccess } from './offering-access'
@@ -289,6 +290,9 @@ export type PortalSnapshot = {
   entity_mandate_queue_available?: boolean; entity_mandate_queue_blocked_reason?: 'MFA_REQUIRED' | 'NOT_ADMITTED' | null;
   customer_monitoring?: PortalCustomerMonitoring[];
   funding?: FundingSnapshot;
+  fund_lifecycle?: FundLifecycleSnapshot;
+  /** Exact legacy reader limitation; not a claim that these record families are empty. */
+  base_records_available?: false;
 }
 export type PortalPageData = { user: { id: string; email: string }; snapshot: PortalSnapshot }
 
@@ -548,6 +552,7 @@ export const portalCommandSchema = z.discriminatedUnion('command', [
   z.object({ command: z.literal('subscribe'), key: id, payload: z.object({ product_id: id, offering_revision_id: id, investment_account_id: id.optional(), expected_revision: z.number().int().positive(), terms_hash: hash, units: positive, accepted_documents: z.literal(true), accepted_risks: z.literal(true) }).strict() }).strict(),
   z.object({ command: z.literal('cancel_subscription'), key: id, payload: z.object({ subscription_id: id }).strict() }).strict(),
   ...fundingCommandOptions,
+  ...fundCommandOptions,
 ]).superRefine((value, ctx) => {
   if ((value.command === 'create_product' || value.command === 'save_product') && 'terms_version' in value.payload.terms && value.payload.terms.terms_version === 3
     && new TextEncoder().encode(JSON.stringify(value)).byteLength > 65536) ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'The complete package command exceeds 65,536 UTF-8 bytes. Nothing is truncated or removed.' })

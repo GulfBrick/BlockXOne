@@ -9,13 +9,14 @@ import { applicantSectionHref, type ApplicantSection } from './applicant-present
 import { ApplicantAccountMenu } from './applicant-account-menu'
 import styles from './portal.module.css'
 
-export type PortalNavigationCapabilities = { manageProducts: boolean; reviewCompliance: boolean; invest: boolean; evaluationInvestor?: boolean; evaluationViews?: readonly string[] }
+export type PortalNavigationCapabilities = { manageProducts: boolean; reviewCompliance: boolean; invest: boolean; manageFundOperations?: boolean; evaluationInvestor?: boolean; evaluationViews?: readonly string[] }
 export type PortalNavigationKey = 'overview' | 'onboarding' | 'products' | 'compliance' | 'opportunities' | 'portfolio'
 export function portalNavigation(capabilities: PortalNavigationCapabilities, onboardingAvailable = true) {
   return [
     { key: 'overview', label: 'Overview', href: '/portal', icon: LayoutDashboard },
     ...(onboardingAvailable ? [{ key: 'onboarding', label: 'My applications', href: '/portal/onboarding', icon: CircleUserRound }] : []),
     ...(capabilities.manageProducts ? [{ key: 'products', label: 'Products & offerings', href: '/portal/products', icon: Building2 }] : []),
+    ...(capabilities.manageFundOperations && !capabilities.manageProducts ? [{ key: 'products', label: 'Fund operations', href: '/portal/products', icon: Building2 }] : []),
     ...(capabilities.reviewCompliance ? [{ key: 'compliance', label: 'Compliance queue', href: '/portal/compliance', icon: ShieldCheck }] : []),
     ...(capabilities.invest ? [{ key: 'opportunities', label: 'Investment opportunities', href: '/portal/opportunities', icon: BriefcaseBusiness }, { key: 'portfolio', label: 'My portfolio', href: '/portal/portfolio', icon: WalletCards }] : []),
     ...(capabilities.evaluationInvestor && !capabilities.invest ? [{ key: 'opportunities', label: 'Browse TEST offerings', href: '/portal/opportunities', icon: BriefcaseBusiness }, { key: 'portfolio', label: 'TEST portfolio', href: '/portal/portfolio', icon: WalletCards }] : []),
