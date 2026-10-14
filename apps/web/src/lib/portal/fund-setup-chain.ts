@@ -100,7 +100,8 @@ export function buildSetupIntent(step_key: FundSetupStepKey, configuration: Fund
   const kind = Object.hasOwn(creates, step_key) ? 'CREATE' as const : 'CALL' as const
   const key = kind === 'CREATE' ? step_key as FundSetupCreateKey : calls[step_key as keyof typeof calls]
   const artifact = creates[key], expected = kind === 'CREATE' ? getCreateAddress({ from, nonce: n }).toLowerCase() : required(dependencies, key)
-  let data: string, checks: FundSetupCheck[] = []
+  let data: string
+  const checks: FundSetupCheck[] = []
   const add = (method: string, args: unknown[], result: unknown[], a = artifact) => checks.push(check(a, expected, method, args, result))
   if (kind === 'CREATE') {
     data = canonicalFundCreation(artifact, constructorArgs(key, c, dependencies))

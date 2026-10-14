@@ -734,3 +734,9 @@ jobs:
             spawnImplementation: (executable, args, options) => spawn(executable, [...args, ...files], options),
           })
           NODE
+
+      - name: Typecheck the same fund source before requesting its release build
+        if: ${{ inputs.mode == 'fund-dashboard-focused' }}
+        shell: bash
+        working-directory: apps/web
+        run: npx tsc --noEmit --incremental false
