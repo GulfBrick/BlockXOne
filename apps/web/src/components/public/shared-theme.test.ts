@@ -52,4 +52,13 @@ describe('shared BlockXOne theme contract', () => {
     expect(legacy).toContain('Record synthetic funding')
     expect(legacy).toContain('Deploy fund token with MetaMask')
   })
+
+  it('keeps constrained confirmation and expired-link documents on theme without relaxing their resource policy', () => {
+    const auth = source('../../app/auth/[action]/route.ts')
+    expect(auth).toContain('html{color-scheme:light}')
+    expect(auth).toContain('background:#e8f7f9;color:#031a28')
+    expect(auth).toContain('<header><a href="/" aria-label="BlockXOne home">')
+    expect(auth).toContain("default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'")
+    expect(auth).not.toContain('<script')
+  })
 })

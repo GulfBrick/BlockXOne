@@ -698,6 +698,8 @@ jobs:
           import { runHermeticVitest } from './scripts/run-hermetic-tests.mjs'
           const files = process.env.BX1_FOCUSED_UI_MODE === 'theme-focused' ? [
             'src/app/homepage-v4.test.tsx',
+            'src/app/auth/auth-routes.test.ts',
+            'src/app/auth/portal-auth.test.ts',
             'src/components/public/public-shell.test.tsx',
             'src/components/public/public-navigation.test.tsx',
             'src/components/public/shared-theme.test.ts',
