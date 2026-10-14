@@ -10,7 +10,7 @@ import { fictionalProductTerms, upgradeLegacyDraftTerms } from './product-form'
 import { ApplicationReview, EntityProductEligibilityPanel, InvestmentAccountPanel, IssuerOfferingReview, OfferingPackageEvidence, ProductActions, ProductEligibilityPanel, ProductEligibilityReview, ProductReview, SubscriptionForm, activeIndividualAccounts, currentInvestorApplication, currentProductEligibility } from './portal-workflows'
 import { postPortalCommand, prepareDurablePortalCommand, reconcilePortalMarker } from './portal-client'
 import { money } from './portal-primitives'
-import { FundLifecycleDashboard, fundAttentionTask } from './fund-lifecycle'
+import { FundLifecycleDashboard, FundLifecycleWorkspace, fundAttentionTask } from './fund-lifecycle'
 import { fundStageKeys, type FundLifecycleAction, type FundLifecycleOperation, type FundLifecycleSnapshot, type FundProductLifecycle } from '@/lib/portal/fund-lifecycle-contracts'
 
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }) }))
@@ -187,6 +187,100 @@ describe('connected fund task destinations', () => {
       const html = renderToStaticMarkup(<FundLifecycleDashboard snapshot={candidate} actorId={actor} operatingContext={context} onRefresh={vi.fn()} />)
       expect(html).toContain('Saved fund records are unavailable'); expect(html).not.toContain('Needs your attention')
     }
+  })
+})
+
+describe('connected fund operational screens', () => {
+  const release = { environment: 'TESTNET' as const, version: 'normal-fixture', source: 'normal-fixture' }
+  it.each(['TokenisationAgent', 'TransferAgent', 'TreasuryOperator', 'FinancialController'] as const)('keeps the %s navigation destination and full/limited base content on the same scoped fund queue', role => {
+    for (const limitedBase of [false, true]) {
+      const context = operating(role), value = { ...snapshot(), operating_context: context, fund_lifecycle: fundSnapshot(context),
+        ...(limitedBase ? { base_records_available: false as const } : {}) }
+      const html = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal/products" operatingContext={context} release={release} />)
+      expect(html).toContain('Your fund handoffs'); expect(html).toContain('Needs your attention'); expect(html).toContain('Connected Fund')
+      expect(html).toContain(portalScopeHref('/portal/products', context).replaceAll('&', '&amp;'))
+      expect(html).not.toContain('Product register'); expect(html).not.toContain('Create a product')
+      expect(html).not.toContain('No connected operating queue is available for this role')
+    }
+  })
+  it.each(['TokenisationAgent', 'TransferAgent'] as const)('does not contradict the real %s overview queue with a disconnected fallback', role => {
+    const context = operating(role), value = { ...snapshot(), operating_context: context, fund_lifecycle: fundSnapshot(context) }
+    const html = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal" operatingContext={context} release={release} />)
+    expect(html).toContain('Your fund handoffs')
+    expect(html).not.toContain('Operational records unavailable'); expect(html).not.toContain('No connected operating queue is available')
+  })
+  it('does not show a scoped fund queue from the wrong actor, outer context, environment or unavailable projection', () => {
+    const context = operating('TokenisationAgent'), fund = fundSnapshot(context)
+    for (const limitedBase of [false, true]) {
+      const value = { ...snapshot(), operating_context: context, ...(limitedBase ? { base_records_available: false as const } : {}) }
+      const candidates: PortalSnapshot[] = [
+        { ...value, fund_lifecycle: { ...fund, actor_id: other } },
+        { ...value, operating_context: operating('TransferAgent'), fund_lifecycle: fund },
+        { ...value, fund_lifecycle: { ...fund, environment: 'MAINNET' } },
+        { ...value, fund_lifecycle: { ...fund, availability: 'UNAVAILABLE' } },
+      ]
+      for (const candidate of candidates) {
+        const html = renderToStaticMarkup(<PortalScreen data={data(candidate)} view="/portal/products" operatingContext={context} release={release} />)
+        expect(html).not.toContain('Your fund handoffs'); expect(html).not.toContain('Needs your attention'); expect(html).not.toContain('Connected Fund')
+        expect(html).not.toMatch(/href="\/portal\/products\?[^"<]+"/)
+      }
+    }
+  })
+})
+
+describe('fund next-action language and package handoffs', () => {
+  function atStage(key: 'PREPARATION' | 'APPROVAL' | 'DEPLOYMENT' | 'PAYMENT', reasonCode: string): FundProductLifecycle {
+    const action = fundAction({ command: null, payload: null, can_execute: false, reason_code: reasonCode, label: key === 'PREPARATION' ? 'Complete the fund details' : 'Follow the current fund action' })
+    return fundProduct({ actions: [], next_action: action, stages: fundStageKeys.map(stageKey => ({ key: stageKey,
+      state: stageKey === key ? 'CURRENT' : key === 'APPROVAL' && stageKey === 'PREPARATION' ? 'COMPLETE' : 'NOT_STARTED',
+      label: stageKey, description: 'Follow the saved evidence.', reason_code: stageKey === key ? reasonCode : null,
+      owner_role: 'OfferingManager', evidence_ids: [] })) })
+  }
+  it('does not imply submission when the SQL review reason accompanies an unfinished preparation step', () => {
+    const html = renderToStaticMarkup(<FundLifecycleWorkspace lifecycle={atStage('PREPARATION', 'CURRENT_REVIEW_AND_SIGNATURE_REQUIRED')} actorId={actor} operatingContext={operating('OfferingManager')} onRefresh={vi.fn()} />)
+    expect(html).toContain('Complete and save the fund details, then submit that saved version')
+    expect(html).not.toContain('The current offering needs its appointed issuer review')
+    expect(html).not.toContain('The current record has an unresolved requirement')
+  })
+  it.each([
+    ['CURRENT_REVIEW_AND_SIGNATURE_REQUIRED', 'appointed issuer review, Compliance review and document signatures'],
+    ['CANONICAL_DEPLOYMENT_NOT_ADMITTED', 'contract release and institutional signing policy must be admitted'],
+    ['GOVERNED_DEPLOYMENT_REQUIRED', 'appointed institutional signers through MetaMask'],
+    ['CURRENT_SIGNING_AUTHORITY_REQUIRED', 'current appointed signing authority'],
+    ['RECONCILED_PAYMENT_AND_WALLET_REQUIRED', 'independently reconciled and the investor delivery wallet verified'],
+    ['CURRENT_INDEPENDENT_ALLOCATION_REVIEW_REQUIRED', 'Transfer Agent, independent of the requester'],
+    ['CURRENT_ISSUANCE_AUTHORITY_REQUIRED', 'valid approved allocation'],
+    ['EXISTING_TRANSACTION_HASH_REQUIRED', 'hash of the existing transaction'],
+  ])('explains the actual %s reason without a generic dead end', (reasonCode, message) => {
+    const html = renderToStaticMarkup(<FundLifecycleWorkspace lifecycle={atStage('APPROVAL', reasonCode)} actorId={actor} operatingContext={operating('OfferingManager')} onRefresh={vi.fn()} />)
+    expect(html).toContain(message); expect(html).not.toContain('The current record has an unresolved requirement')
+  })
+  it('keeps the existing package navigation in the preparation/review action row', () => {
+    const html = renderToStaticMarkup(<FundLifecycleWorkspace lifecycle={atStage('APPROVAL', 'CURRENT_REVIEW_AND_SIGNATURE_REQUIRED')} actorId={actor} operatingContext={operating('OfferingManager')} onRefresh={vi.fn()}
+      handoff={{ message: 'Confirm the appointed reviewers for this exact product.', label: 'Open Appointments', regionId: 'existing-appointments-region', onSelect: vi.fn() }} />)
+    expect(html).toContain('Confirm the appointed reviewers for this exact product.')
+    expect(html).toContain('aria-controls="existing-appointments-region"'); expect(html).toContain('Open Appointments')
+    expect(html).not.toContain('Your next step</h2>')
+  })
+  it.each(['DEPLOYMENT', 'PAYMENT'] as const)('never hides the existing unknown transaction instruction with stale package navigation during %s', key => {
+    const html = renderToStaticMarkup(<FundLifecycleWorkspace lifecycle={atStage(key, 'EXECUTION_CLAIMED_OUTCOME_UNKNOWN')} actorId={actor} operatingContext={operating('OfferingManager')} onRefresh={vi.fn()}
+      handoff={{ message: 'Stale appointment message.', label: 'Open Appointments', regionId: 'existing-appointments-region', onSelect: vi.fn() }} />)
+    expect(html).toContain('Execution was started, but its outcome is not yet verified.')
+    expect(html).not.toContain('Stale appointment message.'); expect(html).not.toContain('Open Appointments')
+  })
+  it('preserves an unknown reason instead of replacing it with an appointment prompt', () => {
+    const html = renderToStaticMarkup(<FundLifecycleWorkspace lifecycle={atStage('APPROVAL', 'UNRECOGNISED_RECOVERY_CASE')} actorId={actor} operatingContext={operating('OfferingManager')} onRefresh={vi.fn()}
+      handoff={{ message: 'Stale appointment message.', label: 'Open Appointments', regionId: 'existing-appointments-region', onSelect: vi.fn() }} />)
+    expect(html).toContain('The current record has an unresolved requirement')
+    expect(html).not.toContain('Stale appointment message.'); expect(html).not.toContain('Open Appointments')
+  })
+  it('retains the actual command and its reason even when package navigation is supplied', () => {
+    const lifecycle = atStage('APPROVAL', 'CURRENT_REVIEW_AND_SIGNATURE_REQUIRED')
+    lifecycle.next_action = fundAction({ reason_code: 'PREPARATION_REQUIRED' })
+    const html = renderToStaticMarkup(<FundLifecycleWorkspace lifecycle={lifecycle} actorId={actor} operatingContext={operating('OfferingManager')} onRefresh={vi.fn()}
+      handoff={{ message: 'Stale appointment message.', label: 'Open Appointments', regionId: 'existing-appointments-region', onSelect: vi.fn() }} />)
+    expect(html).toContain('Prepare the fund contract deployment'); expect(html).toContain('Prepare the exact contract intent')
+    expect(html).not.toContain('Stale appointment message.'); expect(html).not.toContain('Open Appointments')
   })
 })
 

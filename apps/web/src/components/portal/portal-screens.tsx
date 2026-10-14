@@ -7,7 +7,7 @@ import { isOfferingSubscribable, isWealthManagerDetailsV2, representativeMandate
 import type { PlatformRelease } from '@/lib/platform-release'
 import type { DashboardScope } from '@/lib/portal/dashboard'
 import { getRoleDashboard } from '@/lib/portal/role-dashboards'
-import { APPLICANT_CONTEXT, appointedIssuerProducts, portalContextKey, portalContextMatches, portalScopeHref, portalViewAllowed, type PortalOperatingContext } from '@/lib/portal/operating-context'
+import { APPLICANT_CONTEXT, appointedIssuerProducts, hasFundOperatingProducts, isFundOperatingContext, portalContextKey, portalContextMatches, portalScopeHref, portalViewAllowed, type PortalOperatingContext } from '@/lib/portal/operating-context'
 import { hasStage2CommandAccess, isTestPasswordAdmission, stage2AccessSchema } from '@/lib/portal/stage2-access'
 import { hasOfferingCommandAccess, isTestPasswordOffering, isTestPasswordWorkflow, validatedOfferingAccess } from '@/lib/portal/offering-access'
 import { sameEvaluationGrant, validatedEvaluationAccess } from '@/lib/portal/evaluation-access'
@@ -23,7 +23,7 @@ import { DetailList, EmptyState, Field, Notice, Panel, Statistic, StatusBadge, d
 import { ApplicationReview, EntityProductEligibilityPanel, InvestmentAccountPanel, IssuerOfferingReview, OfferingPackageEvidence, OfferingDocuments, ProductActions, ProductEligibilityPanel, ProductEligibilityReview, ProductFacts, ProductNarrative, ProductReview, RepresentativeProposalInbox, SubscriptionCancel, SubscriptionForm, currentInvestorApplication, entityEligibilityNextOwner, investingRepresentativeLabel } from './portal-workflows'
 import { FundingOrderDetail, FundingWorkspace } from './funding-workflows'
 import { FundLifecycleDashboard, FundLifecycleOrder, FundLifecyclePortfolio, FundLifecycleWorkspace } from './fund-lifecycle'
-import { validatedFundLifecycle } from '@/lib/portal/fund-lifecycle-contracts'
+import { validatedFundLifecycle, type FundProductLifecycle } from '@/lib/portal/fund-lifecycle-contracts'
 import styles from './portal.module.css'
 
 export function productManagementOrganisations(snapshot: PortalSnapshot, context?: PortalOperatingContext) {
@@ -40,11 +40,12 @@ function permits(org: PortalOrganisation, command: PortalCapability, context?: P
 
 type ProductWorkspaceSection = 'DETAILS' | 'REVIEW' | 'DOCUMENTS' | 'APPOINTMENTS'
 
-function ProductDetailWorkspace({ product, snapshot, organisations, operatingContext, onSaved, onRefresh, availableCommands, canEdit, canViewIssuerRationale, canReviewIssuer }: {
+function ProductDetailWorkspace({ product, snapshot, organisations, operatingContext, onSaved, onRefresh, availableCommands, canEdit, canViewIssuerRationale, canReviewIssuer, lifecycle }: {
   product: PortalProduct; snapshot: PortalSnapshot; organisations: PortalOrganisation[];
   operatingContext?: PortalOperatingContext; onSaved: (snapshot: PortalSnapshot) => void;
   availableCommands?: readonly string[]; canEdit: boolean; canViewIssuerRationale: boolean; canReviewIssuer: boolean;
   onRefresh: () => Promise<void>;
+  lifecycle?: FundProductLifecycle;
 }) {
   const [section, setSection] = useState<ProductWorkspaceSection>(canEdit ? 'DETAILS' : 'REVIEW')
   const [documentsMounted, setDocumentsMounted] = useState(false)
@@ -63,7 +64,6 @@ function ProductDetailWorkspace({ product, snapshot, organisations, operatingCon
   }
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
   const [showTechnicalEvidence, setShowTechnicalEvidence] = useState(false)
-  const lifecycle = snapshot.fund_lifecycle?.products.find(item => item.product_id === product.id)
   const pkg = product.offering_package
   const appointments = snapshot.product_appointments?.filter(item => item.product_id === product.id) ?? []
   const issuerAssigned = appointments.some(item => item.role === 'IssuerFundManager' && item.effective)
@@ -99,11 +99,13 @@ function ProductDetailWorkspace({ product, snapshot, organisations, operatingCon
     </div>
     <div id={`product-${product.id}-REVIEW`} ref={node => { sectionContent.current.REVIEW = node }} role="region" aria-labelledby={`product-${product.id}-section-REVIEW`} tabIndex={-1} className={styles.stack} hidden={section !== 'REVIEW'}>
       {lifecycle && operatingContext ? <FundLifecycleWorkspace showTitle={false} lifecycle={lifecycle} actorId={snapshot.actor.id} operatingContext={operatingContext}
-        onRefresh={onRefresh} /> : <Panel title="Your next step"><p>{nextStep.message}</p>
+        onRefresh={onRefresh} handoff={nextStepSection ? { message: nextStep.message, label: `Open ${nextStepSection.label}`,
+          regionId: `product-${product.id}-${nextStepSection.id}`, onSelect: () => selectSection(nextStepSection.id) } : undefined} /> : <Panel title="Your next step"><p>{nextStep.message}</p>
         {nextStepSection ? <button type="button" className={styles.buttonSecondary} aria-controls={`product-${product.id}-${nextStepSection.id}`} onClick={() => selectSection(nextStepSection.id)}>Open {nextStepSection.label}</button> : null}
         <p className={styles.muted}>This page acts on the saved product version.</p>
         {hasUnsavedChanges ? <p className={styles.fieldError} role="status">Save your changes in Edit details before submitting. They are not part of the saved package yet.</p> : null}
       </Panel>}
+      {lifecycle && hasUnsavedChanges ? <p className={styles.fieldError} role="status">Save your changes in Edit details before submitting. They are not part of the saved package yet.</p> : null}
       <ProductActions compact={Boolean(lifecycle)} product={product} onSaved={onSaved} availableCommands={commands} />
       {canReviewIssuer && pkg && product.status === 'IN_REVIEW' ? <IssuerOfferingReview product={product} snapshot={snapshot} onSaved={onSaved} /> : null}
       {pkg ? <><button type="button" className={styles.buttonSecondary} aria-expanded={showTechnicalEvidence} onClick={() => setShowTechnicalEvidence(value => !value)}>{showTechnicalEvidence ? 'Hide recorded package evidence' : 'View recorded package evidence'}</button>{showTechnicalEvidence ? <OfferingPackageEvidence product={product} showIssuerRationale={canViewIssuerRationale} /> : null}</> : null}
@@ -359,6 +361,7 @@ function OperatingPortalScreen({ data, view, id, operatingContext, release, scop
   const [refreshMessage, setRefreshMessage] = useState('')
   const context = operatingContext ?? APPLICANT_CONTEXT
   const fundLifecycle = release ? validatedFundLifecycle(snapshot.fund_lifecycle, data.user.id, context, release.environment) : null
+  const fundOperatingProducts = Boolean(fundLifecycle && release && hasFundOperatingProducts(snapshot, context, release.environment))
   async function refreshFund() {
     setRefreshMessage('Refreshing saved fund progress…')
     try {
@@ -475,7 +478,9 @@ function OperatingPortalScreen({ data, view, id, operatingContext, release, scop
         return <div className={styles.stack}><FundLifecycleOrder lifecycle={orderFund} subscriptionId={id} actorId={snapshot.actor.id} operatingContext={context} onRefresh={refreshFund} />
           {subscription && snapshot.funding ? <section aria-label="Payment reference and reconciliation"><FundingOrderDetail subscription={subscription} snapshot={snapshot} operatingContext={context} onSaved={setSnapshot} /></section> : null}</div>
       }
-      if (snapshot.base_records_available === false) return <FundLifecycleDashboard snapshot={fundLifecycle} role={role} actorId={snapshot.actor.id} operatingContext={context} onRefresh={refreshFund} />
+      if (view === '/portal/products' && fundOperatingProducts) return <FundLifecycleDashboard snapshot={fundLifecycle} role={role} actorId={snapshot.actor.id} operatingContext={context} onRefresh={refreshFund} />
+      if (snapshot.base_records_available === false) return view === '/portal/products' && isFundOperatingContext(context) && !fundOperatingProducts ? unavailable()
+        : <FundLifecycleDashboard snapshot={fundLifecycle} role={role} actorId={snapshot.actor.id} operatingContext={context} onRefresh={refreshFund} />
     }
     if (evaluation) {
       if (view === '/portal/onboarding') return <Link href="/portal/onboarding?mode=applicant" className={styles.button}>View my separate application</Link>
@@ -489,7 +494,8 @@ function OperatingPortalScreen({ data, view, id, operatingContext, release, scop
           const commands = (organisation.capabilities ?? []).filter(command => workflowPermits(command) && ['create_product', 'save_product', 'submit_product', 'request_product_service_appointment'].includes(command))
           const canEdit = commands.includes('save_product') && selected.allowed_actions?.includes('save_product') === true && ['DRAFT', 'CHANGES_REQUIRED'].includes(selected.status)
           return <ProductDetailWorkspace key={selected.id} product={selected} snapshot={snapshot} organisations={[organisation]} operatingContext={operatingContext}
-            onSaved={setSnapshot} onRefresh={refreshFund} availableCommands={commands} canEdit={canEdit} canViewIssuerRationale canReviewIssuer={false} />
+            onSaved={setSnapshot} onRefresh={refreshFund} availableCommands={commands} canEdit={canEdit} canViewIssuerRationale canReviewIssuer={false}
+            lifecycle={fundLifecycle?.products.find(item => item.product_id === selected.id)} />
         }
         if (view === '/portal' || view === '/portal/products') return <ProductRegister products={managedProducts} canCreate={createOrganisations.length > 0} operatingContext={operatingContext} />
       }
@@ -521,7 +527,8 @@ function OperatingPortalScreen({ data, view, id, operatingContext, release, scop
       return <div className={styles.stack}><ProductDetailWorkspace key={selected.id} product={selected} snapshot={snapshot}
         organisations={organisations.filter(org => permits(org, 'save_product', operatingContext))} operatingContext={operatingContext} onSaved={setSnapshot} onRefresh={refreshFund}
         availableCommands={managerContext && organisation ? organisation.capabilities ?? (operatingContext ? [] : undefined) : []} canEdit={canEdit && ['DRAFT', 'CHANGES_REQUIRED'].includes(selected.status)}
-        canViewIssuerRationale={canViewIssuerRationale} canReviewIssuer={role === 'IssuerFundManager'} />
+        canViewIssuerRationale={canViewIssuerRationale} canReviewIssuer={role === 'IssuerFundManager'}
+        lifecycle={fundLifecycle?.products.find(item => item.product_id === selected.id)} />
         {!passwordWorkflow ? organisation && permits(organisation, 'read_orders', operatingContext) ? <SubscriptionOrders subscriptions={incomingSubscriptions.filter(item => item.product_id === selected.id)} products={[selected]} incoming onSaved={setSnapshot} operatingContext={operatingContext} funding={snapshot.funding} /> : <Notice title="Order access unavailable">This product’s incoming-order book is not available under your current mandate.</Notice> : null}</div>
     }
     if (view === '/portal/compliance') return canReview ? <ComplianceQueue snapshot={reviewSnapshot} operatingContext={operatingContext} /> : role === 'SuperAdmin' ? <div className={styles.stack}><RepresentativeMandateQueue snapshot={snapshot} operatingContext={operatingContext} /><EntityInvestingMandateQueue snapshot={snapshot} operatingContext={operatingContext} /><ProductAppointmentQueue snapshot={snapshot} operatingContext={operatingContext} /></div> : unavailable()
@@ -554,12 +561,12 @@ function OperatingPortalScreen({ data, view, id, operatingContext, release, scop
     if (role === 'Investor') return investorWork()
     if ((role === 'TreasuryOperator' || role === 'FinancialController') && operatingContext) return <FundingWorkspace snapshot={snapshot} operatingContext={operatingContext} onSaved={setSnapshot} />
     if (role === 'SuperAdmin' && operatingContext?.mode === 'ROLE') return <div className={styles.stack}><RepresentativeMandateQueue snapshot={snapshot} operatingContext={operatingContext} /><EntityInvestingMandateQueue snapshot={snapshot} operatingContext={operatingContext} /><ProductAppointmentQueue snapshot={snapshot} operatingContext={operatingContext} />{!passwordWorkflow ? <Panel title="Separate gated administration service" description="The mandate queues above are connected appointment handoffs. The broader administration service requires its own configured authority root and may be unavailable in this environment. Business and wallet-signing powers remain separate."><div className={styles.actions}><Link href={`/workspace/administration?organisation=${encodeURIComponent(operatingContext.organisationId)}`} className={styles.buttonSecondary}>Open gated administration, if configured</Link><a href="/workspace/security" className={styles.buttonSecondary}>Account security</a></div></Panel> : null}</div>
-    if (role) return <Panel title="Operational records unavailable"><EmptyState title="No connected operating queue is available for this role" description="This release does not manufacture settlement, register or token operations. Your assigned organisation and sign-in remain unchanged." /></Panel>
+    if (role) return view === '/portal' && fundOperatingProducts ? null : <Panel title="Operational records unavailable"><EmptyState title="No connected operating queue is available for this role" description="This release does not manufacture settlement, register or token operations. Your assigned organisation and sign-in remain unchanged." /></Panel>
     if (capabilities.manageProducts) return <div className={styles.stack}><Notice title="Approved applicant product relationship">These products use your existing approved owner relationship. This is not a native organisation role assignment.</Notice>{productWork()}</div>
     return <div className={styles.stack}><section className={styles.hero}><div><p className={styles.eyebrow}>Your BlockXOne relationship</p><h2>{entityOnly ? hasEntityAccountView ? 'View your represented entity account.' : 'Follow your entity admission and appointment.' : hasInvestorCapacity ? currentInvestorApplication(snapshot) ? 'Review opportunities. Track every instruction.' : 'Complete your investor onboarding.' : ownApplications.some(item => item.persona === 'WEALTH_MANAGER') ? 'Continue your customer organisation application.' : 'Choose the capacity you want to apply for.'}</h2><p>Your applicant records and operating assignments are separate. Customer admission does not grant a platform role or permission to create products.</p><Link href={href('/portal/onboarding')} className={styles.button}>Continue onboarding<ArrowRight aria-hidden="true" /></Link></div></section><Panel title="Your onboarding" action={<Link href={href('/portal/onboarding')} className={styles.textLink}>View application</Link>}>{ownApplications.length ? ownApplications.map(application => <div key={application.id}><DetailList rows={[{ label: application.persona === 'INVESTOR' ? 'Investor relationship' : 'Customer organisation relationship', value: <StatusBadge status={application.status} /> }, { label: 'Review expiry', value: dateLabel(application.approved_until) }, ...(application.persona === 'WEALTH_MANAGER' ? [{ label: 'Next owner', value: application.status === 'APPROVED' ? 'BlockXOne mandate reviewer and authorised role administrator' : application.status === 'SUBMITTED' ? 'BlockXOne independent compliance reviewer' : 'Applicant' }] : [])]} /></div>) : <EmptyState title="Introduce yourself" description="Submit your own applicant details and evidence for an independent review." href={href('/portal/onboarding')} action="Start onboarding" />}</Panel>{canInvest ? investorWork() : null}</div>
   }
 
-  return <PortalCommandProvider snapshot={snapshot} operatingContext={operatingContext} environment={release?.environment}><PortalShell user={data.user} organisationName={scope?.organisationName ?? organisations[0]?.name} capabilities={{ ...capabilities, manageFundOperations: fundLifecycle?.availability === 'AVAILABLE' && operatingContext?.mode === 'ROLE' && ['TokenisationAgent', 'TransferAgent', 'TreasuryOperator', 'FinancialController'].includes(operatingContext.role) }} active={config.active} title={title} description={config.description} eyebrow={config.eyebrow} breadcrumbs={breadcrumbs} release={release} operatingContext={operatingContext} actions={fundLifecycle?.availability === 'AVAILABLE' ? undefined : <a href={href(view, id)} className={styles.buttonSecondary}>Refresh saved state</a>}>
+  return <PortalCommandProvider snapshot={snapshot} operatingContext={operatingContext} environment={release?.environment}><PortalShell user={data.user} organisationName={scope?.organisationName ?? organisations[0]?.name} capabilities={{ ...capabilities, manageFundOperations: fundOperatingProducts }} active={config.active} title={title} description={config.description} eyebrow={config.eyebrow} breadcrumbs={breadcrumbs} release={release} operatingContext={operatingContext} actions={fundLifecycle?.availability === 'AVAILABLE' ? undefined : <a href={href(view, id)} className={styles.buttonSecondary}>Refresh saved state</a>}>
     {evaluation && view === '/portal' ? <Notice title="Your TEST workspace">{role === 'OfferingManager' ? 'Prepare your fund or property and follow its review progress.' : 'Browse published TEST offerings and inspect the portfolio workspace without placing orders.'} This access is separate from your application decision; identity verification, production admission and signing authority are not implied. <Link href="/portal/onboarding?mode=applicant" className={styles.textLink}>View my application status</Link></Notice> : null}
     {operatingContext?.mode !== 'ROLE' && scopes?.length ? <nav aria-label={evaluation ? 'TEST workspace and organisation' : 'Assigned role and organisation'} className={`${styles.scopeSelector} ${styles.sectionGap}`}>
       {scope ? <p>Working as <strong>{getRoleDashboard(scope.role)?.title ?? scope.role}</strong> in <strong>{scope.organisationName}</strong></p> : <p>Working with your <strong>personal and applicant relationships</strong>. An approved product-owner relationship here does not grant a native organisation role.</p>}

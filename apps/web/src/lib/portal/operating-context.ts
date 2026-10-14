@@ -82,6 +82,27 @@ export function appointedIssuerProducts(snapshot: PortalSnapshot, context: Porta
     && appointment.role === 'IssuerFundManager' && appointment.status === 'APPLIED' && appointment.effective === true
     && Number.isFinite(Date.parse(appointment.requested_until)) && Date.parse(appointment.requested_until) > Date.now()))
 }
+/** A scoped operating queue is not product-creation or financial authority.
+ * The server reader validates the complete lifecycle against its configured
+ * environment; client callers additionally pass their validated release.
+ * Keep this binding check here to avoid importing the lifecycle validator,
+ * which depends on the operating-context schema itself.
+ */
+const fundOperatingRoles: readonly string[] = ['TokenisationAgent', 'TransferAgent', 'TreasuryOperator', 'FinancialController']
+export function isFundOperatingContext(context: PortalOperatingContext): boolean {
+  return context.mode === 'ROLE' && fundOperatingRoles.includes(context.role)
+}
+export function hasFundOperatingProducts(snapshot: PortalSnapshot, context: PortalOperatingContext, environment?: 'TESTNET' | 'MAINNET'): boolean {
+  if (!isFundOperatingContext(context)
+    || 'rehearsal' in snapshot || snapshot.evaluation_access !== undefined || isTestPasswordWorkflow(snapshot)
+    || !portalContextMatches(snapshot.operating_context, context)) return false
+  if (snapshot.stage2_access !== undefined && !validatedStage2Access(snapshot, context, environment)) return false
+  if (snapshot.offering_access !== undefined && !validatedOfferingAccess(snapshot, context, environment)) return false
+  const fund = snapshot.fund_lifecycle
+  return fund?.schema_version === 1 && fund.actor_id === snapshot.actor.id
+    && ['TESTNET', 'MAINNET'].includes(fund.environment) && (environment === undefined || fund.environment === environment)
+    && portalContextMatches(fund.operating_context, context) && fund.availability === 'AVAILABLE' && Array.isArray(fund.products)
+}
 export function portalViewAllowed(view: PortalPath, context: PortalOperatingContext, snapshot: PortalSnapshot, id?: string): boolean {
   if ('rehearsal' in snapshot) {
     return false
@@ -93,9 +114,14 @@ export function portalViewAllowed(view: PortalPath, context: PortalOperatingCont
     && fund.availability === 'AVAILABLE' && Array.isArray(fund.products)) {
     if (view === '/portal/products/detail' && context.mode === 'ROLE' && fund.products.some(product => product.product_id === id)) return true
     if (view === '/portal/orders/detail' && fund.products.some(product => Array.isArray(product.orders) && product.orders.some(order => order.subscription_id === id))) return true
-    if (snapshot.base_records_available === false) return view === '/portal'
-      || view === '/portal/products' && context.mode === 'ROLE'
-      || view === '/portal/portfolio' && (context.mode === 'APPLICANT' || context.role === 'Investor')
+    if (snapshot.base_records_available === false) {
+      // Preserve the established customer detail/order paths above. A limited
+      // base reader must not widen these four operational roles beyond their
+      // scoped lifecycle queue or bypass evaluation/password restrictions.
+      if (view === '/portal/products' && isFundOperatingContext(context)) return hasFundOperatingProducts(snapshot, context)
+      return view === '/portal' || view === '/portal/products' && context.mode === 'ROLE'
+        || view === '/portal/portfolio' && (context.mode === 'APPLICANT' || context.role === 'Investor')
+    }
   }
   if (snapshot.evaluation_access !== undefined) {
     const evaluation = validatedEvaluationAccess(snapshot, context)
@@ -104,6 +130,7 @@ export function portalViewAllowed(view: PortalPath, context: PortalOperatingCont
     if (view === '/portal/opportunities/detail') return snapshot.products.some(product => product.id === id && product.status === 'PUBLISHED')
     return true
   }
+  if (view === '/portal/products' && hasFundOperatingProducts(snapshot, context)) return true
   if (isTestPasswordWorkflow(snapshot)) {
     if (view === '/portal' || view === '/portal/onboarding') return true
     if (view === '/portal/portfolio') return context.mode === 'APPLICANT'

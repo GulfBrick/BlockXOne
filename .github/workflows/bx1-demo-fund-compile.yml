@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: Cloud acceptance or one fixed-origin empty-form browser proof
+        description: Cloud acceptance, one empty-form browser proof, or focused fund dashboard checks
         type: choice
-        options: [acceptance, registration-browser-proof]
+        options: [acceptance, registration-browser-proof, fund-dashboard-focused]
         default: acceptance
       registration_origin_expectation:
         description: Expected browser-generated Origin on the current hosted TEST document
@@ -168,7 +168,7 @@ permissions:
 jobs:
   document-scanner-engine:
     name: Real scanner engine and bounded producer
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.mode != 'registration-browser-proof' }}
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.mode == 'acceptance' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -208,7 +208,7 @@ jobs:
           BX1_SCANNER_PACKAGE_SHA256: d3ee9e401974855a1edc1761b1425417d126de618d5f0c91cd51209f69f6fcc2
         run: node apps/web/scripts/document-scanner-engine-proof.mjs
   compile-and-build:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.mode != 'registration-browser-proof' }}
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.mode == 'acceptance' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     strategy:
@@ -365,7 +365,7 @@ jobs:
           "$RUNNER_TEMP/bx1-deno/node_modules/.bin/deno" check --config deno.json index.ts
 
   staff-invitation-sql-acceptance:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.mode != 'registration-browser-proof' }}
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.mode == 'acceptance' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     services:
@@ -409,7 +409,7 @@ jobs:
         run: node scripts/test-supabase-staff-invitations.mjs
 
   funding-sql-acceptance:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.mode != 'registration-browser-proof' }}
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.mode == 'acceptance' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 8
     services:
@@ -463,7 +463,7 @@ jobs:
         run: node apps/web/scripts/test-portal-funding.mjs
 
   entry-sql-acceptance:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.mode != 'registration-browser-proof' }}
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.mode == 'acceptance' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     services:
@@ -503,7 +503,7 @@ jobs:
         run: node apps/web/scripts/test-entry.mjs
 
   application-admission-sql-acceptance:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.mode != 'registration-browser-proof' }}
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.mode == 'acceptance' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     services:
@@ -543,7 +543,7 @@ jobs:
         run: node apps/web/scripts/test-application-admission.mjs
 
   entry-mainnet-sql-acceptance:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.mode != 'registration-browser-proof' }}
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.mode == 'acceptance' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     services:
@@ -591,7 +591,7 @@ jobs:
         run: node apps/web/scripts/test-entry-mainnet.mjs
 
   amoy-provider-readiness:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.mode != 'registration-browser-proof' }}
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.mode == 'acceptance' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 3
     steps:
@@ -649,3 +649,56 @@ jobs:
           PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/bx1-registration-browsers
           BX1_REGISTRATION_BROWSER_EXPECTATION: ${{ inputs.registration_origin_expectation }}
         run: node apps/web/scripts/test-registration-browser.mjs
+
+  fund-dashboard-focused:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'fund-dashboard-focused' && github.ref == 'refs/heads/codex/stage2-sandbox-completion-20261011' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out the reviewed dashboard correction without write credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+          submodules: false
+          lfs: false
+
+      - name: Select pinned cloud web runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22.23.1'
+          check-latest: false
+          package-manager-cache: false
+
+      - name: Install exact npm and locked web dependencies
+        shell: bash
+        working-directory: apps/web
+        run: |
+          set -euo pipefail
+          npm install --global npm@10.9.8 --no-audit --no-fund
+          test "$(node --version)" = 'v22.23.1'
+          test "$(npm --version)" = '10.9.8'
+          npm ci --no-audit --no-fund
+
+      - name: Check copy and runtime policy
+        shell: bash
+        working-directory: apps/web
+        run: npm run preflight
+
+      - name: Run only dashboard routing and existing handoff regressions
+        shell: bash
+        working-directory: apps/web
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { spawn } from 'node:child_process'
+          import { runHermeticVitest } from './scripts/run-hermetic-tests.mjs'
+          const files = [
+            'src/lib/portal/operating-context.test.ts',
+            'src/components/portal/portal.test.tsx',
+            'src/components/portal/offering-workflow.interaction.test.tsx',
+          ]
+          process.exitCode = await runHermeticVitest({
+            spawnImplementation: (executable, args, options) => spawn(executable, [...args, ...files], options),
+          })
+          NODE

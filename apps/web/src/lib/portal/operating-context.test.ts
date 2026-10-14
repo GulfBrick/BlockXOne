@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { BX1_ROLES } from '../supabase/contracts'
 import type { PortalInvestingRepresentativeMandate, PortalOrganisationMandate, PortalProduct, PortalProductServiceAppointment, PortalSnapshot } from './contracts'
-import { APPLICANT_CONTEXT, appointedIssuerProducts, portalContextKey, portalContextMatches, portalOperatingContextSchema, portalScopeHref, portalViewAllowed, type PortalOperatingContext } from './operating-context'
+import { APPLICANT_CONTEXT, appointedIssuerProducts, hasFundOperatingProducts, portalContextKey, portalContextMatches, portalOperatingContextSchema, portalScopeHref, portalViewAllowed, type PortalOperatingContext } from './operating-context'
 import type { OfferingAccess } from './offering-access'
 
 const organisation = '33333333-3333-4333-8333-333333333333'
@@ -32,6 +32,59 @@ const packageProduct: PortalProduct = { id: caseId, organisation_id: packageOrga
     property_address: '', property_valuation_minor: '0', rental_income_policy: '', documents: { memorandum: 'Synthetic memorandum only.', risks: 'No real money or rights.', subscription_terms: 'Synthetic subscription terms.' } },
   terms_hash: 'a'.repeat(64), reserved_units: '0', created_at: '2026-10-01T00:00:00Z', reviewer_id: null, review_notes: null,
   reviewed_at: null, published_at: null, review_checks: {} }
+function fundOperatingSnapshot(role: 'TokenisationAgent' | 'TransferAgent' | 'TreasuryOperator' | 'FinancialController', limitedBase = false): PortalSnapshot {
+  const context: PortalOperatingContext = { mode: 'ROLE', organisationId: organisation, role }
+  return { ...snapshot, actor: { ...snapshot.actor, id: packageActor }, operating_context: context,
+    ...(limitedBase ? { base_records_available: false as const } : {}),
+    fund_lifecycle: { schema_version: 1, projection_revision: 1, actor_id: packageActor, environment: 'TESTNET', operating_context: context,
+      observed_at: '2026-10-14T00:00:00Z', availability: 'AVAILABLE', reason_code: null, products: [] } }
+}
+
+describe('connected fund operational queue routing', () => {
+  it.each(['TokenisationAgent', 'TransferAgent', 'TreasuryOperator', 'FinancialController'] as const)('opens only the scoped %s queue with full or limited base records', role => {
+    for (const limitedBase of [false, true]) {
+      const value = fundOperatingSnapshot(role, limitedBase), context = value.operating_context!
+      expect(hasFundOperatingProducts(value, context, 'TESTNET')).toBe(true)
+      expect(portalViewAllowed('/portal/products', context, value)).toBe(true)
+      expect(portalViewAllowed('/portal/products/new', context, value)).toBe(false)
+      expect(portalViewAllowed('/portal/products/detail', context, value, caseId)).toBe(false)
+    }
+  })
+  it('does not use a role label, foreign actor/context, missing schema or unavailable projection as a queue', () => {
+    for (const limitedBase of [false, true]) {
+      const value = fundOperatingSnapshot('TokenisationAgent', limitedBase), context = value.operating_context!, fund = value.fund_lifecycle!
+      const denied: PortalSnapshot[] = [
+        { ...value, fund_lifecycle: undefined }, { ...value, operating_context: undefined },
+        { ...value, operating_context: { mode: 'ROLE', organisationId: otherOrganisation, role: 'TokenisationAgent' } },
+        { ...value, fund_lifecycle: { ...fund, actor_id: syntheticApplicant } },
+        { ...value, fund_lifecycle: { ...fund, operating_context: { mode: 'ROLE', organisationId: otherOrganisation, role: 'TokenisationAgent' } } },
+        { ...value, fund_lifecycle: { ...fund, availability: 'UNAVAILABLE' } },
+        { ...value, fund_lifecycle: { ...fund, schema_version: 2 } } as unknown as PortalSnapshot,
+        { ...value, fund_lifecycle: { ...fund, products: null } } as unknown as PortalSnapshot,
+      ]
+      for (const candidate of denied) {
+        expect(hasFundOperatingProducts(candidate, context, 'TESTNET')).toBe(false)
+        expect(portalViewAllowed('/portal/products', context, candidate)).toBe(false)
+      }
+    }
+  })
+  it('retains current environment, password-workflow and early admission/package guards', () => {
+    const value = fundOperatingSnapshot('TokenisationAgent'), context = value.operating_context!
+    expect(hasFundOperatingProducts(value, context, 'MAINNET')).toBe(false)
+    const password: PortalSnapshot = { ...value, stage2_access: { version: 1, actor_id: packageActor, environment: 'TESTNET',
+      operating_context: context, session_mode: 'TEST_PASSWORD', allowed_commands: [] } }
+    for (const limitedBase of [false, true]) {
+      const candidate = { ...password, ...(limitedBase ? { base_records_available: false as const } : {}) }
+      expect(hasFundOperatingProducts(candidate, context, 'TESTNET')).toBe(false)
+      expect(portalViewAllowed('/portal/products', context, candidate)).toBe(false)
+    }
+    for (const candidate of [
+      { ...value, stage2_access: { ...password.stage2_access!, actor_id: syntheticApplicant } },
+      { ...value, offering_access: {} } as unknown as PortalSnapshot,
+      { ...value, evaluation_access: {} } as unknown as PortalSnapshot,
+    ]) expect(portalViewAllowed('/portal/products', context, candidate)).toBe(false)
+  })
+})
 function packageSnapshot(role: OfferingAccess['operating_context']['role']): PortalSnapshot {
   const context = { mode: 'ROLE' as const, organisationId: organisation, role }
   const commands: Record<typeof role, OfferingAccess['allowed_commands']> = { OfferingManager: ['create_product', 'save_product', 'submit_product'],

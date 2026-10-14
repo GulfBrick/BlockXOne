@@ -9,6 +9,7 @@ import { prepareCommonEnvelopeUpgrade } from '@/lib/portal/product-common-envelo
 import { portalScopeHref, type PortalOperatingContext } from '@/lib/portal/operating-context'
 import { OFFERING_COMMANDS, type OfferingAccess } from '@/lib/portal/offering-access'
 import type { PlatformRelease } from '@/lib/platform-release'
+import { fundStageKeys, type FundProductLifecycle } from '@/lib/portal/fund-lifecycle-contracts'
 import { PortalScreen } from './portal-screens'
 import { PortalCommandProvider, postPortalCommand, prepareDurablePortalCommand, reconcilePortalMarker } from './portal-client'
 import { fictionalProductTerms } from './product-form'
@@ -346,6 +347,22 @@ describe('normal TEST mounted offering package handoffs', () => {
 })
 
 describe('existing product workspace next-step navigation', () => {
+  function withFundProgress(value: PortalSnapshot, current: 'PREPARATION' | 'APPROVAL' = 'APPROVAL'): PortalSnapshot {
+    const item = value.products[0]
+    const lifecycle: FundProductLifecycle = { product_id: item.id, organisation_id: item.organisation_id,
+      native_organisation_id: managerOrganisation, product_revision: item.revision, offering_revision_id: item.offering_package?.id ?? null,
+      class_id: null, product_name: item.terms.name, terms_hash: item.terms_hash, configuration_hash: null,
+      availability: 'DEPENDENCY_NOT_ADMITTED', stages: fundStageKeys.map(key => ({ key,
+        state: key === current ? 'CURRENT' : current === 'APPROVAL' && key === 'PREPARATION' ? 'COMPLETE' : 'NOT_STARTED',
+        label: key, description: 'Follow the current saved fund record.', reason_code: key === current ? 'CURRENT_REVIEW_AND_SIGNATURE_REQUIRED' : null,
+        owner_role: current === 'PREPARATION' ? 'OfferingManager' : 'IssuerFundManager', evidence_ids: [] })),
+      next_action: { action_id: `fund:${item.id}`, command: null, record_id: item.id, expected_revision: item.revision,
+        label: current === 'PREPARATION' ? 'Complete the fund details' : 'Complete issuer review, compliance review and signing',
+        reason_code: 'CURRENT_REVIEW_AND_SIGNATURE_REQUIRED', owner_role: current === 'PREPARATION' ? 'OfferingManager' : 'IssuerFundManager',
+        can_execute: false, payload: null }, operations: [], orders: [], holdings: [], actions: [] }
+    return { ...value, fund_lifecycle: { schema_version: 1, projection_revision: 1, actor_id: value.actor.id, environment: 'TESTNET',
+      operating_context: value.operating_context!, observed_at: past(), availability: 'AVAILABLE', reason_code: null, products: [lifecycle] } }
+  }
   const fetchOfferingReads = vi.fn(async () => new Response(JSON.stringify({
     error: 'Synthetic document/signature service is unavailable; no provider admission or acceptance is implied.', admitted: false,
   }), { status: 503, headers: { 'content-type': 'application/json' } }))
@@ -357,6 +374,40 @@ describe('existing product workspace next-step navigation', () => {
       if (method === 'GET' && (url.startsWith('/api/portal/offering-documents?') || url.startsWith('/api/portal/offering-signatures?'))) return fetchOfferingReads()
       return fetchCommand(input, init)
     }))
+  })
+
+  it('keeps an unsaved fund draft safe and reaches Edit details from the connected preparation step', () => {
+    mount(withFundProgress(snapshot('OfferingManager', [product('FUND')]), 'PREPARATION'), '/portal/products/detail', productId)
+    fireEvent.change(screen.getByLabelText('Product name'), { target: { value: 'Fictional unsaved fund edit' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Review & next step' }))
+    expect(screen.getByText('Complete and save the product details, then submit the saved version for review.')).toBeTruthy()
+    expect(screen.getByText('Save your changes in Edit details before submitting. They are not part of the saved package yet.')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Submit immutable offering package' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Open Edit details' }))
+    expect(document.activeElement).toBe(screen.getByRole('region', { name: 'Edit details' }))
+    expect((screen.getByLabelText('Product name') as HTMLInputElement).value).toBe('Fictional unsaved fund edit')
+    expect(fetchCommand).not.toHaveBeenCalled()
+  })
+
+  it('reaches the existing appointment form from connected fund review without creating a second next-step card', () => {
+    const item = product('FUND', { status: 'IN_REVIEW', offering_package: packageRecord(), allowed_actions: [] })
+    mount(withFundProgress(snapshot('OfferingManager', [item])), '/portal/products/detail', productId)
+    expect(screen.getByLabelText('Next fund action')).toBeTruthy()
+    expect(screen.queryByRole('heading', { name: 'Your next step' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Open Appointments' }))
+    expect(document.activeElement).toBe(screen.getByRole('region', { name: 'Appointments' }))
+    expect(screen.getByLabelText(/^Appointment evidence reference/)).toBeTruthy()
+    expect(fetchCommand).not.toHaveBeenCalled()
+  })
+
+  it('mounts and focuses the existing documents/signing section from connected fund review', () => {
+    const item = product('FUND', { status: 'IN_REVIEW', offering_package: packageRecord(), allowed_actions: [] })
+    const applied = (['IssuerFundManager', 'ComplianceOfficer'] as const).map(role => appointment(role, { status: 'APPLIED', effective: true }))
+    mount(withFundProgress(snapshot('OfferingManager', [item], applied)), '/portal/products/detail', productId)
+    fireEvent.click(screen.getByRole('button', { name: 'Open Documents & signing' }))
+    expect(document.activeElement).toBe(screen.getByRole('region', { name: 'Documents & signing' }))
+    expect(screen.queryByRole('button', { name: 'Get my DocuSign signing link' })).toBeNull()
+    expect(fetchCommand).not.toHaveBeenCalled()
   })
 
   it.each(['FUND', 'REAL_ESTATE'] as const)('focuses the %s details handoff without losing an unsaved edit or enabling submission', kind => {

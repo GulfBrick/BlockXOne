@@ -13,11 +13,34 @@ import styles from './fund-lifecycle.module.css'
 
 type Refresh = () => void | Promise<void>
 type ActionsProps = { actorId: string; operatingContext: PortalOperatingContext; onRefresh: Refresh }
+type ProductHandoff = { message: string; label: string; regionId: string; onSelect: () => void }
 type Order = FundProductLifecycle['orders'][number]
 const stageNames: Record<(typeof fundStageKeys)[number], string> = { PREPARATION: 'Prepare the fund', APPROVAL: 'Independent review', DEPLOYMENT: 'Deploy the contracts', OPENING: 'Open the offering', SUBSCRIPTION: 'Accept subscriptions', PAYMENT: 'Reconcile payment', ISSUANCE: 'Issue approved units', HOLDINGS: 'Record investor holdings' }
 const stateNames: Record<string, string> = { COMPLETE: 'Complete', CURRENT: 'Current step', WAITING: 'Waiting on another owner', BLOCKED: 'Action unavailable', NOT_STARTED: 'Not started', REQUESTED: 'Request recorded', APPROVAL_PENDING: 'Independent approval needed', APPROVED: 'Approved; not executed', SIGNING: 'Signatures in progress', BROADCAST: 'Submitted; not final', MINED: 'Included in a block', CONFIRMING: 'Waiting for finality', FINAL: 'Final evidence recorded', REJECTED: 'Rejected', SIGNING_FAILED: 'Signing did not complete', UNKNOWN: 'Submission outcome uncertain', REPLACED: 'Transaction replaced', REVERTED: 'Transaction reverted', REORGED: 'Chain evidence changed', CANCELLED: 'Cancelled', EXPIRED: 'Approval expired', AWAITING_FUNDING: 'Awaiting payment', EVIDENCE_REVIEW: 'Payment evidence under review', PARTIAL: 'Partial payment; review needed', OVERPAID: 'Excess payment; review needed', RECONCILED: 'Reconciled', UNAPPLIED: 'Payment not applied', REVERSED: 'Accounting reversed; not refunded' }
 const roleNames: Record<string, string> = { OfferingManager: 'Offering manager', IssuerFundManager: 'Issuer', ComplianceOfficer: 'Compliance', TokenisationAgent: 'Tokenisation agent', TreasuryOperator: 'Treasury', FinancialController: 'Financial controller', Investor: 'Investor', TransferAgent: 'Transfer agent', SuperAdmin: 'Platform administrator' }
-const reasonNames: Record<string, string> = { DEPENDENCY_NOT_ADMITTED: 'The reviewed contract release and signing policy are not admitted yet.', TECHNICAL_READINESS_NOT_VERIFIED: 'Contract readiness must be independently verified before the offering can open.', WALLET_PROOF_REQUIRED: 'The account holder must verify a delivery wallet before units can be issued.', FUNDING_NOT_RECONCILED: 'Treasury and an independent controller must reconcile payment first.', INDEPENDENT_APPROVAL_REQUIRED: 'A different authorised person must review this exact request.', PREPARATION_REQUIRED: 'Prepare the exact contract intent for a different authorised person to review. No signature is needed for preparation.', SAFE_SIGNATURE_REQUIRED: 'An authorised Safe owner must sign the approved contract operation.', UNKNOWN_BROADCAST: 'Check the existing transaction before taking any further action.' }
+const reasonNames: Record<string, string> = {
+  DEPENDENCY_NOT_ADMITTED: 'The reviewed contract release and signing policy are not admitted yet.',
+  CANONICAL_DEPLOYMENT_NOT_ADMITTED: 'The contract release and institutional signing policy must be admitted for this fund before deployment can be requested.',
+  CURRENT_REVIEW_AND_SIGNATURE_REQUIRED: 'The current offering needs its appointed issuer review, Compliance review and document signatures before deployment can proceed.',
+  GOVERNED_DEPLOYMENT_REQUIRED: 'The approved fund must be deployed by its appointed institutional signers through MetaMask, then independently verified before it can open.',
+  CURRENT_SIGNING_AUTHORITY_REQUIRED: 'This request needs current appointed signing authority. A role label or connected wallet alone is not enough.',
+  EXISTING_TRANSACTION_HASH_REQUIRED: 'Use the hash of the existing transaction so its outcome can be checked. Do not submit a replacement transaction.',
+  RECONCILED_PAYMENT_AND_WALLET_REQUIRED: 'Payment must be independently reconciled and the investor delivery wallet verified before allocation can be prepared.',
+  CURRENT_INDEPENDENT_ALLOCATION_REVIEW_REQUIRED: 'A currently appointed Transfer Agent, independent of the requester, must review this exact allocation.',
+  CURRENT_ISSUANCE_AUTHORITY_REQUIRED: 'Current appointed issuance authority and a valid approved allocation are required before an issuance request can be made.',
+  REASON_REQUIRED: 'Cancellation requires a recorded reason and an authorised request; no cancellation has been performed.',
+  CANCELLED_BEFORE_SIGNING: 'This operation was cancelled before signing. No completed contract action is implied.',
+  EXECUTION_CLAIMED_OUTCOME_UNKNOWN: 'Execution was started, but its outcome is not yet verified. Check the original transaction before trying anything else.',
+  VERIFIED_TRANSACTION_REVERTED: 'The transaction reverted. No successful deployment or issuance was recorded from it.',
+  FINAL_EFFECT_AUTHORITY_CHANGED_RECOVERY_REQUIRED: 'Authority changed while this transaction was being checked. The existing operation needs recovery review before its effects can be accepted.',
+  TECHNICAL_READINESS_NOT_VERIFIED: 'Contract readiness must be independently verified before the offering can open.',
+  WALLET_PROOF_REQUIRED: 'The account holder must verify a delivery wallet before units can be issued.',
+  FUNDING_NOT_RECONCILED: 'Treasury and an independent controller must reconcile payment first.',
+  INDEPENDENT_APPROVAL_REQUIRED: 'A different authorised person must review this exact request.',
+  PREPARATION_REQUIRED: 'Prepare the exact contract intent for a different authorised person to review. No signature is needed for preparation.',
+  SAFE_SIGNATURE_REQUIRED: 'An authorised Safe owner must sign the approved contract operation.',
+  UNKNOWN_BROADCAST: 'Check the existing transaction before taking any further action.',
+}
 function reason(code: string | null) { return code ? reasonNames[code] ?? 'The current record has an unresolved requirement. Refresh saved state or contact its responsible owner.' : null }
 function label(state: string) { return stateNames[state] ?? state.replaceAll('_', ' ').toLowerCase() }
 function units(value: string, decimals: number) {
@@ -46,10 +69,18 @@ function ActionButton({ action, actorId, operatingContext, onRefresh, primary = 
   </div>
 }
 
-function NextAction({ lifecycle, ...props }: ActionsProps & { lifecycle: FundProductLifecycle }) {
+function NextAction({ lifecycle, handoff, ...props }: ActionsProps & { lifecycle: FundProductLifecycle; handoff?: ProductHandoff }) {
   const action = lifecycle.next_action
   const stage = lifecycle.stages.find(item => item.state === 'CURRENT' || item.state === 'BLOCKED' || item.state === 'WAITING')
-  return <section className={styles.nextAction} aria-label="Next fund action"><div><p className={styles.eyebrow}>{action?.can_execute ? 'Your next action' : 'What happens next'}</p><h2>{action?.label ?? (stage ? stageNames[stage.key] : 'Review the saved fund record')}</h2><p>{reason(action?.reason_code ?? stage?.reason_code ?? null) ?? stage?.description ?? 'Only independently verified evidence moves the fund to its next stage.'}</p><p className={styles.owner}>Responsible owner: {roleNames[action?.owner_role ?? stage?.owner_role ?? ''] ?? action?.owner_role ?? stage?.owner_role ?? 'No current action'}</p></div><div className={styles.actionBlock}>{action?.command ? <ActionButton action={action} {...props} primary /> : <button type="button" className={styles.secondary} onClick={() => void props.onRefresh()}>Refresh saved state</button>}</div></section>
+  const reasonCode = action?.reason_code ?? stage?.reason_code ?? null
+  // Package navigation belongs only to preparation/review. Stale appointments
+  // must never replace an execution, payment or recovery instruction.
+  const currentHandoff = stage && ['PREPARATION', 'APPROVAL'].includes(stage.key) && !action?.command
+    && (reasonCode === null || reasonCode === 'CURRENT_REVIEW_AND_SIGNATURE_REQUIRED') ? handoff : undefined
+  const explanation = currentHandoff?.message ?? (reasonCode === 'CURRENT_REVIEW_AND_SIGNATURE_REQUIRED' && stage?.key === 'PREPARATION'
+    ? 'Complete and save the fund details, then submit that saved version for its appointed reviews and document signing.'
+    : reason(reasonCode) ?? stage?.description ?? 'Only independently verified evidence moves the fund to its next stage.')
+  return <section className={styles.nextAction} aria-label="Next fund action"><div><p className={styles.eyebrow}>{action?.can_execute ? 'Your next action' : 'What happens next'}</p><h2>{action?.label ?? (stage ? stageNames[stage.key] : 'Review the saved fund record')}</h2><p>{explanation}</p><p className={styles.owner}>Responsible owner: {roleNames[action?.owner_role ?? stage?.owner_role ?? ''] ?? action?.owner_role ?? stage?.owner_role ?? 'No current action'}</p></div><div className={styles.actionBlock}>{action?.command ? <ActionButton action={action} {...props} primary /> : currentHandoff ? <button type="button" className={styles.secondary} aria-controls={currentHandoff.regionId} onClick={currentHandoff.onSelect}>{currentHandoff.label}</button> : <button type="button" className={styles.secondary} onClick={() => void props.onRefresh()}>Refresh saved state</button>}</div></section>
 }
 
 function StageProgress({ lifecycle }: { lifecycle: FundProductLifecycle }) {
@@ -69,10 +100,10 @@ function OperationCard({ operation, lifecycle, ...props }: ActionsProps & { oper
   </article>
 }
 
-export function FundLifecycleWorkspace({ lifecycle, actorId, operatingContext, onRefresh, showTitle = true }: ActionsProps & { lifecycle: FundProductLifecycle | null | undefined; showTitle?: boolean }) {
+export function FundLifecycleWorkspace({ lifecycle, actorId, operatingContext, onRefresh, showTitle = true, handoff }: ActionsProps & { lifecycle: FundProductLifecycle | null | undefined; showTitle?: boolean; handoff?: ProductHandoff }) {
   if (!lifecycle) return <div className={styles.workspace}><Unavailable /></div>
   return <div className={styles.workspace}><div className={styles.heading}>{showTitle ? <div><p className={styles.eyebrow}>Fund operating record</p><h2>{lifecycle.product_name}</h2><p>Track this fund from preparation to investor holdings.</p></div> : <span>Fund progress</span>}<button type="button" className={styles.secondary} onClick={() => void onRefresh()}>Refresh status</button></div>
-    <NextAction lifecycle={lifecycle} actorId={actorId} operatingContext={operatingContext} onRefresh={onRefresh} />
+    <NextAction lifecycle={lifecycle} actorId={actorId} operatingContext={operatingContext} onRefresh={onRefresh} handoff={handoff} />
     {lifecycle.availability === 'DEPENDENCY_NOT_ADMITTED' ? <div className={styles.notice}><strong>Contracts are not admitted for execution</strong><p>The canonical release, network manifest and independent signing policy must be approved. A saved package does not enable a new deployment, opening or issuance; any historical evidence remains a separate record.</p></div> : null}
     <StageProgress lifecycle={lifecycle} />
     <Card title="Contract and issuance evidence" note="Requests, approvals and broadcasts remain separate from final chain evidence.">{lifecycle.operations.length ? <div className={styles.stack}>{lifecycle.operations.map(operation => <OperationCard key={`${operation.id}:${operation.revision}`} operation={operation} lifecycle={lifecycle} actorId={actorId} operatingContext={operatingContext} onRefresh={onRefresh} />)}</div> : <p className={styles.muted}>No deployment or issuance operation has been recorded. No contract or token ownership is inferred.</p>}</Card>
