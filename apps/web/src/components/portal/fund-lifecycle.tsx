@@ -328,7 +328,7 @@ function SafeOperationControl({ operation, lifecycle, actorId, operatingContext,
     checkExecution(next, prepared, saved.revision)
     saveBroadcast(key, { intentId: operation.id, hash: null, unknown: true })
     setExecutionOperation(saved); setIntent(prepared); setExecution(next); setSigningOwner(prepared.signer_address.toLowerCase()); setReviewed(false)
-    wallet.setMessage('The approved signatures are ready for one execution. Review and confirm in MetaMask. If you leave or reject it, this operation needs recovery—not a second submission.')
+    wallet.setMessage('The approved signatures are ready for one execution. Review and confirm in MetaMask. If you leave or reject it, this operation needs recovery, not a second submission.')
   }
   async function broadcast() {
     if (!execution || !executionOperation || !intent || !reviewed || pending) throw new Error('Check the existing transaction; a replacement broadcast is not authorised.')
