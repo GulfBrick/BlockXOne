@@ -8,6 +8,7 @@ import { CheckCircle2, Clock3, Circle, ShieldCheck } from 'lucide-react'
 import { discoverMetaMask, MetaMaskWalletLink, type MetaMaskProvider } from '@/components/workspace/metamask-wallet-link'
 import { fundIntentSchema, fundOperationSchema, fundPaymentIntentSchema, fundStageKeys, type FundLifecycleAction, type FundLifecycleOperation, type FundLifecycleSnapshot, type FundPaymentIntent, type FundProductLifecycle, type FundTransactionIntent } from '@/lib/portal/fund-lifecycle-contracts'
 import { portalContextKey, portalContextMatches, portalScopeHref, type PortalOperatingContext } from '@/lib/portal/operating-context'
+import { prepareAmoyWalletTransaction, validateRecoveryNonce } from '@/lib/testnet-fund/wallet-transaction'
 import { usePortalActorId, usePortalCommand, usePortalOperatingContext } from './portal-client'
 import styles from './fund-lifecycle.module.css'
 
@@ -390,8 +391,15 @@ function SafeOperationControl({ operation, lifecycle, actorId, operatingContext,
     if (Date.parse(intent.expires_at) <= Date.now()) throw new Error('The approved intent expired. Nothing was sent.')
     checkExecution(execution, intent, execution.expected_revision)
     await wallet.check(attempt.provider, execution.from, execution.chain_id, attempt.current)
+    const prepared = await prepareAmoyWalletTransaction(attempt.provider, { from: execution.from, to: execution.to, data: execution.data, value: execution.value })
+    await validateRecoveryNonce(attempt.provider, execution.from, prepared.nonce)
+    await wallet.check(attempt.provider, execution.from, execution.chain_id, attempt.current)
+    if (operationRef.current.id !== operation.id || operationRef.current.revision !== operation.revision || operationRef.current.state !== operation.state || operationRef.current.intent_hash !== operation.intent_hash) throw new Error('The saved operation changed while preparing its network fee. Nothing was sent; check the existing execution lease.')
+    checkedIntent(intent, executionOperation, execution.expected_revision)
+    checkExecution(execution, intent, execution.expected_revision)
+    if (prepared.transaction.from.toLowerCase() !== execution.from.toLowerCase() || prepared.transaction.to?.toLowerCase() !== execution.to.toLowerCase() || prepared.transaction.data.toLowerCase() !== execution.data.toLowerCase() || prepared.transaction.value !== execution.value || prepared.transaction.chainId !== `0x${execution.chain_id.toString(16)}`) throw new Error('Network-fee preparation changed the approved execution payload. Nothing was sent; check the existing execution lease.')
     saveBroadcast(key, { intentId: operation.id, hash: null, unknown: true }); setPending(true)
-    const sent = await attempt.provider.request({ method: 'eth_sendTransaction', params: [{ from: execution.from, to: execution.to, data: execution.data, value: execution.value, chainId: `0x${execution.chain_id.toString(16)}` }] })
+    const sent = await attempt.provider.request({ method: 'eth_sendTransaction', params: [prepared.transaction] })
     const transactionHash = txHash.parse(sent)
     saveBroadcast(key, { intentId: operation.id, hash: transactionHash, unknown: false }); setHash(transactionHash); setExecution(null)
     if (!attempt.current()) return
@@ -446,15 +454,25 @@ function PaymentControl({ order, actorId, operatingContext, onRefresh }: Actions
     checkedPayment(intent, orderRef.current, actorId)
     if (Date.parse(intent.expires_at) <= Date.now()) throw new Error('The payment instruction expired. Nothing was sent.')
     await wallet.check(attempt.provider, intent.payer_address, intent.chain_id, attempt.current)
+    // Read-only gas, balance and nonce checks happen before acquiring an uncertain submission lease.
+    const prepared = await prepareAmoyWalletTransaction(attempt.provider, { from: intent.payer_address, to: intent.token_address, data: intent.data, value: '0x0' })
+    await wallet.check(attempt.provider, intent.payer_address, intent.chain_id, attempt.current)
+    if (!orderRef.current.funding?.can_pay || orderRef.current.funding.state !== 'AWAITING_FUNDING' || readBroadcast(key)) throw new Error('The saved funding state changed while preparing its network fee. Nothing was sent; check the original payment.')
+    checkedPayment(intent, orderRef.current, actorId)
+    if (Date.parse(intent.expires_at) <= Date.now()) throw new Error('The payment instruction expired while preparing its network fee. Nothing was sent.')
+    if (prepared.transaction.from.toLowerCase() !== intent.payer_address.toLowerCase() || prepared.transaction.to?.toLowerCase() !== intent.token_address.toLowerCase() || prepared.transaction.data.toLowerCase() !== intent.data.toLowerCase() || prepared.transaction.value !== '0x0' || prepared.transaction.chainId !== `0x${intent.chain_id.toString(16)}`) throw new Error('Network-fee preparation changed the approved payment payload. Nothing was sent.')
     // A server-side UNKNOWN submission lease prevents a reload or another browser from paying twice.
     saveBroadcast(key, { intentId: intent.payment_id, hash: null, unknown: true }); setPending(true)
     const result = await lifecyclePost('/api/portal/fund-lifecycle/payment/submit', { payment_id: intent.payment_id }, actorId, operatingContext, attempt.signal)
     const leased = checkedPayment(result.intent, orderRef.current, actorId)
     if (leased.payment_id !== intent.payment_id || leased.payer_address.toLowerCase() !== intent.payer_address.toLowerCase() || leased.state !== 'UNKNOWN' || leased.transaction_hash) throw new Error('The server did not grant this exact payment submission lease. Nothing was sent. Refresh the existing record.')
     if (!attempt.current()) return
+    await validateRecoveryNonce(attempt.provider, intent.payer_address, prepared.nonce)
     await wallet.check(attempt.provider, intent.payer_address, intent.chain_id, attempt.current)
-    if (Date.parse(intent.expires_at) <= Date.now()) throw new Error('The leased instruction expired. Nothing was sent; review its saved submission state.')
-    const sent = await attempt.provider.request({ method: 'eth_sendTransaction', params: [{ from: intent.payer_address, to: intent.token_address, data: intent.data, value: '0x0', chainId: `0x${intent.chain_id.toString(16)}` }] })
+    checkedPayment(intent, orderRef.current, actorId)
+    checkedPayment(leased, orderRef.current, actorId)
+    if (Date.parse(intent.expires_at) <= Date.now() || Date.parse(leased.expires_at) <= Date.now()) throw new Error('The leased instruction expired. Nothing was sent; review its saved submission state.')
+    const sent = await attempt.provider.request({ method: 'eth_sendTransaction', params: [prepared.transaction] })
     const transactionHash = txHash.parse(sent)
     saveBroadcast(key, { intentId: intent.payment_id, hash: transactionHash, unknown: false }); setHash(transactionHash)
     if (!attempt.current()) return

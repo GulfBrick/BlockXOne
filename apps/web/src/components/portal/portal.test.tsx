@@ -222,7 +222,9 @@ describe('connected fund operational screens', () => {
       for (const candidate of candidates) {
         const html = renderToStaticMarkup(<PortalScreen data={data(candidate)} view="/portal/products" operatingContext={context} release={release} />)
         expect(html).not.toContain('Your fund handoffs'); expect(html).not.toContain('Needs your attention'); expect(html).not.toContain('Connected Fund')
-        expect(html).not.toMatch(/href="\/portal\/products\?[^"<]+"/)
+        // Breadcrumbs still identify the requested destination. The guarded
+        // operating navigation must not offer a fund queue from this state.
+        expect(html).not.toContain('<span>Fund operations</span>')
       }
     }
   })
@@ -294,22 +296,21 @@ describe('portal navigation and source-driven surfaces', () => {
     expect(html).toContain('Skip to main content'); expect(html).toContain('aria-current="page"'); expect(html).toContain('Testnet environment')
     expect(html).not.toContain('Switch role'); expect(html).not.toContain('Impersonate'); expect(html).not.toContain('href="/portal/compliance"')
   })
-  it('keeps account security and the account workspace available inside the mobile navigation', () => {
+  it('keeps account security and the account workspace in the shared account menu', () => {
     const html = renderToStaticMarkup(<PortalShell user={data().user} capabilities={{ manageProducts: false, reviewCompliance: false, invest: true }} active="overview" title="Overview"><p>Saved content</p></PortalShell>)
-    const mobileNavigation = html.match(/<details[^>]*>[\s\S]*?<\/details>/)?.[0]
-    expect(mobileNavigation).toBeDefined()
-    expect(mobileNavigation).toContain('Navigate your workspace')
-    expect(mobileNavigation).toContain('aria-label="Account navigation"')
-    expect(mobileNavigation).toContain('href="/workspace/security"')
-    expect(mobileNavigation).toContain('Account security')
-    expect(mobileNavigation).toContain('href="/workspace"')
-    expect(mobileNavigation).toContain('Account workspace')
-    expect(mobileNavigation).not.toContain('href="/portal/compliance"')
+    const accountNavigation = html.match(/<nav aria-label="Account navigation"[^>]*>[\s\S]*?<\/nav>/)?.[0]
+    expect(accountNavigation).toBeDefined()
+    expect(html).toMatch(/<button[^>]+aria-expanded="false"[^>]+aria-controls="[^"]+"[^>]*>[\s\S]*?Account<\/button>/)
+    expect(accountNavigation).toContain('href="/workspace/security"')
+    expect(accountNavigation).toContain('Account security')
+    expect(accountNavigation).toContain('href="/workspace"')
+    expect(accountNavigation).toContain('Account workspace')
+    expect(accountNavigation).not.toContain('href="/portal/compliance"')
   })
-  it('enters account security through a full document request on desktop and mobile', () => {
+  it('enters account security through one full document request in the shared account menu', () => {
     const html = renderToStaticMarkup(<PortalShell user={data().user} capabilities={{ manageProducts: false, reviewCompliance: true, invest: false }} active="overview" title="Overview"><p>Saved content</p></PortalShell>)
     const securityLinks = html.match(/<a\b[^>]*href="\/workspace\/security"[^>]*>[\s\S]*?<\/a>/g) ?? []
-    expect(securityLinks).toHaveLength(2)
+    expect(securityLinks).toHaveLength(1)
     for (const link of securityLinks) {
       expect(link).toContain('Account security')
       expect(link).not.toContain('data-client-navigation')
@@ -317,10 +318,10 @@ describe('portal navigation and source-driven surfaces', () => {
     // Keep ordinary portal links on the existing client router.
     expect(html).toMatch(/<a\b[^>]*href="\/portal"[^>]*data-client-navigation="true"/)
   })
-  it('enters account workspace through a full document request on desktop and mobile', () => {
+  it('enters account workspace through one full document request in the shared account menu', () => {
     const html = renderToStaticMarkup(<PortalShell user={data().user} capabilities={{ manageProducts: false, reviewCompliance: true, invest: false }} active="compliance" title="Compliance queue"><p>Saved content</p></PortalShell>)
     const workspaceLinks = html.match(/<a\b[^>]*href="\/workspace"[^>]*>[\s\S]*?<\/a>/g) ?? []
-    expect(workspaceLinks).toHaveLength(2)
+    expect(workspaceLinks).toHaveLength(1)
     for (const link of workspaceLinks) {
       expect(link).toContain('Account workspace')
       expect(link).not.toContain('data-client-navigation')
@@ -417,9 +418,13 @@ describe('onboarding and subscription boundaries', () => {
     const item = product({ status: 'IN_REVIEW', offering_package: { ...original.offering_package!, issuer_status: 'CHANGES_REQUIRED', issuer_review_notes: 'Correct the synthetic class rights before resubmission.' } })
     const manager = snapshot(); manager.operating_context = operating('OfferingManager'); manager.organisations = [operatorOrganisation()]; manager.products = [item]
     const managerHtml = renderToStaticMarkup(<PortalScreen data={data(manager)} view="/portal/products/detail" id={productId} operatingContext={operating('OfferingManager')} />)
-    expect(managerHtml).toContain('Issuer decision rationale')
-    expect(managerHtml).toContain('Correct the synthetic class rights')
-    expect(managerHtml).toContain('Issuer name (unverified)')
+    expect(managerHtml).toContain('View recorded package evidence')
+    expect(managerHtml).not.toContain('Correct the synthetic class rights')
+    const managerEvidence = renderToStaticMarkup(<OfferingPackageEvidence product={item} showIssuerRationale />)
+    expect(managerEvidence).toContain('Issuer decision rationale')
+    expect(managerEvidence).toContain('Correct the synthetic class rights')
+    expect(managerEvidence).toContain('Issuer name (unverified)')
+    expect(managerEvidence).toContain(offeringRevisionId)
     const investorHtml = renderToStaticMarkup(<OfferingPackageEvidence product={item} />)
     expect(investorHtml).not.toContain('Correct the synthetic class rights')
   })
@@ -487,7 +492,11 @@ describe('onboarding and subscription boundaries', () => {
     const item = product({ status: 'CHANGES_REQUIRED', offering_package: { ...submitted.offering_package!, issuer_status: 'CHANGES_REQUIRED', issuer_review_notes: 'Issuer requests a corrected fictional class-rights explanation before another submission.' } })
     const manager = snapshot(); manager.operating_context = operating('OfferingManager'); manager.organisations = [operatorOrganisation()]; manager.products = [item]
     const managerHtml = renderToStaticMarkup(<PortalScreen data={data(manager)} view="/portal/products/detail" id={productId} operatingContext={operating('OfferingManager')} />)
-    expect(managerHtml).toContain('Issuer decision rationale'); expect(managerHtml).toContain('corrected fictional class-rights explanation')
+    expect(managerHtml).toContain('View recorded package evidence')
+    expect(managerHtml).not.toContain('corrected fictional class-rights explanation')
+    const managerEvidence = renderToStaticMarkup(<OfferingPackageEvidence product={item} showIssuerRationale />)
+    expect(managerEvidence).toContain('Issuer decision rationale'); expect(managerEvidence).toContain('corrected fictional class-rights explanation')
+    expect(managerEvidence).toContain(offeringRevisionId)
     const investor = snapshot(); investor.applications = [application()]; investor.products = [product({ offering_package: { ...product().offering_package!, issuer_review_notes: 'Private reviewer rationale must not render in investor discovery.' } })]
     const investorHtml = renderToStaticMarkup(<PortalScreen data={data(investor)} view="/portal/opportunities/detail" id={productId} operatingContext={APPLICANT_CONTEXT} />)
     expect(investorHtml).not.toContain('Private reviewer rationale')
@@ -672,7 +681,8 @@ describe('operational landings and one subscription hand-off', () => {
     expect(queue).not.toContain('Create a product</a>')
     const detail = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal/products/detail" id={productId} operatingContext={operating('IssuerFundManager')} />)
     expect(detail).toContain('Record issuer decision')
-    expect(detail).toContain(offeringRevisionId)
+    expect(detail).toContain('View recorded package evidence')
+    expect(renderToStaticMarkup(<OfferingPackageEvidence product={item} />)).toContain(offeringRevisionId)
     expect(detail).toContain('Order access unavailable')
     expect(detail).not.toContain('Open approved offering</button>')
   })
@@ -778,7 +788,7 @@ describe('operational landings and one subscription hand-off', () => {
     expect(applicant).toContain(portalScopeHref('/portal', operating('Investor')).replaceAll('&', '&amp;'))
     value.operating_context = operating('Investor')
     const native = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal" operatingContext={operating('Investor')} scope={scopes[0]} scopes={scopes} />)
-    expect(native).toContain('href="/portal?mode=applicant"'); expect(native).toContain('Native Organisation')
+    expect(native).toContain('href="/portal?mode=applicant&amp;section=workspaces"'); expect(native).toContain('Change workspace'); expect(native).toContain('Native Organisation')
   })
   it('retains the guarded Super Admin workflow and account security without creating investor access', () => {
     const value = snapshot(); value.operating_context = operating('SuperAdmin')
@@ -786,7 +796,8 @@ describe('operational landings and one subscription hand-off', () => {
     expect(html).toContain(`href="/workspace/administration?organisation=${nativeOrganisation}"`)
     expect(html).toContain('href="/workspace/security"'); expect(html).not.toContain('Your subscription orders'); expect(html).not.toContain('href="/portal/opportunities?')
     const securityLinks = html.match(/<a\b[^>]*href="\/workspace\/security"[^>]*>[\s\S]*?<\/a>/g) ?? []
-    expect(securityLinks).toHaveLength(3)
+    // One consolidated account-menu link plus the existing gated-admin link.
+    expect(securityLinks).toHaveLength(2)
     for (const link of securityLinks) expect(link).not.toContain('data-client-navigation')
   })
   it('does not render another context’s events as a generic recent-activity feed', () => {

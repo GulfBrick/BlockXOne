@@ -685,7 +685,7 @@ jobs:
         working-directory: apps/web
         run: npm run preflight
 
-      - name: Run only dashboard routing and existing handoff regressions
+      - name: Run only dashboard, handoff and existing Amoy gas regressions
         shell: bash
         working-directory: apps/web
         run: |
@@ -697,6 +697,7 @@ jobs:
             'src/lib/portal/operating-context.test.ts',
             'src/components/portal/portal.test.tsx',
             'src/components/portal/offering-workflow.interaction.test.tsx',
+            'src/lib/testnet-fund/wallet-transaction.test.ts',
           ]
           process.exitCode = await runHermeticVitest({
             spawnImplementation: (executable, args, options) => spawn(executable, [...args, ...files], options),

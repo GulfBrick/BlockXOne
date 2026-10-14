@@ -2,10 +2,11 @@
 
 import React from 'react'
 import { webcrypto } from 'node:crypto'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { portalCommandSchema, type FundTermsV2, type RealEstateTermsV2, type PortalCommand, type PortalOfferingPackage, type PortalProduct, type PortalProductServiceAppointment, type PortalSnapshot, type ProductTerms } from '@/lib/portal/contracts'
 import { prepareCommonEnvelopeUpgrade } from '@/lib/portal/product-common-envelope'
+import { productDraftFields } from '@/lib/portal/product-form-flow'
 import { portalScopeHref, type PortalOperatingContext } from '@/lib/portal/operating-context'
 import { OFFERING_COMMANDS, type OfferingAccess } from '@/lib/portal/offering-access'
 import type { PlatformRelease } from '@/lib/platform-release'
@@ -123,6 +124,31 @@ async function saved() {
   await waitFor(() => expect(sessionStorage.length).toBe(0))
 }
 function checkLabels(labels: RegExp[]) { labels.forEach(label => fireEvent.click(screen.getByRole('checkbox', { name: label }))) }
+function reviewSavedDraft() {
+  fireEvent.click(within(screen.getByRole('list', { name: 'Product setup steps' })).getByRole('button', { name: /^\d+\. Review and save$/ }))
+}
+/** Fill the current blank v3 editor through its actual mounted controls. The
+ * values are synthetic terms, not fake approvals or document/provider proof.
+ */
+function enterNewProductTerms(kind: 'FUND' | 'REAL_ESTATE') {
+  const template = prepareCommonEnvelopeUpgrade(fictionalProductTerms(kind) as FundTermsV2 | RealEstateTermsV2, productOrganisation, issuerOrganisation, receiptId)
+  const values = new Map(productDraftFields(template).map(item => [item.path, item.value]))
+  const steps = within(screen.getByRole('list', { name: 'Product setup steps' })).getAllByRole('button')
+  for (const step of steps) {
+    fireEvent.click(step)
+    if (/Review and save$/.test(step.textContent ?? '')) break
+    for (const input of document.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>('[data-product-field]')) {
+      const path = input.getAttribute('data-product-field')!, value = values.get(path)
+      expect(value, `Synthetic value for the rendered ${path} control`).not.toBeUndefined()
+      if (input instanceof HTMLSelectElement && input.multiple) {
+        expect(Array.isArray(value)).toBe(true)
+        for (const option of input.options) option.selected = (value as string[]).includes(option.value)
+        fireEvent.change(input)
+      } else fireEvent.change(input, { target: { value: Array.isArray(value) ? value.join(',') : String(value) } })
+    }
+  }
+  checkLabels([/I have reviewed these TEST terms/])
+}
 
 beforeEach(() => {
   vi.clearAllMocks(); nextResult = undefined; failTransport = false; expectedFetchCount = 0; sessionStorage.clear()
@@ -136,9 +162,10 @@ describe('normal TEST mounted offering package handoffs', () => {
     nextResult = snapshot('OfferingManager', [draft])
     let page = mount(snapshot('OfferingManager'), '/portal/products/new')
     if (kind === 'REAL_ESTATE') fireEvent.change(screen.getByLabelText(/^Asset template/), { target: { value: kind } })
-    checkLabels([/I have reviewed this explicitly fictional product/])
+    enterNewProductTerms(kind)
     fireEvent.click(screen.getByRole('button', { name: 'Create product draft' }))
     await saved(); recorded('create_product', { organisation_id: productOrganisation, terms: { asset_type: kind, currency: 'TST' } })
+    expect(lastRequest.payload).toMatchObject({ terms: { terms_version: 3, common_envelope: { manager_organisation_id: productOrganisation } } })
     expect(push).toHaveBeenCalledWith(portalScopeHref('/portal/products', context('OfferingManager')))
     page.unmount()
 
@@ -146,6 +173,7 @@ describe('normal TEST mounted offering package handoffs', () => {
     nextResult = snapshot('OfferingManager', [edited])
     page = mount(snapshot('OfferingManager', [draft]), '/portal/products/detail', productId)
     fireEvent.change(screen.getByLabelText('Product name'), { target: { value: edited.terms.name } })
+    reviewSavedDraft()
     checkLabels([/I have reviewed this explicitly fictional product/])
     fireEvent.click(screen.getByRole('button', { name: 'Save revised draft' }))
     await saved(); recorded('save_product', { product_id: productId, expected_revision: 1, terms: { name: edited.terms.name, asset_type: kind } })
@@ -156,6 +184,7 @@ describe('normal TEST mounted offering package handoffs', () => {
       const requested = appointment(serviceRole)
       nextResult = snapshot('OfferingManager', [edited], [...applied, requested])
       page = mount(snapshot('OfferingManager', [edited], applied), '/portal/products/detail', productId)
+      fireEvent.click(screen.getByRole('button', { name: 'Appointments' }))
       fireEvent.change(screen.getByLabelText('Service role'), { target: { value: serviceRole } })
       fireEvent.change(screen.getByLabelText('Existing role member'), { target: { value: requested.native_membership_id } })
       fireEvent.change(screen.getByLabelText(/^Appointment evidence reference/), { target: { value: requested.evidence_reference } })
@@ -189,8 +218,10 @@ describe('normal TEST mounted offering package handoffs', () => {
     const submitted = { ...edited, revision: 3, status: 'IN_REVIEW' as const, offering_package: originalPackage, offering_history: [originalPackage], allowed_actions: [] }
     nextResult = snapshot('OfferingManager', [submitted], applied)
     page = mount(snapshot('OfferingManager', [edited], applied), '/portal/products/detail', productId)
+    fireEvent.click(screen.getByRole('button', { name: 'Review & next step' }))
     fireEvent.click(screen.getByRole('button', { name: 'Submit immutable offering package' }))
     await saved(); recorded('submit_product', { product_id: productId, expected_revision: 2 })
+    fireEvent.click(screen.getByRole('button', { name: 'View recorded package evidence' }))
     expect(screen.getAllByText(firstPackageId).length).toBeGreaterThan(0)
     page.unmount()
 
@@ -209,8 +240,12 @@ describe('normal TEST mounted offering package handoffs', () => {
     const corrected = { ...changes, status: 'DRAFT' as const, revision: 5, terms_hash: 'ce'.repeat(32), terms: { ...edited.terms, summary: 'Fictional revised disclosure of the precise proposed product rights and investor interests.' } }
     nextResult = snapshot('OfferingManager', [corrected], applied)
     page = mount(snapshot('OfferingManager', [changes], applied), '/portal/products/detail', productId)
+    fireEvent.click(screen.getByRole('button', { name: 'Review & next step' }))
+    fireEvent.click(screen.getByRole('button', { name: 'View recorded package evidence' }))
     expect(screen.getByText(changesPackage.issuer_review_notes)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Edit details' }))
     fireEvent.change(screen.getByLabelText('Investor-facing summary'), { target: { value: corrected.terms.summary } })
+    reviewSavedDraft()
     checkLabels([/I have reviewed this explicitly fictional product/])
     fireEvent.click(screen.getByRole('button', { name: 'Save revised draft' }))
     await saved(); recorded('save_product', { product_id: productId, expected_revision: 4, terms: { summary: corrected.terms.summary } })
@@ -220,6 +255,7 @@ describe('normal TEST mounted offering package handoffs', () => {
     const resubmitted = { ...corrected, revision: 6, status: 'IN_REVIEW' as const, offering_package: nextPackage, offering_history: [changesPackage, nextPackage], allowed_actions: [] }
     nextResult = snapshot('OfferingManager', [resubmitted], applied)
     page = mount(snapshot('OfferingManager', [corrected], applied), '/portal/products/detail', productId)
+    fireEvent.click(screen.getByRole('button', { name: 'Review & next step' }))
     fireEvent.click(screen.getByRole('button', { name: 'Submit immutable offering package' }))
     await saved(); recorded('submit_product', { product_id: productId, expected_revision: 5 })
     page.unmount()
@@ -253,6 +289,7 @@ describe('normal TEST mounted offering package handoffs', () => {
     fireEvent.change(screen.getByLabelText(/^Reason for re-review/), { target: { value: 'Fictional new review cycle requires fresh independent package decisions.' } })
     fireEvent.click(screen.getByRole('button', { name: 'Create new review revision' }))
     await saved(); recorded('reopen_offering_review', { product_id: productId, expected_revision: 8 })
+    fireEvent.click(screen.getByRole('button', { name: 'View recorded package evidence' }))
     expect(screen.getAllByText(thirdPackageId).length).toBeGreaterThan(0)
     expect(nextResult.products[0].offering_package).toMatchObject({ issuer_status: 'PENDING', compliance_status: 'PENDING', publishable: false })
   })
@@ -264,6 +301,8 @@ describe('normal TEST mounted offering package handoffs', () => {
     fireEvent.change(screen.getByLabelText(/^Reason for terms amendment/), { target: { value: 'Fictional reviewed policy change requires newly submitted immutable terms.' } })
     fireEvent.click(screen.getByRole('button', { name: 'Begin terms amendment' }))
     await saved(); recorded('begin_offering_amendment', { product_id: productId, expected_revision: 8 })
+    fireEvent.click(screen.getByRole('button', { name: 'Edit details' }))
+    reviewSavedDraft()
     expect(screen.getByRole('button', { name: 'Save revised draft' })).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Open approved offering' })).toBeNull()
   })
@@ -334,6 +373,7 @@ describe('normal TEST mounted offering package handoffs', () => {
   it('retains original-key retry after an unknown package command outcome', async () => {
     const draft = product(); const value = snapshot('OfferingManager', [draft])
     mount(value, '/portal/products/detail', productId)
+    fireEvent.click(screen.getByRole('button', { name: 'Review & next step' }))
     failTransport = true
     fireEvent.click(screen.getByRole('button', { name: 'Submit immutable offering package' }))
     await screen.findByRole('button', { name: 'Retry the original saved request' })
@@ -374,6 +414,49 @@ describe('existing product workspace next-step navigation', () => {
       if (method === 'GET' && (url.startsWith('/api/portal/offering-documents?') || url.startsWith('/api/portal/offering-signatures?'))) return fetchOfferingReads()
       return fetchCommand(input, init)
     }))
+  })
+
+  it('opens the single shared account menu and preserves full-document account boundaries', () => {
+    mount(snapshot('OfferingManager'))
+    const account = screen.getByRole('button', { name: 'Account' })
+    expect(account.getAttribute('aria-expanded')).toBe('false')
+    expect(screen.queryByRole('region', { name: 'Account options' })).toBeNull()
+    fireEvent.click(account)
+    const menu = within(screen.getByRole('region', { name: 'Account options' }))
+    expect(account.getAttribute('aria-expanded')).toBe('true')
+    for (const [name, path] of [['Account security', '/workspace/security'], ['Account workspace', '/workspace']] as const) {
+      const link = menu.getByRole('link', { name })
+      expect(link.getAttribute('href')).toBe(path)
+      expect(link.hasAttribute('data-client-navigation')).toBe(false)
+    }
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.queryByRole('region', { name: 'Account options' })).toBeNull()
+    expect(document.activeElement).toBe(account)
+    expect(fetchCommand).not.toHaveBeenCalled()
+  })
+
+  it.each(['IN_REVIEW', 'CHANGES_REQUIRED'] as const)('reveals the exact %s manager rationale only on request and keeps it out of investor discovery', status => {
+    const notes = `Private issuer changes for this ${status} package only.`
+    const item = product('FUND', { status, offering_package: packageRecord({ issuer_status: 'CHANGES_REQUIRED', issuer_review_notes: notes }), allowed_actions: [] })
+    const page = mount(snapshot('OfferingManager', [item]), '/portal/products/detail', productId)
+    expect(screen.queryByText(notes)).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'View recorded package evidence' }))
+    expect(screen.getByText('Issuer decision rationale')).toBeTruthy()
+    expect(screen.getByText(notes)).toBeTruthy()
+    expect(screen.getAllByText(firstPackageId).length).toBeGreaterThan(0)
+    page.unmount()
+
+    const published = product('FUND', { status: 'PUBLISHED', offering_package: packageRecord({ issuer_status: 'APPROVED', compliance_status: 'APPROVED',
+      technical_readiness_status: 'VERIFIED', subscribable: true, issuer_review_notes: notes }), allowed_actions: [] })
+    const investor = snapshot('OfferingManager', [published])
+    delete investor.stage2_access; delete investor.offering_access
+    investor.operating_context = { mode: 'ROLE', organisationId: managerOrganisation, role: 'Investor' }
+    investor.organisations = []
+    render(<PortalScreen data={{ user: { id: investor.actor.id, email: investor.actor.email }, snapshot: investor }} view="/portal/opportunities/detail" id={productId} operatingContext={investor.operating_context} release={release} />)
+    expect(screen.getByRole('heading', { level: 1 }).textContent).toBe(published.terms.name)
+    expect(screen.queryByText(notes)).toBeNull()
+    expect(screen.queryByText('Issuer decision rationale')).toBeNull()
+    expect(fetchCommand).not.toHaveBeenCalled()
   })
 
   it('keeps an unsaved fund draft safe and reaches Edit details from the connected preparation step', () => {
@@ -603,6 +686,10 @@ describe('connected v3 issuer execution in existing dashboards', () => {
       })
       vi.stubGlobal('fetch', signatureFetch)
       const page = mount(value, role === 'ComplianceOfficer' ? '/portal/compliance/detail' : '/portal/products/detail', productId)
+      if (role !== 'ComplianceOfficer') {
+        expect(signatureFetch).not.toHaveBeenCalled()
+        fireEvent.click(screen.getByRole('button', { name: 'Documents & signing' }))
+      }
       await screen.findByText('Signature processing not admitted')
       expect(screen.getByRole('heading', { name: 'Issuer package execution' })).toBeTruthy()
       expect(signatureFetch).toHaveBeenCalledTimes(1)
