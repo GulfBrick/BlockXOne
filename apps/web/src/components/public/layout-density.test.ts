@@ -17,6 +17,9 @@ describe('compact shared layout without a separate testnet interface', () => {
   it('keeps public entry content near the top without removing personal-login guards', () => {
     const register = source('../../app/register/page.tsx')
     expect(register).toContain('py-8 sm:px-6 sm:py-10')
+    expect(register).toContain('className="order-2 lg:order-1 lg:sticky lg:top-28"')
+    expect(register).toContain('aria-labelledby="registration-title" className="order-1')
+    expect(register).toContain('lg:order-2 lg:p-6')
     expect(register).not.toContain('Hosted test environment')
     expect(register).not.toContain('Mainnet environment · admission required')
     expect(register).not.toContain('{release.environment} · Personal account')
