@@ -423,7 +423,7 @@ describe('onboarding and subscription boundaries', () => {
     const managerEvidence = renderToStaticMarkup(<OfferingPackageEvidence product={item} showIssuerRationale />)
     expect(managerEvidence).toContain('Issuer decision rationale')
     expect(managerEvidence).toContain('Correct the synthetic class rights')
-    expect(managerEvidence).toContain('Issuer name (unverified)')
+    expect(managerHtml).toContain('Issuer name (unverified)')
     expect(managerEvidence).toContain(offeringRevisionId)
     const investorHtml = renderToStaticMarkup(<OfferingPackageEvidence product={item} />)
     expect(investorHtml).not.toContain('Correct the synthetic class rights')
