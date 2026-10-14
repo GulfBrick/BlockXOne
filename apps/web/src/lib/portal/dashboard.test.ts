@@ -30,6 +30,31 @@ describe('normal sandbox package dashboard projection', () => {
     expect(dashboardProjection(scope, 'TESTNET', { ...data, offering_access: { ...data.offering_access!, allowed_commands: ['save_product'] } }).availablePaths).not.toContain('/portal/products/new')
     expect(dashboardProjection(scope, 'MAINNET', data).queue).toEqual([])
   })
+  it('connects the current standard TEST role-play manager without granting product creation', () => {
+    const data = packageData('OfferingManager')
+    data.offering_access = { ...data.offering_access!, session_mode: 'STANDARD', allowed_commands: ['request_product_service_appointment'] }
+    data.organisations[0].authority_source = 'TEST_ROLE_PLAY'
+    data.products = [{ id: productId, organisation_id: productOrganisation, status: 'IN_REVIEW' } as PortalProduct]
+    const scope = { organisationId: organisation, organisationName: 'A', role: 'OfferingManager' as const }
+    const result = dashboardProjection(scope, 'TESTNET', data)
+    expect(result.availablePaths).toContain('/portal/products')
+    expect(result.availablePaths).not.toContain('/portal/products/new')
+    expect(result.queue.find(item => item.label === 'Products in review')?.value).toBe(1)
+  })
+  it('does not treat a TEST role-play organisation label as manager authority', () => {
+    const data = packageData('OfferingManager')
+    data.organisations[0].authority_source = 'TEST_ROLE_PLAY'
+    const scope = { organisationId: organisation, organisationName: 'A', role: 'OfferingManager' as const }
+    for (const denied of [data, { ...data, offering_access: undefined },
+      { ...data, offering_access: { ...data.offering_access!, session_mode: 'STANDARD', actor_id: otherOrganisation } },
+      { ...data, offering_access: { ...data.offering_access!, session_mode: 'STANDARD', operating_context: { ...data.offering_access!.operating_context, organisationId: otherOrganisation } } },
+    ] as PortalSnapshot[]) {
+      expect(dashboardProjection(scope, 'TESTNET', denied).availablePaths).not.toContain('/portal/products')
+    }
+    const standard = { ...data, offering_access: { ...data.offering_access!, session_mode: 'STANDARD' as const } }
+    expect(dashboardProjection(scope, 'MAINNET', standard).availablePaths).not.toContain('/portal/products')
+    expect(dashboardProjection({ ...scope, organisationId: otherOrganisation }, 'TESTNET', standard).availablePaths).not.toContain('/portal/products')
+  })
   it('retains issuer readback after review without an editor or fabricated organisation binding', () => {
     const data = packageData('IssuerFundManager'); data.organisations = []
     // Projection-only fixture; full typed terms and package UI are proved separately.
