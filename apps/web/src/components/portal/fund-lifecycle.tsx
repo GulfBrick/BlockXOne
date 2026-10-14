@@ -11,6 +11,7 @@ import { portalContextKey, portalContextMatches, portalScopeHref, type PortalOpe
 import { prepareAmoyWalletTransaction, validateRecoveryNonce } from '@/lib/testnet-fund/wallet-transaction'
 import { usePortalActorId, usePortalCommand, usePortalOperatingContext } from './portal-client'
 import styles from './fund-lifecycle.module.css'
+import { FundRecipient } from './fund-recipient'
 
 type Refresh = () => void | Promise<void>
 type ActionsProps = { actorId: string; operatingContext: PortalOperatingContext; onRefresh: Refresh }
@@ -173,6 +174,7 @@ export function FundLifecycleOrder({ lifecycle, subscriptionId, actorId, operati
     <Card title="Pay the approved TST instruction" note="A test-token transfer, reconciliation and unit issuance are separate steps.">{!basis?.current ? <p className={styles.muted}>Payment instructions remain unavailable until the appointed issuer approves this exact reservation.</p> : order.funding ? <><dl className={styles.facts}><Fact title="Required test tokens" value={`${units(order.funding.required_base_units, order.funding.settlement_decimals)} TST`} /><Fact title="Independently posted" value={`${units(order.funding.posted_base_units, order.funding.settlement_decimals)} TST`} /><Fact title="Approved token contract" value={<Address value={order.funding.settlement_token_address} />} /><Fact title="Approved beneficiary" value={<Address value={order.funding.beneficiary_address} />} /></dl><PaymentControl order={order} actorId={actorId} operatingContext={operatingContext} onRefresh={onRefresh} /></> : <p className={styles.muted}>Treasury must prepare an approved route before a payment can be requested. Do not transfer tokens yet.</p>}</Card>
     <Card title="Delivery wallet and allocation"><p>{order.delivery_wallet?.effective ? <>Verified delivery wallet: <Address value={order.delivery_wallet.address} /></> : 'Choose the wallet that will receive your fund units.'}</p>
       {operatingContext.mode === 'APPLICANT' || operatingContext.role === 'Investor' ? <DeliveryWalletControl lifecycle={lifecycle} order={order} actorId={actorId} operatingContext={operatingContext} onRefresh={onRefresh} /> : null}
+      <RecipientWalletBridge lifecycle={lifecycle} order={order} actorId={actorId} operatingContext={operatingContext} onRefresh={onRefresh} />
       <p className={styles.muted}>{order.allocation_id ? 'The final funded allocation and its approval are shown below.' : 'After payment is reconciled, the issuer and transfer agent recheck the final allocation, eligibility and delivery wallet before issuance.'}</p><div className={styles.actions}>{order.actions.filter(action => !basisActions.includes(action)).map(action => <ActionButton key={action.action_id} action={action} actorId={actorId} operatingContext={operatingContext} onRefresh={onRefresh} />)}</div></Card>
     {operation ? <Card title="Issuance handoff"><OperationCard operation={operation} lifecycle={lifecycle} actorId={actorId} operatingContext={operatingContext} onRefresh={onRefresh} /></Card> : <Card title="Issuance handoff"><p className={styles.muted}>No issuance operation is recorded. Reconciled payment is not token ownership.</p></Card>}
     {holding ? <Card title="Register and holdings"><p className={styles.verified}><ShieldCheck aria-hidden="true" size={20} /> {units(holding.units_base, holding.security_unit_decimals)} units reconciled to the saved register entry.</p><p>Recorded on {date(holding.recorded_at)} from chain {holding.chain_id}. The issuance transaction is retained in the evidence above.</p></Card> : null}
@@ -222,6 +224,13 @@ function DeliveryWalletControl({ lifecycle, order, actorId, operatingContext, on
     {command.unknown ? <button type="button" className={styles.secondary} disabled={command.busy} onClick={() => void command.retry()}>Check the original wallet-binding request</button> : null}
     <button type="button" className={styles.secondary} disabled={loading} onClick={() => void load()}>Refresh verified wallets</button>
   </div>
+}
+
+function RecipientWalletBridge({ lifecycle, order, actorId, operatingContext, onRefresh }: ActionsProps & { lifecycle: FundProductLifecycle; order: Order }) {
+  const wallet = useFundWallet(actorId, operatingContext)
+  if (!order.delivery_wallet?.binding_id || !order.delivery_wallet.effective) return null
+  return <FundRecipient bindingId={order.delivery_wallet.binding_id} productId={lifecycle.product_id} accountId={order.investment_account_id}
+    actorId={actorId} operatingContext={operatingContext} wallet={wallet} renderWalletPicker={busy => <WalletPicker wallet={wallet} chainId={80002} busy={busy} />} onRefresh={onRefresh} />
 }
 
 const evmAddress = z.string().regex(/^0x[0-9a-fA-F]{40}$/)

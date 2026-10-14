@@ -101,7 +101,7 @@ export const fundOrderSchema = z.object({
     state: z.enum(['AWAITING_FUNDING', 'EVIDENCE_REVIEW', 'PARTIAL', 'OVERPAID', 'RECONCILED', 'UNAPPLIED', 'REVERSED', 'CANCELLED']),
     can_pay: z.boolean(),
   }).nullable(),
-  delivery_wallet: z.object({ proof_id: id, address, chain_id: z.number().int().positive(), effective: z.boolean() }).nullable(),
+  delivery_wallet: z.object({ binding_id: id.optional(), proof_id: id, address, chain_id: z.number().int().positive(), effective: z.boolean() }).nullable(),
   payment_allocation_basis: fundPaymentAllocationBasisSchema.nullable().optional(),
   issuance_operation_id: id.nullable(), actions: z.array(fundActionSchema).max(20),
 })

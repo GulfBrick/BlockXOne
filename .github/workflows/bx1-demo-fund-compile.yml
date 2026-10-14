@@ -732,6 +732,8 @@ jobs:
             'src/lib/portal/fund-chain-admission.test.ts',
             'src/lib/portal/fund-recipient-chain.test.ts',
             'src/lib/portal/fund-lifecycle-selection.test.ts',
+            'src/lib/portal/fund-recipient-contracts.test.ts',
+            'src/lib/portal/fund-recipient-server.test.ts',
           ]
           process.exitCode = await runHermeticVitest({
             spawnImplementation: (executable, args, options) => spawn(executable, [...args, ...files], options),
@@ -739,7 +741,7 @@ jobs:
           NODE
 
       - name: Typecheck the same fund source before requesting its release build
-        if: ${{ inputs.mode == 'fund-dashboard-focused' }}
+        if: ${{ inputs.mode == 'fund-dashboard-focused' && !cancelled() }}
         shell: bash
         working-directory: apps/web
         run: npx tsc --noEmit --incremental false

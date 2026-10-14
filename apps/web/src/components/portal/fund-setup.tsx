@@ -8,6 +8,7 @@ import { prepareAmoyWalletTransaction, validateRecoveryNonce } from '@/lib/testn
 import { usePortalActorId, usePortalOperatingContext } from './portal-client'
 import { useFundWallet, WalletPicker } from './fund-lifecycle'
 import { FundReleaseAdmission } from './fund-release-admission'
+import { FundSigningKeys } from './fund-signing-keys'
 import { setupPost, SetupRequestError } from '@/lib/portal/fund-setup-client'
 import styles from './fund-lifecycle.module.css'
 
@@ -140,6 +141,7 @@ export function FundSetup({ productId, productRevision, actorId, operatingContex
   const state = step?.state
   const confirmed = setup?.steps.filter(item => item.state === 'FINAL').length ?? 0
   return <div className={styles.workspace}>
+    {snapshot?.roleplay_policy ? <FundSigningKeys productId={productId} actorId={actorId} operatingContext={operatingContext} onRefresh={onRefresh} /> : null}
     <div className={styles.heading}><div><h2>Set up the fund’s blockchain</h2><p>Continue the same fund on Polygon Amoy. Each transaction is saved and independently checked before the next step.</p></div>
       <button type="button" className={styles.secondary} disabled={busy || !authorised} onClick={() => void run(async (signal, current) => { const raw = await load(signal); if (current()) accept(raw) })}>Refresh saved progress</button></div>
     {snapshot?.roleplay_policy ? <p className={styles.boundary}>One-person TEST role-play: you are the recorded operator in each capacity. This does not prove independent human approval.</p> : null}

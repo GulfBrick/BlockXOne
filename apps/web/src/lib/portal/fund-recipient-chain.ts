@@ -25,7 +25,7 @@ export const fundRecipientExpectationSchema = z.object({
 }).strict().superRefine((value, context) => {
   if (value.phase === 'CREATE_IDENTITY' && value.identity_address !== null || value.phase !== 'CREATE_IDENTITY' && value.identity_address === null
     || value.phase === 'REVOKE_CLAIM' && value.claim_signature === null
-    || value.phase === 'REGISTER_IDENTITY' && (value.safe_nonce === null || !value.manifest.safe.owners.includes(value.sender_address))
+    || value.phase === 'REGISTER_IDENTITY' && !value.manifest.safe.owners.includes(value.sender_address)
     || ['CREATE_IDENTITY', 'ADD_CLAIM'].includes(value.phase) && value.sender_address !== value.recipient_address
     || value.phase === 'REVOKE_CLAIM' && value.sender_address !== value.claim_signer_address
     || value.product_binding_hash !== value.manifest.product_binding_hash || BigInt(value.sender_nonce) >= 2n ** 64n) {
@@ -213,6 +213,7 @@ function expectedRecipientPayload(e: FundRecipientExpectation) {
 }
 export async function prepareFundRecipientOperation(raw: unknown, options: FundSetupObservers = {}): Promise<FundRecipientIntent> {
   const e = fundRecipientExpectationSchema.parse(raw)
+  if (e.phase === 'REGISTER_IDENTITY' && e.safe_nonce === null) return fail('RECIPIENT_SAFE_NONCE_REQUIRED')
   if (Date.parse(e.action_valid_until) <= Date.now() || e.phase !== 'REVOKE_CLAIM' && Date.parse(e.valid_until) <= Date.now()) return fail('RECIPIENT_AUTHORITY_EXPIRED')
   const rpc = fundAdmissionRpc(options), snapshot = await readFundAdmissionSnapshot(rpc)
   const { data, identity, trusted, targetData, safeTransaction, to } = expectedRecipientPayload(e)
@@ -378,7 +379,9 @@ export async function observeFundRecipientOperation(raw: unknown, intent: FundRe
         if (lower(event[0]) !== e.recipient_address || lower(event[1]) !== identity) return fail('RECIPIENT_REGISTRY_EVENT_MISMATCH')
       } else {
         const event = exactEvent(r, issuer(e).address, CLAIM, 'ClaimRevoked')
-        if (lower(event[0]) !== e.claim_signature) return fail('RECIPIENT_REVOCATION_EVENT_MISMATCH')
+        // Upstream declares dynamic bytes as indexed. The topic is its Keccak
+        // digest; ABI decoding cannot recover the original signature bytes.
+        if (object(event[0]).hash !== keccak256(e.claim_signature!)) return fail('RECIPIENT_REVOCATION_EVENT_MISMATCH')
       }
     }
     const reread = await rpc(fact.url, 'eth_getTransactionReceipt', [txHash])
