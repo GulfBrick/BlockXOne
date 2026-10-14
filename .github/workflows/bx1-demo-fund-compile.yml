@@ -737,6 +737,7 @@ jobs:
             'src/lib/portal/fund-recipient-server.test.ts',
             'src/components/portal/fund-recipient.interaction.test.tsx',
             'src/lib/portal/fund-roleplay-commands-schema.test.ts',
+            'src/lib/portal/fund-recipient-allocation-schema.test.ts',
           ]
           process.exitCode = await runHermeticVitest({
             spawnImplementation: (executable, args, options) => spawn(executable, [...args, ...files], options),
