@@ -6,7 +6,7 @@ import type { PortalProduct, PortalSnapshot, PortalSubscription } from '@/lib/po
 import type { FundingJournal, FundingObligation, FundingReference, FundingRoute } from '@/lib/portal/funding-contracts'
 import type { FundingClaim } from '@/lib/portal/funding-claim'
 import type { MetaMaskProvider } from '@/components/workspace/metamask-wallet-link'
-import { FundingOrderDetail, FundingWorkspace, fundingReferencePayload, fundingRouteUsable, fundingTokenAmount, signFundingClaim, verifyFundingRecord } from './funding-workflows'
+import { FundingOrderDetail, FundingWorkspace, fundingReferencePayload, fundingRouteUsable, fundingTokenAmount, readFundingClaimPrefill, signFundingClaim, verifyFundingRecord } from './funding-workflows'
 import { PortalCommandProvider } from './portal-client'
 import { PortalScreen } from './portal-screens'
 import { fictionalProductTerms } from './product-form'
@@ -30,7 +30,7 @@ function subscription(): PortalSubscription { return { id: record, product_id: p
 function snapshot(role: 'Investor' | 'TreasuryOperator' | 'FinancialController' | 'IssuerFundManager' = 'Investor'): PortalSnapshot {
   return { actor: { id: actor, email: 'synthetic@example.invalid', display_name: null, can_review: false }, operating_context: context(role), applications: [], accounts: [], organisations: [{ id: organisation, name: 'Scoped issuer', status: 'ACTIVE', roles: [role], authority_source: 'NATIVE_BINDING', native_organisation_id: nativeOrganisation, capabilities: ['read_orders'] }], products: [product()], subscriptions: [subscription()], events: [], funding: { routes: [route()], obligations: [obligation()], references: [], journals: [], reversals: [] } }
 }
-function detail(value = snapshot()) { return renderToStaticMarkup(<PortalCommandProvider snapshot={value} operatingContext={value.operating_context}><FundingOrderDetail subscription={value.subscriptions[0]} snapshot={value} operatingContext={value.operating_context!} onSaved={vi.fn()} /></PortalCommandProvider>) }
+function detail(value = snapshot(), fundFlow?: { allocationBasisCurrent: boolean }) { return renderToStaticMarkup(<PortalCommandProvider snapshot={value} operatingContext={value.operating_context}><FundingOrderDetail subscription={value.subscriptions[0]} snapshot={value} operatingContext={value.operating_context!} onSaved={vi.fn()} fundFlow={fundFlow} /></PortalCommandProvider>) }
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }) }))
 afterEach(() => { vi.unstubAllGlobals() })
 
@@ -61,7 +61,73 @@ describe('funding exact units and verification transport', () => {
   })
 })
 
+describe('recorded TST payment to payer confirmation', () => {
+  const receipt = () => ({ version: 1, status: 'READY_FOR_PAYER_CLAIM', payment_id: referenceId,
+    subscription_id: record, obligation_id: obligationId, obligation_revision: 2, route_id: routeId, route_revision: 2,
+    investment_account_id: accountId, actor_id: actor, chain_id: 80002, currency: 'TST', token_decimals: 6,
+    token_address: token, token_runtime_hash: `0x${'ef'.repeat(32)}`, beneficiary_address: receiver, payer_address: payer,
+    transaction_hash: tx, log_index: 1, amount_base_units: '1000000000', block_number: '1234', block_hash: `0x${'01'.repeat(32)}`,
+    block_timestamp: '2026-09-21T10:01:00Z', providers: ['https://polygon-amoy.drpc.org', 'https://polygon-amoy-bor-rpc.publicnode.com']
+      .map(url => ({ url, finalized_block_number: '1235', finalized_block_hash: `0x${'02'.repeat(32)}` })) })
+  it('reads only the saved order identity and current actor, never a browser receipt or paid flag', async () => {
+    const prefill = receipt(), fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ prefill }), { headers: { 'content-type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetch)
+    expect(await readFundingClaimPrefill(record, obligation({ currency: 'TST' }), route(), context('Investor'), actor)).toEqual(prefill)
+    expect(fetch).toHaveBeenCalledWith('/api/portal/fund-lifecycle/payment/receipt', expect.objectContaining({
+      method: 'POST', credentials: 'same-origin', cache: 'no-store', redirect: 'error',
+      headers: { 'Content-Type': 'application/json', 'x-bx1-expected-actor': actor },
+      body: JSON.stringify({ subscription_id: record, operating_context: context('Investor') }),
+    }))
+  })
+  it.each([{ actor_id: record }, { subscription_id: productId }, { route_revision: 1 }, { amount_base_units: '1' },
+    { investment_account_id: productId }, { token_address: receiver }, { beneficiary_address: token }, { obligation_revision: 1 }])('denies changed payment binding %o', async change => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ prefill: { ...receipt(), ...change } }), { headers: { 'content-type': 'application/json' } })))
+    await expect(readFundingClaimPrefill(record, obligation({ currency: 'TST' }), route(), context('Investor'), actor)).rejects.toThrow('changed account or payment instructions')
+  })
+  it('does not convert pending or unavailable receipt checks into an instruction to pay again', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: 'Payment is pending. Do not pay again.' }), { status: 409, headers: { 'content-type': 'application/json' } })))
+    await expect(readFundingClaimPrefill(record, obligation({ currency: 'TST' }), route(), context('Investor'), actor)).rejects.toThrow('Do not pay again')
+  })
+  it('uses a saved-transfer action rather than asking a canonical investor for an event log number', () => {
+    const value = snapshot(); value.funding!.obligations[0] = obligation({ currency: 'TST' })
+    const html = detail(value, { allocationBasisCurrent: true })
+    expect(html).toContain('Find my saved transfer')
+    expect(html).toContain('Confirm payer and submit for review')
+    expect(html).not.toContain('Transfer event log index')
+    expect(html).not.toContain('Existing transaction hash')
+    expect(html).toContain('The server must verify the transfer and an independent Controller must reconcile it')
+  })
+})
+
 describe('connected funding records without fabricated settlement', () => {
+  it('keeps fund payment instructions closed until the issuer allocation basis is current', () => {
+    const value = snapshot(); value.funding!.obligations = []; value.subscriptions[0].allowed_actions = ['open_funding_obligation']
+    const html = detail(value, { allocationBasisCurrent: false })
+    expect(html).toContain('Wait for the issuer to approve the allocation shown above. No payment is due yet.')
+    expect(html).not.toContain('Open funding obligation for this route')
+  })
+  it('still requires the server action and approved route after allocation approval', () => {
+    const value = snapshot(); value.funding!.obligations = []; value.subscriptions[0].allowed_actions = ['open_funding_obligation']
+    expect(detail(value, { allocationBasisCurrent: true })).toContain('Open funding obligation for this route')
+    value.subscriptions[0].allowed_actions = []
+    expect(detail(value, { allocationBasisCurrent: true })).not.toContain('Open funding obligation for this route')
+  })
+  it('does not describe TST as ZAR conversion or contradict the integrated MetaMask payment control', () => {
+    const value = snapshot(); value.funding!.obligations[0].currency = 'TST'; value.funding!.obligations[0].amount_minor = '1000000000'
+    const html = detail(value, { allocationBasisCurrent: true })
+    expect(html).toContain('TST uses six-decimal token base units, not ZAR conversion or bank cash.')
+    expect(html).toContain('Use the MetaMask payment action above')
+    expect(html).not.toContain('This page does not send tokens')
+    expect(html).not.toContain('One token unit per ZAR_TEST unit')
+  })
+  it('preserves existing funding evidence while preventing another transfer after basis expiry', () => {
+    const value = snapshot(); value.funding!.references = [reference()]
+    const html = detail(value, { allocationBasisCurrent: false })
+    expect(html).toContain('Do not send additional funds')
+    expect(html).not.toContain('Use the MetaMask payment action above')
+    expect(html).toContain('Recorded transfer references')
+    expect(html).toContain(tx)
+  })
   it('distinguishes an unavailable projection from an empty queue', () => {
     const value = snapshot(); delete value.funding
     expect(detail(value)).toContain('Funding records unavailable')

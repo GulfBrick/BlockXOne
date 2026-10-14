@@ -717,6 +717,12 @@ jobs:
             'src/components/portal/portal.test.tsx',
             'src/components/portal/offering-workflow.interaction.test.tsx',
             'src/lib/testnet-fund/wallet-transaction.test.ts',
+            'src/components/portal/funding-workflows.test.tsx',
+            'src/components/portal/fund-payment-claim.interaction.test.tsx',
+            'src/components/portal/fund-payment-allocation-basis.test.tsx',
+            'src/lib/portal/fund-payment-allocation-basis.test.ts',
+            'src/lib/portal/fund-payment-receipt.test.ts',
+            'src/lib/portal/fund-payment-receipt-api.test.ts',
           ]
           process.exitCode = await runHermeticVitest({
             spawnImplementation: (executable, args, options) => spawn(executable, [...args, ...files], options),

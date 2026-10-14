@@ -10,7 +10,7 @@ const hash = z.string().regex(/^0x[0-9a-fA-F]{64}$/)
 const digest = z.string().regex(/^[0-9a-f]{64}$/)
 export const fundStageKeys = ['PREPARATION', 'APPROVAL', 'DEPLOYMENT', 'OPENING', 'SUBSCRIPTION', 'PAYMENT', 'ISSUANCE', 'HOLDINGS'] as const
 export const fundOperationStates = ['REQUESTED', 'APPROVAL_PENDING', 'APPROVED', 'SIGNING', 'BROADCAST', 'MINED', 'CONFIRMING', 'FINAL', 'REJECTED', 'SIGNING_FAILED', 'UNKNOWN', 'REPLACED', 'REVERTED', 'REORGED', 'CANCELLED', 'EXPIRED'] as const
-export const fundCommands = ['request_fund_deployment', 'approve_fund_deployment', 'record_fund_transaction', 'request_fund_allocation', 'approve_fund_allocation', 'request_fund_issuance', 'approve_fund_issuance', 'bind_fund_delivery_wallet', 'cancel_fund_operation'] as const
+export const fundCommands = ['request_fund_deployment', 'approve_fund_deployment', 'record_fund_transaction', 'request_fund_payment_allocation_basis', 'approve_fund_payment_allocation_basis', 'request_fund_allocation', 'approve_fund_allocation', 'request_fund_issuance', 'approve_fund_issuance', 'bind_fund_delivery_wallet', 'cancel_fund_operation'] as const
 export type FundCommand = (typeof fundCommands)[number]
 export function isFundLifecycleCommand(command: string): command is FundCommand { return (fundCommands as readonly string[]).includes(command) }
 
@@ -19,6 +19,8 @@ export const fundCommandOptions = [
   z.object({ command: z.literal('request_fund_deployment'), key: id, payload: z.object({ product_id: id, expected_revision: revision, manifest_id: id, signer_policy_id: id }).strict() }).strict(),
   z.object({ command: z.literal('approve_fund_deployment'), key: id, payload: operationPayload }).strict(),
   z.object({ command: z.literal('record_fund_transaction'), key: id, payload: operationPayload.extend({ transaction_hash: hash }).strict() }).strict(),
+  z.object({ command: z.literal('request_fund_payment_allocation_basis'), key: id, payload: z.object({ subscription_id: id, expected_basis_hash: digest }).strict() }).strict(),
+  z.object({ command: z.literal('approve_fund_payment_allocation_basis'), key: id, payload: z.object({ basis_id: id, expected_revision: revision }).strict() }).strict(),
   z.object({ command: z.literal('request_fund_allocation'), key: id, payload: z.object({ subscription_id: id, expected_obligation_revision: revision }).strict() }).strict(),
   z.object({ command: z.literal('approve_fund_allocation'), key: id, payload: z.object({ allocation_id: id, expected_revision: revision }).strict() }).strict(),
   z.object({ command: z.literal('request_fund_issuance'), key: id, payload: z.object({ allocation_id: id, expected_revision: revision }).strict() }).strict(),
@@ -73,6 +75,20 @@ export const fundHoldingSchema = z.object({
   /** No invented performance. Valuation is absent until a reviewed valuation exists. */
   valuation: z.object({ amount_base: amount, currency: z.string().max(16), decimals: z.number().int().min(0).max(18), as_of: z.string(), evidence_id: id }).nullable(),
 })
+export const fundPaymentAllocationBasisSchema = z.object({
+  id: id.nullable(), revision: revision.nullable(), basis_hash: digest,
+  status: z.enum(['NOT_REQUESTED', 'REQUESTED', 'APPROVED', 'NO_LONGER_CURRENT']), current: z.boolean(),
+  approved_at: z.string().datetime({ offset: true }).nullable(), approved_until: z.string().datetime({ offset: true }).nullable(),
+  units_base: amount.refine(value => /^(0|[1-9][0-9]{0,77})$/.test(value) && BigInt(value) > 0n),
+  amount_base_units: amount.refine(value => /^(0|[1-9][0-9]{0,77})$/.test(value) && BigInt(value) > 0n),
+}).strict().superRefine((basis, context) => {
+  if (basis.current && (basis.status !== 'APPROVED' || !basis.id || !basis.revision || !basis.approved_at || !basis.approved_until)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: 'Current issuer allocation approval must have its saved evidence.' })
+  }
+  if (basis.status === 'NOT_REQUESTED' && (basis.id !== null || basis.revision !== null || basis.current)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: 'An unrequested basis cannot claim an approval record.' })
+  }
+})
 export const fundOrderSchema = z.object({
   subscription_id: id, product_id: id, investment_account_id: id, allocation_id: id.nullable(), allocation_revision: revision.nullable(),
   units_base: amount, security_unit_decimals: z.number().int().min(0).max(18),
@@ -85,6 +101,7 @@ export const fundOrderSchema = z.object({
     can_pay: z.boolean(),
   }).nullable(),
   delivery_wallet: z.object({ proof_id: id, address, chain_id: z.number().int().positive(), effective: z.boolean() }).nullable(),
+  payment_allocation_basis: fundPaymentAllocationBasisSchema.nullable().optional(),
   issuance_operation_id: id.nullable(), actions: z.array(fundActionSchema).max(20),
 })
 export const fundProductLifecycleSchema = z.object({
@@ -132,6 +149,9 @@ export function validatedFundLifecycle(value: unknown, actorId: string, context:
     if (new Set(product.stages.map(stage => stage.key)).size !== fundStageKeys.length) return null
     if (product.operations.some(operation => operation.product_id !== product.product_id)) return null
     if (product.orders.some(order => order.product_id !== product.product_id)) return null
+    if (product.orders.some(order => order.payment_allocation_basis && (order.payment_allocation_basis.units_base !== order.units_base
+      || order.funding && order.payment_allocation_basis.amount_base_units !== order.funding.required_base_units
+      || order.funding?.can_pay && !order.payment_allocation_basis.current))) return null
     if (product.holdings.some(holding => holding.product_id !== product.product_id)) return null
     for (const action of [...product.actions, ...product.operations.flatMap(operation => operation.actions), ...product.orders.flatMap(order => order.actions)]) {
       // A transaction-reference action describes the current operation only.

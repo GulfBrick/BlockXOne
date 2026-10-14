@@ -5,6 +5,7 @@ import Link from 'next/link'
 import type { PortalCommand, PortalProduct, PortalSnapshot, PortalSubscription } from '@/lib/portal/contracts'
 import { formatFundingUnits, type FundingRoute, type FundingObligation, type FundingReference, type FundingJournal, type FundingReversal } from '@/lib/portal/funding-contracts'
 import { buildFundingClaimMessage, type FundingClaim } from '@/lib/portal/funding-claim'
+import { fundPaymentReceiptResponseSchema, type FundPaymentReceiptPrefill } from '@/lib/portal/fund-payment-receipt-contracts'
 import { portalContextKey, portalContextMatches, portalScopeHref, type PortalOperatingContext } from '@/lib/portal/operating-context'
 import { discoverMetaMask, type MetaMaskProvider } from '@/components/workspace/metamask-wallet-link'
 import { CommandFeedback, usePortalActorId, usePortalCommand, usePortalOperatingContext } from './portal-client'
@@ -23,6 +24,34 @@ export function fundingRouteUsable(route: FundingRoute, now = Date.now()): boole
 
 export function fundingReferencePayload(obligation: FundingObligation, route: FundingRoute, payer: string, transactionHash: string, logIndex: number, signature: string) {
   return { obligation_id: obligation.id, expected_revision: obligation.revision, expected_route_revision: route.revision, payer_address: payer.toLowerCase(), transaction_hash: transactionHash.toLowerCase(), log_index: logIndex, signature }
+}
+
+/** Finds an already-sent payment. It never sends tokens or accepts funding. */
+export async function readFundingClaimPrefill(subscriptionId: string, obligation: FundingObligation, route: FundingRoute,
+  operatingContext: PortalOperatingContext, actorId: string, signal?: AbortSignal): Promise<FundPaymentReceiptPrefill> {
+  const response = await fetch('/api/portal/fund-lifecycle/payment/receipt', {
+    method: 'POST', credentials: 'same-origin', cache: 'no-store', redirect: 'error',
+    headers: { 'Content-Type': 'application/json', 'x-bx1-expected-actor': actorId },
+    body: JSON.stringify({ subscription_id: subscriptionId, operating_context: operatingContext }),
+    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(45000)]) : AbortSignal.timeout(45000),
+  })
+  if (!(response.headers.get('content-type') ?? '').includes('application/json')) throw new Error('The existing transfer could not be checked. Keep its reference; do not pay again.')
+  const result: unknown = await response.json()
+  if (!response.ok) throw new Error(result && typeof result === 'object' && 'error' in result && typeof result.error === 'string'
+    ? result.error : 'The existing transfer could not be checked. Keep its reference; do not pay again.')
+  const parsed = fundPaymentReceiptResponseSchema.safeParse(result)
+  if (!parsed.success) throw new Error('The saved transfer response could not be verified. No claim was signed.')
+  const found = parsed.data.prefill
+  if (obligation.currency !== 'TST' || route.chain_id !== 80002 || route.token_decimals !== 6
+    || found.actor_id !== actorId || found.subscription_id !== subscriptionId || obligation.subscription_id !== subscriptionId
+    || found.obligation_id !== obligation.id || found.obligation_revision !== obligation.revision
+    || found.investment_account_id !== obligation.investment_account_id || found.route_id !== route.id || obligation.route_id !== route.id
+    || found.route_revision !== route.revision || found.token_address !== route.token_address.toLowerCase()
+    || found.token_runtime_hash !== route.token_runtime_hash.toLowerCase() || found.token_decimals !== route.token_decimals
+    || found.beneficiary_address !== route.receiving_address.toLowerCase() || found.amount_base_units !== obligation.token_amount_base_units) {
+    throw new Error('The saved transfer belongs to changed account or payment instructions. Refresh this order; no claim was signed.')
+  }
+  return found
 }
 
 /** Explicit ownership-only signing. This helper never requests a transaction or token approval. */
@@ -144,62 +173,105 @@ function FundingRouteCard({ route, onSaved }: Saved & { route: FundingRoute }) {
   </Panel>
 }
 
-function FundingClaimForm({ obligation, route, onSaved }: Saved & { obligation: FundingObligation; route: FundingRoute }) {
+function FundingClaimForm({ obligation, route, onSaved, fundSubscriptionId }: Saved & { obligation: FundingObligation; route: FundingRoute; fundSubscriptionId?: string }) {
   const actorId = usePortalActorId()
+  const operatingContext = usePortalOperatingContext()
   const [choices, setChoices] = useState<{ id: string; provider: MetaMaskProvider }[]>([]), [selectedId, setSelectedId] = useState('')
   const [payer, setPayer] = useState(''), [hash, setHash] = useState(''), [logIndex, setLogIndex] = useState('')
   const [busy, setBusy] = useState(false), [message, setMessage] = useState('')
+  const [prefill, setPrefill] = useState<FundPaymentReceiptPrefill | null>(null)
   const command = usePortalCommand(onSaved), alive = useRef(true), walletGeneration = useRef(0), lock = useRef(false)
+  const receiptRead = useRef<AbortController | null>(null)
+  const attemptSequence = useRef(0)
+  const identity = `${actorId}:${portalContextKey(operatingContext)}:${obligation.id}:${obligation.revision}:${route.revision}`
+  const activeIdentity = useRef(identity); activeIdentity.current = identity
   const provider = choices.find(item => item.id === selectedId)?.provider ?? null
-  useEffect(() => { alive.current = true; const stop = discoverMetaMask(window, choice => setChoices(current => current.some(item => item.id === choice.id) ? current : [...current, choice])); return () => { alive.current = false; walletGeneration.current++; stop() } }, [])
+  useEffect(() => { alive.current = true; const stop = discoverMetaMask(window, choice => {
+    setChoices(current => current.some(item => item.id === choice.id) ? current : [...current, choice])
+    setSelectedId(current => current || choice.id)
+  }); return () => { alive.current = false; walletGeneration.current++; stop() } }, [])
+  useEffect(() => {
+    attemptSequence.current++; walletGeneration.current++; receiptRead.current?.abort(); lock.current = false
+    setBusy(false); setPayer(''); setMessage(''); setPrefill(null); setHash(''); setLogIndex('')
+    return () => { receiptRead.current?.abort() }
+  }, [identity])
   useEffect(() => {
     setPayer(''); walletGeneration.current++
     if (!provider) return
-    const changed = () => { walletGeneration.current++; setPayer(''); setMessage('Wallet account or network changed. Reconnect the original payer.') }
+    const changed = () => { walletGeneration.current++; receiptRead.current?.abort(); setPayer(''); setMessage('Wallet account or network changed. Reconnect the original payer.') }
     const events = ['accountsChanged', 'chainChanged', 'disconnect']
     const detach = () => { events.forEach(event => { try { provider.removeListener(event, changed) } catch { /* Provider cleanup cannot grant authority. */ } }) }
     try { events.forEach(event => provider.on(event, changed)) }
     catch { detach(); setSelectedId(''); setMessage('MetaMask could not be monitored safely. Reload the wallet before continuing.') }
     return detach
   }, [provider])
+  async function findTransfer() {
+    if (!fundSubscriptionId || lock.current || command.busy || command.unknown) return
+    lock.current = true; setBusy(true); setMessage('Finding the transfer already recorded for this order...')
+    const attemptIdentity = identity, generation = walletGeneration.current
+    const attemptNumber = ++attemptSequence.current
+    const currentAttempt = () => alive.current && activeIdentity.current === attemptIdentity && attemptSequence.current === attemptNumber
+    const controller = new AbortController(); receiptRead.current = controller
+    try {
+      const found = await readFundingClaimPrefill(fundSubscriptionId, obligation, route, operatingContext, actorId, controller.signal)
+      if (!currentAttempt() || generation !== walletGeneration.current) return
+      setPrefill(found); setHash(found.transaction_hash); setLogIndex(String(found.log_index))
+      setMessage('Transfer found. Connect its original payer wallet and confirm the receipt claim. This will not send more tokens.')
+    } catch (error) { if (currentAttempt()) setMessage(error instanceof Error ? error.message : 'The existing payment could not be checked. Do not pay again.') }
+    finally { if (currentAttempt()) { lock.current = false; setBusy(false) } }
+  }
   async function connect() {
     if (!provider || lock.current) return
     lock.current = true; setBusy(true); setMessage('')
-    const generation = walletGeneration.current
+    const generation = walletGeneration.current, attemptIdentity = identity
+    const attemptNumber = ++attemptSequence.current
+    const currentAttempt = () => alive.current && activeIdentity.current === attemptIdentity && attemptSequence.current === attemptNumber
     try {
       const accounts = await provider.request({ method: 'eth_requestAccounts' })
       const chain = await provider.request({ method: 'eth_chainId' })
-      if (!alive.current || generation !== walletGeneration.current) return
+      if (!currentAttempt() || generation !== walletGeneration.current) return
       if (typeof chain !== 'string' || !/^0x[0-9a-f]+$/i.test(chain) || BigInt(chain) !== 80002n) throw new Error('Select Polygon Amoy (80002) in MetaMask, then reconnect. No network change is performed automatically.')
       if (!Array.isArray(accounts) || typeof accounts[0] !== 'string' || !/^0x[0-9a-f]{40}$/i.test(accounts[0]) || /^0x0{40}$/i.test(accounts[0])) throw new Error('Select the wallet that made the transfer.')
       setPayer(accounts[0].toLowerCase()); setMessage('Payer selected. Signing a claim will not send tokens or approve spending.')
-    } catch (error) { if (alive.current) setMessage(error instanceof Error ? error.message : 'MetaMask connection was not confirmed.') }
-    finally { if (alive.current) { lock.current = false; setBusy(false) } }
+    } catch (error) { if (currentAttempt()) setMessage(error instanceof Error ? error.message : 'MetaMask connection was not confirmed.') }
+    finally { if (currentAttempt()) { lock.current = false; setBusy(false) } }
   }
   async function sign() {
     if (!provider || !payer || lock.current || command.busy || command.unknown) return
     if (!/^0x[0-9a-f]{64}$/i.test(hash) || !/^(0|[1-9][0-9]*)$/.test(logIndex) || !Number.isSafeInteger(Number(logIndex)) || Number(logIndex) > 2147483647) { setMessage('Enter the existing transaction hash and the exact Transfer log index.'); return }
     lock.current = true; setBusy(true); setMessage('Review the ownership-only receipt claim in MetaMask.')
-    const generation = walletGeneration.current
+    const generation = walletGeneration.current, attemptIdentity = identity
+    const attemptNumber = ++attemptSequence.current
+    const currentAttempt = () => alive.current && activeIdentity.current === attemptIdentity && attemptSequence.current === attemptNumber
     try {
+      if (fundSubscriptionId) {
+        if (!prefill || prefill.payer_address !== payer || prefill.transaction_hash !== hash.toLowerCase() || prefill.log_index !== Number(logIndex)) throw new Error('Find this order\'s saved transfer and connect its original payer wallet first.')
+        const controller = new AbortController(); receiptRead.current = controller
+        const current = await readFundingClaimPrefill(fundSubscriptionId, obligation, route, operatingContext, actorId, controller.signal)
+        if (!currentAttempt() || generation !== walletGeneration.current) return
+        if (current.payment_id !== prefill.payment_id || current.transaction_hash !== prefill.transaction_hash
+          || current.block_hash !== prefill.block_hash || current.log_index !== prefill.log_index || current.payer_address !== payer) throw new Error('The original transfer changed while you were reviewing it. Find it again; no claim was signed.')
+      }
       const claim: FundingClaim = { actor_id: actorId, investment_account_id: obligation.investment_account_id, obligation_id: obligation.id, route_id: route.id, route_revision: route.revision, token_address: route.token_address.toLowerCase(), token_runtime_hash: route.token_runtime_hash.toLowerCase(), token_decimals: route.token_decimals, receiving_address: route.receiving_address.toLowerCase(), payer_address: payer, transaction_hash: hash.toLowerCase(), log_index: Number(logIndex) }
-      const signature = await signFundingClaim(provider, claim, () => alive.current && generation === walletGeneration.current)
-      if (!alive.current || generation !== walletGeneration.current) return
+      const signature = await signFundingClaim(provider, claim, () => currentAttempt() && generation === walletGeneration.current)
+      if (!currentAttempt() || generation !== walletGeneration.current) return
       await command.submit('submit_funding_reference', fundingReferencePayload(obligation, route, payer, hash, Number(logIndex), signature))
-    } catch (error) { if (alive.current) setMessage(error instanceof Error ? error.message : 'The claim signature was not confirmed. No transaction was sent.') }
-    finally { if (alive.current) { lock.current = false; setBusy(false) } }
+    } catch (error) { if (currentAttempt()) setMessage(error instanceof Error ? error.message : 'The claim signature was not confirmed. No transaction was sent.') }
+    finally { if (currentAttempt()) { lock.current = false; setBusy(false) } }
   }
   const disabled = busy || command.busy || command.unknown
-  return <Panel title="Submit your existing transfer for verification" description="If you already made a transfer, submit its existing reference for review. This form only signs a claim and records that reference; it does not instruct you to send any funds.">
+  return <Panel title={fundSubscriptionId ? 'Confirm your existing payment' : 'Submit your existing transfer for verification'} description={fundSubscriptionId ? 'Find the transfer already sent for this order, then confirm its payer. You do not need to look up a blockchain log number.' : 'Submit the reference of an existing transfer for review. This records a claim; it does not send funds.'}>
     <Notice title="A signature is not payment confirmation">Claim signing proves control of the payer key for this record only. The server must verify the transfer and an independent Controller must reconcile it.</Notice>
     <CommandFeedback command={command} />
-    <div className={`${styles.form} ${styles.sectionGap}`}><Field label="MetaMask provider"><select value={selectedId} disabled={disabled} onChange={event => setSelectedId(event.target.value)}><option value="">Select MetaMask</option>{choices.map((choice, index) => <option key={choice.id} value={choice.id}>MetaMask {index + 1} · {choice.id.slice(0, 8)}</option>)}</select></Field>
+    <div className={`${styles.form} ${styles.sectionGap}`}>
+      {fundSubscriptionId ? <button type="button" className={styles.buttonSecondary} disabled={disabled} onClick={() => void findTransfer()}>{busy ? 'Checking the existing transfer...' : 'Find my saved transfer'}</button> : null}
+      {choices.length > 1 ? <Field label="MetaMask provider"><select value={selectedId} disabled={disabled} onChange={event => setSelectedId(event.target.value)}>{choices.map((choice, index) => <option key={choice.id} value={choice.id}>MetaMask {index + 1} · {choice.id.slice(0, 8)}</option>)}</select></Field> : choices.length === 1 ? <p className={styles.muted}>MetaMask detected. Connect the wallet that sent this payment.</p> : null}
       {!choices.length ? <p className={styles.muted}>Open this portal in your MetaMask-enabled browser. Never share a recovery phrase or private key.</p> : null}
       <button type="button" className={styles.buttonSecondary} disabled={!provider || disabled} onClick={() => void connect()}>Connect payer MetaMask on Amoy</button>
       {payer ? <p className={styles.mono}>Payer: {payer}</p> : null}
-      <Field label="Existing transaction hash"><input disabled={disabled} value={hash} onChange={event => setHash(event.target.value)} autoComplete="off" /></Field>
-      <Field label="Transfer event log index" hint="The log index from the transaction receipt, not the transaction index."><input disabled={disabled} inputMode="numeric" value={logIndex} onChange={event => setLogIndex(event.target.value)} /></Field>
-      <button type="button" className={styles.button} disabled={!payer || disabled} onClick={() => void sign()}>Sign receipt claim and submit reference</button>
+      {fundSubscriptionId ? prefill ? <p className={styles.mono}>Saved transfer: {prefill.transaction_hash}</p> : <p className={styles.muted}>After MetaMask submits your transfer, record its hash in the payment section above. This check uses that saved payment, not a new transfer.</p> : <><Field label="Existing transaction hash"><input disabled={disabled} value={hash} onChange={event => setHash(event.target.value)} autoComplete="off" /></Field><Field label="Transfer event log index" hint="The log index from the transaction receipt, not the transaction index."><input disabled={disabled} inputMode="numeric" value={logIndex} onChange={event => setLogIndex(event.target.value)} /></Field></>}
+      {prefill && payer && prefill.payer_address !== payer ? <p role="status" className={styles.muted}>Switch MetaMask to the wallet that sent this transfer: {prefill.payer_address}.</p> : null}
+      <button type="button" className={styles.button} disabled={!payer || disabled || Boolean(fundSubscriptionId && (!prefill || prefill.payer_address !== payer))} onClick={() => void sign()}>{fundSubscriptionId ? 'Confirm payer and submit for review' : 'Sign receipt claim and submit reference'}</button>
       {message ? <p role="status" className={styles.muted}>{message}</p> : null}
     </div>
   </Panel>
@@ -235,25 +307,26 @@ function FundingJournalCard({ journal, obligation, reversals, onSaved }: Saved &
   </Panel>
 }
 
-export function FundingOrderDetail({ subscription, snapshot, onSaved, operatingContext }: Saved & { subscription: PortalSubscription; snapshot: PortalSnapshot; operatingContext: PortalOperatingContext }) {
+export function FundingOrderDetail({ subscription, snapshot, onSaved, operatingContext, fundFlow }: Saved & { subscription: PortalSubscription; snapshot: PortalSnapshot; operatingContext: PortalOperatingContext; fundFlow?: { allocationBasisCurrent: boolean } }) {
   const funding = snapshot.funding
   const obligation = funding?.obligations.find(item => item.subscription_id === subscription.id)
   const route = obligation ? funding?.routes.find(item => item.id === obligation.route_id) : undefined
   const candidateRoutes = funding?.routes.filter(item => item.product_id === subscription.product_id && item.product_revision === subscription.product_revision && item.terms_hash === subscription.terms_hash && fundingRouteUsable(item)) ?? []
   const hasUnresolvedReference = Boolean(obligation && funding?.references.some(item => item.obligation_id === obligation.id && item.status !== 'REJECTED_UNPAID'))
   const isOwner = subscription.investor_id === snapshot.actor.id && (operatingContext.mode === 'APPLICANT' || operatingContext.role === 'Investor')
+  const canOpenObligation = !fundFlow || fundFlow.allocationBasisCurrent
   return <div className={styles.stack}>
     <Panel title={subscription.product_name} description="One subscription record connects its accepted terms, funding evidence and independent reconciliation."><DetailList rows={[{ label: 'Subscription', value: <span className={styles.mono}>{subscription.id}</span> }, { label: 'Investment account', value: subscription.investment_account_id ?? 'Legacy instruction · account not linked' }, { label: 'Accepted offering', value: `Revision ${subscription.product_revision}` }, { label: 'Terms fingerprint', value: <span className={styles.mono}>{subscription.terms_hash}</span> }, { label: 'Reserved units', value: subscription.units }, { label: 'Requested synthetic amount', value: money(subscription.amount_minor, subscription.currency ?? 'ZAR_TEST') }, { label: 'Reservation status', value: <StatusBadge status={subscription.status === 'AWAITING_FUNDING' ? 'RESERVED' : subscription.status} /> }]} /></Panel>
     {!funding ? <Notice title="Funding records unavailable">Do not send funds. The hosted financial projection could not be loaded; this is not a zero balance or proof that no payment exists.</Notice>
-      : !obligation ? <Panel title="Funding instructions"><Notice title="Do not send funds yet">An existing subscription reservation is not a funding instruction. Open the obligation against a current approved route before transferring any test tokens.</Notice>{isOwner && subscription.allowed_actions?.includes('open_funding_obligation') && candidateRoutes.length ? candidateRoutes.map(item => <div className={styles.sectionGap} key={item.id}><FundingRouteCard route={item} onSaved={onSaved} /><FundingAction label="Open funding obligation for this route" commandName="open_funding_obligation" payload={{ subscription_id: subscription.id, route_id: item.id }} onSaved={onSaved} /></div>) : <p className={styles.muted}>No currently permitted funding instruction is available. Treasury must propose the product-revision route and a different authorised Controller must approve it. Your saved order has not been funded.</p>}</Panel>
+      : !obligation ? <Panel title="Funding instructions"><Notice title="Do not send funds yet">An existing subscription reservation is not a funding instruction. The issuer must approve the allocation basis and the settlement route must be current before any payment.</Notice>{canOpenObligation && isOwner && subscription.allowed_actions?.includes('open_funding_obligation') && candidateRoutes.length ? candidateRoutes.map(item => <div className={styles.sectionGap} key={item.id}><FundingRouteCard route={item} onSaved={onSaved} /><FundingAction label="Open funding obligation for this route" commandName="open_funding_obligation" payload={{ subscription_id: subscription.id, route_id: item.id }} onSaved={onSaved} /></div>) : <p className={styles.muted}>{!canOpenObligation ? 'Wait for the issuer to approve the allocation shown above. No payment is due yet.' : 'No currently permitted funding instruction is available. Treasury must propose the product-revision route and a different authorised Controller must approve it. Your saved order has not been funded.'}</p>}</Panel>
         : <>
           <Panel title="Funding and reconciliation" description={`Obligation ${obligation.id} · revision ${obligation.revision}`} action={<StatusBadge status={obligation.state} />}>
             <DetailList rows={[{ label: 'Requested synthetic amount', value: money(obligation.amount_minor, obligation.currency) }, { label: 'Required settlement-token amount', value: fundingTokenAmount(obligation.token_amount_base_units, obligation.token_decimals) }, { label: 'Required token base units', value: <span className={styles.mono}>{obligation.token_amount_base_units}</span> }, { label: 'Observed token amount', value: fundingTokenAmount(obligation.observed_amount_base_units, obligation.token_decimals) }, { label: 'Net posted token amount', value: fundingTokenAmount(obligation.posted_amount_base_units, obligation.token_decimals) }, { label: 'Evidence set fingerprint', value: <span className={styles.mono}>{obligation.evidence_set_hash}</span> }]} />
-            <p className={styles.muted}>One token unit per ZAR_TEST unit is a fictional test convention, not FX or real ZAR. Observations, accounting and reservation status are separate records. Reconciled funding is not issued ownership.</p>
+            <p className={styles.muted}>{obligation.currency === 'TST' ? 'TST uses six-decimal token base units, not ZAR conversion or bank cash.' : 'One token unit per ZAR_TEST unit is a fictional test convention, not FX or real ZAR.'} Observations, accounting and reservation status are separate records. Reconciled funding is not issued ownership.</p>
           </Panel>
           {route ? <FundingRouteCard route={route} onSaved={onSaved} /> : <Notice title="Funding route unavailable">Do not send funds. The pinned route cannot be displayed in this context; the obligation is not evidence of a safe current receiving destination.</Notice>}
-          {route && fundingRouteUsable(route) && obligation.reservation_status === 'AWAITING_FUNDING' && obligation.state === 'AWAITING_FUNDING' && !hasUnresolvedReference ? <Notice title="User-controlled MetaMask transfer">Review the pinned token contract, receiving address, chain 80002 and exact required amount. Make any test transfer yourself in MetaMask, then submit its transaction hash and Transfer log index below. This page does not send tokens or request spending approval. If you have already sent a transaction that is not recorded here, submit its reference instead of paying again.</Notice> : <Notice title="Do not send additional funds">Review the recorded funding state and any outstanding evidence with Treasury. For partial funding, Treasury must confirm the remaining requirement before you send more. The full required amount displayed above is not a request to pay again. Pending, unapplied, excess or reversed evidence must not be treated as a request for a replacement payment.</Notice>}
-          {isOwner && route && permitted(obligation, 'submit_funding_reference') ? <FundingClaimForm key={`${obligation.id}:${obligation.revision}:${route.revision}`} obligation={obligation} route={route} onSaved={onSaved} /> : null}
+          {canOpenObligation && route && fundingRouteUsable(route) && obligation.reservation_status === 'AWAITING_FUNDING' && obligation.state === 'AWAITING_FUNDING' && !hasUnresolvedReference ? <Notice title={fundFlow ? "Pay through the fund workflow" : "User-controlled MetaMask transfer"}>{fundFlow ? 'Use the MetaMask payment action above after reviewing the token, beneficiary and exact amount. If you already sent a transfer, submit its reference below instead of paying again.' : 'Review the pinned token contract, receiving address, chain 80002 and exact required amount. Make any test transfer yourself in MetaMask, then submit its transaction hash and Transfer log index below. This page does not send tokens or request spending approval. If you have already sent a transaction that is not recorded here, submit its reference instead of paying again.'}</Notice> : <Notice title="Do not send additional funds">Review the recorded funding state and any outstanding evidence with Treasury. For partial funding, Treasury must confirm the remaining requirement before you send more. The full required amount displayed above is not a request to pay again. Pending, unapplied, excess or reversed evidence must not be treated as a request for a replacement payment.</Notice>}
+          {isOwner && route && permitted(obligation, 'submit_funding_reference') ? <FundingClaimForm key={`${obligation.id}:${obligation.revision}:${route.revision}`} obligation={obligation} route={route} onSaved={onSaved} fundSubscriptionId={fundFlow ? subscription.id : undefined} /> : null}
           <Panel title="Recorded transfer references" description="Only server observations establish receipt facts; a submitted transaction hash is not funding confirmation.">{funding.references.filter(item => item.obligation_id === obligation.id).length ? <div className={styles.stack}>{funding.references.filter(item => item.obligation_id === obligation.id).map(reference => <FundingReferenceCard key={`${reference.id}:${reference.revision}:${obligation.revision}`} reference={reference} obligation={obligation} onSaved={onSaved} />)}</div> : <p className={styles.muted}>No transfer reference is recorded. No payment is inferred.</p>}</Panel>
           <Panel title="Immutable accounting history" description="Balanced test-token postings and approved reversals remain visible; history is not overwritten.">{funding.journals.filter(item => item.obligation_id === obligation.id).length ? <div className={styles.stack}>{funding.journals.filter(item => item.obligation_id === obligation.id).map(journal => <FundingJournalCard key={journal.id} journal={journal} obligation={obligation} reversals={funding.reversals.filter(item => item.journal_id === journal.id)} onSaved={onSaved} />)}</div> : <p className={styles.muted}>No funding journal is posted. This is not a bank-cash balance.</p>}</Panel>
         </>}

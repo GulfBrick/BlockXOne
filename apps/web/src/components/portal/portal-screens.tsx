@@ -476,7 +476,7 @@ function OperatingPortalScreen({ data, view, id, operatingContext, release, scop
       if (view === '/portal/orders/detail' && orderFund && id) {
         const subscription = snapshot.subscriptions.find(item => item.id === id)
         return <div className={styles.stack}><FundLifecycleOrder lifecycle={orderFund} subscriptionId={id} actorId={snapshot.actor.id} operatingContext={context} onRefresh={refreshFund} />
-          {subscription && snapshot.funding ? <section aria-label="Payment reference and reconciliation"><FundingOrderDetail subscription={subscription} snapshot={snapshot} operatingContext={context} onSaved={setSnapshot} /></section> : null}</div>
+          {subscription && snapshot.funding ? <section aria-label="Payment reference and reconciliation"><FundingOrderDetail subscription={subscription} snapshot={snapshot} operatingContext={context} onSaved={setSnapshot} fundFlow={{ allocationBasisCurrent: orderFund.orders.find(order => order.subscription_id === id)?.payment_allocation_basis?.current === true }} /></section> : null}</div>
       }
       if (view === '/portal/products' && fundOperatingProducts) return <FundLifecycleDashboard snapshot={fundLifecycle} role={role} actorId={snapshot.actor.id} operatingContext={context} onRefresh={refreshFund} />
       if (snapshot.base_records_available === false) return view === '/portal/products' && isFundOperatingContext(context) && !fundOperatingProducts ? unavailable()
