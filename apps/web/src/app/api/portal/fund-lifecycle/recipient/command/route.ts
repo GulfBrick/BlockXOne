@@ -10,4 +10,3 @@ export const maxDuration = 120
 export async function POST(request: NextRequest) {
   return fundApiRequest(request, fundRecipientCommandRequestSchema, async (input, { client, actorId }) => ({ snapshot: await commandFundRecipient(client, actorId, input) }))
 }
-

@@ -79,6 +79,7 @@ export function FundRecipient({ bindingId, productId, accountId, actorId, operat
     finally { if (current()) { lock.current = false; setBusy(false) } }
   }
   async function mutate(path: string, body: Record<string, unknown>, signal: AbortSignal, current: () => boolean) {
+    if (!current() || signal.aborted) throw new Error('This handoff was cancelled before saving because the account or wallet changed. No submission lease was requested.')
     if (!paths.has(path)) throw new Error('This wallet command is not supported.')
     if (pending.current && JSON.stringify(pending.current) !== JSON.stringify({ path, body })) throw new Error('Check the original saved request before starting a different action.')
     const original = { path, body }; sessionStorage.setItem(key, JSON.stringify(original)); pending.current = original; setUncertain(true)
@@ -171,7 +172,7 @@ export function FundRecipient({ bindingId, productId, accountId, actorId, operat
     if (!leased?.intent || leased.state !== 'UNKNOWN' || leased.intent.expectation_hash !== original.expectation_hash || leased.intent.transaction_data !== original.transaction_data
       || leased.intent.to !== original.to || leased.intent.sender_nonce !== original.sender_nonce || leased.intent.sender_address !== original.sender_address) throw new Error('The exact submission lease was not confirmed. Check the existing operation; do not resend.')
     const safe = original.safe_transaction ? signedTransactionSchema.parse(claimed.signed_transaction) : null
-    if (safe && (safe.to !== original.to || safe.nonce !== original.safe_transaction!.nonce)) throw new Error('The approved registry execution differs from this request. Nothing was sent; the original lease needs review.')
+    if (safe && (safe.to !== original.to || safe.nonce !== original.sender_nonce)) throw new Error('The approved registry execution differs from this request. Nothing was sent; the original lease needs review.')
     if (!safe && claimed.signed_transaction !== null) throw new Error('An EOA wallet instruction cannot contain a substitute signing request.')
     const prepared = safe ? await prepareAmoyWalletTransaction(attempt.provider, { from: original.sender_address, to: safe.to, data: safe.data, value: '0x0' }) : fee
     if (!prepared) throw new Error('The exact transaction could not be prepared. The original submission lease needs review; do not resend.')

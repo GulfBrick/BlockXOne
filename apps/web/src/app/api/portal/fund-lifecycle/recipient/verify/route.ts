@@ -10,4 +10,3 @@ export const maxDuration = 120
 export async function POST(request: NextRequest) {
   return fundApiRequest(request, fundRecipientVerifyRequestSchema, async (input, { client, actorId }) => ({ snapshot: await verifyFundRecipient(client, actorId, input) }))
 }
-

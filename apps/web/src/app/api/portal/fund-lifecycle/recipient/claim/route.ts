@@ -10,4 +10,3 @@ export const maxDuration = 120
 export async function POST(request: NextRequest) {
   return fundApiRequest(request, fundRecipientClaimRequestSchema, async (input, { client, actorId }) => claimFundRecipient(client, actorId, input))
 }
-

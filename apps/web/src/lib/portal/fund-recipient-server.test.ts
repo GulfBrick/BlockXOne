@@ -36,7 +36,12 @@ function preparation() { return { operation_id: operationId, expected_revision: 
   case_id: caseId, expectation, saved_intent: null } }
 const request = { operation_id: operationId, expected_revision: 1, operating_context: context }
 beforeAll(async () => {
+  // Candidate construction uses the explicit synthetic RPC fixture, not the
+  // server adapter's later Safe-observation mock.
+  const chain = await vi.importActual<typeof import('./fund-setup-chain')>('./fund-setup-chain')
+  mocks.safe.mockImplementation(chain.observeSetupSafe)
   const source = canonicalAdmissionFixture(), candidate = await buildFundAdmissionCandidate(source.input, { rpc: source.rpc })
+  mocks.safe.mockReset()
   expectation = { operation_id: operationId, revision: 1, phase: 'CREATE_IDENTITY', product_id: source.input.setup.product_id,
     offering_revision_id: source.input.setup.offering_revision_id!, investment_account_id: testId(707), wallet_proof_id: testId(708),
     eligibility_case_id: testId(709), eligibility_revision: 1, product_binding_hash: source.input.product_binding_hash,

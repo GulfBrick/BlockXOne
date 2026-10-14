@@ -48,7 +48,10 @@ export function dashboardProjection(scope: DashboardScope, environment: Platform
   paths.push('/portal/onboarding')
   // The existing customer feature has product organisations distinct from
   // native access organisations. Never manufacture an ID mapping between them.
-  const productOrganisations = snapshot.organisations.filter(org => org.status === 'ACTIVE' && org.native_organisation_id === scope.organisationId && org.authority_source === 'NATIVE_BINDING' && org.roles.includes(scope.role))
+  const productOrganisations = snapshot.organisations.filter(org => org.status === 'ACTIVE'
+    && org.native_organisation_id === scope.organisationId && org.roles.includes(scope.role)
+    && (org.authority_source === 'NATIVE_BINDING' || org.authority_source === 'TEST_ROLE_PLAY'
+      && ['TreasuryOperator', 'FinancialController'].includes(scope.role)))
   if (scope.role === 'Investor') {
     paths.push('/portal/opportunities', '/portal/portfolio')
     const own = snapshot.subscriptions.filter(item => item.investor_id === snapshot.actor.id)

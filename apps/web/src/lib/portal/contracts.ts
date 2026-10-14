@@ -69,7 +69,7 @@ export type PortalCapability = 'create_product' | 'save_product' | 'submit_produ
 export type PortalOrganisation = {
   id: string; name: string; roles: string[]; status: string;
   native_organisation_id?: string | null; capabilities?: PortalCapability[];
-  authority_source?: 'NATIVE_BINDING' | 'LEGACY_OWNER' | 'TEST_EVALUATION';
+  authority_source?: 'NATIVE_BINDING' | 'LEGACY_OWNER' | 'TEST_EVALUATION' | 'TEST_ROLE_PLAY';
 }
 export type PortalInvestmentAccount = {
   id: string; holder_user_id: string; application_id: string; kind: 'INDIVIDUAL';

@@ -337,14 +337,20 @@ export function FundingWorkspace({ snapshot, operatingContext, onSaved }: Saved 
   if (operatingContext.mode !== 'ROLE' || (operatingContext.role !== 'TreasuryOperator' && operatingContext.role !== 'FinancialController')) return <Notice title="Funding workspace unavailable">Select an assigned Treasury or Financial Controller context. A shared URL does not grant financial authority.</Notice>
   const role = operatingContext.role
   if (!snapshot.funding) return <Notice title="Funding records unavailable">The financial adapter has not returned a verified projection. This is not an empty queue, a zero balance or permission to send funds.</Notice>
-  const organisations = snapshot.organisations.filter(item => item.status === 'ACTIVE' && item.authority_source === 'NATIVE_BINDING' && item.native_organisation_id === operatingContext.organisationId && item.roles.includes(role))
+  // This server-derived TEST source is a simulated operating capacity, not a
+  // professional appointment. Per-product permission stays in guarded SQL.
+  const organisations = snapshot.organisations.filter(item => item.status === 'ACTIVE'
+    && (item.authority_source === 'NATIVE_BINDING' || item.authority_source === 'TEST_ROLE_PLAY')
+    && item.native_organisation_id === operatingContext.organisationId && item.roles.includes(role))
   const productIds = new Set(snapshot.products.filter(product => organisations.some(item => item.id === product.organisation_id)).map(item => item.id))
   const products = snapshot.products.filter(item => productIds.has(item.id))
   const subscriptions = snapshot.subscriptions.filter(item => productIds.has(item.product_id) && organisations.some(org => org.id === item.organisation_id))
   const routes = snapshot.funding.routes.filter(item => productIds.has(item.product_id) && organisations.some(org => org.id === item.organisation_id))
   if (!organisations.length) return <Notice title="No appointed financial scope">A current explicit organisation binding is required. No product access, receiving mandate or posting authority is inferred from your role label.</Notice>
   return <div className={styles.stack}>
-    <Notice title={role === 'TreasuryOperator' ? 'Prepare evidence for independent reconciliation' : 'Independently reconcile exact funding evidence'}>Treasury proposals and Controller decisions remain separate. These queues concern Amoy test tokens, not safeguarded bank cash, issued units or legal ownership.</Notice>
+    <Notice title={role === 'TreasuryOperator' ? 'Prepare funding evidence' : 'Reconcile funding evidence'}>{organisations.some(item => item.authority_source === 'TEST_ROLE_PLAY')
+      ? 'TEST role-play: one operator can change capacity; this does not prove independent human approval. Actual token receipt, reconciliation and posting are still required.'
+      : 'Treasury proposals and Controller decisions require separate appointed people.'} These queues concern Amoy test tokens, not safeguarded bank cash, issued units or legal ownership.</Notice>
     <Panel title={role === 'TreasuryOperator' ? 'Funding operations queue' : 'Independent reconciliation queue'} description="Open the same subscription and evidence records used by the investor and issuer." flush>
       {subscriptions.length ? <div className={styles.tableWrap}><table className={styles.table}><thead><tr><th scope="col">Product</th><th scope="col">Subscription / account</th><th scope="col">Requested amount</th><th scope="col">Funding state</th><th scope="col">Next action</th></tr></thead><tbody>{subscriptions.map(subscription => {
         const obligation = snapshot.funding!.obligations.find(item => item.subscription_id === subscription.id)
