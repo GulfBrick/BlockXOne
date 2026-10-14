@@ -260,7 +260,7 @@ function FundingClaimForm({ obligation, route, onSaved, fundSubscriptionId }: Sa
     finally { if (currentAttempt()) { lock.current = false; setBusy(false) } }
   }
   const disabled = busy || command.busy || command.unknown
-  return <Panel title={fundSubscriptionId ? 'Confirm your existing payment' : 'Submit your existing transfer for verification'} description={fundSubscriptionId ? 'Find the transfer already sent for this order, then confirm its payer. You do not need to look up a blockchain log number.' : 'Submit the reference of an existing transfer for review. This records a claim; it does not send funds.'}>
+  return <Panel title={fundSubscriptionId ? 'Confirm your existing payment' : 'Submit your existing transfer for verification'} description={fundSubscriptionId ? 'Find the transfer already sent for this order, then confirm its payer. You do not need to look up a blockchain log number.' : 'If you already made a transfer, submit its existing reference for review. This form only signs a claim and records that reference; it does not instruct you to send any funds.'}>
     <Notice title="A signature is not payment confirmation">Claim signing proves control of the payer key for this record only. The server must verify the transfer and an independent Controller must reconcile it.</Notice>
     <CommandFeedback command={command} />
     <div className={`${styles.form} ${styles.sectionGap}`}>
