@@ -44,9 +44,13 @@ describe('FAQ access in mounted portal shells', () => {
       const header = view.container.querySelector('header')!
       expect(header.textContent).not.toMatch(/TESTNET|MAINNET|Testnet environment|Mainnet environment/)
       expect(header.textContent).toContain('Assigned organisation')
-      expect(within(header).getByRole('button', { name: /^Account$/ })).toBeDefined()
+      const accountButton = within(header).getByRole('button', { name: /^Account$/ })
+      const accountPanelId = accountButton.getAttribute('aria-controls')!
+      expect(accountPanelId).toBeTruthy()
+      expect(header.querySelector(`[id="${accountPanelId}"]`)?.getAttribute('aria-label')).toBe('Account options')
       expect(within(header).getByRole('link', { name: 'Change workspace' }).getAttribute('href')).toBe('/portal?mode=applicant&section=workspaces')
-      headers.push(header.innerHTML)
+      // useId varies per mount; compare the interface after validating its binding.
+      headers.push(header.innerHTML.replaceAll(accountPanelId, 'account-panel'))
       view.unmount()
     }
     expect(headers[0]).toBe(headers[1])
