@@ -1,0 +1,57 @@
+name: BX1 canonical fund cloud compile
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [codex/stage2-sandbox-completion-20261011]
+    paths:
+      - .github/workflows/bx1-canonical-fund-compile.yml
+      - contracts/canonical/compile.mjs
+      - contracts/canonical/cloud-package.json
+      - contracts/canonical/Bx1TestSettlementToken.sol
+      - contracts/canonical/Bx1MaximumHoldingModule.sol
+      - contracts/canonical/Bx1FundController.sol
+      - contracts/canonical/release-source.json
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bx1-canonical-fund-compile-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  canonical-artifacts:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out the requested source without write credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+          submodules: false
+          lfs: false
+
+      - name: Select the pinned cloud compiler runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22.23.1'
+          check-latest: false
+          package-manager-cache: false
+
+      - name: Verify pinned archives and compile the canonical artifact packet
+        shell: bash
+        run: |
+          set -euo pipefail
+          node contracts/canonical/compile.mjs \
+            --packages "$RUNNER_TEMP/bx1-canonical-packages" \
+            --out "$RUNNER_TEMP/bx1-canonical-artifacts"
+
+      - name: Retain artifacts, source hashes and the undeployed bootstrap packet
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: bx1-canonical-fund-${{ github.sha }}
+          path: ${{ runner.temp }}/bx1-canonical-artifacts
+          if-no-files-found: error
+          retention-days: 30
