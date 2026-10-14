@@ -183,6 +183,19 @@ describe('bounded fixed-origin RPC transport', () => {
     expect(await createFundingRpc(fetcher)(FUNDING_RPC_URLS[0], 'eth_chainId', [])).toBe('0x13882')
     expect(fetcher).toHaveBeenCalledWith(FUNDING_RPC_URLS[0], expect.objectContaining({ method: 'POST', redirect: 'error', cache: 'no-store', signal: expect.any(AbortSignal) }))
   })
+  it('permits only exact latest or pending sender-nonce reads on fixed endpoints', async () => {
+    const fetcher = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      const request = JSON.parse(String(init?.body))
+      return Response.json({ jsonrpc: '2.0', id: request.id, result: '0x2' })
+    })
+    const rpc = createFundingRpc(fetcher), wallet = '0x1111111111111111111111111111111111111111'
+    expect(await rpc(FUNDING_RPC_URLS[0], 'eth_getTransactionCount', [wallet, 'latest'])).toBe('0x2')
+    expect(await rpc(FUNDING_RPC_URLS[1], 'eth_getTransactionCount', [wallet, 'pending'])).toBe('0x2')
+    await expect(rpc(FUNDING_RPC_URLS[0], 'eth_getTransactionCount', [wallet, 'earliest'])).rejects.toMatchObject({ code: 'RPC_PARAMETERS_NOT_ALLOWED' })
+    await expect(rpc(FUNDING_RPC_URLS[0], 'eth_getTransactionCount', ['not-a-wallet', 'pending'])).rejects.toMatchObject({ code: 'RPC_PARAMETERS_NOT_ALLOWED' })
+    await expect(rpc(FUNDING_RPC_URLS[0], 'eth_getTransactionCount', [wallet, 'pending', true])).rejects.toMatchObject({ code: 'RPC_PARAMETERS_NOT_ALLOWED' })
+    expect(fetcher).toHaveBeenCalledTimes(2)
+  })
   it.each([
     () => Response.json({ jsonrpc: '2.0', id: 999, result: '0x13882' }),
     () => Response.json({ jsonrpc: '2.0', id: 1, error: { message: 'secret upstream diagnostic' } }),

@@ -193,7 +193,16 @@ export function createFundingRpc(fetcher: typeof fetch = fetch, signal?: AbortSi
   let requestId = 0
   return async (url, method, params) => {
     if (!(FUNDING_RPC_URLS as readonly string[]).includes(url)) reject('RPC_ENDPOINT_NOT_ALLOWED')
-    if (!['eth_chainId', 'eth_getBlockByNumber', 'eth_getTransactionReceipt', 'eth_getTransactionByHash', 'eth_getCode', 'eth_call'].includes(method)) reject('RPC_METHOD_NOT_ALLOWED')
+    if (!['eth_chainId', 'eth_getBlockByNumber', 'eth_getTransactionReceipt', 'eth_getTransactionByHash', 'eth_getTransactionCount', 'eth_getStorageAt', 'eth_getCode', 'eth_call'].includes(method)) reject('RPC_METHOD_NOT_ALLOWED')
+    // Setup reads a server-bound sender nonce; this is still a read-only RPC
+    // transport. No arbitrary tags, wallet writes or caller-supplied URL.
+    if (method === 'eth_getTransactionCount' && (params.length !== 2
+      || typeof params[0] !== 'string' || !/^0x[0-9a-f]{40}$/i.test(params[0])
+      || !['latest', 'pending'].includes(String(params[1])))) reject('RPC_PARAMETERS_NOT_ALLOWED')
+    if (method === 'eth_getStorageAt' && (params.length !== 3
+      || typeof params[0] !== 'string' || !/^0x[0-9a-f]{40}$/i.test(params[0])
+      || typeof params[1] !== 'string' || !/^0x(?:0|[1-9a-f][0-9a-f]*)$/i.test(params[1])
+      || typeof params[2] !== 'string' || !/^0x(?:0|[1-9a-f][0-9a-f]*)$/i.test(params[2]))) reject('RPC_PARAMETERS_NOT_ALLOWED')
     const id = ++requestId
     const timeout = AbortSignal.timeout(8_000)
     const bound = signal ? AbortSignal.any([signal, timeout]) : timeout

@@ -23,6 +23,7 @@ import { DetailList, EmptyState, Field, Notice, Panel, Statistic, StatusBadge, d
 import { ApplicationReview, EntityProductEligibilityPanel, InvestmentAccountPanel, IssuerOfferingReview, OfferingPackageEvidence, OfferingDocuments, ProductActions, ProductEligibilityPanel, ProductEligibilityReview, ProductFacts, ProductNarrative, ProductReview, RepresentativeProposalInbox, SubscriptionCancel, SubscriptionForm, currentInvestorApplication, entityEligibilityNextOwner, investingRepresentativeLabel } from './portal-workflows'
 import { FundingOrderDetail, FundingWorkspace } from './funding-workflows'
 import { FundLifecycleDashboard, FundLifecycleOrder, FundLifecyclePortfolio, FundLifecycleWorkspace } from './fund-lifecycle'
+import { FundSetup } from './fund-setup'
 import { validatedFundLifecycle, type FundProductLifecycle } from '@/lib/portal/fund-lifecycle-contracts'
 import styles from './portal.module.css'
 
@@ -38,7 +39,7 @@ function permits(org: PortalOrganisation, command: PortalCapability, context?: P
   return org.capabilities?.includes(command) ?? !context
 }
 
-type ProductWorkspaceSection = 'DETAILS' | 'REVIEW' | 'DOCUMENTS' | 'APPOINTMENTS'
+type ProductWorkspaceSection = 'DETAILS' | 'REVIEW' | 'DOCUMENTS' | 'APPOINTMENTS' | 'CHAIN_SETUP'
 
 function ProductDetailWorkspace({ product, snapshot, organisations, operatingContext, onSaved, onRefresh, availableCommands, canEdit, canViewIssuerRationale, canReviewIssuer, lifecycle }: {
   product: PortalProduct; snapshot: PortalSnapshot; organisations: PortalOrganisation[];
@@ -49,7 +50,7 @@ function ProductDetailWorkspace({ product, snapshot, organisations, operatingCon
 }) {
   const [section, setSection] = useState<ProductWorkspaceSection>(canEdit ? 'DETAILS' : 'REVIEW')
   const [documentsMounted, setDocumentsMounted] = useState(false)
-  const sectionContent = useRef<Record<ProductWorkspaceSection, HTMLDivElement | null>>({ DETAILS: null, REVIEW: null, DOCUMENTS: null, APPOINTMENTS: null })
+  const sectionContent = useRef<Record<ProductWorkspaceSection, HTMLDivElement | null>>({ DETAILS: null, REVIEW: null, DOCUMENTS: null, APPOINTMENTS: null, CHAIN_SETUP: null })
   const focusRequested = useRef(false)
   useEffect(() => {
     if (!focusRequested.current) return
@@ -76,7 +77,7 @@ function ProductDetailWorkspace({ product, snapshot, organisations, operatingCon
     : signatureStatus === 'NOT_CONNECTED' || signatureStatus === 'NOT_ADMITTED' ? { message: 'Document signing is not connected for this package yet. The submission is saved, but approval is not available.', section: 'DOCUMENTS' }
     : pkg.issuer_status !== 'APPROVED' ? { message: 'The appointed issuer must complete the document and package review.', section: 'DOCUMENTS' }
     : pkg.compliance_status !== 'APPROVED' ? { message: 'The appointed Compliance Officer must review the same submitted package.', section: 'DOCUMENTS' }
-    : pkg.technical_readiness_status !== 'VERIFIED' ? { message: 'The package still needs verified blockchain deployment before it can open to investors.' }
+    : pkg.technical_readiness_status !== 'VERIFIED' ? { message: 'The package still needs verified blockchain deployment before it can open to investors.', section: 'CHAIN_SETUP' }
     : product.status !== 'PUBLISHED' ? { message: 'Use the authorised opening action when the backend confirms every requirement.' }
     : { message: 'The offering is published. Investor access remains subject to the current product and account requirements.' }
   const commands = hasUnsavedChanges ? (availableCommands ?? []).filter(command => command !== 'submit_product') : availableCommands
@@ -85,6 +86,7 @@ function ProductDetailWorkspace({ product, snapshot, organisations, operatingCon
     { id: 'REVIEW', label: 'Review & next step' },
     { id: 'DOCUMENTS', label: 'Documents & signing' },
     { id: 'APPOINTMENTS', label: 'Appointments' },
+    ...(product.terms.asset_type === 'FUND' ? [{ id: 'CHAIN_SETUP', label: 'Blockchain setup' } as const] : []),
   ] as const
   const nextStepSection = sections.find(item => item.id === nextStep.section)
   return <div className={styles.stack}>
@@ -118,6 +120,10 @@ function ProductDetailWorkspace({ product, snapshot, organisations, operatingCon
     <div id={`product-${product.id}-APPOINTMENTS`} ref={node => { sectionContent.current.APPOINTMENTS = node }} role="region" aria-labelledby={`product-${product.id}-section-APPOINTMENTS`} tabIndex={-1} hidden={section !== 'APPOINTMENTS'}>
       <ProductAppointmentRequest product={product} snapshot={snapshot} operatingContext={operatingContext} onSaved={onSaved} />
     </div>
+    {section === 'CHAIN_SETUP' && product.terms.asset_type === 'FUND' && operatingContext ? <div id={`product-${product.id}-CHAIN_SETUP`} ref={node => { sectionContent.current.CHAIN_SETUP = node }} role="region" aria-labelledby={`product-${product.id}-section-CHAIN_SETUP`} tabIndex={-1}>
+      <FundSetup key={`${snapshot.actor.id}:${product.id}:${portalContextKey(operatingContext)}`} productId={product.id} productRevision={product.revision}
+        actorId={snapshot.actor.id} operatingContext={operatingContext} onRefresh={onRefresh} />
+    </div> : null}
   </div>
 }
 

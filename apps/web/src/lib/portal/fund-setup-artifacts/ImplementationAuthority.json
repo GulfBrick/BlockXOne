@@ -1,0 +1,457 @@
+{
+  "schema": "blockxone.canonical-fund-artifact.v1",
+  "status": "COMPILED_SOURCE_NOT_DEPLOYED_NOT_ADMITTED",
+  "chain_id": 80002,
+  "contract_name": "ImplementationAuthority",
+  "source_path": "@onchain-id/solidity/contracts/proxy/ImplementationAuthority.sol",
+  "source_sha256": "7f78cf5a0e21a0843b3f5312d155e6d888f21550e32a3f1b19a0af6355857681",
+  "application_commit": "6760781aad5afc7af47b47789040efec06766e20",
+  "release_source": {
+    "erc3643_repository": "https://github.com/ERC-3643/ERC-3643",
+    "erc3643_commit": "b6c5fabf86e733ede017fef754d59eeb8f80e3f4",
+    "onchainid_repository": "https://github.com/onchain-id/solidity",
+    "onchainid_commit": "a483cda6821e3883497972d36d0c4c1e1693e483"
+  },
+  "compiler_version": "0.8.17+commit.8df45f5f.Emscripten.clang",
+  "settings": {
+    "optimizer": {
+      "enabled": true,
+      "runs": 200
+    },
+    "evmVersion": "london",
+    "viaIR": false,
+    "metadata": {
+      "bytecodeHash": "ipfs"
+    },
+    "outputSelection": {
+      "*": {
+        "*": [
+          "abi",
+          "metadata",
+          "storageLayout",
+          "evm.bytecode",
+          "evm.deployedBytecode"
+        ],
+        "": [
+          "ast"
+        ]
+      }
+    }
+  },
+  "abi": [
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "implementation",
+          "type": "address"
+        }
+      ],
+      "stateMutability": "nonpayable",
+      "type": "constructor"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "previousOwner",
+          "type": "address"
+        },
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "newOwner",
+          "type": "address"
+        }
+      ],
+      "name": "OwnershipTransferred",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": false,
+          "internalType": "address",
+          "name": "newAddress",
+          "type": "address"
+        }
+      ],
+      "name": "UpdatedImplementation",
+      "type": "event"
+    },
+    {
+      "inputs": [],
+      "name": "getImplementation",
+      "outputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "owner",
+      "outputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "renounceOwnership",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "newOwner",
+          "type": "address"
+        }
+      ],
+      "name": "transferOwnership",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "_newImplementation",
+          "type": "address"
+        }
+      ],
+      "name": "updateImplementation",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    }
+  ],
+  "constructor": {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "implementation",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "nonpayable",
+    "type": "constructor"
+  },
+  "constructor_arguments": null,
+  "deployed_address": null,
+  "deployment_transaction": null,
+  "creation": {
+    "code": "0x608060405234801561001057600080fd5b5060405161049238038061049283398101604081905261002f91610139565b610038336100e9565b6001600160a01b0381166100925760405162461bcd60e51b815260206004820152601f60248201527f696e76616c696420617267756d656e74202d207a65726f206164647265737300604482015260640160405180910390fd5b600180546001600160a01b0319166001600160a01b0383169081179091556040519081527f87c4e67a766ffddda27f441d63853a36ae64fbb07775a7c59d395e064b204eeb9060200160405180910390a150610169565b600080546001600160a01b038381166001600160a01b0319831681178455604051919092169283917f8be0079c531659141344cd1fd0a4f28419497f9722a3daafe3b4186f6b6457e09190a35050565b60006020828403121561014b57600080fd5b81516001600160a01b038116811461016257600080fd5b9392505050565b61031a806101786000396000f3fe608060405234801561001057600080fd5b50600436106100575760003560e01c8063025b22bc1461005c578063715018a6146100715780638da5cb5b14610079578063aaf10f42146100a2578063f2fde38b146100b3575b600080fd5b61006f61006a3660046102b4565b6100c6565b005b61006f61017d565b6000546001600160a01b03165b6040516001600160a01b03909116815260200160405180910390f35b6001546001600160a01b0316610086565b61006f6100c13660046102b4565b610191565b6100ce61020a565b6001600160a01b0381166101295760405162461bcd60e51b815260206004820152601f60248201527f696e76616c696420617267756d656e74202d207a65726f20616464726573730060448201526064015b60405180910390fd5b600180546001600160a01b0319166001600160a01b0383169081179091556040519081527f87c4e67a766ffddda27f441d63853a36ae64fbb07775a7c59d395e064b204eeb9060200160405180910390a150565b61018561020a565b61018f6000610264565b565b61019961020a565b6001600160a01b0381166101fe5760405162461bcd60e51b815260206004820152602660248201527f4f776e61626c653a206e6577206f776e657220697320746865207a65726f206160448201526564647265737360d01b6064820152608401610120565b61020781610264565b50565b6000546001600160a01b0316331461018f5760405162461bcd60e51b815260206004820181905260248201527f4f776e61626c653a2063616c6c6572206973206e6f7420746865206f776e65726044820152606401610120565b600080546001600160a01b038381166001600160a01b0319831681178455604051919092169283917f8be0079c531659141344cd1fd0a4f28419497f9722a3daafe3b4186f6b6457e09190a35050565b6000602082840312156102c657600080fd5b81356001600160a01b03811681146102dd57600080fd5b939250505056fea2646970667358221220af57693694765cd0943e6abdf3e6a5aa9e77d759f4916d467bb54daae7628b5464736f6c63430008110033",
+    "sha256": "ee7d8b05215205946b096d29e48b47a05749a28f1eb2fbe6dbe4fd8c8ee216ef",
+    "keccak256": "0x02f83310bb188734f8a21979483ab1199ee2c8ffa04c5c6e037afa2f3dab7901",
+    "link_references": {},
+    "source_map": "168:949:47:-:0;;;334:219;;;;;;;;;;;;;;;;;;;;;;;;;;;;:::i;:::-;936:32:55;734:10:59;936:18:55;:32::i;:::-;-1:-1:-1;;;;;388:28:47;;380:72;;;;-1:-1:-1;;;380:72:47;;511:2:63;380:72:47;;;493:21:63;550:2;530:18;;;523:30;589:33;569:18;;;562:61;640:18;;380:72:47;;;;;;;;462:15;:32;;-1:-1:-1;;;;;;462:32:47;-1:-1:-1;;;;;462:32:47;;;;;;;;509:37;;815:51:63;;;509:37:47;;803:2:63;788:18;509:37:47;;;;;;;334:219;168:949;;2426:187:55;2499:16;2518:6;;-1:-1:-1;;;;;2534:17:55;;;-1:-1:-1;;;;;;2534:17:55;;;;;;2566:40;;2518:6;;;;;;;2566:40;;2499:16;2566:40;2489:124;2426:187;:::o;14:290:63:-;84:6;137:2;125:9;116:7;112:23;108:32;105:52;;;153:1;150;143:12;105:52;179:16;;-1:-1:-1;;;;;224:31:63;;214:42;;204:70;;270:1;267;260:12;204:70;293:5;14:290;-1:-1:-1;;;14:290:63:o;669:203::-;168:949:47;;;;;;"
+  },
+  "runtime_template": {
+    "code": "0x608060405234801561001057600080fd5b50600436106100575760003560e01c8063025b22bc1461005c578063715018a6146100715780638da5cb5b14610079578063aaf10f42146100a2578063f2fde38b146100b3575b600080fd5b61006f61006a3660046102b4565b6100c6565b005b61006f61017d565b6000546001600160a01b03165b6040516001600160a01b03909116815260200160405180910390f35b6001546001600160a01b0316610086565b61006f6100c13660046102b4565b610191565b6100ce61020a565b6001600160a01b0381166101295760405162461bcd60e51b815260206004820152601f60248201527f696e76616c696420617267756d656e74202d207a65726f20616464726573730060448201526064015b60405180910390fd5b600180546001600160a01b0319166001600160a01b0383169081179091556040519081527f87c4e67a766ffddda27f441d63853a36ae64fbb07775a7c59d395e064b204eeb9060200160405180910390a150565b61018561020a565b61018f6000610264565b565b61019961020a565b6001600160a01b0381166101fe5760405162461bcd60e51b815260206004820152602660248201527f4f776e61626c653a206e6577206f776e657220697320746865207a65726f206160448201526564647265737360d01b6064820152608401610120565b61020781610264565b50565b6000546001600160a01b0316331461018f5760405162461bcd60e51b815260206004820181905260248201527f4f776e61626c653a2063616c6c6572206973206e6f7420746865206f776e65726044820152606401610120565b600080546001600160a01b038381166001600160a01b0319831681178455604051919092169283917f8be0079c531659141344cd1fd0a4f28419497f9722a3daafe3b4186f6b6457e09190a35050565b6000602082840312156102c657600080fd5b81356001600160a01b03811681146102dd57600080fd5b939250505056fea2646970667358221220af57693694765cd0943e6abdf3e6a5aa9e77d759f4916d467bb54daae7628b5464736f6c63430008110033",
+    "sha256": "8dae40377f7fd2bea969464bfa30b9a07df3af8e03fbe46895da82079ff9ca8f",
+    "keccak256": "0xd904c774a56a245e5ab29ade34884550824c7c43caee04f2218193c867ac5b45",
+    "link_references": {},
+    "source_map": "168:949:47:-:0;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;641:281;;;;;;:::i;:::-;;:::i;:::-;;1824:101:55;;;:::i;1201:85::-;1247:7;1273:6;-1:-1:-1;;;;;1273:6:55;1201:85;;;-1:-1:-1;;;;;469:32:63;;;451:51;;439:2;424:18;1201:85:55;;;;;;;1007:108:47;1093:15;;-1:-1:-1;;;;;1093:15:47;1007:108;;2074:198:55;;;;;;:::i;:::-;;:::i;641:281:47:-;1094:13:55;:11;:13::i;:::-;-1:-1:-1;;;;;745:32:47;::::1;737:76;;;::::0;-1:-1:-1;;;737:76:47;;715:2:63;737:76:47::1;::::0;::::1;697:21:63::0;754:2;734:18;;;727:30;793:33;773:18;;;766:61;844:18;;737:76:47::1;;;;;;;;;823:15;:36:::0;;-1:-1:-1;;;;;;823:36:47::1;-1:-1:-1::0;;;;;823:36:47;::::1;::::0;;::::1;::::0;;;874:41:::1;::::0;451:51:63;;;874:41:47::1;::::0;439:2:63;424:18;874:41:47::1;;;;;;;641:281:::0;:::o;1824:101:55:-;1094:13;:11;:13::i;:::-;1888:30:::1;1915:1;1888:18;:30::i;:::-;1824:101::o:0;2074:198::-;1094:13;:11;:13::i;:::-;-1:-1:-1;;;;;2162:22:55;::::1;2154:73;;;::::0;-1:-1:-1;;;2154:73:55;;1075:2:63;2154:73:55::1;::::0;::::1;1057:21:63::0;1114:2;1094:18;;;1087:30;1153:34;1133:18;;;1126:62;-1:-1:-1;;;1204:18:63;;;1197:36;1250:19;;2154:73:55::1;873:402:63::0;2154:73:55::1;2237:28;2256:8;2237:18;:28::i;:::-;2074:198:::0;:::o;1359:130::-;1247:7;1273:6;-1:-1:-1;;;;;1273:6:55;734:10:59;1422:23:55;1414:68;;;;-1:-1:-1;;;1414:68:55;;1482:2:63;1414:68:55;;;1464:21:63;;;1501:18;;;1494:30;1560:34;1540:18;;;1533:62;1612:18;;1414:68:55;1280:356:63;2426:187:55;2499:16;2518:6;;-1:-1:-1;;;;;2534:17:55;;;-1:-1:-1;;;;;;2534:17:55;;;;;;2566:40;;2518:6;;;;;;;2566:40;;2499:16;2566:40;2489:124;2426:187;:::o;14:286:63:-;73:6;126:2;114:9;105:7;101:23;97:32;94:52;;;142:1;139;132:12;94:52;168:23;;-1:-1:-1;;;;;220:31:63;;210:42;;200:70;;266:1;263;256:12;200:70;289:5;14:286;-1:-1:-1;;;14:286:63:o"
+  },
+  "immutable_references": {},
+  "immutable_bindings": {},
+  "deployed_runtime_keccak256": null,
+  "runtime_hash_warning": "Template hash is not deployed runtime proof. Patch/verify all immutable constructor bindings and compare independently observed code after finality.",
+  "storage_layout": {
+    "storage": [
+      {
+        "astId": 12473,
+        "contract": "@onchain-id/solidity/contracts/proxy/ImplementationAuthority.sol:ImplementationAuthority",
+        "label": "_owner",
+        "offset": 0,
+        "slot": "0",
+        "type": "t_address"
+      },
+      {
+        "astId": 11627,
+        "contract": "@onchain-id/solidity/contracts/proxy/ImplementationAuthority.sol:ImplementationAuthority",
+        "label": "_implementation",
+        "offset": 0,
+        "slot": "1",
+        "type": "t_address"
+      }
+    ],
+    "types": {
+      "t_address": {
+        "encoding": "inplace",
+        "label": "address",
+        "numberOfBytes": "20"
+      }
+    }
+  },
+  "compiler_metadata": {
+    "compiler": {
+      "version": "0.8.17+commit.8df45f5f"
+    },
+    "language": "Solidity",
+    "output": {
+      "abi": [
+        {
+          "inputs": [
+            {
+              "internalType": "address",
+              "name": "implementation",
+              "type": "address"
+            }
+          ],
+          "stateMutability": "nonpayable",
+          "type": "constructor"
+        },
+        {
+          "anonymous": false,
+          "inputs": [
+            {
+              "indexed": true,
+              "internalType": "address",
+              "name": "previousOwner",
+              "type": "address"
+            },
+            {
+              "indexed": true,
+              "internalType": "address",
+              "name": "newOwner",
+              "type": "address"
+            }
+          ],
+          "name": "OwnershipTransferred",
+          "type": "event"
+        },
+        {
+          "anonymous": false,
+          "inputs": [
+            {
+              "indexed": false,
+              "internalType": "address",
+              "name": "newAddress",
+              "type": "address"
+            }
+          ],
+          "name": "UpdatedImplementation",
+          "type": "event"
+        },
+        {
+          "inputs": [],
+          "name": "getImplementation",
+          "outputs": [
+            {
+              "internalType": "address",
+              "name": "",
+              "type": "address"
+            }
+          ],
+          "stateMutability": "view",
+          "type": "function"
+        },
+        {
+          "inputs": [],
+          "name": "owner",
+          "outputs": [
+            {
+              "internalType": "address",
+              "name": "",
+              "type": "address"
+            }
+          ],
+          "stateMutability": "view",
+          "type": "function"
+        },
+        {
+          "inputs": [],
+          "name": "renounceOwnership",
+          "outputs": [],
+          "stateMutability": "nonpayable",
+          "type": "function"
+        },
+        {
+          "inputs": [
+            {
+              "internalType": "address",
+              "name": "newOwner",
+              "type": "address"
+            }
+          ],
+          "name": "transferOwnership",
+          "outputs": [],
+          "stateMutability": "nonpayable",
+          "type": "function"
+        },
+        {
+          "inputs": [
+            {
+              "internalType": "address",
+              "name": "_newImplementation",
+              "type": "address"
+            }
+          ],
+          "name": "updateImplementation",
+          "outputs": [],
+          "stateMutability": "nonpayable",
+          "type": "function"
+        }
+      ],
+      "devdoc": {
+        "kind": "dev",
+        "methods": {
+          "getImplementation()": {
+            "details": "See {IImplementationAuthority-getImplementation}."
+          },
+          "owner()": {
+            "details": "Returns the address of the current owner."
+          },
+          "renounceOwnership()": {
+            "details": "Leaves the contract without owner. It will not be possible to call `onlyOwner` functions. Can only be called by the current owner. NOTE: Renouncing ownership will leave the contract without an owner, thereby disabling any functionality that is only available to the owner."
+          },
+          "transferOwnership(address)": {
+            "details": "Transfers ownership of the contract to a new account (`newOwner`). Can only be called by the current owner."
+          },
+          "updateImplementation(address)": {
+            "details": "See {IImplementationAuthority-updateImplementation}."
+          }
+        },
+        "version": 1
+      },
+      "userdoc": {
+        "kind": "user",
+        "methods": {},
+        "version": 1
+      }
+    },
+    "settings": {
+      "compilationTarget": {
+        "@onchain-id/solidity/contracts/proxy/ImplementationAuthority.sol": "ImplementationAuthority"
+      },
+      "evmVersion": "london",
+      "libraries": {},
+      "metadata": {
+        "bytecodeHash": "ipfs"
+      },
+      "optimizer": {
+        "enabled": true,
+        "runs": 200
+      },
+      "remappings": []
+    },
+    "sources": {
+      "@onchain-id/solidity/contracts/interface/IImplementationAuthority.sol": {
+        "keccak256": "0xa3ea8fecc49a4920ed36eeb19342cda22230f36a52d9d53c556d41643c2c4920",
+        "license": "GPL-3.0",
+        "urls": [
+          "bzz-raw://d9bd719ad806a73fc69beede738e3451f7afc438c9e92119cab67c1beee49d2a",
+          "dweb:/ipfs/QmVpoGmBmczaEjk9gLtV2B13vHfzBdbMHu8bWV7eAPEwvC"
+        ]
+      },
+      "@onchain-id/solidity/contracts/proxy/ImplementationAuthority.sol": {
+        "keccak256": "0x2a00d62be9be76f26513caeff730809cf775dd1cac65691dd31a78a884458140",
+        "license": "GPL-3.0",
+        "urls": [
+          "bzz-raw://3cdb30ce71fdbd57774fdbce9ea321703fe031a532d149f9b48f9d5346889dae",
+          "dweb:/ipfs/QmNNN27BzmvYxKgz91TWns4dZnc8LnuMB9WBabWPFaFaTq"
+        ]
+      },
+      "@openzeppelin/contracts/access/Ownable.sol": {
+        "keccak256": "0xba43b97fba0d32eb4254f6a5a297b39a19a247082a02d6e69349e071e2946218",
+        "license": "MIT",
+        "urls": [
+          "bzz-raw://fc980984badf3984b6303b377711220e067722bbd6a135b24669ff5069ef9f32",
+          "dweb:/ipfs/QmPHXMSXj99XjSVM21YsY6aNtLLjLVXDbyN76J5HQYvvrz"
+        ]
+      },
+      "@openzeppelin/contracts/utils/Context.sol": {
+        "keccak256": "0xa92e4fa126feb6907daa0513ddd816b2eb91f30a808de54f63c17d0e162c3439",
+        "license": "MIT",
+        "urls": [
+          "bzz-raw://a367861093b74443b137564d3f3c472f70bcf114739e62059c939f25e315706c",
+          "dweb:/ipfs/Qmd7JMpcxD9RuQjK3uM3EzJUgSqdN8vzp8eytEiuwxQJ6h"
+        ]
+      }
+    },
+    "version": 1
+  },
+  "source_hashes": {
+    "@erc3643org/erc-3643/contracts/token/Token.sol": "754bf46aa42f260fbab50c7dec08769935f65c6a5067a7a70f1ad74a91d34828",
+    "@erc3643org/erc-3643/contracts/token/IToken.sol": "36db234ae57863f6a158a469a93e6243875b615fcb84e564ef49b12416ee44c9",
+    "@erc3643org/erc-3643/contracts/registry/interface/IIdentityRegistry.sol": "9b2bb6010b31b8506b3621449588b30a6cd77a2a1fc4b9e6c02da966b6981b0e",
+    "@erc3643org/erc-3643/contracts/registry/interface/ITrustedIssuersRegistry.sol": "6c39cb60cf6647c91923eec087f673ab95a3331309b22cb435e68148646ef607",
+    "@onchain-id/solidity/contracts/interface/IClaimIssuer.sol": "f9fc0d9978cbfdfda4a1acd2a99771cb4655fecfb43fee7eaee1b584727eca8d",
+    "@onchain-id/solidity/contracts/interface/IIdentity.sol": "80b5c1a284821b9ccb226164e46c1766335003ce1b97805d0bfc142121dfd70f",
+    "@onchain-id/solidity/contracts/interface/IERC734.sol": "8177f74b508b46270dee0f58ff402888455a77ac34ec7ecd971f78161809f382",
+    "@onchain-id/solidity/contracts/interface/IERC735.sol": "e78f056da8ad43e0cd1bcb606c32dd6d095b54eb3aab01c051bf82d64f41e7f5",
+    "@erc3643org/erc-3643/contracts/registry/interface/IClaimTopicsRegistry.sol": "f8589bbc6966d5e73670d43977eccacac2830d7f1c69700159c6e555b1e6997e",
+    "@erc3643org/erc-3643/contracts/registry/interface/IIdentityRegistryStorage.sol": "de9ffcc1342e836060454fd136862c929087ec8bf515585910a46f9c24b50c28",
+    "@erc3643org/erc-3643/contracts/compliance/modular/IModularCompliance.sol": "29149ff57a25fcfb884cb4a4d60b42abe4bb7f23b6d1a8fd1378e74b75d6876e",
+    "@openzeppelin/contracts/token/ERC20/IERC20.sol": "7ebde70853ccafcf1876900dad458f46eb9444d591d39bfc58e952e2582f5587",
+    "@erc3643org/erc-3643/contracts/token/TokenStorage.sol": "16e4197b62ddc2b439d5718422f0897c073587462c65da75350cc99b563b9762",
+    "@erc3643org/erc-3643/contracts/roles/AgentRoleUpgradeable.sol": "7fbc3e4c736de064011ab628674c488b115f39966b10b50c96d7afbfaa2fb95a",
+    "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol": "2d9e57d2a4b0775334be2968019c1939377d45b69e8b724fe6bb80af47e28419",
+    "@openzeppelin/contracts-upgradeable/utils/ContextUpgradeable.sol": "2d3d7dc6e116cb8ebb8517208141cb3d0950b337a285f15f8476ec3df29d824e",
+    "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol": "a2c4e5c274a586f145d278293ae33198cd8f412ab7e6d26f2394c8949b32b24b",
+    "@openzeppelin/contracts-upgradeable/utils/AddressUpgradeable.sol": "db92fc1b515decad3a783b1422190877d2d70b907c6e36fb0998d9465aee42db",
+    "@erc3643org/erc-3643/contracts/roles/Roles.sol": "a17dfc7447ab75333812f35c68879da0ef7e54bf6a62bfe392b28c04c6293e5c",
+    "@erc3643org/erc-3643/contracts/registry/implementation/IdentityRegistry.sol": "124aa7f7aac4c6f1d16b8768923a8b2d1d6a095e79f5885bff68f9b85e0dfd79",
+    "@erc3643org/erc-3643/contracts/registry/storage/IRStorage.sol": "8ec5f52ebcd7123ed3025a7cf9167d3c82ecf74fc32acd872e47ab16bbd6f8e3",
+    "@erc3643org/erc-3643/contracts/registry/implementation/IdentityRegistryStorage.sol": "51b019dd1b25f42376d1583539bb18561064f0e103d403e568e47608c949ef04",
+    "@erc3643org/erc-3643/contracts/registry/storage/IRSStorage.sol": "3309ab668b9def6d8a062b106cf59313e09f693ff74869621e2915358ce97af6",
+    "@erc3643org/erc-3643/contracts/registry/implementation/TrustedIssuersRegistry.sol": "00a3555b6a26010f8ae7658de9e2f0ae4d81ca01e7d9a008612292cbee7bebe9",
+    "@erc3643org/erc-3643/contracts/registry/storage/TIRStorage.sol": "119fd55dac46e35a3feec61db0e05c231f1d6b4b4f3a9813b1a5e2366bb5053a",
+    "@erc3643org/erc-3643/contracts/registry/implementation/ClaimTopicsRegistry.sol": "8d30228da393b7bf469191c0af166fc5db6d5f754fe6872213a0cfccd2053653",
+    "@erc3643org/erc-3643/contracts/registry/storage/CTRStorage.sol": "cbf4442f027affd89e8f174efe8830901f3cf51f7ff8847ee99c09916724602a",
+    "@erc3643org/erc-3643/contracts/compliance/modular/ModularCompliance.sol": "578e9fc32fef42560ebd2767705104a754b1fc2cc730c61548468ffe2bf7c429",
+    "@erc3643org/erc-3643/contracts/compliance/modular/MCStorage.sol": "6e5f84928b2685ff5092ebd4910aba6b691e2c8126244710de557da811a83f2c",
+    "@erc3643org/erc-3643/contracts/compliance/modular/modules/IModule.sol": "2b52eae758f7dbe146067ec08cdb4594651a6118c684072c5201265266bba457",
+    "@erc3643org/erc-3643/contracts/proxy/TokenProxy.sol": "52eb3a4a75a4e8e1f360a366a746ff9cd01869cb76d826b2cfd2e3646a5592ac",
+    "@erc3643org/erc-3643/contracts/proxy/AbstractProxy.sol": "29ac7460fc0df80825b9b3cabdc4474316d760e5a59e00b9c59e993fabab909c",
+    "@erc3643org/erc-3643/contracts/proxy/interface/IProxy.sol": "b8ef183f4574cfe21d1cdd60751e9223373b61e421fce64d2263ee7413916c7c",
+    "@erc3643org/erc-3643/contracts/proxy/authority/ITREXImplementationAuthority.sol": "6b00301ab3b349b0ee3733d98696c0e76ea15c5789f26996d481c2f0cd78d881",
+    "@erc3643org/erc-3643/contracts/proxy/IdentityRegistryProxy.sol": "6af0fb18ee6b36be3a775e22019a5593f6b6e30b8746d8c01ecfc4c22903722f",
+    "@erc3643org/erc-3643/contracts/proxy/IdentityRegistryStorageProxy.sol": "d01c785c062b0e7ec5045720942be125e0cb21565c0cb38c46b624c68f1c589a",
+    "@erc3643org/erc-3643/contracts/proxy/TrustedIssuersRegistryProxy.sol": "2ca9d505a71996a81a2974c65158c20ed8f50adfcb45b9b662292652820b5c41",
+    "@erc3643org/erc-3643/contracts/proxy/ClaimTopicsRegistryProxy.sol": "f268d157f1c6390514154835c5fa1cfb9eaf712f133c9c3ef1ac668067f2d827",
+    "@erc3643org/erc-3643/contracts/proxy/ModularComplianceProxy.sol": "b7e9774f5c0e868e966db21be6b06d6a3e66e13f81bcad95da83dc0b9309124c",
+    "@erc3643org/erc-3643/contracts/proxy/authority/TREXImplementationAuthority.sol": "24c09f05946c5a083ae1842fd1b6bb0ef495b695294c82df8163ab2775a5bf03",
+    "@openzeppelin/contracts/access/Ownable.sol": "a8e4e1ae19d9bd3e8b0a6d46577eec098c01fbaffd3ec1252fd20d799e73393b",
+    "@openzeppelin/contracts/utils/Context.sol": "b2cfee351bcafd0f8f27c72d76c054df9b571b62cfac4781ed12c86354e2a56c",
+    "@erc3643org/erc-3643/contracts/factory/ITREXFactory.sol": "302514899c9e63fa606ab52233c693744929879b8d34317dcaef8e1755cb4edf",
+    "@erc3643org/erc-3643/contracts/proxy/authority/IIAFactory.sol": "b479ee085d16e83c27170e45d5813c1b0bbbbc1b0a411f6df58babc4ed795749",
+    "@erc3643org/erc-3643/contracts/proxy/authority/IAFactory.sol": "af68c5ffa2b8cb42dc365f95a8b91666f4833138580f6fa5ed0d931188bfe351",
+    "@erc3643org/erc-3643/contracts/factory/TREXFactory.sol": "030a42cf9e0bc5e6dba5f4d06316f7019a181a951c2de0f37a344faeaadaa17c",
+    "@erc3643org/erc-3643/contracts/roles/AgentRole.sol": "23705f81c449bdd6410af03c1bfb20791b9d690f7345dab6118caabe8f8eed26",
+    "@onchain-id/solidity/contracts/factory/IIdFactory.sol": "93a0443cc5b959961aba42e741e8ac7abed539e600ba4189c4d164f512a33b33",
+    "@onchain-id/solidity/contracts/Identity.sol": "771560d61adb5c0514c4d30a49f8d13f2d35e0abded2d76e38d9e8d1ee2d1873",
+    "@onchain-id/solidity/contracts/version/Version.sol": "80e875ef73e5f903c34c87b813c1f1fccf15a0a0ec9b0dce27320905e21dd748",
+    "@onchain-id/solidity/contracts/storage/Storage.sol": "5f33032e6f89213d68136750a21dd2ff1ad75c375f6e4d1129c6cadad287990a",
+    "@onchain-id/solidity/contracts/storage/Structs.sol": "5c63704c233ea259367e55bf971356298ae91dcde217cc3b1612d3d24a897cd3",
+    "@onchain-id/solidity/contracts/ClaimIssuer.sol": "233228d40c6e8ddd0179f0df6d71db212b394857b62e28f1aac3ad8a4637a85b",
+    "@onchain-id/solidity/contracts/proxy/IdentityProxy.sol": "5d69fe0bbbf0c51f7729416c6f3054e215f016dc3fdbd03f4cf6edea35c58fde",
+    "@onchain-id/solidity/contracts/interface/IImplementationAuthority.sol": "a087f070ed6c5700e92f8addfe1b193511ec52505811480fdf475cf6939a0646",
+    "@onchain-id/solidity/contracts/proxy/ImplementationAuthority.sol": "7f78cf5a0e21a0843b3f5312d155e6d888f21550e32a3f1b19a0af6355857681",
+    "@onchain-id/solidity/contracts/factory/IdFactory.sol": "43a0847c9b6f99f08cd2d74e01b27bbbfdc049c26560e7f9cb9d112943b2f245",
+    "contracts/canonical/Bx1FundController.sol": "5e11e6a16109c984a698f1e498338f8f4b1298389c7d054069258f1cc4c40cc7",
+    "contracts/canonical/Bx1MaximumHoldingModule.sol": "7f21d8460c27a634a26f302ec5900dcfb3b0bffbcf06e1637e5c85e9532d2204",
+    "@erc3643org/erc-3643/contracts/compliance/modular/modules/AbstractModule.sol": "10224a27416a7bda4938da57b0047d7b155e646a406cafb2bc8ce61d94afd6ce",
+    "contracts/canonical/Bx1TestSettlementToken.sol": "c1ea6df2894c2cdcfba2466fc1367e662a126952c5efe077beef4b5e5f404825",
+    "@openzeppelin/contracts/token/ERC20/ERC20.sol": "d20d52b4be98738b8aa52b5bb0f88943f62128969b33d654fbca731539a7fe0a",
+    "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol": "af5c8a77965cc82c33b7ff844deb9826166689e55dc037a7f2f790d057811990"
+  }
+}

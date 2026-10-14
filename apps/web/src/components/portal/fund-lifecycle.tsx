@@ -256,7 +256,7 @@ async function lifecyclePost(path: string, payload: Record<string, unknown>, act
   return body
 }
 
-function useFundWallet(actorId: string, context: PortalOperatingContext) {
+export function useFundWallet(actorId: string, context: PortalOperatingContext) {
   const actor = usePortalActorId(), activeContext = usePortalOperatingContext()
   const [choices, setChoices] = useState<{ id: string; provider: MetaMaskProvider }[]>([])
   const [selectedId, setSelectedId] = useState(''), [account, setAccount] = useState(''), [message, setMessage] = useState(''), [monitored, setMonitored] = useState(false), [connecting, setConnecting] = useState(false)
@@ -293,7 +293,7 @@ function useFundWallet(actorId: string, context: PortalOperatingContext) {
   }
   return { choices, selectedId, setSelectedId, account, message, setMessage, provider, authorizedContext, monitored, connecting, begin, check, connect }
 }
-function WalletPicker({ wallet, chainId, busy }: { wallet: ReturnType<typeof useFundWallet>; chainId: number; busy: boolean }) {
+export function WalletPicker({ wallet, chainId, busy }: { wallet: ReturnType<typeof useFundWallet>; chainId: number; busy: boolean }) {
   return <div className={styles.form}>{wallet.choices.length > 1 ? <label className={styles.field}>MetaMask provider<select value={wallet.selectedId} disabled={busy || wallet.connecting} onChange={event => wallet.setSelectedId(event.target.value)}><option value="">Select MetaMask</option>{wallet.choices.map((choice, index) => <option key={choice.id} value={choice.id}>MetaMask {index + 1}</option>)}</select></label> : null}
     {!wallet.choices.length ? <p className={styles.muted}>Open this fund record in a MetaMask-enabled browser. Never share a private key or recovery phrase.</p> : null}
     <div className={styles.actions}><button type="button" className={styles.secondary} disabled={busy || wallet.connecting || !wallet.provider || !wallet.authorizedContext || !wallet.monitored} onClick={() => void wallet.connect(chainId).catch(error => wallet.setMessage(walletError(error)))}>{wallet.connecting ? 'Waiting for MetaMask connection…' : `Connect MetaMask on chain ${chainId}`}</button>{wallet.account ? <p>Connected wallet: <Address value={wallet.account} /></p> : null}</div>

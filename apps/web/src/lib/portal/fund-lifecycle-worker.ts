@@ -25,6 +25,7 @@ export function fundWorkerDatabaseConfig(env: Record<string, string | undefined>
 
 let pool: Pool | undefined
 type WorkerFunction = 'prepare_fund_operation' | 'claim_fund_observation' | 'record_fund_observation' | 'read_fund_signature_verification' | 'record_fund_signature_verification'
+  | 'read_fund_setup_preparation' | 'prepare_fund_setup_step' | 'read_fund_setup_observation' | 'record_fund_setup_observation'
 export async function callFundWorker(name: WorkerFunction, parameters: unknown[]): Promise<unknown> {
   pool ??= new Pool(fundWorkerDatabaseConfig())
   const statements: Record<WorkerFunction, string> = {
@@ -33,6 +34,10 @@ export async function callFundWorker(name: WorkerFunction, parameters: unknown[]
     record_fund_observation: 'select bx1_portal.record_fund_observation($1::uuid,$2::jsonb) as result',
     read_fund_signature_verification: 'select bx1_portal.read_fund_signature_verification($1::uuid) as result',
     record_fund_signature_verification: 'select bx1_portal.record_fund_signature_verification($1::uuid,$2::jsonb) as result',
+    read_fund_setup_preparation: 'select bx1_portal.read_fund_setup_preparation($1::uuid,$2::text,$3::integer,$4::text,$5::uuid,$6::jsonb) as result',
+    prepare_fund_setup_step: 'select bx1_portal.prepare_fund_setup_step($1::jsonb,$2::jsonb) as result',
+    read_fund_setup_observation: 'select bx1_portal.read_fund_setup_observation($1::uuid,$2::uuid,$3::integer,$4::uuid,$5::jsonb) as result',
+    record_fund_setup_observation: 'select bx1_portal.record_fund_setup_observation($1::jsonb,$2::jsonb) as result',
   }
   try {
     const result = await pool.query(statements[name], parameters)
