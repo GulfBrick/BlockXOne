@@ -106,24 +106,7 @@ contract Bx1FundController {
 
         // The admitted factory must first be owned by THIS controller. No public gateway fallback.
         factory.deployTREXSuite(salt, tokenDetails, claimDetails);
-        address token = factory.getToken(salt);
-        require(token != address(0) && fundBindings[token] == bytes32(0), "invalid deployed token");
-        IToken security = IToken(token);
-        address identityRegistry = address(security.identityRegistry());
-        address identityStorage = address(security.identityRegistry().identityStorage());
-        // Official factory 4.1.3 retains new IRS ownership; transfer it atomically before success.
-        factory.recoverContractOwnership(identityStorage, institutionalAuthority);
-        require(IBx1OwnedContract(token).owner() == institutionalAuthority
-            && IBx1OwnedContract(identityRegistry).owner() == institutionalAuthority
-            && IBx1OwnedContract(identityStorage).owner() == institutionalAuthority, "suite owner handoff failed");
-        require(security.totalSupply() == 0, "deployment must not manufacture ownership");
-        fundBindings[token] = productBindingHash;
-        maximumSupply[token] = supplyLimit;
-        maximumOperationUnits[token] = operationLimit;
-        // Official token initialises paused. Activation is part of this approved deployment operation;
-        // it does not publish an offering or accept money. The platform verifies readiness separately.
-        security.unpause();
-        emit FundDeployed(operationId, bindingHash, token, identityRegistry, supplyLimit, operationLimit);
+        _finaliseFundDeployment(operationId, bindingHash, productBindingHash, salt, supplyLimit, operationLimit);
     }
 
     function issueFund(
@@ -181,6 +164,36 @@ contract Bx1FundController {
         require(fundBindings[token] != bytes32(0) && reasonHash != bytes32(0), "known fund/reason required");
         if (state) IToken(token).pause(); else IToken(token).unpause();
         emit FundPauseChanged(token, state, reasonHash);
+    }
+
+    // Keep finalisation locals off deployFund's calldata-heavy stack. This is
+    // an internal call under the original nonReentrant/onlyInstitution guards.
+    function _finaliseFundDeployment(
+        bytes32 operationId,
+        bytes32 bindingHash,
+        bytes32 productBindingHash,
+        string calldata salt,
+        uint256 supplyLimit,
+        uint256 operationLimit
+    ) private {
+        address token = factory.getToken(salt);
+        require(token != address(0) && fundBindings[token] == bytes32(0), "invalid deployed token");
+        IToken security = IToken(token);
+        address identityRegistry = address(security.identityRegistry());
+        address identityStorage = address(security.identityRegistry().identityStorage());
+        // Official factory 4.1.3 retains new IRS ownership; transfer it atomically before success.
+        factory.recoverContractOwnership(identityStorage, institutionalAuthority);
+        require(IBx1OwnedContract(token).owner() == institutionalAuthority
+            && IBx1OwnedContract(identityRegistry).owner() == institutionalAuthority
+            && IBx1OwnedContract(identityStorage).owner() == institutionalAuthority, "suite owner handoff failed");
+        require(security.totalSupply() == 0, "deployment must not manufacture ownership");
+        fundBindings[token] = productBindingHash;
+        maximumSupply[token] = supplyLimit;
+        maximumOperationUnits[token] = operationLimit;
+        // Official token initialises paused. Activation is part of this approved deployment operation;
+        // it does not publish an offering or accept money. The platform verifies readiness separately.
+        security.unpause();
+        emit FundDeployed(operationId, bindingHash, token, identityRegistry, supplyLimit, operationLimit);
     }
 
     function _consume(bytes32 operationId, bytes32 bindingHash, uint256 epoch, uint256 expiresAt) private {
