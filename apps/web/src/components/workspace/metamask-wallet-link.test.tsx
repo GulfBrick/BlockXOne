@@ -296,6 +296,13 @@ describe('actual controller / HTTP / workspace integration', () => {
   function configure() {
     vi.stubEnv('BLOCKXONE_AUTH_MODE', 'supabase'); vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_AUTH_MODE', 'supabase')
     vi.stubEnv('BLOCKXONE_APP_ORIGIN', 'https://bx1.co.za')
+    // The actual handler now requires the complete exact environment binding.
+    // These public synthetic fixture values do not configure a live connection.
+    vi.stubEnv('BLOCKXONE_ENVIRONMENT', 'MAINNET')
+    vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_RUNTIME_SCOPE', 'MAINNET')
+    vi.stubEnv('VERCEL_ENV', 'production')
+    vi.stubEnv('SUPABASE_URL', 'https://oqkevkjbkpugjotihtda.supabase.co')
+    vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'https://oqkevkjbkpugjotihtda.supabase.co')
     integration.configured.mockReturnValue(true)
     const userId = '44444444-4444-4444-8444-444444444444'
     const platformUserId = '55555555-5555-4555-8555-555555555555'
