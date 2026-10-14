@@ -799,7 +799,7 @@ $uniques$::jsonb) loop
     select pg_catalog.pg_get_constraintdef(c.oid) into actual from pg_catalog.pg_constraint c
       where c.conrelid=(spec->>'relation')::regclass and c.conname=spec->>'conname' and c.contype='u';
     if actual is distinct from spec->>'definition' then raise exception 'fund_roleplay_unique_pin_mismatch: %',spec->>'conname';end if;
-    columns:=pg_catalog.substring(actual from 8);index_name:=spec->>'conname';
+    columns:=pg_catalog.substring(actual,8);index_name:=spec->>'conname';
     execute pg_catalog.format('alter table %s drop constraint %I',spec->>'relation',index_name);
     execute pg_catalog.format('create unique index %I on %s %s where roleplay_policy_id is null',index_name,spec->>'relation',columns);
   end loop;

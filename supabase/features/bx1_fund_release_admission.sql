@@ -203,7 +203,7 @@ end $$;
 create function bx1_portal.record_fund_admission(request_id uuid,candidate jsonb,admitted_manifest_hash text) returns jsonb
 language plpgsql volatile security definer set search_path='' as $$
 declare prior text;r bx1_portal.fund_admission_requests;s bx1_portal.fund_setups;p bx1_private.roleplay_policies;
-  manifest jsonb;references jsonb;receipt_kind text;receipt_id uuid;evidence jsonb;capacity record;slot record;expiry timestamptz;policy_hash text;provider jsonb;
+  manifest jsonb;proof_refs jsonb;receipt_kind text;receipt_id uuid;evidence jsonb;capacity record;slot record;expiry timestamptz;policy_hash text;provider jsonb;
 begin
   prior:=bx1_portal.fund_admission_worker_enter(request_id);
   select * into r from bx1_portal.fund_admission_requests where id=request_id for update;
@@ -213,7 +213,7 @@ begin
   end if;
   select * into s from bx1_portal.fund_setups where id=r.setup_id for share;
   select * into p from bx1_private.roleplay_policies where id=r.roleplay_policy_id for share;
-  manifest:=candidate->'manifest';references:=r.input->'proof_refs';expiry:=least(s.expires_at,p.valid_until,
+  manifest:=candidate->'manifest';proof_refs:=r.input->'proof_refs';expiry:=least(s.expires_at,p.valid_until,
     (select valid_until from bx1_portal.fund_contract_release_receipts where id=r.conformance_receipt_id));
   -- Missing/JSON-null observations must fail before casts or nullable SQL time
   -- comparisons. They cannot be upgraded to a governance/network receipt.
@@ -251,7 +251,7 @@ begin
     or candidate->>'terms_hash' is distinct from s.terms_hash or candidate->>'configuration_hash' is distinct from s.configuration_hash
     or candidate->>'product_binding_hash' is distinct from r.input->>'product_binding_hash'
     or candidate->>'source_pin' is distinct from s.source_pin or candidate->>'catalog_hash' is distinct from s.catalog_hash
-    or candidate->'proof_refs' is distinct from references or candidate->'roleplay_policy' is distinct from s.roleplay_policy
+    or candidate->'proof_refs' is distinct from proof_refs or candidate->'roleplay_policy' is distinct from s.roleplay_policy
     or candidate->'independent_audit_proven' is distinct from 'false'::jsonb or candidate->'standard_claim_expiry_enforced' is distinct from 'false'::jsonb
     or candidate->>'authority_epoch' is distinct from p.authority_epoch::text or admitted_manifest_hash !~ '^[0-9a-f]{64}$'
     or manifest->>'id' is distinct from r.manifest_id::text or manifest#>'{safe,owners}' is distinct from s.safe_owners
@@ -272,7 +272,7 @@ begin
     raise exception 'fund_admission_current_terms_required' using errcode='23514';end if;
   perform bx1_private.fund_roleplay_enter(r.operating_context,r.product_id,'admit_fund_release',r.request_key);
   foreach receipt_kind in array array['CONFORMANCE','GOVERNANCE','OBSERVATION_POLICY','ROLE_STATE'] loop
-    receipt_id:=(references->>case receipt_kind when 'CONFORMANCE' then 'conformance_receipt_id' when 'GOVERNANCE' then 'governance_receipt_id'
+    receipt_id:=(proof_refs->>case receipt_kind when 'CONFORMANCE' then 'conformance_receipt_id' when 'GOVERNANCE' then 'governance_receipt_id'
       when 'OBSERVATION_POLICY' then 'observation_policy_receipt_id' else 'role_state_receipt_id' end)::uuid;
     evidence:=jsonb_build_object('kind',receipt_kind,'setup_id',s.id,'setup_revision',s.revision,'product_id',r.product_id,'offering_revision_id',r.offering_revision_id,
       'terms_hash',s.terms_hash,'configuration_hash',s.configuration_hash,'catalog_hash',s.catalog_hash,'source_pin',s.source_pin,
@@ -288,11 +288,11 @@ begin
       s.configuration_hash,r.input->>'product_binding_hash',s.terms_hash,p.authority_epoch,manifest#>>'{suite,token,address}',manifest#>>'{controller,address}',s.safe_address,
       (r.input->>'required_confirmations')::integer,(r.input->>'security_unit_decimals')::integer,(r.input->>'class_id')::uuid,r.input->>'class_name',
       jsonb_set(candidate->'deployment_expectation','{manifest}',manifest),jsonb_set(candidate->'issuance_expectation','{manifest}',manifest),'ADMITTED',
-      (references->>'conformance_receipt_id')::uuid,(references->>'governance_receipt_id')::uuid,(references->>'observation_policy_receipt_id')::uuid,auth.uid(),expiry);
+      (proof_refs->>'conformance_receipt_id')::uuid,(proof_refs->>'governance_receipt_id')::uuid,(proof_refs->>'observation_policy_receipt_id')::uuid,auth.uid(),expiry);
   policy_hash:=bx1_portal.fund_digest(jsonb_build_object('manifest',r.manifest_id,'manifest_hash',admitted_manifest_hash,'roleplay_policy_id',p.id,
-    'epoch',p.authority_epoch,'owners',s.safe_owners,'threshold',s.safe_threshold,'role_state_receipt',references->>'role_state_receipt_id'));
+    'epoch',p.authority_epoch,'owners',s.safe_owners,'threshold',s.safe_threshold,'role_state_receipt',proof_refs->>'role_state_receipt_id'));
   insert into bx1_portal.fund_signer_policies(id,manifest_id,authority_policy_hash,authority_epoch,approval_threshold,safe_threshold,status,admission_receipt_id,admitted_until)
-    values(r.signer_policy_id,r.manifest_id,policy_hash,p.authority_epoch,s.safe_threshold,s.safe_threshold,'ADMITTED',(references->>'role_state_receipt_id')::uuid,expiry);
+    values(r.signer_policy_id,r.manifest_id,policy_hash,p.authority_epoch,s.safe_threshold,s.safe_threshold,'ADMITTED',(proof_refs->>'role_state_receipt_id')::uuid,expiry);
   for capacity in select * from bx1_private.roleplay_capacities where policy_id=p.id and user_id=r.actor_id
     and role in ('IssuerFundManager','ComplianceOfficer','TransferAgent','TokenisationAgent','TreasuryOperator','FinancialController') order by role loop
     if capacity.role='TokenisationAgent' then
@@ -300,17 +300,17 @@ begin
         if not bx1_private.fund_roleplay_control_proof_current(p.id,p.authority_epoch,slot.slot,r.actor_id) then raise exception 'fund_admission_key_proof_changed' using errcode='42501';end if;
         insert into bx1_portal.fund_authorities(signer_policy_id,user_id,native_membership_id,person_id,role,can_approve,can_sign,signer_address,authority_receipt_id,valid_from,valid_until,status)
           values(r.signer_policy_id,r.actor_id,capacity.native_membership_id,p.actual_operator_person_id,capacity.role,true,true,slot.wallet_address,
-            (references->>'role_state_receipt_id')::uuid,clock_timestamp(),expiry,'ADMITTED');
+            (proof_refs->>'role_state_receipt_id')::uuid,clock_timestamp(),expiry,'ADMITTED');
       end loop;
     else
       insert into bx1_portal.fund_authorities(signer_policy_id,user_id,native_membership_id,person_id,role,can_approve,can_sign,authority_receipt_id,valid_from,valid_until,status)
         values(r.signer_policy_id,r.actor_id,capacity.native_membership_id,p.actual_operator_person_id,capacity.role,true,false,
-          (references->>'role_state_receipt_id')::uuid,clock_timestamp(),expiry,'ADMITTED');
+          (proof_refs->>'role_state_receipt_id')::uuid,clock_timestamp(),expiry,'ADMITTED');
     end if;
   end loop;
   if not bx1_portal.fund_manifest_current(r.manifest_id) then raise exception 'fund_admission_manifest_not_current' using errcode='23514';end if;
   update bx1_portal.fund_admission_requests set status='ADMITTED',result_hash=bx1_portal.fund_digest(candidate),admitted_at=clock_timestamp() where id=r.id;
-  perform bx1_portal.fund_audit(r.product_id,r.manifest_id,null,'RELEASE_ADMITTED',r.operating_context,1,1,(references->>'governance_receipt_id')::uuid,candidate);
+  perform bx1_portal.fund_audit(r.product_id,r.manifest_id,null,'RELEASE_ADMITTED',r.operating_context,1,1,(proof_refs->>'governance_receipt_id')::uuid,candidate);
   perform bx1_private.fund_roleplay_finish(r.operating_context,r.product_id,'admit_fund_release',r.request_key);
   perform bx1_portal.fund_admission_seed(r.setup_id,r.setup_revision,r.operating_context);
   perform set_config('request.jwt.claims',prior,true);
