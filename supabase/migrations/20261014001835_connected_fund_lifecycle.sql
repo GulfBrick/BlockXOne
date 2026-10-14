@@ -1651,7 +1651,7 @@ declare item record;
 begin
   for item in select c.oid::regclass as relation,c.relname from pg_catalog.pg_class c
     join pg_catalog.pg_namespace n on n.oid=c.relnamespace
-    where n.nspname='bx1_portal' and c.relkind='r' and c.relname like 'fund_%'
+    where n.nspname='bx1_portal' and c.relkind='r' and pg_catalog.left(c.relname,5)='fund_'
   loop
     execute pg_catalog.format('alter table %s enable row level security',item.relation);
     execute pg_catalog.format('revoke all on table %s from public,anon,authenticated,service_role,bx1_fund_execution_worker',item.relation);
@@ -1663,7 +1663,7 @@ begin
     end if;
   end loop;
   for item in select p.oid::regprocedure as signature from pg_catalog.pg_proc p join pg_catalog.pg_namespace n on n.oid=p.pronamespace
-    where (n.nspname='bx1_portal' and (p.proname like 'fund_%' or p.proname in ('prepare_fund_operation','claim_fund_observation','record_fund_observation','read_fund_signature_verification','record_fund_signature_verification')))
+    where (n.nspname='bx1_portal' and (pg_catalog.left(p.proname,5)='fund_' or p.proname in ('prepare_fund_operation','claim_fund_observation','record_fund_observation','read_fund_signature_verification','record_fund_signature_verification')))
       or (n.nspname='public' and p.proname in ('bx1_portal_fund_lifecycle_read_scoped','bx1_portal_fund_lifecycle_command_scoped',
         'bx1_portal_prepare_fund_transaction','bx1_portal_record_fund_signature','bx1_portal_claim_fund_execution',
         'bx1_portal_prepare_fund_payment','bx1_portal_submit_fund_payment','bx1_portal_record_fund_payment'))

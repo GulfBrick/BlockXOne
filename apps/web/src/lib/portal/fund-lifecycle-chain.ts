@@ -228,12 +228,12 @@ export function verifyFundOwnerSignature(value: unknown, rawSignature: string, e
 }
 async function read(rpc: Rpc, url: string, target: string, iface: Interface, method: string, args: unknown[], height: bigint) {
   const result = await rpc(url, 'eth_call', [{ to: target, data: iface.encodeFunctionData(method, args) }, hex(height)])
-  if (typeof result !== 'string' || !/^0x(?:[0-9a-f]{2})+$/i.test(result) || result.length > 131074) reject('CONTRACT_READ_UNAVAILABLE', 503)
+  if (typeof result !== 'string' || !/^0x(?:[0-9a-f]{2})+$/i.test(result) || result.length > 131074) return reject('CONTRACT_READ_UNAVAILABLE', 503)
   try { return iface.decodeFunctionResult(method, result) } catch { return reject('CONTRACT_READ_MALFORMED', 503) }
 }
 async function code(rpc: Rpc, url: string, item: { address: string; runtime_hash: string }, height: bigint) {
   const result = await rpc(url, 'eth_getCode', [item.address, hex(height)])
-  if (typeof result !== 'string' || !/^0x(?:[0-9a-f]{2})+$/i.test(result) || result.length > 131074 || keccak256(result) !== item.runtime_hash) reject('MANIFEST_RUNTIME_MISMATCH')
+  if (typeof result !== 'string' || !/^0x(?:[0-9a-f]{2})+$/i.test(result) || result.length > 131074 || keccak256(result) !== item.runtime_hash) return reject('MANIFEST_RUNTIME_MISMATCH')
   return result
 }
 function requireImmutableRuntime(runtime: string) {
@@ -414,11 +414,11 @@ export type FundChainObservation = {
   providers: { url: string; finalized_block_number: string; finalized_block_hash: string }[];
 }
 function logsAt(receipt: Record<string, unknown>, txHash: string, blockNumber: bigint, blockHash: string) {
-  if (!Array.isArray(receipt.logs) || receipt.logs.length > 4096) reject('MALFORMED_FUND_LOGS', 503)
+  if (!Array.isArray(receipt.logs) || receipt.logs.length > 4096) return reject('MALFORMED_FUND_LOGS', 503)
   return receipt.logs.map(value => {
     const log = object(value)
     if (log.removed !== false || checkedHash(log.transactionHash) !== txHash || checkedHash(log.blockHash) !== blockHash || quantity(log.blockNumber) !== blockNumber
-      || !Array.isArray(log.topics) || log.topics.length > 4 || typeof log.data !== 'string' || !/^0x(?:[0-9a-f]{2})*$/i.test(log.data)) reject('FUND_LOG_CANONICAL_IDENTITY_MISMATCH')
+      || !Array.isArray(log.topics) || log.topics.length > 4 || typeof log.data !== 'string' || !/^0x(?:[0-9a-f]{2})*$/i.test(log.data)) return reject('FUND_LOG_CANONICAL_IDENTITY_MISMATCH')
     const topics = log.topics.map(value => { const result = lower(value); return /^0x[0-9a-f]{64}$/.test(result) ? result : reject('FUND_LOG_TOPIC_MALFORMED') })
     const index = quantity(log.logIndex)
     if (index > 2_147_483_647n) reject('FUND_LOG_INDEX_MALFORMED')
@@ -431,7 +431,7 @@ function exactEvent(logs: ReturnType<typeof logsAt>, target: string, iface: Inte
   try { return { args: iface.decodeEventLog(name, found[0].data, found[0].topics), index: found[0].index } } catch { return reject('FUND_EVENT_MALFORMED') }
 }
 function verifiedSafeCall(e: FundChainExpectation, input: unknown) {
-  if (typeof input !== 'string' || input.length > 131074) reject('SAFE_TRANSACTION_CALL_MISMATCH')
+  if (typeof input !== 'string' || input.length > 131074) return reject('SAFE_TRANSACTION_CALL_MISMATCH')
   let call: ReturnType<Interface['decodeFunctionData']>
   try { call = SAFE.decodeFunctionData('execTransaction', input) } catch { return reject('SAFE_TRANSACTION_CALL_MISMATCH') }
   const tx = safePayload(e), expected = [tx.to, tx.value, tx.data, tx.operation, tx.safeTxGas, tx.baseGas, tx.gasPrice, tx.gasToken, tx.refundReceiver]
