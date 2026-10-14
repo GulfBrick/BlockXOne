@@ -26,6 +26,9 @@ export function fundWorkerDatabaseConfig(env: Record<string, string | undefined>
 let pool: Pool | undefined
 type WorkerFunction = 'prepare_fund_operation' | 'claim_fund_observation' | 'record_fund_observation' | 'read_fund_signature_verification' | 'record_fund_signature_verification'
   | 'read_fund_setup_preparation' | 'prepare_fund_setup_step' | 'read_fund_setup_observation' | 'record_fund_setup_observation'
+  | 'read_fund_admission' | 'record_fund_admission'
+  | 'read_fund_recipient_preparation' | 'prepare_fund_recipient_operation' | 'read_fund_recipient_observation' | 'record_fund_recipient_observation'
+  | 'read_fund_recipient_claim' | 'record_fund_recipient_claim' | 'read_fund_recipient_signature' | 'record_fund_recipient_signature'
 export async function callFundWorker(name: WorkerFunction, parameters: unknown[]): Promise<unknown> {
   pool ??= new Pool(fundWorkerDatabaseConfig())
   const statements: Record<WorkerFunction, string> = {
@@ -38,6 +41,16 @@ export async function callFundWorker(name: WorkerFunction, parameters: unknown[]
     prepare_fund_setup_step: 'select bx1_portal.prepare_fund_setup_step($1::jsonb,$2::jsonb) as result',
     read_fund_setup_observation: 'select bx1_portal.read_fund_setup_observation($1::uuid,$2::uuid,$3::integer,$4::uuid,$5::jsonb) as result',
     record_fund_setup_observation: 'select bx1_portal.record_fund_setup_observation($1::jsonb,$2::jsonb) as result',
+    read_fund_admission: 'select bx1_portal.read_fund_admission($1::uuid) as result',
+    record_fund_admission: 'select bx1_portal.record_fund_admission($1::uuid,$2::jsonb,$3::text) as result',
+    read_fund_recipient_preparation: 'select bx1_portal.read_fund_recipient_preparation($1::uuid,$2::integer,$3::uuid,$4::jsonb) as result',
+    prepare_fund_recipient_operation: 'select bx1_portal.prepare_fund_recipient_operation($1::jsonb,$2::jsonb) as result',
+    read_fund_recipient_observation: 'select bx1_portal.read_fund_recipient_observation($1::uuid,$2::integer,$3::uuid,$4::jsonb) as result',
+    record_fund_recipient_observation: 'select bx1_portal.record_fund_recipient_observation($1::jsonb,$2::jsonb) as result',
+    read_fund_recipient_claim: 'select bx1_portal.read_fund_recipient_claim($1::uuid,$2::integer,$3::uuid,$4::jsonb) as result',
+    record_fund_recipient_claim: 'select bx1_portal.record_fund_recipient_claim($1::jsonb,$2::jsonb) as result',
+    read_fund_recipient_signature: 'select bx1_portal.read_fund_recipient_signature($1::uuid) as result',
+    record_fund_recipient_signature: 'select bx1_portal.record_fund_recipient_signature($1::uuid,$2::jsonb) as result',
   }
   try {
     const result = await pool.query(statements[name], parameters)

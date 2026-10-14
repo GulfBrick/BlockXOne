@@ -6,7 +6,7 @@ import { z } from 'zod'
 import { Interface, TypedDataEncoder, verifyTypedData } from 'ethers'
 import { CheckCircle2, Clock3, Circle, ShieldCheck } from 'lucide-react'
 import { discoverMetaMask, MetaMaskWalletLink, type MetaMaskProvider } from '@/components/workspace/metamask-wallet-link'
-import { fundIntentSchema, fundOperationSchema, fundPaymentIntentSchema, fundStageKeys, type FundLifecycleAction, type FundLifecycleOperation, type FundLifecycleSnapshot, type FundPaymentIntent, type FundProductLifecycle, type FundTransactionIntent } from '@/lib/portal/fund-lifecycle-contracts'
+import { fundApprovalRequestSchema, fundIntentSchema, fundOperationSchema, fundPaymentIntentSchema, fundStageKeys, validatedFundLifecycle, type FundLifecycleAction, type FundLifecycleOperation, type FundLifecycleSnapshot, type FundPaymentIntent, type FundProductLifecycle, type FundTransactionIntent } from '@/lib/portal/fund-lifecycle-contracts'
 import { portalContextKey, portalContextMatches, portalScopeHref, type PortalOperatingContext } from '@/lib/portal/operating-context'
 import { prepareAmoyWalletTransaction, validateRecoveryNonce } from '@/lib/testnet-fund/wallet-transaction'
 import { usePortalActorId, usePortalCommand, usePortalOperatingContext } from './portal-client'
@@ -61,11 +61,13 @@ function Fact({ title, value }: { title: string; value: ReactNode }) { return <d
 function Address({ value }: { value: string }) { return <span className={styles.address}>{value}</span> }
 function Unavailable({ children }: { children?: ReactNode }) { return <div className={styles.notice} role="status"><strong>Saved fund records are unavailable</strong><p>{children ?? 'Refresh the hosted workspace. No payment, contract deployment or holdings have been inferred.'}</p></div> }
 
-function ActionButton({ action, actorId, operatingContext, onRefresh, primary = false }: ActionsProps & { action: FundLifecycleAction; primary?: boolean }) {
+function ActionButton({ action, actorId, operatingContext, onRefresh, primary = false, directApproval = false }: ActionsProps & { action: FundLifecycleAction; primary?: boolean; directApproval?: boolean }) {
   const currentActor = usePortalActorId(), currentContext = usePortalOperatingContext()
   const command = usePortalCommand(() => { void onRefresh() })
   const sameContext = currentActor === actorId && portalContextMatches(currentContext, operatingContext)
   if (!action.command || !action.payload || action.command === 'record_fund_transaction' || action.command === 'bind_fund_delivery_wallet') return null
+  if (!directApproval && ['approve_fund_deployment', 'approve_fund_issuance'].includes(action.command)) return <button type="button" className={primary ? styles.primary : styles.secondary} disabled={!sameContext || !action.can_execute}
+    onClick={() => document.getElementById(`fund-operation-${action.record_id}`)?.scrollIntoView({ behavior: 'auto', block: 'start' })}>Review this contract approval</button>
   return <div className={styles.actionBlock}><button type="button" className={primary ? styles.primary : styles.secondary} disabled={!sameContext || !action.can_execute || command.busy || command.unknown} onClick={() => { if (action.command && action.payload) void command.submit(action.command, action.payload) }}>{command.busy ? 'Saving the original request…' : action.label}</button>
     {command.message ? <p className={styles.feedback} role="status" aria-live="polite">{command.message}</p> : null}
     {command.unknown ? <div className={styles.notice}><p>The saved request is unresolved. Do not start a replacement.</p><button type="button" className={styles.secondary} disabled={command.busy} onClick={() => void command.retry()}>Check using the original request key</button></div> : null}
@@ -95,10 +97,12 @@ function StageProgress({ lifecycle }: { lifecycle: FundProductLifecycle }) {
 }
 
 function OperationCard({ operation, lifecycle, ...props }: ActionsProps & { operation: FundLifecycleOperation; lifecycle: FundProductLifecycle }) {
-  return <article className={styles.operation}><div className={styles.rowHeading}><h3>{operation.kind === 'DEPLOYMENT' ? 'Contract deployment' : 'Approved unit issuance'}</h3><Status state={operation.state} /></div><p>{operation.kind === 'DEPLOYMENT' ? 'The approved fund configuration must match the deployed contract and governed signer policy.' : 'Issuance must match reconciled payment, the approved allocation and the current delivery wallet.'}</p>
+  return <article id={`fund-operation-${operation.id}`} className={styles.operation}><div className={styles.rowHeading}><h3>{operation.kind === 'DEPLOYMENT' ? 'Contract deployment' : 'Approved unit issuance'}</h3><Status state={operation.state} /></div><p>{operation.kind === 'DEPLOYMENT' ? 'The approved fund configuration must match the deployed contract and governed signer policy.' : 'Issuance must match reconciled payment, the approved allocation and the current delivery wallet.'}</p>
     <dl className={styles.facts}><Fact title="Network" value={`Chain ${operation.chain_id}`} /><Fact title="Finality" value={operation.confirmations === null ? 'Not observed' : `${operation.confirmations} of ${operation.required_confirmations} required confirmations`} /><Fact title="Contract" value={operation.token_address ? <Address value={operation.token_address} /> : 'Not verified'} /><Fact title="Transaction" value={operation.transaction_hash ? <Address value={operation.transaction_hash} /> : 'No broadcast recorded'} /></dl>
     {reason(operation.reason_code) ? <p className={styles.warning}>{reason(operation.reason_code)}</p> : null}
-    <div className={styles.actions}>{operation.actions.filter(action => action.command !== 'record_fund_transaction').map(action => <ActionButton key={action.action_id} action={action} {...props} />)}</div>
+    <div className={styles.actions}>{operation.actions.filter(action => action.command !== 'record_fund_transaction'
+      && !((operation.signing_owner_addresses?.length ?? 0) > 1 && ['approve_fund_deployment', 'approve_fund_issuance'].includes(action.command ?? ''))).map(action => <ActionButton key={action.action_id} action={action} directApproval {...props} />)}</div>
+    {(operation.signing_owner_addresses?.length ?? 0) > 1 && operation.state === 'APPROVAL_PENDING' ? <FundOwnerApproval operation={operation} {...props} /> : null}
     <SafeOperationControl operation={operation} lifecycle={lifecycle} {...props} />
   </article>
 }
@@ -315,6 +319,60 @@ function checkExecution(execution: Execution, intent: FundTransactionIntent, exp
   if (String(decoded.to).toLowerCase() !== tx.to.toLowerCase() || BigInt(decoded.value) !== 0n || String(decoded.data).toLowerCase() !== tx.data.toLowerCase() || BigInt(decoded.operation) !== 0n || BigInt(decoded.safeTxGas) !== BigInt(tx.safeTxGas) || BigInt(decoded.baseGas) !== BigInt(tx.baseGas) || BigInt(decoded.gasPrice) !== BigInt(tx.gasPrice) || String(decoded.gasToken).toLowerCase() !== tx.gasToken.toLowerCase() || String(decoded.refundReceiver).toLowerCase() !== tx.refundReceiver.toLowerCase() || !/^0x(?:[0-9a-f]{130})+$/i.test(String(decoded.signatures))) throw new Error('The Safe execution payload differs from the reviewed intent. Nothing was sent.')
 }
 
+function FundOwnerApproval({ operation, actorId, operatingContext, onRefresh }: ActionsProps & { operation: FundLifecycleOperation }) {
+  const wallet = useFundWallet(actorId, operatingContext)
+  const [busy, setBusy] = useState(false), [ready, setReady] = useState(false), [reviewed, setReviewed] = useState(false), [unknown, setUnknown] = useState(false)
+  const lock = useRef(false), saved = useRef<z.infer<typeof fundApprovalRequestSchema> | null>(null)
+  const key = pendingKey(actorId, operatingContext, 'approval', operation.id)
+  const commandName = operation.kind === 'DEPLOYMENT' ? 'approve_fund_deployment' : 'approve_fund_issuance'
+  const allowed = operation.actions.some(action => action.command === commandName && action.can_execute)
+  const owners = operation.signing_owner_addresses ?? (operation.signing_owner_address ? [operation.signing_owner_address] : [])
+  useEffect(() => {
+    saved.current = null; setUnknown(false); setReviewed(false); setReady(false)
+    try {
+      const raw = sessionStorage.getItem(key)
+      if (raw) {
+        if (raw.length > 4096) throw new Error('The original approval reference is not readable. Refresh; do not replace it.')
+        const original = fundApprovalRequestSchema.parse(JSON.parse(raw))
+        if (original.operation_id !== operation.id || original.command !== commandName || !portalContextMatches(original.operating_context, operatingContext)) throw new Error('The original approval belongs to another context.')
+        saved.current = original; setUnknown(true)
+      }
+      setReady(true)
+    } catch (error) { wallet.setMessage(walletError(error)); setUnknown(true) }
+  }, [key, commandName])
+  useEffect(() => setReviewed(false), [wallet.account, wallet.provider, operation.revision])
+  async function approve(retry: boolean) {
+    if (lock.current || !wallet.authorizedContext || !ready) return
+    lock.current = true; setBusy(true); wallet.setMessage('')
+    const attempt = wallet.begin()
+    try {
+      if (!retry && (!reviewed || !allowed || !wallet.account || !owners.some(owner => owner.toLowerCase() === wallet.account.toLowerCase()))) throw new Error('Review this operation using your appointed wallet before approving it.')
+      const original = retry ? saved.current : fundApprovalRequestSchema.parse({ operation_id: operation.id, expected_revision: operation.revision,
+        command: commandName, request_key: crypto.randomUUID(), operating_context: operatingContext,
+        ...(operation.signing_owner_addresses ? { signing_address: wallet.account } : {}) })
+      if (!original) throw new Error('No original approval is available to retry. Refresh the saved operation.')
+      if (!retry) await wallet.check(attempt.provider, wallet.account, operation.chain_id, attempt.current)
+      sessionStorage.setItem(key, JSON.stringify(original)); saved.current = original; setUnknown(true)
+      const result = await lifecyclePost('/api/portal/fund-lifecycle/approval', original, actorId, operatingContext, attempt.signal)
+      if (!attempt.current()) return
+      const snapshot = validatedFundLifecycle(result.fund_lifecycle, actorId, operatingContext, 'TESTNET')
+      if (!snapshot?.products.some(product => product.product_id === operation.product_id && product.operations.some(value => value.id === operation.id))) throw new Error('The approval result could not be verified. Check the original request.')
+      sessionStorage.removeItem(key); saved.current = null; setUnknown(false); setReviewed(false)
+      wallet.setMessage('Your approval is recorded. Refreshing the next signing action. No transaction was sent.'); await onRefresh()
+    } catch (error) { if (attempt.current()) wallet.setMessage(walletError(error)) }
+    finally { if (attempt.current()) { lock.current = false; setBusy(false) } }
+  }
+  return <div className={styles.form}>
+    <h4>Approve the exact {operation.kind === 'DEPLOYMENT' ? 'fund deployment' : 'unit issuance'}</h4>
+    {!unknown ? <><WalletPicker wallet={wallet} chainId={operation.chain_id} busy={busy} />
+      <p className={styles.muted}>Review the saved fund and this request before approving. Signing and sending the blockchain transaction are separate actions.</p>
+      <label className={styles.check}><input type="checkbox" checked={reviewed} disabled={busy || !ready || !allowed} onChange={event => setReviewed(event.target.checked)} />I reviewed this exact operation and its current terms.</label>
+      <button type="button" className={styles.primary} disabled={busy || !ready || !allowed || !reviewed || !wallet.account || !owners.some(owner => owner.toLowerCase() === wallet.account.toLowerCase())} onClick={() => void approve(false)}>{busy ? 'Recording approval…' : 'Record my approval'}</button></>
+      : <div className={styles.notice}><p>The original approval needs confirmation. Do not create another request.</p><button type="button" className={styles.secondary} disabled={busy || !ready || !saved.current} onClick={() => void approve(true)}>Check original approval</button></div>}
+    {wallet.message ? <p className={styles.feedback} role="status" aria-live="polite">{wallet.message}</p> : null}
+  </div>
+}
+
 function SafeOperationControl({ operation, lifecycle, actorId, operatingContext, onRefresh }: ActionsProps & { operation: FundLifecycleOperation; lifecycle: FundProductLifecycle }) {
   const wallet = useFundWallet(actorId, operatingContext)
   const [busy, setBusy] = useState(false), [intent, setIntent] = useState<FundTransactionIntent | null>(null), [execution, setExecution] = useState<Execution | null>(null), [signingOwner, setSigningOwner] = useState('')
@@ -328,8 +386,9 @@ function SafeOperationControl({ operation, lifecycle, actorId, operatingContext,
   // This delivery enables the selected TEST rail only; displaying a MAIN record never activates signing.
   const canPrepareReview = lifecycle.availability === 'AVAILABLE' && operation.chain_id === 80002 && operation.state === 'REQUESTED' && operation.actions.some(action => action.can_execute && action.command === null && action.reason_code === 'PREPARATION_REQUIRED')
   const signable = lifecycle.availability === 'AVAILABLE' && operation.chain_id === 80002 && ['APPROVED', 'SIGNING'].includes(operation.state) && operation.actions.some(action => action.can_execute && action.command === null && action.reason_code === 'SAFE_SIGNATURE_REQUIRED') && !pending && ready
-  const canExecute = signable && Boolean(operation.intent && operation.signing_owner_address && operation.signer_threshold
-    && (operation.signature_count ?? 0) >= operation.signer_threshold && operation.signing_owner_address.toLowerCase() === operation.intent.signer_address.toLowerCase())
+  const ownerAddresses = operation.signing_owner_addresses ?? (operation.signing_owner_address ? [operation.signing_owner_address] : [])
+  const canExecute = signable && Boolean(operation.intent && operation.signer_threshold
+    && (operation.signature_count ?? 0) >= operation.signer_threshold && ownerAddresses.some(owner => owner.toLowerCase() === operation.intent!.signer_address.toLowerCase()))
   async function run(action: () => Promise<void>) { if (lock.current) return; lock.current = true; setBusy(true); wallet.setMessage(''); try { await action() } catch (error) { wallet.setMessage(walletError(error)) } finally { lock.current = false; setBusy(false) } }
   async function prepare() {
     if (canPrepareReview) {
@@ -342,13 +401,16 @@ function SafeOperationControl({ operation, lifecycle, actorId, operatingContext,
       return
     }
     const attempt = wallet.begin()
-    const result = await lifecyclePost('/api/portal/fund-lifecycle/transaction', { operation_id: operation.id, expected_revision: operation.revision }, actorId, operatingContext, attempt.signal)
+    if (!wallet.account || !ownerAddresses.some(owner => owner.toLowerCase() === wallet.account.toLowerCase())) throw new Error('Select one of your appointed signing wallets in MetaMask before reviewing this request.')
+    const result = await lifecyclePost('/api/portal/fund-lifecycle/transaction', { operation_id: operation.id, expected_revision: operation.revision,
+      ...(operation.signing_owner_addresses ? { signing_address: wallet.account } : {}) }, actorId, operatingContext, attempt.signal)
     if (!attempt.current()) return
     const saved = fundOperationSchema.parse(result.operation)
     if (saved.id !== operation.id || saved.revision !== operation.revision || saved.product_id !== lifecycle.product_id || !['APPROVED', 'SIGNING'].includes(saved.state)) throw new Error('The saved operation changed. Refresh before signing.')
     const prepared = checkedIntent(result.intent, saved)
     const owner = evmAddress.parse(result.signing_owner_address)
-    if (/^0x0{40}$/i.test(owner) || saved.signing_owner_address && saved.signing_owner_address.toLowerCase() !== owner.toLowerCase() || operation.signing_owner_address && operation.signing_owner_address.toLowerCase() !== owner.toLowerCase()) throw new Error('The signing-owner mandate was not verified for this current actor. No executor-wallet fallback is authorised.')
+    if (/^0x0{40}$/i.test(owner) || !ownerAddresses.some(value => value.toLowerCase() === owner.toLowerCase())
+      || !(saved.signing_owner_addresses ?? (saved.signing_owner_address ? [saved.signing_owner_address] : [])).some(value => value.toLowerCase() === owner.toLowerCase())) throw new Error('The signing-owner mandate was not verified for this current actor. No executor-wallet fallback is authorised.')
     await wallet.check(attempt.provider, owner, prepared.chain_id, attempt.current)
     setIntent(prepared); setSigningOwner(owner.toLowerCase()); setReviewed(false)
   }
@@ -363,7 +425,8 @@ function SafeOperationControl({ operation, lifecycle, actorId, operatingContext,
     if (typeof signature !== 'string' || !/^0x[0-9a-f]{130}$/i.test(signature) || verifyTypedData(typedData.domain, safeTypes, intent.safe_transaction, signature).toLowerCase() !== signingOwner.toLowerCase()) throw new Error('MetaMask did not return the signature of this actor’s approved Safe owner.')
     await wallet.check(attempt.provider, signingOwner, intent.chain_id, attempt.current)
     checkedIntent(intent, operationRef.current)
-    const result = await lifecyclePost('/api/portal/fund-lifecycle/signature', { operation_id: intent.operation_id, expected_revision: operationRef.current.revision, signature }, actorId, operatingContext, attempt.signal)
+    const result = await lifecyclePost('/api/portal/fund-lifecycle/signature', { operation_id: intent.operation_id, expected_revision: operationRef.current.revision, signature,
+      ...(operation.signing_owner_addresses ? { signing_address: signingOwner } : {}) }, actorId, operatingContext, attempt.signal)
     if (!attempt.current()) return
     const saved = fundOperationSchema.parse(result.operation)
     const count = z.number().int().min(0).max(20).parse(result.signature_count), threshold = z.number().int().min(2).max(20).parse(result.threshold)
@@ -414,7 +477,7 @@ function SafeOperationControl({ operation, lifecycle, actorId, operatingContext,
   async function verify() { await lifecyclePost('/api/portal/fund-lifecycle/verify', { operation_id: operation.id, expected_revision: operation.revision }, actorId, operatingContext); await onRefresh(); wallet.setMessage('The server observation was requested. Only refreshed saved evidence can establish finality.') }
   return <div className={styles.form}>
     {canPrepareReview ? <button type="button" className={styles.secondary} disabled={busy || !wallet.authorizedContext} onClick={() => void run(prepare)}>Prepare the exact contract intent for review</button> : null}
-    {signable ? <><WalletPicker wallet={wallet} chainId={operation.chain_id} busy={busy} /><button type="button" className={styles.secondary} disabled={busy || !wallet.account} onClick={() => void run(prepare)}>Review the approved Safe request</button></> : null}
+    {signable ? <><WalletPicker wallet={wallet} chainId={operation.chain_id} busy={busy} />{ownerAddresses.length > 1 ? <p className={styles.muted}>Sign once with each appointed key. Switch accounts inside MetaMask, then return here to review the same operation. Two keys are not proof of two independent people.</p> : null}<button type="button" className={styles.secondary} disabled={busy || !wallet.account || !ownerAddresses.some(owner => owner.toLowerCase() === wallet.account.toLowerCase())} onClick={() => void run(prepare)}>Review the approved Safe request</button></> : null}
     {canExecute && !execution ? <button type="button" className={styles.primary} disabled={busy || !wallet.account || wallet.account.toLowerCase() !== operation.intent!.signer_address.toLowerCase()} onClick={() => void run(prepareExecution)}>Review approved contract execution</button> : null}
     {intent ? <div className={styles.review}><h3>{execution ? 'Review Safe contract execution' : 'Review the Safe owner signature'}</h3><dl className={styles.facts}><Fact title="Your signing owner" value={<Address value={signingOwner} />} />{signingOwner !== intent.signer_address.toLowerCase() ? <Fact title="Designated execution wallet" value={<Address value={intent.signer_address} />} /> : null}<Fact title="Safe execution account" value={<Address value={intent.execution_account} />} /><Fact title="Target controller" value={<Address value={intent.target_address} />} /><Fact title="Network and Safe nonce" value={`Chain ${intent.chain_id} · nonce ${intent.safe_transaction.nonce}`} /></dl><p>{execution ? 'The admitted Safe executes only the approved contract operation. Only the designated execution wallet may pay its network gas fee. Native transfer value is zero.' : 'This EIP-712 signature authorises the exact approved Safe operation. Your signing-owner mandate does not make you the execution wallet, and does not authorise an EOA mint, deployment or token allowance.'}</p><label className={styles.check}><input type="checkbox" checked={reviewed} disabled={busy} onChange={event => setReviewed(event.target.checked)} />I checked the operation, signing owner, Safe account and chain.</label><button type="button" className={styles.secondary} disabled={busy || !reviewed || !wallet.account || Boolean(execution && wallet.account.toLowerCase() !== execution.from.toLowerCase())} onClick={() => void run(execution ? broadcast : sign)}>{busy ? 'Waiting for the current handoff…' : execution ? 'Execute the approved Safe transaction in MetaMask' : 'Sign the Safe request in MetaMask'}</button></div> : null}
     {pending || ['UNKNOWN', 'BROADCAST', 'MINED', 'CONFIRMING', 'REORGED', 'REPLACED'].includes(operation.state) ? <div className={styles.notice}><strong>Check the existing operation; do not execute it again</strong><p>A pending or uncertain broadcast remains locked. Use its original transaction from MetaMask Activity.</p>{!operation.transaction_hash ? <><label className={styles.field}>Existing transaction hash<input value={hash} onChange={event => setHash(event.target.value)} disabled={busy || command.busy} autoComplete="off" /></label><button type="button" className={styles.secondary} disabled={busy || command.busy || command.unknown || !txHash.safeParse(hash).success} onClick={() => void command.submit('record_fund_transaction', { operation_id: operation.id, expected_revision: operation.revision, transaction_hash: hash })}>Record the existing execution hash</button></> : null}<button type="button" className={styles.secondary} disabled={busy || command.busy} onClick={() => void run(verify)}>Check recorded chain evidence</button></div> : null}

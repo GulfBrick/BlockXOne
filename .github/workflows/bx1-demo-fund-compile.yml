@@ -729,6 +729,9 @@ jobs:
             'src/lib/portal/fund-setup-client.test.ts',
             'src/lib/portal/fund-setup-server.test.ts',
             'src/components/portal/fund-setup.interaction.test.tsx',
+            'src/lib/portal/fund-chain-admission.test.ts',
+            'src/lib/portal/fund-recipient-chain.test.ts',
+            'src/lib/portal/fund-lifecycle-selection.test.ts',
           ]
           process.exitCode = await runHermeticVitest({
             spawnImplementation: (executable, args, options) => spawn(executable, [...args, ...files], options),

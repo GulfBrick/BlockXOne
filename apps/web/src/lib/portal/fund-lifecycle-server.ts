@@ -51,9 +51,10 @@ export function fundCommandDiscoverable(snapshot: FundLifecycleSnapshot, command
     && Object.entries(action.payload).every(([key, value]) => body[key] === value))
 }
 
-export async function executeFundCommand(client: SupabaseClient, actorId: string, context: PortalOperatingContext, command: string, key: string, payload: unknown): Promise<FundLifecycleSnapshot> {
+export async function executeFundCommand(client: SupabaseClient, actorId: string, context: PortalOperatingContext, command: string, key: string, payload: unknown, signingAddress?: string): Promise<FundLifecycleSnapshot> {
   const { data, error } = await client.rpc('bx1_portal_fund_lifecycle_command_scoped', {
     command, request_key: key, payload, operating_context: context,
+    ...(signingAddress ? { signing_address: signingAddress } : {}),
   }).abortSignal(AbortSignal.timeout(15000))
   if (error) throw new FundLifecycleError(error.code === '42501' ? 'AUTHORITY_CHANGED' : 'COMMAND_NOT_CONFIRMED',
     error.code === '42501' ? 'Your current authority no longer permits this action.'

@@ -24,8 +24,11 @@ const recordSchema = z.object({
   expectation: fundChainExpectationSchema, operation: fundOperationSchema,
   signing_owner_address: ownerSchema.nullable().optional(),
 })
-async function readExecution(client: SupabaseClient, input: { operation_id: string; expected_revision: number; operating_context: PortalOperatingContext }) {
-  const { data, error } = await client.rpc('bx1_portal_prepare_fund_transaction', input).abortSignal(AbortSignal.timeout(10000))
+async function readExecution(client: SupabaseClient, input: { operation_id: string; expected_revision: number; operating_context: PortalOperatingContext; signing_address?: string }) {
+  const { data, error } = await client.rpc('bx1_portal_prepare_fund_transaction', {
+    operation_id: input.operation_id, expected_revision: input.expected_revision, operating_context: input.operating_context,
+    ...(input.signing_address ? { signing_address: input.signing_address } : {}),
+  }).abortSignal(AbortSignal.timeout(10000))
   const result = recordSchema.safeParse(requireFundRpcResult(data, error))
   if (!result.success || result.data.operation.id !== input.operation_id || result.data.operation.revision !== input.expected_revision
     || result.data.expectation.operation_id !== input.operation_id || result.data.operation.product_id !== result.data.expectation.product_id
@@ -41,7 +44,7 @@ function chainError(error: unknown): never {
   throw error
 }
 
-export async function prepareExecution(client: SupabaseClient, input: { operation_id: string; expected_revision: number; operating_context: PortalOperatingContext }) {
+export async function prepareExecution(client: SupabaseClient, input: { operation_id: string; expected_revision: number; operating_context: PortalOperatingContext; signing_address?: string }) {
   let current = await readExecution(client, input)
   let prepared: FundTransactionIntent
   try { prepared = await prepareFundTransaction(current.expectation) } catch (error) { return chainError(error) }
@@ -61,7 +64,7 @@ export async function prepareExecution(client: SupabaseClient, input: { operatio
   return { operation: current.operation, intent: prepared, signing_owner_address: current.signing_owner_address }
 }
 
-export async function recordExecutionSignature(client: SupabaseClient, input: { operation_id: string; expected_revision: number; signature: string; operating_context: PortalOperatingContext }) {
+export async function recordExecutionSignature(client: SupabaseClient, input: { operation_id: string; expected_revision: number; signature: string; operating_context: PortalOperatingContext; signing_address?: string }) {
   const current = await readExecution(client, input)
   if (!current.operation.intent || !current.signing_owner_address || !['APPROVED', 'SIGNING'].includes(current.operation.state)) throw new FundLifecycleError('SIGNER_NOT_CURRENT', 'This login cannot sign the current operation.', 403)
   const recovered = recover(current.expectation, current.operation.intent, input.signature, current.signing_owner_address)
@@ -85,7 +88,10 @@ export async function recordExecutionSignature(client: SupabaseClient, input: { 
 
 /** Execution is a separate, explicit handoff; the executor may have signed first. */
 export async function claimExecution(client: SupabaseClient, input: { operation_id: string; expected_revision: number; operating_context: PortalOperatingContext }) {
-  const prepared = await prepareExecution(client, input)
+  const current = await readExecution(client, input)
+  if (!current.operation.intent) throw new FundLifecycleError('APPROVAL_REQUIRED', 'The exact contract request must be approved before execution.', 409)
+  const selected = current.operation.signing_owner_addresses?.some(address => address.toLowerCase() === current.operation.intent!.signer_address.toLowerCase())
+  const prepared = await prepareExecution(client, selected ? { ...input, signing_address: current.operation.intent.signer_address } : input)
   if (!prepared.intent || !prepared.signing_owner_address || prepared.signing_owner_address.toLowerCase() !== prepared.intent.signer_address.toLowerCase()) {
     throw new FundLifecycleError('EXECUTOR_REQUIRED', 'Only the designated execution wallet can submit the approved operation.', 403)
   }

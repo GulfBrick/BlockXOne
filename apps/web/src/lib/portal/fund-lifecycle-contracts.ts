@@ -64,6 +64,7 @@ export const fundOperationSchema = z.object({
   confirmations: z.number().int().nonnegative().nullable(), required_confirmations: z.number().int().positive(),
   reason_code: z.string().max(120).nullable(), intent: fundIntentSchema.nullable(), actions: z.array(fundActionSchema).max(20),
   signing_owner_address: address.nullable().optional(), signer_threshold: z.number().int().min(2).max(20).nullable().optional(),
+  signing_owner_addresses: z.array(address).max(20).refine(values => new Set(values.map(value => value.toLowerCase())).size === values.length).optional(),
   signature_count: z.number().int().min(0).max(20).optional(),
 })
 export const fundHoldingSchema = z.object({
@@ -128,7 +129,11 @@ export type FundTransactionIntent = z.infer<typeof fundIntentSchema>
 export type FundLifecycleHolding = z.infer<typeof fundHoldingSchema>
 
 export const fundTransactionRequestSchema = z.object({ operation_id: id, expected_revision: revision, operating_context: portalOperatingContextSchema }).strict()
-export const fundSafeSignatureRequestSchema = fundTransactionRequestSchema.extend({ signature: z.string().regex(/^0x[0-9a-fA-F]{130}$/) }).strict()
+// This selects an already-authorised signing slot. The database checks the
+// current policy and its real wallet-control proof; a supplied address grants nothing.
+export const fundPreparationRequestSchema = fundTransactionRequestSchema.extend({ signing_address: address.optional() }).strict()
+export const fundSafeSignatureRequestSchema = fundPreparationRequestSchema.extend({ signature: z.string().regex(/^0x[0-9a-fA-F]{130}$/) }).strict()
+export const fundApprovalRequestSchema = fundPreparationRequestSchema.extend({ command: z.enum(['approve_fund_deployment', 'approve_fund_issuance']), request_key: id }).strict()
 export const fundPaymentRequestSchema = z.object({ subscription_id: id, expected_obligation_revision: revision, payer_address: address, operating_context: portalOperatingContextSchema }).strict()
 export const fundPaymentSubmitSchema = z.object({ payment_id: id, operating_context: portalOperatingContextSchema }).strict()
 export const fundPaymentReferenceSchema = fundPaymentSubmitSchema.extend({ transaction_hash: hash }).strict()
