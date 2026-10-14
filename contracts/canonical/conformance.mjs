@@ -217,21 +217,27 @@ async function governed(contract, method, values = [], expectedSuccess = true) {
   return executeSafe(await prepareSafe(address(contract), contract.interface.encodeFunctionData(method, values)), expectedSuccess)
 }
 async function callback(receipt, method) {
+  // Pinned EDR 0.12 uses Geth options: memory defaults off unless explicitly enabled.
   const trace = await connection.provider.request({ method: 'debug_traceTransaction', params: [receipt.hash,
-    { disableStorage: true, disableStack: false, disableMemory: false }] })
+    { disableStorage: true, disableStack: false, enableMemory: true }] })
   assert.ok(Array.isArray(trace.structLogs) && trace.structLogs.length > 0 && trace.structLogs.length <= 50000)
   const selector = module.interface.getFunction(method).selector.toLowerCase(), observed = []
+  const diagnostic = { call_frames: 0, target_frames: 0, target_frames_with_memory: 0 }
   const word = value => String(value).replace(/^0x/, '')
   for (const frame of trace.structLogs) {
-    if (!['CALL', 'STATICCALL'].includes(frame.op) || !Array.isArray(frame.stack) || !Array.isArray(frame.memory)) continue
+    if (!['CALL', 'STATICCALL'].includes(frame.op) || !Array.isArray(frame.stack)) continue
+    diagnostic.call_frames++
     const stack = frame.stack, n = stack.length
     if (`0x${word(stack[n - 2]).slice(-40)}`.toLowerCase() !== address(module).toLowerCase()) continue
+    diagnostic.target_frames++
+    if (!Array.isArray(frame.memory)) continue
+    diagnostic.target_frames_with_memory++
     const offset = Number(BigInt(`0x${word(stack[n - (frame.op === 'CALL' ? 4 : 3)])}`))
     assert.ok(Number.isSafeInteger(offset) && offset >= 0 && offset < 16777216)
     const memory = frame.memory.map(word).join('')
     if (`0x${memory.slice(offset * 2, offset * 2 + 8)}`.toLowerCase() === selector) observed.push({ depth: frame.depth, selector })
   }
-  assert.ok(observed.length > 0, `Actual ${method} callback was not observed`)
+  assert.ok(observed.length > 0, `Actual ${method} callback was not observed; trace diagnostics: ${JSON.stringify(diagnostic)}`)
   evidence.callbacks.push({ transaction_hash: receipt.hash, target: address(module), method, calls: observed })
 }
 const productBinding = hash('BX1_EXPLICIT_SYNTHETIC_FUND_CLASS_TERMS'), operationBinding = label => hash(`BX1_SYNTHETIC_OPERATION:${label}`)
