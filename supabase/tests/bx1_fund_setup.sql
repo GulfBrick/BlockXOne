@@ -2,7 +2,7 @@
 -- boundary/definition checks, NOT genuine Supabase MFA or Amoy acceptance.
 do $setup_contract$
 declare rel text;role_name text;signature text;definition text;keys text[];
-  original_claims text;denied boolean;before_count integer;
+  original_claims text;denied boolean;before_count integer;proof jsonb;field text;
 begin
   if not exists(select 1 from bx1_portal.entry_configuration where singleton and environment='TESTNET') then
     raise exception 'setup_test_requires_test_configuration';end if;
@@ -78,6 +78,24 @@ begin
   if bx1_portal.fund_setup_observers_valid('{"providers":[{"url":"https://polygon-amoy.drpc.org","finalized_block_number":"40","finalized_block_hash":"0x1111111111111111111111111111111111111111111111111111111111111111"},{"url":"https://polygon-amoy.drpc.org","finalized_block_number":"40","finalized_block_hash":"0x1111111111111111111111111111111111111111111111111111111111111111"}]}') then
     raise exception 'setup_duplicate_provider_accepted';end if;
   if bx1_portal.fund_setup_observers_valid('{"providers":[]}') then raise exception 'setup_no_provider_accepted';end if;
+  if bx1_portal.fund_setup_observers_valid('{"providers":[{"url":"https://polygon-amoy.drpc.org","finalized_block_number":"40","finalized_block_hash":null},{"url":"https://polygon-amoy-bor-rpc.publicnode.com","finalized_block_number":"40","finalized_block_hash":"0x1111111111111111111111111111111111111111111111111111111111111111"}]}') then
+    raise exception 'setup_json_null_provider_hash_accepted';end if;
+  proof:='{"version":1,"chain_id":80002,"status":"FINAL","step_key":"token_implementation","intent_hash":"abababababababababababababababababababababababababababababababab","transaction_hash":"0x1111111111111111111111111111111111111111111111111111111111111111","block_number":"40","block_hash":"0x1111111111111111111111111111111111111111111111111111111111111111","block_timestamp":"2026-10-14T10:00:00Z","runtime_hash":"0x1111111111111111111111111111111111111111111111111111111111111111","checks":[]}'::jsonb;
+  if bx1_portal.fund_setup_result_shape(proof,'STEP') is not true then raise exception 'setup_final_shape_positive_control_failed';end if;
+  foreach field in array array['block_number','block_hash','block_timestamp','runtime_hash','checks','transaction_hash','intent_hash'] loop
+    if bx1_portal.fund_setup_result_shape(pg_catalog.jsonb_set(proof,array[field],'null'::jsonb),'STEP') is not false then
+      raise exception 'setup_final_json_null_accepted_%',field;end if;
+  end loop;
+  proof:='{"version":1,"chain_id":80002,"status":"VERIFIED_CODE_AND_STATE","release_version":"1.4.1","release_source_commit":"382117f5d97745f611e05f827603aadb493dc620","address":"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","runtime_hash":"0xd7d408ebcd99b2b70be43e20253d6d92a8ea8fab29bd3be7f55b10032331fb4c","singleton":{"address":"0x41675c099f32341bf84bfc5382af534df5c7461a","runtime_hash":"0x1fe2df852ba3299d6534ef416eefa406e56ced995bca886ab7a553e6d0c5e1c4"},"nonce":"0","block_number":"40","block_hash":"0x1111111111111111111111111111111111111111111111111111111111111111","catalog_hash":"abababababababababababababababababababababababababababababababab"}'::jsonb;
+  if bx1_portal.fund_setup_result_shape(proof,'SAFE') is not true then raise exception 'setup_safe_shape_positive_control_failed';end if;
+  foreach field in array array['release_version','release_source_commit','address','runtime_hash','nonce','block_number','block_hash','catalog_hash','singleton'] loop
+    if bx1_portal.fund_setup_result_shape(pg_catalog.jsonb_set(proof,array[field],'null'::jsonb),'SAFE') is not false then
+      raise exception 'setup_safe_json_null_accepted_%',field;end if;
+  end loop;
+  foreach field in array array['address','runtime_hash'] loop
+    if bx1_portal.fund_setup_result_shape(pg_catalog.jsonb_set(proof,array['singleton',field],'null'::jsonb),'SAFE') is not false then
+      raise exception 'setup_safe_singleton_json_null_accepted_%',field;end if;
+  end loop;
   original_claims:=pg_catalog.current_setting('request.jwt.claims',true);
   perform pg_catalog.set_config('request.jwt.claims','{}',true);
   if bx1_portal.fund_setup_context('{"mode":"APPLICANT"}',pg_catalog.gen_random_uuid(),true) then raise exception 'setup_unauthed_mfa_accepted';end if;

@@ -62,7 +62,7 @@ export const fundSetupStepSchema = z.object({
 }).strict()
 export const fundSetupRoleplayPolicySchema = z.object({
   policy_id: id, epoch: revision, expires_at: instant,
-  label: z.literal('TEST ROLE PLAY — one operator; not independent human approval'),
+  label: z.literal('TEST ROLE PLAY - one operator; not independent human approval'),
 }).strict()
 export const fundSetupRecordSchema = z.object({
   id, revision, actor_id: id, operating_context: portalOperatingContextSchema,

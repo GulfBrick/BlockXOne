@@ -148,7 +148,7 @@ begin
     execute 'select bx1_private.test_roleplay_projection($1,$2)' into answer using c,pid;
     if answer is not null and answer->'allowed_actions' ? 'FUND_SETUP' then
       return pg_catalog.jsonb_build_object('policy_id',answer->'policy_id','epoch',answer->'authority_epoch',
-        'expires_at',answer->'expires_at','label','TEST ROLE PLAY — one operator; not independent human approval');
+        'expires_at',answer->'expires_at','label','TEST ROLE PLAY - one operator; not independent human approval');
     end if;
   end if;
   return null;
@@ -508,15 +508,52 @@ begin
   for entry in select value from pg_catalog.jsonb_array_elements(result->'providers') loop
     if pg_catalog.jsonb_typeof(entry) is distinct from 'object' or entry-array['url','finalized_block_number','finalized_block_hash']<>'{}'
       or not(entry ?& array['url','finalized_block_number','finalized_block_hash'])
+      or pg_catalog.jsonb_typeof(entry->'url') is distinct from 'string'
       or entry->>'url' not in ('https://polygon-amoy.drpc.org','https://polygon-amoy-bor-rpc.publicnode.com')
       or pg_catalog.jsonb_typeof(entry->'finalized_block_number') is distinct from 'string'
       or entry->>'finalized_block_number' !~ '^[1-9][0-9]{0,77}$'
+      or pg_catalog.jsonb_typeof(entry->'finalized_block_hash') is distinct from 'string'
       or entry->>'finalized_block_hash' !~ '^0x[0-9a-f]{64}$' then return false;end if;
     urls:=pg_catalog.array_append(urls,entry->>'url');
     if result->>'block_number' is not null and (result->>'block_number' !~ '^[1-9][0-9]{0,77}$'
       or (entry->>'finalized_block_number')::numeric<(result->>'block_number')::numeric) then return false;end if;
   end loop;
   return urls[1]<>urls[2];
+exception when others then return false;
+end $$;
+create function bx1_portal.fund_setup_result_shape(result jsonb,kind text) returns boolean
+language plpgsql immutable set search_path='' as $$
+declare field text;
+begin
+  if pg_catalog.jsonb_typeof(result) is distinct from 'object' or result->'version' is distinct from '1'::jsonb
+    or result->'chain_id' is distinct from '80002'::jsonb or pg_catalog.jsonb_typeof(result->'status') is distinct from 'string' then return false;end if;
+  if kind='SAFE' then
+    foreach field in array array['release_version','release_source_commit','address','runtime_hash','nonce','block_number','block_hash','catalog_hash'] loop
+      if pg_catalog.jsonb_typeof(result->field) is distinct from 'string' then return false;end if;
+    end loop;
+    if pg_catalog.jsonb_typeof(result->'singleton') is distinct from 'object'
+      or pg_catalog.jsonb_typeof(result#>'{singleton,address}') is distinct from 'string'
+      or pg_catalog.jsonb_typeof(result#>'{singleton,runtime_hash}') is distinct from 'string'
+      or (result#>>'{singleton,address}' ~ '^0x[0-9a-f]{40}$') is not true
+      or (result#>>'{singleton,runtime_hash}' ~ '^0x[0-9a-f]{64}$') is not true
+      or (result->>'nonce' ~ '^(0|[1-9][0-9]{0,77})$') is not true
+      or (result->>'catalog_hash' ~ '^[0-9a-f]{64}$') is not true then return false;end if;
+  elsif kind='STEP' then
+    foreach field in array array['step_key','intent_hash','transaction_hash'] loop
+      if pg_catalog.jsonb_typeof(result->field) is distinct from 'string' then return false;end if;
+    end loop;
+    if result->>'status'='RECOVERY_REQUIRED' then return coalesce(pg_catalog.jsonb_typeof(result->'reason_code')='string',false);end if;
+    if result->>'status' not in ('UNKNOWN','PENDING','FAILED','FINAL') then return false;end if;
+    if result->>'status' not in ('FAILED','FINAL') then return true;end if;
+    if pg_catalog.jsonb_typeof(result->'block_number') is distinct from 'string'
+      or pg_catalog.jsonb_typeof(result->'block_hash') is distinct from 'string'
+      or pg_catalog.jsonb_typeof(result->'block_timestamp') is distinct from 'string'
+      or (result->>'block_timestamp' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{1,6})?(Z|[+-][0-9]{2}:[0-9]{2})$') is not true then return false;end if;
+    if result->>'status'='FINAL' and (pg_catalog.jsonb_typeof(result->'runtime_hash') is distinct from 'string'
+      or (result->>'runtime_hash' ~ '^0x[0-9a-f]{64}$') is not true or pg_catalog.jsonb_typeof(result->'checks') is distinct from 'array') then return false;end if;
+  else return false;end if;
+  return (result->>'block_number' ~ '^[1-9][0-9]{0,77}$') is true
+    and (result->>'block_hash' ~ '^0x[0-9a-f]{64}$') is true;
 exception when others then return false;
 end $$;
 create function bx1_portal.record_fund_setup_observation(observation_request jsonb,result jsonb) returns jsonb
@@ -531,6 +568,7 @@ begin
   if expected is distinct from observation_request or pg_catalog.jsonb_typeof(result) is distinct from 'object'
     or pg_catalog.octet_length(result::text)>65536 or result->'version' is distinct from '1'::jsonb
     or result->'chain_id' is distinct from '80002'::jsonb
+    or bx1_portal.fund_setup_result_shape(result,expected->>'kind') is not true
     or (result->>'status' is distinct from 'RECOVERY_REQUIRED' and bx1_portal.fund_setup_observers_valid(result) is not true) then
     raise exception 'fund_setup_observation_invalid' using errcode='23514';end if;
   select * into strict s from bx1_portal.fund_setups where id=(expected->>'setup_id')::uuid for update;
@@ -561,8 +599,8 @@ begin
     if result->>'status' is distinct from 'VERIFIED_CODE_AND_STATE' or result->>'release_version' is distinct from '1.4.1'
       or result->>'release_source_commit' is distinct from '382117f5d97745f611e05f827603aadb493dc620'
       or result->>'address' is distinct from s.safe_address or result->>'runtime_hash' is distinct from '0xd7d408ebcd99b2b70be43e20253d6d92a8ea8fab29bd3be7f55b10032331fb4c'
-      or not((result#>>'{singleton,address}'='0x41675c099f32341bf84bfc5382af534df5c7461a' and result#>>'{singleton,runtime_hash}'='0x1fe2df852ba3299d6534ef416eefa406e56ced995bca886ab7a553e6d0c5e1c4')
-        or (result#>>'{singleton,address}'='0x29fcb43b46531bca003ddc8fcb67ffe91900c762' and result#>>'{singleton,runtime_hash}'='0xb1f926978a0f44a2c0ec8fe822418ae969bd8c3f18d61e5103100339894f81ff'))
+      or ((result#>>'{singleton,address}'='0x41675c099f32341bf84bfc5382af534df5c7461a' and result#>>'{singleton,runtime_hash}'='0x1fe2df852ba3299d6534ef416eefa406e56ced995bca886ab7a553e6d0c5e1c4')
+        or (result#>>'{singleton,address}'='0x29fcb43b46531bca003ddc8fcb67ffe91900c762' and result#>>'{singleton,runtime_hash}'='0xb1f926978a0f44a2c0ec8fe822418ae969bd8c3f18d61e5103100339894f81ff')) is not true
       or pg_catalog.jsonb_typeof(result->'owners') is distinct from 'array' or pg_catalog.jsonb_array_length(result->'owners') not between 2 and 20
       or pg_catalog.jsonb_typeof(result->'threshold') is distinct from 'number' or result->>'threshold' !~ '^[1-9][0-9]?$'
       or result->'modules' is distinct from '[]'::jsonb or result->>'guard' is distinct from '0x0000000000000000000000000000000000000000'
