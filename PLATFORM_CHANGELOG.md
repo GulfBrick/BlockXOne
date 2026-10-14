@@ -1,5 +1,13 @@
 # BlockXOne platform releases
 
+## 1.3.0 - connected fund flow corrections (unreleased)
+
+- Make product next-step instructions open the existing details, appointments or document workspace, with keyboard focus and unsaved pane state preserved.
+- Make fund dashboard task counts, labels and links refer to the same server-permitted action. Allocation and delivery-wallet tasks open their exact subscription; issuance links require the current order-to-operation binding.
+- Add a scoped investor orders link after reservation, without guessing an order or implying payment or ownership. Uncertain requests retain original-request recovery before leaving the form.
+- Correct the reserved chain-adapter loop variable without changing its contract checks. Preserve the existing MetaMask, Safe, six-decimal TST and guarded accounting integration source.
+- This version is source-reviewed, not a completed cloud build or hosted business acceptance. Existing TEST and MAIN releases, backend configuration, roles, providers, money and contracts are unchanged; the complete fund/property journeys remain unproven.
+
 ## 1.2.0-rc.8 - shared workspace theme and navigation
 
 - Carry the approved navy navigation, light workspace, real BlockXOne logo and cyan primary actions through all nine existing role views using the shared portal shell. Keep dense data tables wide and guided product forms comfortable to read.

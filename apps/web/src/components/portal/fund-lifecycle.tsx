@@ -81,14 +81,36 @@ export function FundLifecycleWorkspace({ lifecycle, actorId, operatingContext, o
   </div>
 }
 
+export function fundAttentionTask(product: FundProductLifecycle, context: PortalOperatingContext) {
+  const tasks: { action: FundLifecycleAction; href: string; kind: 'fund' | 'order' }[] = []
+  const fundLink = fundHref(product.product_id, context)
+  for (const action of product.actions) tasks.push({ action, href: fundLink, kind: 'fund' })
+  for (const operation of product.operations) {
+    const order = product.orders.find(item => item.subscription_id === operation.subscription_id && item.issuance_operation_id === operation.id)
+    for (const action of operation.actions) tasks.push({ action,
+      href: order ? portalScopeHref('/portal/orders/detail', context, order.subscription_id) : fundLink,
+      kind: order ? 'order' : 'fund' })
+  }
+  for (const order of product.orders) for (const action of order.actions) {
+    tasks.push({ action, href: portalScopeHref('/portal/orders/detail', context, order.subscription_id), kind: 'order' })
+  }
+  // The backend's current-context permission is authoritative. owner_role is
+  // handoff wording, not a second role gate. Resolve only contained records;
+  // an allocation or wallet proof ID must never become a guessed order URL.
+  const preferred = product.next_action
+  return tasks.find(task => task.action.can_execute && preferred !== null && task.action.action_id === preferred.action_id
+    && task.action.record_id === preferred.record_id) ?? tasks.find(task => task.action.can_execute) ?? null
+}
+
 export function FundLifecycleDashboard({ snapshot, role, actorId, operatingContext, onRefresh }: ActionsProps & { snapshot: FundLifecycleSnapshot | null | undefined; role?: string | null }) {
   if (!snapshot || snapshot.actor_id !== actorId || !portalContextMatches(snapshot.operating_context, operatingContext) || snapshot.availability !== 'AVAILABLE') return <div className={styles.workspace}><Unavailable /></div>
-  const actionable = snapshot.products.filter(product => [product.next_action, ...product.actions, ...product.operations.flatMap(operation => operation.actions), ...product.orders.flatMap(order => order.actions)].some(action => action?.can_execute && (!role || action.owner_role === role)))
-  const waiting = snapshot.products.filter(product => !actionable.includes(product))
+  const tasks = snapshot.products.map(product => ({ product, task: fundAttentionTask(product, operatingContext) }))
+  const actionable = tasks.filter(item => item.task !== null)
+  const waiting = tasks.filter(item => item.task === null).map(item => item.product)
   const positions = snapshot.products.reduce((count, product) => count + product.holdings.length, 0)
   return <div className={styles.workspace}><div className={styles.heading}><div><p className={styles.eyebrow}>Your fund handoffs</p><h2>{roleNames[role ?? ''] ?? 'Fund workspace'}</h2><p>Current record permissions decide what you can act on. A role label does not grant transaction authority.</p></div><button type="button" className={styles.secondary} onClick={() => void onRefresh()}>Refresh saved state</button></div>
     <dl className={styles.summary}><Fact title="Funds visible in this context" value={snapshot.products.length} /><Fact title="Funds with an available action" value={actionable.length} /><Fact title="Reconciled position records" value={positions} /></dl>
-    <Card title="Needs your attention">{actionable.length ? <ul className={styles.queue}>{actionable.map(product => <li key={product.product_id}><div><h3>{product.product_name}</h3><p>{product.next_action?.label ?? 'An authorised handoff is available in this fund record.'}</p></div><Link className={styles.secondary} href={fundHref(product.product_id, operatingContext)}>Open fund record</Link></li>)}</ul> : <p className={styles.muted}>There is no currently permitted fund action in this context. This does not mean the funds are complete.</p>}</Card>
+    <Card title="Needs your attention">{actionable.length ? <ul className={styles.queue}>{actionable.map(({ product, task }) => task ? <li key={product.product_id}><div><h3>{product.product_name}</h3><p>{task.action.label}</p></div><Link className={styles.secondary} href={task.href}>{task.kind === 'order' ? 'Open subscription' : 'Open fund record'}</Link></li> : null)}</ul> : <p className={styles.muted}>There is no currently permitted fund action in this context. This does not mean the funds are complete.</p>}</Card>
     {waiting.length ? <Card title="Waiting on the next owner"><ul className={styles.queue}>{waiting.map(product => <li key={product.product_id}><div><h3>{product.product_name}</h3><p>{product.next_action?.label ?? 'Review the current stage'} · {roleNames[product.next_action?.owner_role ?? ''] ?? product.next_action?.owner_role ?? 'No current owner action'}</p></div><Link className={styles.secondary} href={fundHref(product.product_id, operatingContext)}>View fund progress</Link></li>)}</ul></Card> : null}
     <p className={styles.boundary}>Updated from saved evidence on {date(snapshot.observed_at)}. {snapshot.environment === 'TESTNET' ? 'TEST assets have no investment value.' : 'Production execution is not activated by this view.'}</p>
   </div>

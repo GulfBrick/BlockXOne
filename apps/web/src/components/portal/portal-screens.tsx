@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { ArrowRight, Building2, Layers3, Plus } from 'lucide-react'
 import { isOfferingSubscribable, isWealthManagerDetailsV2, representativeMandateNextOwnerLabel, validatedEntityProductEligibility, type PortalCapability, type PortalInvestingRepresentativeMandate, type PortalOrganisation, type PortalOrganisationMandate, type PortalPageData, type PortalPath, type PortalProduct, type PortalSnapshot, type PortalSubscription } from '@/lib/portal/contracts'
@@ -38,13 +38,29 @@ function permits(org: PortalOrganisation, command: PortalCapability, context?: P
   return org.capabilities?.includes(command) ?? !context
 }
 
+type ProductWorkspaceSection = 'DETAILS' | 'REVIEW' | 'DOCUMENTS' | 'APPOINTMENTS'
+
 function ProductDetailWorkspace({ product, snapshot, organisations, operatingContext, onSaved, onRefresh, availableCommands, canEdit, canViewIssuerRationale, canReviewIssuer }: {
   product: PortalProduct; snapshot: PortalSnapshot; organisations: PortalOrganisation[];
   operatingContext?: PortalOperatingContext; onSaved: (snapshot: PortalSnapshot) => void;
   availableCommands?: readonly string[]; canEdit: boolean; canViewIssuerRationale: boolean; canReviewIssuer: boolean;
   onRefresh: () => Promise<void>;
 }) {
-  const [section, setSection] = useState<'DETAILS' | 'REVIEW' | 'DOCUMENTS' | 'APPOINTMENTS'>(canEdit ? 'DETAILS' : 'REVIEW')
+  const [section, setSection] = useState<ProductWorkspaceSection>(canEdit ? 'DETAILS' : 'REVIEW')
+  const [documentsMounted, setDocumentsMounted] = useState(false)
+  const sectionContent = useRef<Record<ProductWorkspaceSection, HTMLDivElement | null>>({ DETAILS: null, REVIEW: null, DOCUMENTS: null, APPOINTMENTS: null })
+  const focusRequested = useRef(false)
+  useEffect(() => {
+    if (!focusRequested.current) return
+    focusRequested.current = false
+    sectionContent.current[section]?.focus()
+  }, [section])
+  function selectSection(next: ProductWorkspaceSection) {
+    if (next === 'DOCUMENTS') setDocumentsMounted(true)
+    if (next === section) { sectionContent.current[next]?.focus(); return }
+    focusRequested.current = true
+    setSection(next)
+  }
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
   const [showTechnicalEvidence, setShowTechnicalEvidence] = useState(false)
   const lifecycle = snapshot.fund_lifecycle?.products.find(item => item.product_id === product.id)
@@ -53,16 +69,16 @@ function ProductDetailWorkspace({ product, snapshot, organisations, operatingCon
   const issuerAssigned = appointments.some(item => item.role === 'IssuerFundManager' && item.effective)
   const complianceAssigned = appointments.some(item => item.role === 'ComplianceOfficer' && item.effective)
   const signatureStatus = pkg?.document_evidence?.signature_status
-  const nextStep = ['DRAFT', 'CHANGES_REQUIRED'].includes(product.status)
-    ? 'Complete and save the product details, then submit the saved version for review.'
-    : !pkg ? 'The submitted package is not available. Refresh the saved record before taking another action.'
-    : !issuerAssigned || !complianceAssigned ? 'Confirm the issuer and Compliance appointments for this product in Appointments. Submission alone does not assign a reviewer.'
-    : signatureStatus === 'NOT_CONNECTED' || signatureStatus === 'NOT_ADMITTED' ? 'Document signing is not connected for this package yet. The submission is saved, but approval is not available.'
-    : pkg.issuer_status !== 'APPROVED' ? 'The appointed issuer must complete the document and package review.'
-    : pkg.compliance_status !== 'APPROVED' ? 'The appointed Compliance Officer must review the same submitted package.'
-    : pkg.technical_readiness_status !== 'VERIFIED' ? 'The package still needs verified blockchain deployment before it can open to investors.'
-    : product.status !== 'PUBLISHED' ? 'Use the authorised opening action when the backend confirms every requirement.'
-    : 'The offering is published. Investor access remains subject to the current product and account requirements.'
+  const nextStep: { message: string; section?: ProductWorkspaceSection } = ['DRAFT', 'CHANGES_REQUIRED'].includes(product.status)
+    ? { message: 'Complete and save the product details, then submit the saved version for review.', section: 'DETAILS' }
+    : !pkg ? { message: 'The submitted package is not available. Refresh the saved record before taking another action.' }
+    : !issuerAssigned || !complianceAssigned ? { message: 'Confirm the issuer and Compliance appointments for this product in Appointments. Submission alone does not assign a reviewer.', section: 'APPOINTMENTS' }
+    : signatureStatus === 'NOT_CONNECTED' || signatureStatus === 'NOT_ADMITTED' ? { message: 'Document signing is not connected for this package yet. The submission is saved, but approval is not available.', section: 'DOCUMENTS' }
+    : pkg.issuer_status !== 'APPROVED' ? { message: 'The appointed issuer must complete the document and package review.', section: 'DOCUMENTS' }
+    : pkg.compliance_status !== 'APPROVED' ? { message: 'The appointed Compliance Officer must review the same submitted package.', section: 'DOCUMENTS' }
+    : pkg.technical_readiness_status !== 'VERIFIED' ? { message: 'The package still needs verified blockchain deployment before it can open to investors.' }
+    : product.status !== 'PUBLISHED' ? { message: 'Use the authorised opening action when the backend confirms every requirement.' }
+    : { message: 'The offering is published. Investor access remains subject to the current product and account requirements.' }
   const commands = hasUnsavedChanges ? (availableCommands ?? []).filter(command => command !== 'submit_product') : availableCommands
   const sections = [
     { id: 'DETAILS', label: canEdit ? 'Edit details' : 'Product details' },
@@ -70,31 +86,34 @@ function ProductDetailWorkspace({ product, snapshot, organisations, operatingCon
     { id: 'DOCUMENTS', label: 'Documents & signing' },
     { id: 'APPOINTMENTS', label: 'Appointments' },
   ] as const
+  const nextStepSection = sections.find(item => item.id === nextStep.section)
   return <div className={styles.stack}>
     <nav className={styles.actions} aria-label="Product workspace sections">
-      {sections.map(item => <button key={item.id} type="button" className={section === item.id ? styles.button : styles.buttonSecondary}
-        aria-pressed={section === item.id} aria-controls={`product-${product.id}-${item.id}`} onClick={() => setSection(item.id)}>{item.label}</button>)}
+      {sections.map(item => <button key={item.id} id={`product-${product.id}-section-${item.id}`} type="button" className={section === item.id ? styles.button : styles.buttonSecondary}
+        aria-pressed={section === item.id} aria-controls={`product-${product.id}-${item.id}`} onClick={() => selectSection(item.id)}>{item.label}</button>)}
     </nav>
-    <div id={`product-${product.id}-DETAILS`} hidden={section !== 'DETAILS'}>
+    <div id={`product-${product.id}-DETAILS`} ref={node => { sectionContent.current.DETAILS = node }} role="region" aria-labelledby={`product-${product.id}-section-DETAILS`} tabIndex={-1} hidden={section !== 'DETAILS'}>
       {canEdit ? <ProductForm key={`${product.id}-${product.revision}`} organisations={organisations} product={product}
         onSaved={onSaved} operatingContext={operatingContext} onUnsavedChange={setHasUnsavedChanges} />
         : <div className={styles.stack}><ProductFacts product={product} /><ProductNarrative product={product} /></div>}
     </div>
-    <div id={`product-${product.id}-REVIEW`} className={styles.stack} hidden={section !== 'REVIEW'}>
+    <div id={`product-${product.id}-REVIEW`} ref={node => { sectionContent.current.REVIEW = node }} role="region" aria-labelledby={`product-${product.id}-section-REVIEW`} tabIndex={-1} className={styles.stack} hidden={section !== 'REVIEW'}>
       {lifecycle && operatingContext ? <FundLifecycleWorkspace showTitle={false} lifecycle={lifecycle} actorId={snapshot.actor.id} operatingContext={operatingContext}
-        onRefresh={onRefresh} /> : <Panel title="Your next step"><p>{nextStep}</p><p className={styles.muted}>This page acts on the saved product version.</p>
+        onRefresh={onRefresh} /> : <Panel title="Your next step"><p>{nextStep.message}</p>
+        {nextStepSection ? <button type="button" className={styles.buttonSecondary} aria-controls={`product-${product.id}-${nextStepSection.id}`} onClick={() => selectSection(nextStepSection.id)}>Open {nextStepSection.label}</button> : null}
+        <p className={styles.muted}>This page acts on the saved product version.</p>
         {hasUnsavedChanges ? <p className={styles.fieldError} role="status">Save your changes in Edit details before submitting. They are not part of the saved package yet.</p> : null}
       </Panel>}
       <ProductActions compact={Boolean(lifecycle)} product={product} onSaved={onSaved} availableCommands={commands} />
       {canReviewIssuer && pkg && product.status === 'IN_REVIEW' ? <IssuerOfferingReview product={product} snapshot={snapshot} onSaved={onSaved} /> : null}
       {pkg ? <><button type="button" className={styles.buttonSecondary} aria-expanded={showTechnicalEvidence} onClick={() => setShowTechnicalEvidence(value => !value)}>{showTechnicalEvidence ? 'Hide recorded package evidence' : 'View recorded package evidence'}</button>{showTechnicalEvidence ? <OfferingPackageEvidence product={product} showIssuerRationale={canViewIssuerRationale} /> : null}</> : null}
     </div>
-    {section === 'DOCUMENTS' ? <div id={`product-${product.id}-DOCUMENTS`} className={styles.stack}>
+    {documentsMounted ? <div id={`product-${product.id}-DOCUMENTS`} ref={node => { sectionContent.current.DOCUMENTS = node }} role="region" aria-labelledby={`product-${product.id}-section-DOCUMENTS`} tabIndex={-1} className={styles.stack} hidden={section !== 'DOCUMENTS'}>
       {!pkg ? <Panel title="Documents & signing"><EmptyState title="Save and submit the product first" description="The submitted package connects its document versions, uploads and signature evidence. Saving a draft does not create signed documents." /></Panel>
         : <><OfferingDocuments product={product} /><OfferingFilePanel product={product} context={operatingContext} actorId={snapshot.actor.id} />
           <OfferingSignatures product={product} context={operatingContext} actorId={snapshot.actor.id} appointments={snapshot.product_appointments} /></>}
     </div> : null}
-    <div id={`product-${product.id}-APPOINTMENTS`} hidden={section !== 'APPOINTMENTS'}>
+    <div id={`product-${product.id}-APPOINTMENTS`} ref={node => { sectionContent.current.APPOINTMENTS = node }} role="region" aria-labelledby={`product-${product.id}-section-APPOINTMENTS`} tabIndex={-1} hidden={section !== 'APPOINTMENTS'}>
       <ProductAppointmentRequest product={product} snapshot={snapshot} operatingContext={operatingContext} onSaved={onSaved} />
     </div>
   </div>

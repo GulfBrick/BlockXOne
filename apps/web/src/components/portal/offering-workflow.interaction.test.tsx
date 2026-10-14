@@ -12,7 +12,7 @@ import type { PlatformRelease } from '@/lib/platform-release'
 import { PortalScreen } from './portal-screens'
 import { PortalCommandProvider, postPortalCommand, prepareDurablePortalCommand, reconcilePortalMarker } from './portal-client'
 import { fictionalProductTerms } from './product-form'
-import { IssuerOfferingReview, ProductActions, ProductReview } from './portal-workflows'
+import { IssuerOfferingReview, ProductActions, ProductReview, SubscriptionForm } from './portal-workflows'
 import { ProductAppointmentDecision } from './product-service-appointments'
 
 // Normal mounted UI and real durable command transport, with synthetic returned
@@ -342,6 +342,152 @@ describe('normal TEST mounted offering package handoffs', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Retry the original saved request' }))
     await saved(); expect(lastRequest.key).toBe(original.key); expect(lastRequest.payload).toEqual(original.payload)
     expect(sessionStorage.length).toBe(0)
+  })
+})
+
+describe('existing product workspace next-step navigation', () => {
+  const fetchOfferingReads = vi.fn(async () => new Response(JSON.stringify({
+    error: 'Synthetic document/signature service is unavailable; no provider admission or acceptance is implied.', admitted: false,
+  }), { status: 503, headers: { 'content-type': 'application/json' } }))
+  beforeEach(() => {
+    fetchOfferingReads.mockClear()
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      const method = (init?.method ?? (typeof input === 'string' || input instanceof URL ? 'GET' : input.method)).toUpperCase()
+      if (method === 'GET' && (url.startsWith('/api/portal/offering-documents?') || url.startsWith('/api/portal/offering-signatures?'))) return fetchOfferingReads()
+      return fetchCommand(input, init)
+    }))
+  })
+
+  it.each(['FUND', 'REAL_ESTATE'] as const)('focuses the %s details handoff without losing an unsaved edit or enabling submission', kind => {
+    mount(snapshot('OfferingManager', [product(kind)]), '/portal/products/detail', productId)
+    const editedName = `Fictional unsaved ${kind} draft`
+    fireEvent.change(screen.getByLabelText('Product name'), { target: { value: editedName } })
+    fireEvent.click(screen.getByRole('button', { name: 'Review & next step' }))
+    expect(document.activeElement).toBe(screen.getByRole('region', { name: 'Review & next step' }))
+    expect(screen.queryByRole('button', { name: 'Submit immutable offering package' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Open Edit details' }))
+    expect(document.activeElement).toBe(screen.getByRole('region', { name: 'Edit details' }))
+    expect((screen.getByLabelText('Product name') as HTMLInputElement).value).toBe(editedName)
+    expect(fetchCommand).not.toHaveBeenCalled()
+  })
+
+  it.each(['FUND', 'REAL_ESTATE'] as const)('focuses the %s appointments handoff and retains the mounted appointment draft', kind => {
+    const item = product(kind, { status: 'IN_REVIEW', offering_package: packageRecord(), allowed_actions: [] })
+    mount(snapshot('OfferingManager', [item]), '/portal/products/detail', productId)
+    fireEvent.click(screen.getByRole('button', { name: 'Open Appointments' }))
+    expect(document.activeElement).toBe(screen.getByRole('region', { name: 'Appointments' }))
+    const evidence = 'Fictional unsaved appointment evidence for this exact product.'
+    fireEvent.change(screen.getByLabelText(/^Appointment evidence reference/), { target: { value: evidence } })
+    fireEvent.click(screen.getByRole('button', { name: 'Review & next step' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Open Appointments' }))
+    expect((screen.getByLabelText(/^Appointment evidence reference/) as HTMLTextAreaElement).value).toBe(evidence)
+    expect(screen.queryByRole('button', { name: 'Record issuer decision' })).toBeNull()
+    expect(fetchCommand).not.toHaveBeenCalled()
+  })
+
+  it.each(['FUND', 'REAL_ESTATE'] as const)('mounts and focuses the %s documents handoff, then keeps its content mounted when switching', kind => {
+    const item = product(kind, { status: 'IN_REVIEW', offering_package: packageRecord(), allowed_actions: [] })
+    const applied = (['IssuerFundManager', 'ComplianceOfficer'] as const).map(role => appointment(role, { status: 'APPLIED', effective: true }))
+    mount(snapshot('OfferingManager', [item], applied), '/portal/products/detail', productId)
+    expect(document.getElementById(`product-${productId}-DOCUMENTS`)).toBeNull()
+    expect(screen.getByRole('button', { name: 'View recorded package evidence' }).getAttribute('aria-expanded')).toBe('false')
+    fireEvent.click(screen.getByRole('button', { name: 'Open Documents & signing' }))
+    const documents = screen.getByRole('region', { name: 'Documents & signing' })
+    expect(document.activeElement).toBe(documents)
+    fireEvent.click(screen.getByRole('button', { name: 'Review & next step' }))
+    expect(document.getElementById(`product-${productId}-DOCUMENTS`)).toBe(documents)
+    expect(documents.hidden).toBe(true)
+    fireEvent.click(screen.getByRole('button', { name: 'Open Documents & signing' }))
+    expect(document.activeElement).toBe(documents)
+    expect(documents.hidden).toBe(false)
+    expect(fetchCommand).not.toHaveBeenCalled()
+  })
+
+  it.each(['NOT_CONNECTED', 'NOT_ADMITTED', 'DEPLOYMENT'] as const)('uses only a real document destination or a waiting message for the %s prerequisite', prerequisite => {
+    const document_evidence = prerequisite === 'NOT_CONNECTED'
+      ? { profile: 'PDF_SIGNATURE_REQUIRED_V1', state: 'SEALED_SIGNATURE_REQUIRED', manifest_id: receiptId,
+        manifest_hash: hash, signature_status: 'NOT_CONNECTED', approval_allowed: false } as const
+      : prerequisite === 'NOT_ADMITTED' ? { version: 2, profile: 'PDF_SIGNATURE_REQUIRED_V1', state: 'SEALED_SIGNATURE_REQUIRED', manifest_id: receiptId,
+        manifest_hash: hash, signature_status: 'NOT_ADMITTED', approval_allowed: false } as const : undefined
+    const pkg = packageRecord({ issuer_status: 'APPROVED', compliance_status: 'APPROVED', ...(document_evidence ? { document_evidence } : {}) })
+    const applied = (['IssuerFundManager', 'ComplianceOfficer'] as const).map(role => appointment(role, { status: 'APPLIED', effective: true }))
+    mount(snapshot('OfferingManager', [product('FUND', { status: 'IN_REVIEW', offering_package: pkg, allowed_actions: [] })], applied), '/portal/products/detail', productId)
+    expect(screen.getByText(prerequisite === 'DEPLOYMENT' ? /package still needs verified blockchain deployment/ : /Document signing is not connected for this package yet/)).toBeTruthy()
+    if (prerequisite === 'DEPLOYMENT') {
+      expect(screen.queryByRole('button', { name: /^Open (Edit details|Appointments|Documents & signing)$/ })).toBeNull()
+    } else {
+      fireEvent.click(screen.getByRole('button', { name: 'Open Documents & signing' }))
+      expect(document.activeElement).toBe(screen.getByRole('region', { name: 'Documents & signing' }))
+      expect(screen.queryByRole('button', { name: 'Get my DocuSign signing link' })).toBeNull()
+    }
+    expect(screen.queryByRole('button', { name: 'Open approved offering' })).toBeNull()
+    expect(fetchCommand).not.toHaveBeenCalled()
+  })
+})
+
+describe('subscription reservation orders handoff', () => {
+  function investorFixture() {
+    const item = product('FUND', { status: 'PUBLISHED', allowed_actions: [], offering_package: packageRecord({
+      issuer_status: 'APPROVED', compliance_status: 'APPROVED', technical_readiness_status: 'VERIFIED', subscribable: true,
+    }) })
+    const value = snapshot('OfferingManager', [item])
+    delete value.stage2_access; delete value.offering_access
+    value.operating_context = { mode: 'ROLE', role: 'Investor', organisationId: managerOrganisation }
+    value.organisations = []
+    value.applications = [{ id: secondPackageId, user_id: manager, persona: 'INVESTOR', status: 'APPROVED', revision: 1,
+      details: { full_name: 'Fictional Investor', country: 'ZA', investor_type: 'INDIVIDUAL', company_name: '', registration_reference: '',
+        source_of_funds: 'Fictional savings for this synthetic reservation.', beneficial_owners: '', experience: 'Fictional investment experience for review.',
+        documents: [], test_data_acknowledged: true }, submitted_at: past(), reviewed_at: past(), reviewer_id: productReviewer,
+      review_notes: null, organisation_id: null, review_checks: {}, provider_mode: 'MANUAL_TEST_REVIEW', approved_until: expiry() }]
+    value.accounts = [{ id: thirdPackageId, holder_user_id: manager, application_id: secondPackageId, kind: 'INDIVIDUAL', status: 'ACTIVE', created_at: past() }]
+    value.product_eligibility = [{ id: receiptId, investment_account_id: thirdPackageId, product_id: productId, organisation_id: productOrganisation,
+      product_revision: item.revision, offering_revision_id: firstPackageId, terms_hash: hash, application_revision: 1, revision: 1,
+      status: 'APPROVED', investor_statement: 'Fictional product suitability and source-of-funds statement.', submitted_at: past(), reviewed_at: past(),
+      reviewer_id: productReviewer, review_notes: 'Fictional independently approved eligibility.', review_checks: {}, approved_until: expiry(),
+      effective: true, can_decide: false, can_approve: false, can_revoke: false, holder_user_id: manager, product_name: item.terms.name,
+      account_kind: 'INDIVIDUAL', investor_application: value.applications[0] }]
+    const reservation = { id: requestKey, product_id: productId, investment_account_id: thirdPackageId, investor_id: manager, product_name: item.terms.name,
+      organisation_id: productOrganisation, product_revision: item.revision, offering_revision_id: firstPackageId, terms_hash: hash,
+      units: item.terms.minimum_units, amount_minor: (BigInt(item.terms.minimum_units) * BigInt(item.terms.unit_price_minor)).toString(),
+      currency: item.terms.currency, status: 'AWAITING_FUNDING' as const, created_at: past() }
+    nextResult = { ...value, subscriptions: [reservation, { ...reservation, id: receiptId }] }
+    const onSaved = vi.fn()
+    render(<PortalCommandProvider snapshot={value} operatingContext={value.operating_context} environment="TESTNET"><SubscriptionForm product={item} snapshot={value} onSaved={onSaved} operatingContext={value.operating_context} /></PortalCommandProvider>)
+    checkLabels([/I have read and accept the memorandum/, /I have read the risk disclosures/])
+    return { item, value, onSaved }
+  }
+
+  it('links a confirmed reservation to scoped subscription orders without guessing an order or promising funding', async () => {
+    const { item, value, onSaved } = investorFixture()
+    fireEvent.click(screen.getByRole('button', { name: 'Accept terms and reserve units' }))
+    await saved()
+    recorded('subscribe', { product_id: productId, offering_revision_id: firstPackageId, investment_account_id: thirdPackageId, units: item.terms.minimum_units })
+    expect(onSaved).toHaveBeenCalledTimes(1)
+    expect(screen.getByRole('link', { name: 'View my subscription orders' }).getAttribute('href')).toBe(portalScopeHref('/portal/portfolio', value.operating_context))
+    expect(screen.getByText(/Approved funding instructions may still be pending/)).toBeTruthy()
+    expect(screen.getByText(/Only verified settlement and confirmed issuance can create a holding/)).toBeTruthy()
+  })
+
+  it('defers orders navigation for an unknown reservation and recovers the original request before restoring the link', async () => {
+    const { value, onSaved } = investorFixture()
+    failTransport = true
+    fireEvent.click(screen.getByRole('button', { name: 'Accept terms and reserve units' }))
+    await screen.findByRole('button', { name: 'Retry the original saved request' })
+    const original = JSON.parse(String(fetchCommand.mock.calls[0][1]?.body))
+    expect(screen.queryByRole('link', { name: 'View my subscription orders' })).toBeNull()
+    expect((screen.getByRole('button', { name: 'Accept terms and reserve units' }).closest('fieldset') as HTMLFieldSetElement).disabled).toBe(true)
+    expect(screen.getByText(/Resolve the original saved request above before leaving this page/)).toBeTruthy()
+    expect(sessionStorage.length).toBe(1)
+    expect(onSaved).not.toHaveBeenCalled()
+    failTransport = false; expectedFetchCount = 1
+    fireEvent.click(screen.getByRole('button', { name: 'Retry the original saved request' }))
+    await saved()
+    expect(lastRequest.key).toBe(original.key)
+    expect(lastRequest.payload).toEqual(original.payload)
+    expect(onSaved).toHaveBeenCalledTimes(1)
+    expect(screen.queryByRole('button', { name: 'Retry the original saved request' })).toBeNull()
+    expect(screen.getByRole('link', { name: 'View my subscription orders' }).getAttribute('href')).toBe(portalScopeHref('/portal/portfolio', value.operating_context))
   })
 })
 

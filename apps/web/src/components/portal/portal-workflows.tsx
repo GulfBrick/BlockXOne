@@ -783,7 +783,9 @@ export function SubscriptionForm({ product, snapshot, onSaved, operatingContext 
               <button type="submit" className={styles.button} disabled={!acceptedDocuments || !acceptedRisks || 'error' in quote}>Accept terms and reserve units</button>
             </fieldset>
           </form>}
-    <div className={styles.sectionGap}><Notice title="Funding comes next">The same saved instruction appears in your orders and the authorised issuer’s incoming orders as awaiting funding. Only verified settlement and confirmed issuance can create a holding.</Notice></div>
+    <div className={styles.sectionGap}><Notice title="Funding comes next">After your reservation is confirmed, the same saved instruction appears in your orders and the authorised issuer’s incoming orders as awaiting funding. Approved funding instructions may still be pending. Do not send funds without approved instructions. Only verified settlement and confirmed issuance can create a holding.
+      {command.unknown ? <p>Resolve the original saved request above before leaving this page to view your orders.</p> : !command.busy ? <p><Link href={portalScopeHref('/portal/portfolio', operatingContext)} className={styles.textLink}>View my subscription orders</Link></p> : null}
+    </Notice></div>
   </Panel>
 }
 

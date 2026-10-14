@@ -352,8 +352,8 @@ async function suiteAt(rpc: Rpc, url: string, e: FundChainExpectation, height: b
     || !equalSet(values[11][0], d.claim_issuers.map(x => x.address)) || !equalSet(values[12][0], d.compliance_modules.map(x => x.address))
     || lower(values[13][0]) !== s.token.address || values[14][0] !== true) reject('FUND_TOKEN_CONFIGURATION_MISMATCH')
   for (const issuer of d.claim_issuers) if (!equalSet((await read(rpc, url, s.trusted_issuers.address, REGISTRY, 'getTrustedIssuerClaimTopics', [issuer.address], height))[0], issuer.topics)) reject('CLAIM_ISSUER_TOPICS_MISMATCH')
-  for (const module of d.compliance_modules) for (const check of module.settings_readbacks) {
-    if (lower(await rpc(url, 'eth_call', [{ to: module.address, data: check.data }, hex(height)])) !== check.result) reject('COMPLIANCE_MODULE_SETTINGS_MISMATCH')
+  for (const complianceModule of d.compliance_modules) for (const check of complianceModule.settings_readbacks) {
+    if (lower(await rpc(url, 'eth_call', [{ to: complianceModule.address, data: check.data }, hex(height)])) !== check.result) reject('COMPLIANCE_MODULE_SETTINGS_MISMATCH')
   }
   const limits = await Promise.all([
     read(rpc, url, m.controller.address, CONTROLLER, 'fundBindings', [s.token.address], height),

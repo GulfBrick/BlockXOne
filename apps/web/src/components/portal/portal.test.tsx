@@ -10,6 +10,8 @@ import { fictionalProductTerms, upgradeLegacyDraftTerms } from './product-form'
 import { ApplicationReview, EntityProductEligibilityPanel, InvestmentAccountPanel, IssuerOfferingReview, OfferingPackageEvidence, ProductActions, ProductEligibilityPanel, ProductEligibilityReview, ProductReview, SubscriptionForm, activeIndividualAccounts, currentInvestorApplication, currentProductEligibility } from './portal-workflows'
 import { postPortalCommand, prepareDurablePortalCommand, reconcilePortalMarker } from './portal-client'
 import { money } from './portal-primitives'
+import { FundLifecycleDashboard, fundAttentionTask } from './fund-lifecycle'
+import { fundStageKeys, type FundLifecycleAction, type FundLifecycleOperation, type FundLifecycleSnapshot, type FundProductLifecycle } from '@/lib/portal/fund-lifecycle-contracts'
 
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }) }))
 vi.mock('next/link', () => ({ default: ({ children, ...props }: React.ComponentProps<'a'>) => <a {...props} data-client-navigation="true">{children}</a> }))
@@ -98,7 +100,95 @@ function historicalTerms(kind: LegacyProductTerms['asset_type']): LegacyProductT
   return { ...base, asset_type: kind, currency: 'ZAR_TEST', unit_price_minor: '10000', cap_units: '10000', minimum_units: '10', property_address: kind === 'FUND' ? '' : base.property_address, property_valuation_minor: kind === 'FUND' ? '0' : '500000000', rental_income_policy: kind === 'FUND' ? '' : 'Fictional rent after disclosed operating expenses and reserves.' }
 }
 function data(value = snapshot()): PortalPageData { return { user: { id: actor, email: 'synthetic@example.invalid' }, snapshot: value } }
+function fundAction(change: Partial<FundLifecycleAction> = {}): FundLifecycleAction {
+  return { action_id: `deployment:${productId}`, command: 'request_fund_deployment', record_id: productId, expected_revision: 3,
+    label: 'Prepare the fund contract deployment', reason_code: null, owner_role: 'OfferingManager', can_execute: true,
+    payload: { product_id: productId, expected_revision: 3, manifest_id: other, signer_policy_id: accountId }, ...change }
+}
+function fundProduct(change: Partial<FundProductLifecycle> = {}): FundProductLifecycle {
+  const action = fundAction()
+  return { product_id: productId, organisation_id: organisation, native_organisation_id: nativeOrganisation, product_revision: 3,
+    offering_revision_id: offeringRevisionId, class_id: accountId, product_name: 'Connected Fund', terms_hash: 'ab'.repeat(32),
+    configuration_hash: null, availability: 'AVAILABLE', stages: fundStageKeys.map((key): FundProductLifecycle['stages'][number] => ({
+      key, state: 'NOT_STARTED', label: key, description: 'Follow the saved evidence.', reason_code: null,
+      owner_role: 'OfferingManager', evidence_ids: [],
+    })), next_action: action, actions: [action], operations: [], orders: [], holdings: [], ...change }
+}
+function fundOrder(action: FundLifecycleAction): FundProductLifecycle['orders'][number] {
+  return { subscription_id: requestKey, product_id: productId, investment_account_id: accountId, allocation_id: other, allocation_revision: 1,
+    units_base: '10', security_unit_decimals: 0, funding: null, delivery_wallet: null, issuance_operation_id: null, actions: [action] }
+}
+function fundSnapshot(context: PortalOperatingContext, product = fundProduct()): FundLifecycleSnapshot {
+  return { schema_version: 1, projection_revision: 1, actor_id: actor, environment: 'TESTNET', operating_context: context,
+    observed_at: '2026-10-14T00:00:00Z', availability: 'AVAILABLE', reason_code: null, products: [product] }
+}
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers() })
+
+describe('connected fund task destinations', () => {
+  const htmlHref = (value: string) => value.replaceAll('&', '&amp;')
+  it('shows a server-permitted Tokenisation Agent action even when its handoff owner is Offering Manager', () => {
+    const context = operating('TokenisationAgent'), value = fundProduct()
+    const html = renderToStaticMarkup(<FundLifecycleDashboard snapshot={fundSnapshot(context, value)} role="TokenisationAgent" actorId={actor} operatingContext={context} onRefresh={vi.fn()} />)
+    expect(html).toContain('Prepare the fund contract deployment')
+    expect(html).toContain(`href="${htmlHref(portalScopeHref('/portal/products/detail', context, productId))}"`)
+    expect(html).toContain('Open fund record'); expect(html).not.toContain('There is no currently permitted fund action')
+  })
+  it('uses the executable allocation task label and its containing subscription, not the blocked global next action', () => {
+    const context = operating('TransferAgent')
+    const action = fundAction({ action_id: `allocation:${other}`, command: 'approve_fund_allocation', record_id: other,
+      label: 'Review this subscription allocation', owner_role: 'IssuerFundManager', payload: { allocation_id: other, expected_revision: 1 } })
+    const blocked = fundAction({ can_execute: false, label: 'Waiting for deployment' })
+    const value = fundProduct({ actions: [blocked], next_action: blocked, orders: [fundOrder(action)] })
+    const task = fundAttentionTask(value, context)
+    expect(task?.action).toBe(action); expect(task?.href).toBe(portalScopeHref('/portal/orders/detail', context, requestKey))
+    const html = renderToStaticMarkup(<FundLifecycleDashboard snapshot={fundSnapshot(context, value)} role="TransferAgent" actorId={actor} operatingContext={context} onRefresh={vi.fn()} />)
+    expect(html).toContain(action.label); expect(html).toContain('Open subscription'); expect(html).not.toContain(blocked.label)
+    expect(html).toContain(`href="${htmlHref(task!.href)}"`); expect(html).not.toContain(`id=${other}`)
+  })
+  it('takes investor delivery-wallet work to the exact saved order in the current personal context', () => {
+    const action = fundAction({ action_id: `wallet:${accountId}`, command: 'bind_fund_delivery_wallet', record_id: accountId,
+      label: 'Choose your delivery wallet', owner_role: 'Investor', payload: { investment_account_id: accountId, product_id: productId, wallet_proof_id: other } })
+    const value = fundProduct({ actions: [], next_action: action, orders: [fundOrder(action)] })
+    const task = fundAttentionTask(value, APPLICANT_CONTEXT)
+    expect(task?.href).toBe(portalScopeHref('/portal/orders/detail', APPLICANT_CONTEXT, requestKey))
+    const html = renderToStaticMarkup(<FundLifecycleDashboard snapshot={fundSnapshot(APPLICANT_CONTEXT, value)} actorId={actor} operatingContext={APPLICANT_CONTEXT} onRefresh={vi.fn()} />)
+    expect(html).toContain(action.label); expect(html).toContain(`href="${htmlHref(task!.href)}"`)
+    expect(html).not.toContain(`id=${accountId}`); expect(html).not.toContain(`id=${other}`)
+  })
+  it('keeps an issuance operation connected to its exact existing subscription', () => {
+    const context = operating('TokenisationAgent')
+    const action = fundAction({ action_id: `issuance:${other}`, command: 'approve_fund_issuance', record_id: other,
+      label: 'Review the approved unit issuance', owner_role: 'TransferAgent', payload: { operation_id: other, expected_revision: 1 } })
+    const operation: FundLifecycleOperation = { id: other, product_id: productId, offering_revision_id: offeringRevisionId,
+      subscription_id: requestKey, allocation_id: accountId, revision: 1, kind: 'ISSUANCE', state: 'APPROVAL_PENDING', chain_id: 80002,
+      transaction_hash: null, token_address: null, controller_address: null, manifest_id: applicationId, manifest_hash: 'ab'.repeat(32),
+      intent_hash: 'cd'.repeat(32), expires_at: '2099-01-01T00:00:00Z', confirmations: null, required_confirmations: 12,
+      reason_code: null, intent: null, actions: [action] }
+    const value = fundProduct({ actions: [], next_action: action, operations: [operation], orders: [{ ...fundOrder(action), issuance_operation_id: operation.id, actions: [] }] })
+    expect(fundAttentionTask(value, context)?.href).toBe(portalScopeHref('/portal/orders/detail', context, requestKey))
+    const missingOrder = fundProduct({ actions: [], next_action: action, operations: [operation] })
+    expect(fundAttentionTask(missingOrder, context)?.href).toBe(portalScopeHref('/portal/products/detail', context, productId))
+    const changedIssuance = fundProduct({ ...value, orders: [{ ...value.orders[0], issuance_operation_id: applicationId }] })
+    expect(fundAttentionTask(changedIssuance, context)?.href).toBe(portalScopeHref('/portal/products/detail', context, productId))
+  })
+  it('does not turn disabled or detached actions into executable tasks or completed funds', () => {
+    const context = operating('TokenisationAgent'), blocked = fundAction({ can_execute: false })
+    const value = fundProduct({ actions: [blocked], next_action: blocked })
+    expect(fundAttentionTask(value, context)).toBeNull()
+    expect(fundAttentionTask(fundProduct({ actions: [], next_action: fundAction() }), context)).toBeNull()
+    const html = renderToStaticMarkup(<FundLifecycleDashboard snapshot={fundSnapshot(context, value)} role="TokenisationAgent" actorId={actor} operatingContext={context} onRefresh={vi.fn()} />)
+    expect(html).toContain('Waiting on the next owner'); expect(html).toContain('This does not mean the funds are complete.')
+    expect(html).not.toContain('Open fund record'); expect(html).not.toContain('Open subscription')
+  })
+  it('does not present another actor or organisation context as the current task queue', () => {
+    const context = operating('TokenisationAgent'), value = fundSnapshot(context)
+    const foreign: FundLifecycleSnapshot = { ...value, operating_context: { mode: 'ROLE', organisationId: otherOrganisation, role: 'TokenisationAgent' } }
+    for (const candidate of [{ ...value, actor_id: other }, foreign]) {
+      const html = renderToStaticMarkup(<FundLifecycleDashboard snapshot={candidate} actorId={actor} operatingContext={context} onRefresh={vi.fn()} />)
+      expect(html).toContain('Saved fund records are unavailable'); expect(html).not.toContain('Needs your attention')
+    }
+  })
+})
 
 describe('portal navigation and source-driven surfaces', () => {
   it('offers dedicated routes according to assigned capabilities without role impersonation', () => {
