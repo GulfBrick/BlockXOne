@@ -6,7 +6,7 @@ on:
       mode:
         description: Cloud acceptance, one empty-form browser proof, or focused fund dashboard checks
         type: choice
-        options: [acceptance, registration-browser-proof, fund-dashboard-focused]
+        options: [acceptance, registration-browser-proof, fund-dashboard-focused, theme-focused]
         default: acceptance
       registration_origin_expectation:
         description: Expected browser-generated Origin on the current hosted TEST document
@@ -651,7 +651,8 @@ jobs:
         run: node apps/web/scripts/test-registration-browser.mjs
 
   fund-dashboard-focused:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'fund-dashboard-focused' && github.ref == 'refs/heads/codex/stage2-sandbox-completion-20261011' }}
+    name: Focused dashboard or shared-theme acceptance
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.mode == 'fund-dashboard-focused' || inputs.mode == 'theme-focused') && github.ref == 'refs/heads/codex/stage2-sandbox-completion-20261011' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -685,15 +686,26 @@ jobs:
         working-directory: apps/web
         run: npm run preflight
 
-      - name: Run only dashboard, handoff and existing Amoy gas regressions
+      - name: Run only the selected fixed UI regression set
         shell: bash
         working-directory: apps/web
+        env:
+          BX1_FOCUSED_UI_MODE: ${{ inputs.mode }}
         run: |
           set -euo pipefail
           node --input-type=module <<'NODE'
           import { spawn } from 'node:child_process'
           import { runHermeticVitest } from './scripts/run-hermetic-tests.mjs'
-          const files = [
+          const files = process.env.BX1_FOCUSED_UI_MODE === 'theme-focused' ? [
+            'src/app/homepage-v4.test.tsx',
+            'src/components/public/public-shell.test.tsx',
+            'src/components/public/public-navigation.test.tsx',
+            'src/components/public/shared-theme.test.ts',
+            'src/components/portal/portal-shell.test.tsx',
+            'src/components/portal/portal-page.test.tsx',
+            'src/components/workspace/metamask-wallet-link.test.tsx',
+            'src/components/testnet-fund/testnet-fund-demo.test.tsx',
+          ] : [
             'src/lib/portal/operating-context.test.ts',
             'src/components/portal/portal.test.tsx',
             'src/components/portal/offering-workflow.interaction.test.tsx',

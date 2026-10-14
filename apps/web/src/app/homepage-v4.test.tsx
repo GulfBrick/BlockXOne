@@ -82,12 +82,15 @@ describe('Homepage V4 within the existing BlockXOne application', () => {
     const html = renderToStaticMarkup(<HomePage />)
     expect(html).toContain('href="/register"')
     expect(html).toContain('href="/login"')
+    expect(html).not.toContain('TESTNET PREVIEW')
     if (environment === 'TESTNET') {
-      expect(html.match(/TESTNET PREVIEW/g)).toHaveLength(1)
+      expect(html.match(/TESTNET ENVIRONMENT/g)).toHaveLength(1)
+      expect(html).not.toContain('MAINNET ENVIRONMENT')
       expect(html).toMatch(/href="\/register"[^>]*>Explore testnet/)
       expect(html).toContain('Mainnet · admission required')
     } else {
-      expect(html).not.toContain('TESTNET PREVIEW')
+      expect(html.match(/MAINNET ENVIRONMENT/g)).toHaveLength(1)
+      expect(html).not.toContain('TESTNET ENVIRONMENT')
       expect(html).toMatch(/href="https:\/\/testnet\.bx1\.co\.za\/register"[^>]*>Explore testnet/)
       expect(html).toContain('href="https://testnet.bx1.co.za/login"')
     }
@@ -97,6 +100,8 @@ describe('Homepage V4 within the existing BlockXOne application', () => {
     vi.stubEnv('BLOCKXONE_APP_ORIGIN', 'https://testnet.bx1.co.za.evil.test')
     const html = renderToStaticMarkup(<HomePage />)
     expect(html).not.toContain('TESTNET PREVIEW')
+    expect(html).not.toContain('TESTNET ENVIRONMENT')
+    expect(html).not.toContain('MAINNET ENVIRONMENT')
     expect(html).not.toContain('href="/register"')
     expect(html).not.toContain('Explore testnet')
     expect(html).not.toContain('href="https://bx1.co.za"')

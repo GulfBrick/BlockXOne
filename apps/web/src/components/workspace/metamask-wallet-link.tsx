@@ -252,15 +252,15 @@ export function MetaMaskWalletLink({ organisations, wallets, configured, readUna
   useEffect(() => { if (state.phase === 'error') status.current?.focus() }, [state.phase, state.message])
   const busy = busyPhases.has(state.phase)
   const portal = appearance === 'portal'
-  const ink = portal ? 'text-[#102238]' : 'text-bxo-text-primary'
-  const muted = portal ? 'text-[#495b6d]' : 'text-bxo-text-secondary'
-  const line = portal ? 'border-[#d7e1e8]' : 'border-bxo-border-subtle'
-  const focus = portal ? 'focus-visible:ring-[#007780]' : 'focus-visible:ring-bxo-accent-primary'
-  const controlClass = `min-h-11 w-full min-w-0 rounded-xl border ${line} ${portal ? 'bg-white' : 'bg-bxo-bg-primary'} px-3 py-2 text-base ${ink} focus-visible:outline-none focus-visible:ring-2 ${focus}`
+  const ink = 'text-bxo-text-primary'
+  const muted = 'text-bxo-text-secondary'
+  const line = portal ? 'border-bxo-border-default' : 'border-bxo-border-subtle'
+  const focus = portal ? 'focus-visible:ring-bxo-info' : 'focus-visible:ring-bxo-accent-primary'
+  const controlClass = `min-h-11 w-full min-w-0 rounded-xl border ${line} ${portal ? 'bg-bxo-surface' : 'bg-bxo-bg-primary'} px-3 py-2 text-base ${ink} focus-visible:outline-none focus-visible:ring-2 ${focus}`
   const buttonClass = `h-auto min-h-11 max-w-full whitespace-normal ${focus}`
-  const outlineClass = `${buttonClass} ${portal ? 'border-[#b8c8d4] bg-white text-[#102238] hover:border-[#718a9d] hover:bg-[#eaf2f6] hover:text-[#102238]' : ''}`
-  const primaryClass = `${buttonClass} ${portal ? 'bg-[#00e1ea] text-[#102238] hover:bg-[#a8f4f5]' : ''}`
-  return <section aria-labelledby="workspace-wallet" className={`mt-8 min-w-0 rounded-xl border ${line} ${portal ? 'bg-white' : 'bg-bxo-surface'} p-6`}>
+  const outlineClass = `${buttonClass} ${portal ? 'border-bxo-border-default bg-bxo-surface text-bxo-text-primary hover:border-bxo-border-strong hover:bg-bxo-surface-secondary hover:text-bxo-text-primary' : ''}`
+  const primaryClass = `${buttonClass} ${portal ? 'bg-bxo-accent-primary text-bxo-on-accent hover:bg-[var(--bxo-ice-cyan)]' : ''}`
+  return <section aria-labelledby="workspace-wallet" className={`mt-8 min-w-0 rounded-xl border ${line} bg-bxo-surface p-6`}>
     <h2 id="workspace-wallet" className={`text-xl font-semibold ${ink}`}>MetaMask wallet</h2>
     <p className={`mt-3 text-base leading-7 ${muted}`}>Ownership verification only. No payment, gas fee or token approval.</p>
     <p className={`mt-2 text-base ${muted}`}>Required network: {WALLET_CHAIN_NAME} · Chain ID {WALLET_CHAIN_ID}</p>

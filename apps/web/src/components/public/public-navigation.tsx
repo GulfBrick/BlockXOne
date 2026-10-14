@@ -114,7 +114,7 @@ export function PublicNavigation({ showPortalAccess, environment, variant = 'def
 
   return (
     <>
-      <nav aria-label="Primary navigation" className={variant === 'homepage' ? 'hidden items-center gap-1 2xl:flex' : 'hidden items-center gap-1 xl:flex'} data-bxo-nav>
+      <nav aria-label="Primary navigation" className="hidden items-center gap-1 2xl:flex" data-bxo-nav>
         {NAV_LINKS.map((item) => {
           const active = isActive(item.href)
           return (
@@ -153,7 +153,7 @@ export function PublicNavigation({ showPortalAccess, environment, variant = 'def
         ) : null}
       </nav>
 
-      <div className={variant === 'homepage' ? 'hidden items-center justify-end gap-2 2xl:flex' : 'hidden items-center justify-end gap-2 xl:flex'} data-bxo-nav-actions>
+      <div className="hidden items-center justify-end gap-2 2xl:flex" data-bxo-nav-actions>
         {counterpart ? <a href={counterpart.href} className="px-2 py-3 text-xs text-bxo-text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bxo-accent-primary">{counterpart.label}</a> : null}
         {environment ? <Button asChild variant="outline" className="bxo-secondary-cta h-11 rounded-sm"><Link href="/register">Register</Link></Button> : null}
         {showPortalAccess ? (
@@ -166,7 +166,7 @@ export function PublicNavigation({ showPortalAccess, environment, variant = 'def
         </Button>
       </div>
 
-      <div className={variant === 'homepage' ? 'relative 2xl:hidden' : 'relative xl:hidden'}>
+      <div className="relative 2xl:hidden">
         <button
           ref={triggerRef}
           type="button"
@@ -231,7 +231,7 @@ export function PublicNavigation({ showPortalAccess, environment, variant = 'def
               ) : null}
               <Link
                 href={primaryAction.href}
-                className="flex min-h-11 items-center bg-bxo-accent-primary px-3 text-sm font-semibold text-bxo-bg-primary transition-colors hover:bg-bxo-accent-primary-light focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bxo-accent-primary"
+                className="flex min-h-11 items-center bg-bxo-accent-primary px-3 text-sm font-semibold text-bxo-on-accent transition-colors hover:bg-bxo-accent-primary-light focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bxo-accent-primary"
                 data-bxo-menu-item
               >
                 {primaryAction.label}

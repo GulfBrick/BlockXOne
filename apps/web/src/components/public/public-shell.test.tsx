@@ -9,20 +9,21 @@ import { PublicShell } from './public-shell'
 
 afterEach(() => vi.unstubAllEnvs())
 
-describe('opt-in Homepage V4 public shell', () => {
+describe('shared BlockXOne public shell', () => {
   it.each(['default', 'homepage'] as const)('keeps FAQ reachable in the %s footer', variant => {
     const html = renderToStaticMarkup(<PublicShell variant={variant}><main id="main-content">Content</main></PublicShell>)
     const footer = html.match(/<footer[\s\S]*?<\/footer>/)?.[0] ?? ''
     expect(footer).toMatch(/href="\/faq"[^>]*>FAQ<\/a>/)
   })
-  it('preserves the default secondary-page shell and primary workflow destination', () => {
+  it('uses the light secondary-page workspace while preserving its primary workflow destination', () => {
     const html = renderToStaticMarkup(<PublicShell><main id="main-content">Secondary page</main></PublicShell>)
     const explicitDefault = renderToStaticMarkup(<PublicShell variant="default"><main id="main-content">Secondary page</main></PublicShell>)
     expect(html).toBe(explicitDefault)
-    expect(html).toContain('Digital ownership infrastructure for private markets.')
+    expect(html).toContain('class="bxo-content-light" data-bxo-page-content')
+    expect(html).toContain('Private-market infrastructure.')
     expect(html).toContain('View platform workflow')
     expect(html).not.toContain('TESTNET PREVIEW')
-    expect(html).not.toContain('home-footer-platform')
+    expect(html).toContain('footer-platform-title')
     expect(html).not.toContain('Book a walkthrough')
   })
 
@@ -30,10 +31,18 @@ describe('opt-in Homepage V4 public shell', () => {
     const html = renderToStaticMarkup(<PublicShell variant="homepage"><main id="main-content">Homepage</main></PublicShell>)
     expect(html).toContain('blockxone-lockup-horizontal.png')
     expect(html).toContain('Private-market infrastructure.')
-    expect(html).toContain('home-footer-platform')
+    expect(html).toContain('footer-platform-title')
     expect(html).toContain('href="/request-demo"')
     expect(html).toContain('Book a walkthrough')
     expect(html).not.toContain('href="/privacy"')
     expect(html).not.toContain('href="/terms"')
+  })
+
+  it('shares the same compact footer and actual brand across public page variants', () => {
+    const footers = (['default', 'homepage'] as const).map(variant => renderToStaticMarkup(<PublicShell variant={variant}><main id="main-content">Content</main></PublicShell>).match(/<footer[\s\S]*?<\/footer>/)?.[0])
+    expect(footers[0]).toBeDefined()
+    expect(footers[0]).toBe(footers[1])
+    expect(footers[0]).toContain('blockxone-lockup-horizontal.png')
+    expect(footers[0]).toContain('href="/request-demo"')
   })
 })

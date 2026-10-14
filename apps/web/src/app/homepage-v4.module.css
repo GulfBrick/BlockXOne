@@ -1,21 +1,21 @@
 .homeShell {
-  --home-navy: #08171d;
-  --home-paper: #f4f1e9;
-  --home-ink: #102c37;
-  --home-muted: #425c65;
-  --home-border: #c7cecb;
+  --home-navy: var(--bxo-midnight);
+  --home-paper: color-mix(in srgb, var(--bxo-frost) 90%, var(--bxo-chrome));
+  --home-ink: var(--bxo-midnight);
+  --home-muted: var(--bxo-deep-teal);
+  --home-border: var(--bxo-chrome);
   --home-cyan: var(--bxo-electric-cyan);
-  --home-light-link: #076478;
+  --home-light-link: var(--bxo-structural-blue);
   background: var(--home-navy);
   font-family: var(--bxo-font-ui);
 }
 
-.homeHeader { background: var(--home-navy); }
+.homeHeader { background: var(--bxo-midnight); }
 .homeHeader :global([data-bxo-nav-item]),
 .homeHeader :global([data-bxo-menu-item]) { font-size: 1rem; }
 .homeHeader :global([data-bxo-nav-actions] > a) { display: inline-flex; min-height: 2.75rem; align-items: center; font-size: 1rem; }
 .homeBrand { display: flex; flex-direction: column; gap: 0.25rem; padding-block: 0.7rem; }
-.environmentBadge { color: var(--home-cyan); font-size: 0.75rem; font-weight: 650; letter-spacing: 0.1em; }
+.environmentBadge { color: var(--bxo-electric-cyan); font-size: 0.75rem; font-weight: 650; letter-spacing: 0.1em; }
 .page { color: var(--bxo-frost); background: var(--home-navy); font-size: 1rem; line-height: 1.6; }
 .page * { min-width: 0; }
 .container { position: relative; width: min(88%, 88rem); margin-inline: auto; }
@@ -144,7 +144,7 @@
 .invitation { position: relative; padding-block: 3.5rem 4.5rem; border-top: 1px solid var(--home-cyan); }
 .invitation p { max-width: 39rem; margin: 1.4rem 0 0; color: var(--bxo-chrome); font-size: 1.1rem; }
 .lineEnd { display: block; width: 8rem; height: 1px; margin-top: 2.5rem; background: var(--home-cyan); }
-.homeFooter { padding-block: 3rem 1.5rem; background: var(--home-navy); color: var(--bxo-chrome); }
+.homeFooter { padding-block: 3rem 1.5rem; background: var(--bxo-midnight); color: var(--bxo-chrome); }
 .footerGrid { display: grid; grid-template-columns: minmax(0, 1.4fr) repeat(3, minmax(0, 0.8fr)); gap: 2rem; }
 .footerBrand p { max-width: 17rem; margin-top: 1rem; font-size: 1rem; }
 .footerNav h2 { margin: 0 0 0.6rem; color: var(--bxo-frost); font-size: 1rem; font-weight: 550; }

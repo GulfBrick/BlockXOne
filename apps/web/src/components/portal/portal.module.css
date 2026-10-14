@@ -226,6 +226,18 @@
 .frame, .accountMenuBody {
   /* Shared V3 light workspace. Dark navigation and hero regions reset locally;
      the supplied master logo artwork is never recoloured. */
+  --bxo-color-bg-primary-rgb: 251 254 254;
+  --bxo-color-bg-secondary-rgb: var(--bxo-frost-rgb);
+  --bxo-color-surface-rgb: 251 254 254;
+  --bxo-color-surface-secondary-rgb: 234 248 249;
+  --bxo-color-surface-elevated-rgb: var(--bxo-frost-rgb);
+  --bxo-color-text-primary-rgb: var(--bxo-midnight-rgb);
+  --bxo-color-text-secondary-rgb: var(--bxo-deep-teal-rgb);
+  --bxo-color-text-tertiary-rgb: var(--bxo-structural-blue-rgb);
+  --bxo-color-success-rgb: 20 121 102;
+  --bxo-color-warning-rgb: 117 104 52;
+  --bxo-color-danger-rgb: 165 52 75;
+  --bxo-color-info-rgb: var(--bxo-structural-blue-rgb);
   --bxo-surface: color-mix(in srgb, var(--bxo-frost) 25%, white);
   --bxo-surface-secondary: color-mix(in srgb, var(--bxo-frost) 92%, var(--bxo-chrome));
   --bxo-surface-elevated: var(--bxo-frost);
@@ -259,6 +271,18 @@
   background: var(--portal-canvas);
 }
 .topbar, .hero {
+  --bxo-color-bg-primary-rgb: var(--bxo-carbon-rgb);
+  --bxo-color-bg-secondary-rgb: var(--bxo-midnight-rgb);
+  --bxo-color-surface-rgb: var(--bxo-midnight-rgb);
+  --bxo-color-surface-secondary-rgb: var(--bxo-deep-teal-rgb);
+  --bxo-color-surface-elevated-rgb: var(--bxo-structural-blue-rgb);
+  --bxo-color-text-primary-rgb: var(--bxo-frost-rgb);
+  --bxo-color-text-secondary-rgb: var(--bxo-chrome-rgb);
+  --bxo-color-text-tertiary-rgb: var(--bxo-steel-rgb);
+  --bxo-color-success-rgb: var(--bxo-success-rgb);
+  --bxo-color-warning-rgb: var(--bxo-warning-rgb);
+  --bxo-color-danger-rgb: var(--bxo-danger-rgb);
+  --bxo-color-info-rgb: var(--bxo-signal-cyan-rgb);
   --bxo-surface: var(--bxo-midnight);
   --bxo-surface-secondary: var(--bxo-deep-teal);
   --bxo-surface-elevated: var(--bxo-structural-blue);

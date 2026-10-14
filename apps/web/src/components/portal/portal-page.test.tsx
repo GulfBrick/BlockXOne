@@ -11,6 +11,7 @@ vi.mock('./role-dashboard', () => ({ RoleDashboardContent: () => createElement('
 vi.mock('./entry-screen', () => ({ EntryScreen: (props: unknown) => { fixture.entry(props); return createElement('p', null, 'Saved identity capacities') } }))
 import { PortalError } from '@/lib/portal/server'
 import { PortalPage } from './portal-page'
+import styles from './portal.module.css'
 import { entryApplication, entryFixture } from '@/lib/portal/entry-test-fixtures'
 import type { PortalOrganisationMandate, PortalSnapshot } from '@/lib/portal/contracts'
 
@@ -299,6 +300,14 @@ describe('portal server page access and selected context', () => {
     fixture.load.mockRejectedValueOnce(new PortalError('Unavailable', 503))
     const html = renderToStaticMarkup(await PortalPage({ view: '/portal/onboarding', query: { mode: 'applicant' } }))
     expect(html).toContain('href="/portal/onboarding?mode=applicant"')
+  })
+  it.each([403, 503])('keeps the %s fallback in the shared light workspace without mounting protected records', async status => {
+    fixture.load.mockRejectedValueOnce(new PortalError('Unavailable', status))
+    const html = renderToStaticMarkup(await PortalPage({ view: '/portal/onboarding', query: { mode: 'applicant' } }))
+    expect(html).toContain(`${styles.frame} min-h-dvh`)
+    expect(html).toContain(status === 403 ? 'Complete sign-in security' : 'Retry loading the portal')
+    expect(html).toContain('Return to account workspace')
+    expect(fixture.entry).not.toHaveBeenCalled(); expect(fixture.screen).not.toHaveBeenCalled()
   })
   it('preserves a validated applicant directory section after a transient failure', async () => {
     fixture.load.mockRejectedValueOnce(new PortalError('Unavailable', 503))
