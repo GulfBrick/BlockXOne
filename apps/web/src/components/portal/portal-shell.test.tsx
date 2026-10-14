@@ -36,4 +36,19 @@ describe('FAQ access in mounted portal shells', () => {
     const view = render(<PortalShell user={user} capabilities={capabilities} active="overview" title="Account" operatingContext={{ mode: 'APPLICANT' }}><p>Content</p></PortalShell>)
     expect(view.container.querySelectorAll('a[href="/faq"]')).toHaveLength(2)
   })
+
+  it.each(BX1_ROLES)('uses the same compact header in TEST and MAIN for %s without global environment badges', role => {
+    const headers: string[] = []
+    for (const environment of ['TESTNET', 'MAINNET'] as const) {
+      const view = render(<PortalShell user={user} capabilities={capabilities} active="overview" title="Workspace" organisationName="Assigned organisation" operatingContext={{ mode: 'ROLE', organisationId: '22222222-2222-4222-8222-222222222222', role }} release={{ environment, version: '1.3.0', source: 'same-source' }}><p>Role content</p></PortalShell>)
+      const header = view.container.querySelector('header')!
+      expect(header.textContent).not.toMatch(/TESTNET|MAINNET|Testnet environment|Mainnet environment/)
+      expect(header.textContent).toContain('Assigned organisation')
+      expect(within(header).getByRole('button', { name: /^Account$/ })).toBeDefined()
+      expect(within(header).getByRole('link', { name: 'Change workspace' }).getAttribute('href')).toBe('/portal?mode=applicant&section=workspaces')
+      headers.push(header.innerHTML)
+      view.unmount()
+    }
+    expect(headers[0]).toBe(headers[1])
+  })
 })

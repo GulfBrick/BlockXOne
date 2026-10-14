@@ -42,11 +42,11 @@ export default async function SecurityPage({ searchParams }: Props) {
   if (!unavailable && !signedIn) redirect('/login')
   if (!unavailable && !sufficient) redirect('/login/mfa')
   if (!unavailable && !assigned) redirect('/workspace/access-denied')
-  return <PublicShell><main id="main-content" className="mx-auto w-full max-w-md px-4 py-16 sm:px-6 sm:py-24">
+  return <PublicShell><main id="main-content" className="mx-auto w-full max-w-md px-4 py-8 sm:px-6 sm:py-10">
     <p className="text-sm font-semibold uppercase tracking-[0.16em] text-bxo-accent-primary">BlockXOne access</p>
     <h1 className="mt-4 font-ui text-3xl font-medium tracking-tight text-bxo-text-primary sm:text-4xl">Account security</h1>
-    {unavailable || !view ? <p role="alert" className="mt-6 text-base text-bxo-text-secondary">Verification is temporarily unavailable. Reload before trying again.</p> : <MfaForm view={view} continuation="security" />}
-    <p className="mt-8 text-base leading-7 text-bxo-text-secondary">Financial and token operations are not enabled.</p>
-    <div className="mt-8 flex flex-wrap items-center gap-4"><Link href="/workspace" className="inline-flex min-h-11 items-center text-sm text-bxo-accent-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bxo-accent-primary">Back to workspace</Link><form method="post" action="/auth/logout"><Button type="submit" variant="outline" className="min-h-11">Sign out</Button></form></div>
+    {unavailable || !view ? <p role="alert" className="mt-4 text-base text-bxo-text-secondary">Verification is temporarily unavailable. Reload before trying again.</p> : <MfaForm view={view} continuation="security" />}
+    <p className="mt-5 text-base leading-7 text-bxo-text-secondary">Financial and token operations are not enabled.</p>
+    <div className="mt-5 flex flex-wrap items-center gap-4"><Link href="/workspace" className="inline-flex min-h-11 items-center text-sm text-bxo-accent-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bxo-accent-primary">Back to workspace</Link><form method="post" action="/auth/logout"><Button type="submit" variant="outline" className="min-h-11">Sign out</Button></form></div>
   </main></PublicShell>
 }

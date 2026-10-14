@@ -36,8 +36,8 @@ const pageVisuals: Record<string, { src: string; alt: string; caption: string }>
 export function MarketingPage({ eyebrow, title, description, children, heroAside }: MarketingPageProps) {
   const visual = pageVisuals[eyebrow]
   const titleSize = visual
-    ? 'text-[clamp(3rem,5vw,5.9rem)]'
-    : 'text-[clamp(3.1rem,6.7vw,7.4rem)]'
+    ? 'text-[clamp(2.25rem,3.5vw,4.25rem)]'
+    : 'text-[clamp(2.25rem,3.8vw,4.25rem)]'
 
   return (
     <PublicShell>
@@ -53,14 +53,14 @@ export function MarketingPage({ eyebrow, title, description, children, heroAside
                 <span>BXO</span>
                 <span>{eyebrow}</span>
               </div>
-              <h1 className="mt-8 text-bxo-text-primary">
+              <h1 className="mt-4 text-bxo-text-primary">
                 <span className="bxo-type-mask pb-2">
                   <span className={`block font-ui ${titleSize} font-medium leading-[0.91] tracking-[-0.068em]`} data-bxo-hero-line>
                     {title}
                   </span>
                 </span>
               </h1>
-              <p className="mt-8 max-w-3xl font-reading text-xl leading-8 text-bxo-text-secondary sm:text-2xl sm:leading-9" data-bxo-hero-detail data-bxo-hero-copy>
+              <p className="mt-4 max-w-3xl font-reading text-base leading-7 text-bxo-text-secondary sm:text-lg" data-bxo-hero-detail data-bxo-hero-copy>
                 {description}
               </p>
             </div>
@@ -85,7 +85,7 @@ export function MarketingPage({ eyebrow, title, description, children, heroAside
           </div>
         </section>
 
-        <div className="mx-auto max-w-[90rem] px-4 py-16 sm:px-6 sm:py-20 lg:px-8 lg:py-28">
+        <div className="mx-auto max-w-[90rem] px-4 py-8 sm:px-6 sm:py-10 lg:px-8 lg:py-12">
           {children}
         </div>
       </main>

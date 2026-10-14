@@ -1,4 +1,4 @@
-.flow { min-width: 0; width: 100%; max-width: 780px; margin-inline: auto; }
+.flow { min-width: 0; width: 100%; max-width: 740px; margin-inline: auto; }
 .flow > *, .flow form { min-width: 0; max-width: 100%; }
 .flow [hidden] { display: none !important; }
 .flow hr { display: none; }
@@ -11,8 +11,8 @@
 .flow button { min-height: 44px; }
 .flow :where(button,input,textarea,select):focus-visible { outline: 3px solid var(--bxo-electric-cyan); outline-offset: 3px; }
 .heading { margin: 0; font-size: 24px; }
-.navigation { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; margin-top: 20px; }
-.summary { display: grid; gap: 16px; overflow-wrap: anywhere; }
+.navigation { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; margin-top: 16px; }
+.summary { display: grid; gap: 12px; overflow-wrap: anywhere; }
 .summary dt { font-weight: 650; }
 .summary dd { margin: 4px 0 0; white-space: pre-wrap; }
 .status { font-size: 14px; color: var(--bxo-text-secondary); }

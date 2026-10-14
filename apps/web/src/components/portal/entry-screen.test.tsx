@@ -447,7 +447,7 @@ describe('connected pending application workspaces', () => {
   it('uses the same help section in MAIN without exposing TEST applicant commands or pretending admission is available', () => {
     const html = renderToStaticMarkup(<EntryScreen initial={entryFixture([])} release={{ ...release, environment: 'MAINNET' }} section="help" />)
     expect(html).toContain('Help with your next step.')
-    expect(html).toContain('MAIN environment')
+    expect(html).not.toContain('MAIN environment')
     expect(html).toContain('Approved admission is required.')
     expect(html).toContain('pending upload is not a confirmed saved record')
     expect(html).not.toContain('Create or continue this application')

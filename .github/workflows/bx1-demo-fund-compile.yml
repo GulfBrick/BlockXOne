@@ -703,8 +703,13 @@ jobs:
             'src/components/public/public-shell.test.tsx',
             'src/components/public/public-navigation.test.tsx',
             'src/components/public/shared-theme.test.ts',
+            'src/components/public/layout-density.test.ts',
             'src/components/portal/portal-shell.test.tsx',
             'src/components/portal/portal-page.test.tsx',
+            'src/components/portal/portal.test.tsx',
+            'src/components/portal/entry-screen.test.tsx',
+            'src/lib/platform-release.test.ts',
+            'src/lib/release-policy.test.ts',
             'src/components/workspace/metamask-wallet-link.test.tsx',
             'src/components/testnet-fund/testnet-fund-demo.test.tsx',
           ] : [

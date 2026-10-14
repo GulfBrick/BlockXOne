@@ -1595,15 +1595,15 @@
   .bxo-marketing-hero__layout {
     display: grid;
     width: min(100%, 90rem);
-    min-height: 35rem;
+    min-height: 0;
     margin: 0 auto;
-    padding: clamp(4rem, 8vw, 7rem) clamp(1rem, 2.2vw, 2rem);
+    padding: clamp(2rem, 4vw, 3rem) clamp(1rem, 2.2vw, 2rem);
   }
 
   .bxo-marketing-hero__layout--visual {
-    min-height: min(78dvh, 52rem);
+    min-height: 0;
     grid-template-columns: minmax(0, 1.08fr) minmax(23rem, 0.92fr);
-    gap: clamp(2.5rem, 5vw, 6rem);
+    gap: clamp(1.5rem, 3vw, 3rem);
     align-items: center;
   }
 
@@ -1615,8 +1615,8 @@
 
   .bxo-marketing-hero__media {
     position: relative;
-    width: min(100%, 42rem);
-    aspect-ratio: 4 / 5;
+    width: min(100%, 34rem);
+    aspect-ratio: 4 / 3;
     justify-self: end;
     overflow: hidden;
     border: 1px solid var(--bxo-border-subtle);
@@ -1653,7 +1653,7 @@
 
   .bxo-marketing-hero__aside {
     grid-column: 1 / -1;
-    margin-top: clamp(3rem, 6vw, 6rem);
+    margin-top: clamp(1.5rem, 3vw, 2.5rem);
   }
 
   .bxo-footer-link {
@@ -1686,7 +1686,7 @@
   }
 
   .bxo-marketing-hero__media {
-    min-height: min(62vw, 38rem);
+    min-height: 0;
   }
 
   .bxo-structure-row {
@@ -1778,8 +1778,8 @@
   .bxo-marketing-hero__layout,
   .bxo-marketing-hero__layout--visual {
     min-height: auto;
-    padding-top: 4rem;
-    padding-bottom: 4rem;
+    padding-top: 2rem;
+    padding-bottom: 2rem;
   }
 
   .bxo-marketing-hero__media {

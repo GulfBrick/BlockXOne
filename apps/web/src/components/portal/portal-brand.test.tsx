@@ -12,7 +12,7 @@ describe('shared approved brand and release shell', () => {
     expect(html).toContain(PLATFORM_VERSION)
     expect(html).toContain('abcdef123456')
     expect(html).toContain('action="/auth/logout"')
-    expect(html).toContain(environment === 'TESTNET' ? 'Testnet · Test environment' : 'Mainnet · Live environment')
+    expect(html).not.toContain(environment === 'TESTNET' ? 'Testnet · Test environment' : 'Mainnet · Live environment')
     expect(html).not.toContain('Rehearsal environment')
     if (environment === 'MAINNET') { expect(html).not.toContain('href="/portal/onboarding"'); expect(html).not.toContain('Fictional data only') }
   })
@@ -72,7 +72,7 @@ describe('shared approved brand and release shell', () => {
     expect(html).toContain(PLATFORM_VERSION)
     expect(html).toContain('Release abcdef123456')
     expect(html.match(/role="note"/g)).toHaveLength(1)
-    expect(html).toContain(environment === 'TESTNET' ? 'TEST environment' : 'MAIN environment')
+    expect(html).not.toContain(environment === 'TESTNET' ? 'TEST environment' : 'MAIN environment')
     expect(html).toContain(environment === 'TESTNET' ? 'Fictional data only.' : 'Approved admission is required.')
     if (environment === 'MAINNET') expect(html).not.toContain('Fictional data only')
     expect(html).not.toContain('href="/portal/products')

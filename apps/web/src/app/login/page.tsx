@@ -58,9 +58,9 @@ function isMainnetEntrySurface(env: Record<string, string | undefined>): boolean
 
 function TestnetEntryLinks() {
   return (
-    <section aria-labelledby="testnet-access-title" className="mt-8 border-t border-bxo-border-subtle pt-6">
+    <section aria-labelledby="testnet-access-title" className="mt-5 border-t border-bxo-border-subtle pt-6">
       <h2 id="testnet-access-title" className="font-ui text-lg font-medium text-bxo-text-primary">Looking for Testnet?</h2>
-      <p className="mt-3 text-sm leading-6 text-bxo-text-secondary">Use the separate demo environment. Testnet balances have no real-world value; accounts and sessions are separate from Mainnet.</p>
+      <p className="mt-3 text-sm leading-6 text-bxo-text-secondary">Use BlockXOne on testnet rails. Test balances have no real-world value; accounts and sessions are isolated from Mainnet.</p>
       <div className="mt-3 flex flex-wrap gap-x-6 gap-y-2">
         <a href={`${TESTNET_APP_ORIGIN}/login`} className="inline-flex min-h-11 items-center text-sm font-semibold text-bxo-accent-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bxo-accent-primary">Testnet sign in</a>
         <a href={`${TESTNET_APP_ORIGIN}/register`} className="inline-flex min-h-11 items-center text-sm font-semibold text-bxo-accent-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bxo-accent-primary">Create a Testnet account</a>
@@ -182,15 +182,15 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
   }
   return (
     <PublicShell>
-      <main id="main-content" className="mx-auto w-full max-w-md px-4 py-16 sm:px-6 sm:py-24">
+      <main id="main-content" className="mx-auto w-full max-w-md px-4 py-8 sm:px-6 sm:py-10">
         <p className="text-sm font-semibold uppercase tracking-[0.16em] text-bxo-accent-primary">{mainnetEntry ? 'Mainnet · Secure access' : 'Secure access'}</p>
         <h1 className="mt-4 font-ui text-3xl font-medium leading-tight tracking-tight text-bxo-text-primary sm:text-4xl">{setup ? 'Set your password' : 'Sign in to BlockXOne'}</h1>
         {!setup && mainnetEntry ? <p className="mt-4 text-sm leading-6 text-bxo-text-secondary">This is Mainnet access. Signing in does not enable financial operations; permissions and release controls still apply.</p> : null}
-        {unavailable ? <p role="alert" className="mt-6 text-base text-bxo-text-secondary">Access is temporarily unavailable. Please try again.</p>
-          : !validSetup ? <p role="alert" className="mt-6 text-base text-bxo-text-secondary">This invitation link is invalid or has expired.</p>
+        {unavailable ? <p role="alert" className="mt-4 text-base text-bxo-text-secondary">Access is temporarily unavailable. Please try again.</p>
+          : !validSetup ? <p role="alert" className="mt-4 text-base text-bxo-text-secondary">This invitation link is invalid or has expired.</p>
           : <SupabaseAuthForm mode={setup ? 'setup' : 'login'} initialEmail={initialEmail} error={isAuthErrorCode(params.error) ? params.error : undefined} />}
-        {!setup && !unavailable && identityEnvironmentEnabled(process.env) ? <section aria-labelledby="test-account-title" className="mt-8 border-t border-bxo-border-subtle pt-6"><h2 id="test-account-title" className="text-base font-medium text-bxo-text-primary">New to BlockXOne?</h2><p className="mt-2 text-sm leading-6 text-bxo-text-secondary">Create a personal login, then apply as an investor or wealth manager. Registration does not grant approval or signing authority.</p><Link href="/register" className="mt-4 inline-flex min-h-11 w-full items-center justify-between gap-3 rounded-lg border border-bxo-accent-border bg-bxo-accent-soft px-4 py-3 text-sm font-semibold text-bxo-accent-primary hover:border-bxo-accent-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bxo-accent-primary">Create your account<ArrowRight aria-hidden="true" className="h-4 w-4" /></Link></section> : null}
-        <Link href="/" className="mt-6 inline-flex min-h-11 items-center text-sm text-bxo-accent-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bxo-accent-primary">Back to home</Link>
+        {!setup && !unavailable && identityEnvironmentEnabled(process.env) ? <section aria-labelledby="test-account-title" className="mt-5 border-t border-bxo-border-subtle pt-6"><h2 id="test-account-title" className="text-base font-medium text-bxo-text-primary">New to BlockXOne?</h2><p className="mt-2 text-sm leading-6 text-bxo-text-secondary">Create a personal login, then apply as an investor or wealth manager. Registration does not grant approval or signing authority.</p><Link href="/register" className="mt-4 inline-flex min-h-11 w-full items-center justify-between gap-3 rounded-lg border border-bxo-accent-border bg-bxo-accent-soft px-4 py-3 text-sm font-semibold text-bxo-accent-primary hover:border-bxo-accent-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bxo-accent-primary">Create your account<ArrowRight aria-hidden="true" className="h-4 w-4" /></Link></section> : null}
+        <Link href="/" className="mt-4 inline-flex min-h-11 items-center text-sm text-bxo-accent-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bxo-accent-primary">Back to home</Link>
         {!setup && mainnetEntry ? <TestnetEntryLinks /> : null}
       </main>
     </PublicShell>

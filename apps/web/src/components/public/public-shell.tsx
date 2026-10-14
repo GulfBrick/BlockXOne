@@ -18,7 +18,6 @@ export function PublicShell({
 }) {
   const showPortalAccess = isPortalAccessAdvertised()
   const environment = platformRelease(process.env)?.environment
-  const environmentLabel = environment === 'TESTNET' ? 'TESTNET ENVIRONMENT' : environment === 'MAINNET' ? 'MAINNET ENVIRONMENT' : null
   const brandLink = (
     <Link
       href="/"
@@ -45,10 +44,9 @@ export function PublicShell({
           className={`${topBar ? 'relative' : 'sticky top-0'} bxo-public-header ${homepageStyles.homeHeader} z-30 border-b border-bxo-border-subtle`}
           data-bxo-public-header
         >
-          <div className="mx-auto flex min-h-20 max-w-[90rem] items-center justify-between gap-4 px-4 sm:px-6 lg:px-8">
+          <div className="mx-auto flex min-h-16 max-w-[90rem] items-center justify-between gap-4 px-4 sm:px-6 lg:px-8">
             <div className={homepageStyles.homeBrand}>
               {brandLink}
-              {environmentLabel ? <span className={homepageStyles.environmentBadge} data-bxo-environment>{environmentLabel}</span> : null}
             </div>
 
             <PublicNavigation showPortalAccess={showPortalAccess} environment={environment} variant={variant} />

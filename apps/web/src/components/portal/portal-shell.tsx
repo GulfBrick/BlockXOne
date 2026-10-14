@@ -46,12 +46,11 @@ export function PortalShell({ user, organisationName, capacityName, capabilities
     <a href="#portal-content" className={styles.skip}>Skip to main content</a>
     <aside className={styles.sidebar}>
       {brand}
-      <p className={styles.sidebarCaption}>Ownership, reimagined</p>
       {links}
       {!compactApplicant ? <div className={styles.mobileNav}>{links}</div> : null}
       <p className={styles.navRestricted}>Workspace tools reflect your assigned access. Signing authority is managed separately.</p>
       {!compactApplicant ? <div className={styles.sidebarFoot}>
-        <div className={styles.environmentCard}><strong>{testnet ? 'Testnet · Test environment' : 'Mainnet · Live environment'}</strong><p>{testnet ? 'Fictional products and synthetic settlement. Test tokens have no investment value.' : 'Real-world operations require their own approved mandates, providers and production admission.'}</p><p>Version {release?.version ?? PLATFORM_VERSION}{release ? ` · ${release.source}` : ''}</p></div>
+        <div className={styles.environmentCard}><p>{testnet ? 'Fictional products and synthetic settlement. Test tokens have no investment value.' : 'Real-world operations require their own approved mandates, providers and production admission.'}</p><p>Version {release?.version ?? PLATFORM_VERSION}{release ? ` · ${release.source}` : ''}</p></div>
         <Link href="/faq" className={styles.navLink}>FAQ</Link>
       </div> : null}
     </aside>
@@ -63,15 +62,15 @@ export function PortalShell({ user, organisationName, capacityName, capabilities
           <ApplicantAccountMenu email={user.email} />
         </> : <>
           <div className={styles.topbarContext}><strong>{organisationName || 'Your BlockXOne account'}</strong><span>Current workspace: {workspaceLabel}</span><Link href={applicantSectionHref('workspaces')}>Change workspace</Link></div>
-          <div className={styles.userArea}><span className={styles.environmentPill}>{testnet ? 'Testnet' : 'Mainnet'} environment</span><ApplicantAccountMenu email={user.email} /></div>
+          <div className={styles.userArea}><ApplicantAccountMenu email={user.email} /></div>
         </>}
       </header>
       {compactApplicant ? <nav aria-label="Applicant sections on mobile" className={styles.applicantMobileNav}>{applicantNavigation.map(item => <Link key={item.key} href={applicantSectionHref(item.key)} aria-current={(applicantSection ?? 'applications') === item.key ? 'page' : undefined}>{item.key === 'applications' ? 'Applications' : item.label}</Link>)}</nav> : null}
       <main id="portal-content" tabIndex={-1} className={styles.content}>
-        {compactApplicant ? <p className={styles.applicantNotice} role="note"><strong>{testnet ? 'TEST environment' : 'MAIN environment'}</strong><span>{testnet ? 'Fictional data only.' : 'Approved admission is required.'}</span></p> : <nav aria-label="Breadcrumb"><ol className={styles.breadcrumbs}><li><Link href={portalScopeHref('/portal', operatingContext)}>Portal</Link></li>{breadcrumbs.map((item, index) => <li key={`${item.label}-${index}`}>{item.href ? <Link href={portalScopeHref(item.href, operatingContext)}>{item.label}</Link> : <span aria-current="page">{item.label}</span>}</li>)}</ol></nav>}
+        {compactApplicant ? <p className={styles.applicantNotice} role="note">{testnet ? 'Fictional data only.' : 'Approved admission is required.'}</p> : <nav aria-label="Breadcrumb"><ol className={styles.breadcrumbs}><li><Link href={portalScopeHref('/portal', operatingContext)}>Portal</Link></li>{breadcrumbs.map((item, index) => <li key={`${item.label}-${index}`}>{item.href ? <Link href={portalScopeHref(item.href, operatingContext)}>{item.label}</Link> : <span aria-current="page">{item.label}</span>}</li>)}</ol></nav>}
         <div className={styles.pageHeading}><div>{eyebrow ? <p className={styles.eyebrow}>{eyebrow}</p> : null}<h1 className={styles.title}>{title}</h1>{description ? <p className={styles.subtitle}>{description}</p> : null}</div>{actions ? <div className={styles.actions}>{actions}</div> : null}</div>
         {children}
-        {compactApplicant ? <footer className={styles.boundary}><span>BlockXOne · {testnet ? 'Testnet' : 'Mainnet'} · {release?.version ?? PLATFORM_VERSION}</span>{release ? <span className={styles.releaseIdentity}>Release {release.source}</span> : null}</footer> : <footer className={styles.boundary}><span>BlockXOne · Multi-asset tokenisation · {release?.version ?? PLATFORM_VERSION}</span><span>{testnet ? 'Fictional data only · Synthetic cash is not a bank balance' : 'Dashboard access is not approval to move funds or issue tokens'}</span></footer>}
+        {compactApplicant ? <footer className={styles.boundary}><span>BlockXOne · {release?.version ?? PLATFORM_VERSION}</span>{release ? <span className={styles.releaseIdentity}>Release {release.source}</span> : null}</footer> : <footer className={styles.boundary}><span>BlockXOne · Multi-asset tokenisation · {release?.version ?? PLATFORM_VERSION}</span><span>{testnet ? 'Fictional data only · Synthetic cash is not a bank balance' : 'Dashboard access is not approval to move funds or issue tokens'}</span></footer>}
       </main>
     </div>
   </div>

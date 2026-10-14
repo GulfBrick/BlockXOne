@@ -293,7 +293,7 @@ describe('portal navigation and source-driven surfaces', () => {
     const full = portalNavigation({ manageProducts: true, reviewCompliance: true, invest: true })
     expect(full.map(item => item.href)).toContain('/portal/products'); expect(full.map(item => item.href)).toContain('/portal/compliance')
     const html = renderToStaticMarkup(<PortalShell user={data().user} capabilities={{ manageProducts: false, reviewCompliance: false, invest: true }} active="onboarding" title="Onboarding"><p>Saved content</p></PortalShell>)
-    expect(html).toContain('Skip to main content'); expect(html).toContain('aria-current="page"'); expect(html).toContain('Testnet environment')
+    expect(html).toContain('Skip to main content'); expect(html).toContain('aria-current="page"'); expect(html).not.toContain('Testnet environment')
     expect(html).not.toContain('Switch role'); expect(html).not.toContain('Impersonate'); expect(html).not.toContain('href="/portal/compliance"')
   })
   it('keeps account security and the account workspace in the shared account menu', () => {

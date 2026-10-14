@@ -57,7 +57,7 @@ export function SupabaseAuthForm({ mode, error, initialEmail = '' }: Props) {
     return () => window.removeEventListener('pageshow', restoreForm)
   }, [])
   return (
-    <form method="post" action={setup ? '/auth/setup' : '/auth/login'} className="mt-8 space-y-6" onSubmit={(event) => handleAuthFormSubmit(event, { setup, pending, setPending, setError: setClientError })} aria-busy={pending}>
+    <form method="post" action={setup ? '/auth/setup' : '/auth/login'} className="mt-5 space-y-5" onSubmit={(event) => handleAuthFormSubmit(event, { setup, pending, setPending, setError: setClientError })} aria-busy={pending}>
       {displayedError ? <p id="bx1-auth-error" ref={errorRef} tabIndex={-1} role="alert" className="rounded-lg border border-bxo-danger-border bg-bxo-danger-soft p-4 text-base text-bxo-text-primary outline-none focus-visible:ring-2 focus-visible:ring-bxo-accent-primary">{AUTH_ERROR_COPY[displayedError]}</p> : null}
       {!setup ? (
         <div>

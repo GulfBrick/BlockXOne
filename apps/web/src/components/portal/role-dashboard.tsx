@@ -37,7 +37,6 @@ export function RoleDashboardContent({ dashboard, environment, organisationName,
       </ul>
       <dl className={styles.context}>
         <div><dt>Organisation context</dt><dd>{organisationName || 'No organisation selected'}</dd></div>
-        <div><dt>Environment</dt><dd><span className={styles.environment}>{environment}</span><span className={styles.contextHint}>{environment === 'TESTNET' ? 'Test records and test value only' : 'Real operations require approved authority'}</span></dd></div>
       </dl>
     </section>
 
