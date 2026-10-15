@@ -9,12 +9,29 @@ const directory = resolve(process.cwd(), '../../supabase/features')
 const read = (name: string) => readFileSync(resolve(directory, name), 'utf8').replace(/\r\n/g, '\n')
 const sql = read('bx1_fund_roleplay_investor_admission.sql')
 type Cut = { from: string; to: string; count: number }
-type Spec = { signature: string; oid: number; sha: string; cuts: Cut[] }
+type Spec = { signature: string; oid: number; sha: string; acl?: string[]; cuts: Cut[] }
 const specs = JSON.parse(sql.match(/\$specs\$([\s\S]*?)\$specs\$::jsonb/)![1]) as Spec[]
 const body = (name: string) => sql.match(new RegExp(`create function bx1_private\\.${name}\\([\\s\\S]*?as \\$\\$([\\s\\S]*?)\\$\\$;`))![1]
 const hash = (value: string) => createHash('sha256').update(value.trim(), 'utf8').digest('hex')
 
 describe('exact TEST own-investor admission continuation source contract', () => {
+  it('balances expression parentheses in all thirteen helper bodies without counting quoted literals', () => {
+    // Delimiter guard only, not a replacement for actual native compilation.
+    const helpers = [...sql.matchAll(/create function bx1_private\.(fund_roleplay_admission_[a-z_]+)\([\s\S]*?as \$\$([\s\S]*?)\$\$;/g)]
+    expect(helpers).toHaveLength(13)
+    for (const helper of helpers) {
+      const expression = helper[2].replace(/'(?:''|[^'])*'/g, "''").replace(/--[^\n]*/g, '')
+      let depth = 0
+      for (const character of expression) {
+        if (character === '(') depth += 1
+        if (character === ')') depth -= 1
+        expect(depth, `${helper[1]}: unexpected closing expression delimiter`).toBeGreaterThanOrEqual(0)
+      }
+      expect(depth, `${helper[1]}: unclosed expression delimiter`).toBe(0)
+    }
+    expect(body('fund_roleplay_admission_review_allowed')).toContain("fund_roleplay_appointed(p_context,binding.product_id,'ComplianceOfficer')),false);")
+  })
+
   it('has exactly six pinned targets and retains current publication cuts', () => {
     expect(specs.map(spec => spec.oid)).toEqual([24447, 24343, 27054, 27038, 26200, 25200])
     expect(specs.map(spec => spec.cuts.map(cut => cut.count))).toEqual([[1, 1], [1, 1], [1], [1, 1, 1, 1, 1, 1], [1], [2, 1, 1]])
@@ -36,7 +53,33 @@ describe('exact TEST own-investor admission continuation source contract', () =>
     expect(corrected).toBe(retained)
     expect(sql).toContain("after_row-'prosrc' is distinct from before_row-'prosrc'")
     expect(sql).toContain('restored is distinct from original')
-    expect(sql).toContain("before_row->'proacl' is distinct from '[\"postgres=X/postgres\"]'::jsonb")
+    expect(sql).toContain("before_row->'proacl' is distinct from coalesce(spec->'acl','[\"postgres=X/postgres\"]'::jsonb)")
+  })
+
+  it('preserves the established authenticated read_scoped entry and owner-only five writer targets', () => {
+    expect(specs.filter(spec => spec.acl !== undefined).map(({ signature, oid, sha, acl }) => ({ signature, oid, sha, acl }))).toEqual([{
+      signature: 'bx1_portal.read_scoped(jsonb)', oid: 27038,
+      sha: '8f6f44c013f0a84656bee3254a1824c73d43ed09171f3d2a5bd25fc182429ba2',
+      acl: ['postgres=X/postgres', 'authenticated=X/postgres'],
+    }])
+    expect(specs.filter(spec => spec.acl === undefined).map(spec => spec.oid).sort((a, b) => a - b))
+      .toEqual([24343, 24447, 25200, 26200, 27054])
+    expect(sql).toContain("before_row->>'proowner' is distinct from 'postgres'::regrole::oid::text")
+    expect(sql).toContain("before_row->'prosecdef' is distinct from 'true'::jsonb")
+    expect(sql).toContain("before_row->'proconfig' is distinct from '[\"search_path=\\\"\\\"\"]'::jsonb")
+    expect(sql).toContain("after_row-'prosrc' is distinct from before_row-'prosrc'")
+  })
+
+  it('pins the existing environment delegation without adding privileges or relaxing the other dependencies', () => {
+    const dependencies = JSON.parse(sql.match(/\$pins\$([\s\S]*?)\$pins\$::jsonb/)![1]) as { signature: string; sha: string; acl?: string[] }[]
+    expect(dependencies).toHaveLength(6)
+    expect(dependencies.filter(value => value.acl !== undefined)).toEqual([{
+      signature: 'bx1_private.test_roleplay_environment()',
+      sha: 'df3f47b7e75c9925105a77a558609cf65a8db2c135bbc857bb84bacb82123c21',
+      acl: ['postgres=X/postgres', 'bx1_authority_owner=X/postgres'],
+    }])
+    expect(sql).toContain("metadata->'proacl' is distinct from coalesce(dependency->'acl','[\"postgres=X/postgres\"]'::jsonb)")
+    expect(sql).not.toMatch(/grant\s+(?:all|execute|usage|select|insert|update|delete)\s/i)
   })
 
   it('provisions only immutable configuration derived from the actual saved submission', () => {

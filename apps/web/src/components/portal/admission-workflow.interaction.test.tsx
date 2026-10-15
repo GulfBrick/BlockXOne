@@ -193,7 +193,10 @@ describe('native case-specific TEST role-play admission', () => {
     expect(screen.getByRole('link', { name: 'Review TEST role-play case' })).toBeTruthy()
     expect(screen.getByText('TEST role-play · not independent approval')).toBeTruthy()
     expect(screen.queryByText('Another reviewer required')).toBeNull()
-    page.rerender(reviewScreen(recordedDecision(), { view: '/portal/compliance', id: undefined }))
+    // A returned decision reaches the live component through its command/refresh
+    // callback, not replacement initial props. This assertion proves a reload.
+    page.unmount()
+    render(reviewScreen(recordedDecision(), { view: '/portal/compliance', id: undefined }))
     expect(screen.getByRole('link', { name: 'Inspect saved decision' })).toBeTruthy()
     expect(screen.getByText('TEST role-play · not independent approval')).toBeTruthy()
     expect(screen.queryByRole('link', { name: 'Review TEST role-play case' })).toBeNull()

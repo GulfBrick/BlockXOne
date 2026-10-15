@@ -4,7 +4,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('server-only', () => ({}))
-const mocks = vi.hoisted(() => ({ create: vi.fn(), user: vi.fn(), workspace: vi.fn(), mfa: vi.fn(), sufficient: vi.fn(), current: vi.fn(), rpc: vi.fn(), notFound: vi.fn(), redirect: vi.fn() }))
+const mocks = vi.hoisted(() => ({ create: vi.fn(), user: vi.fn(), workspace: vi.fn(), mfa: vi.fn(), sufficient: vi.fn(), current: vi.fn(), rpc: vi.fn(), lifecycle: vi.fn(), registration: vi.fn(), notFound: vi.fn(), redirect: vi.fn() }))
 vi.mock('next/navigation', () => ({
   notFound: () => { mocks.notFound(); throw new Error('NEXT_NOT_FOUND') },
   redirect: (path: string) => { mocks.redirect(path); throw new Error(`NEXT_REDIRECT:${path}`) },
@@ -13,21 +13,31 @@ vi.mock('@/lib/supabase/page', () => ({ createPageSupabaseClient: mocks.create }
 vi.mock('@/lib/supabase/server', () => ({ readVerifiedUser: mocks.user, readWorkspace: mocks.workspace }))
 vi.mock('@/lib/supabase/mfa', () => ({ readMfaContext: mocks.mfa, hasRequiredMfa: mocks.sufficient, isMfaContextCurrent: mocks.current }))
 vi.mock('@/components/public/public-shell', () => ({ PublicShell: ({ children }: { children: ReactNode }) => createElement('div', null, children) }))
-vi.mock('@/components/portal/registration-form', () => ({ RegistrationForm: () => createElement('p', null, 'server-admitted registration') }))
+vi.mock('@/components/portal/registration-form', () => ({ RegistrationForm: (props: { environment: string }) => {
+  mocks.registration(props)
+  return createElement('p', null, 'server-admitted registration')
+} }))
 vi.mock('@/components/portal/portal-screens', () => ({ PortalScreen: () => createElement('p', null, 'server-admitted portal') }))
+vi.mock('./fund-lifecycle-server', async original => ({ ...await original<object>(), readFundLifecycle: mocks.lifecycle }))
 
 vi.mock('@/components/portal/entry-screen', () => ({ EntryScreen: () => createElement('p', null, 'server-admitted entry') }))
 
 import RegisterPage, { generateMetadata as registrationMetadata } from '@/app/register/page'
 import { PortalPage } from '@/components/portal/portal-page'
 import { isPortalSnapshot, loadPortalPage, PackageReaderUnavailable, readPortal } from './server'
-import { APPLICANT_CONTEXT } from './operating-context'
+import { APPLICANT_CONTEXT, type PortalOperatingContext } from './operating-context'
+import { unavailableFundLifecycle } from './fund-lifecycle-server'
 
 const origin = 'https://block-x-one-admission-test.vercel.app'
 const user = { id: 'd22789ee-7f73-4acf-a414-3de0b62ea801', email: 'applicant@example.test', email_confirmed_at: '2026-09-21T08:00:00Z', is_anonymous: false }
 const organisation = '33333333-3333-4333-8333-333333333333'
 const roleContext = { mode: 'ROLE' as const, organisationId: organisation, role: 'Investor' as const }
 const snapshot = { actor: { id: user.id, email: user.email, display_name: null, can_review: false }, operating_context: APPLICANT_CONTEXT, applications: [], organisations: [], products: [], subscriptions: [], events: [], requests: [] }
+// This suite isolates admission/entry authority from the separately tested fund
+// reader. Its explicit UNAVAILABLE extension cannot invent a ready fund/holding.
+function lifecycleFixture(actorId: string, context: PortalOperatingContext) {
+  return { ...unavailableFundLifecycle(actorId, context), observed_at: '2026-10-15T12:00:00Z' }
+}
 const entrySnapshot = {
   entry_version: 1, actor: { id: user.id, email: user.email }, applications: [], contexts: [], admission: { manual_test_review: true },
   workflow: { version: 1, environment: 'TESTNET' as const, actor_id: user.id, scoped_read_available: true },
@@ -56,6 +66,7 @@ beforeEach(() => {
   mocks.mfa.mockResolvedValue(null)
   mocks.sufficient.mockReturnValue(true)
   mocks.current.mockResolvedValue(true)
+  mocks.lifecycle.mockImplementation(async (_client, actorId: string, context: PortalOperatingContext) => lifecycleFixture(actorId, context))
   mocks.rpc.mockImplementation((name: string) => ({ abortSignal: vi.fn().mockResolvedValue({ data: name === 'bx1_entry_read' ? entrySnapshot : snapshot, error: null }) }))
 })
 afterEach(() => vi.unstubAllEnvs())
@@ -123,8 +134,9 @@ describe('bounded package read boundary and pre-cutover compatibility', () => {
     expect(Object.hasOwn(data, 'funding')).toBe(false)
     expect(isPortalSnapshot(data, user.id)).toBe(true)
     mocks.rpc.mockReturnValue({ abortSignal: vi.fn().mockResolvedValue({ data, error: null }) })
-    expect((await readPortal({ rpc: mocks.rpc } as never, context)).snapshot).toEqual(data)
+    expect((await readPortal({ rpc: mocks.rpc } as never, context)).snapshot).toEqual({ ...data, fund_lifecycle: lifecycleFixture(user.id, context) })
     expect(mocks.rpc).toHaveBeenCalledExactlyOnceWith('bx1_portal_read_scoped', { operating_context: context })
+    expect(mocks.lifecycle).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ rpc: mocks.rpc }), user.id, context)
   })
   it.each(['OfferingManager', 'IssuerFundManager'] as const)('still rejects the old invalid funding array in a %s payload', async role => {
     const data = { ...packageOnlySnapshot(role), funding: [] }, context = { ...manager, role }
@@ -146,7 +158,8 @@ describe('bounded package read boundary and pre-cutover compatibility', () => {
     const data = { ...snapshot, operating_context: roleContext, funding }
     expect(isPortalSnapshot(data, user.id)).toBe(true)
     mocks.rpc.mockReturnValue({ abortSignal: vi.fn().mockResolvedValue({ data, error: null }) })
-    expect((await readPortal({ rpc: mocks.rpc } as never, roleContext)).snapshot).toEqual(data)
+    expect((await readPortal({ rpc: mocks.rpc } as never, roleContext)).snapshot).toEqual({ ...data, fund_lifecycle: lifecycleFixture(user.id, roleContext) })
+    expect(mocks.lifecycle).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ rpc: mocks.rpc }), user.id, roleContext)
     for (const invalid of [null, {}, { ...funding, journals: 'paid' },
       { ...funding, journals: [{ ...funding.journals[0], amount_base_units: 1000000 }] }]) {
       const malformed = { ...data, funding: invalid }
@@ -157,7 +170,8 @@ describe('bounded package read boundary and pre-cutover compatibility', () => {
   })
   it('validates a package marker against the authenticated reader and selected context', async () => {
     mocks.rpc.mockReturnValue({ abortSignal: vi.fn().mockResolvedValue({ data: marked, error: null }) })
-    expect((await readPortal({ rpc: mocks.rpc } as never, manager)).snapshot).toEqual(marked)
+    expect((await readPortal({ rpc: mocks.rpc } as never, manager)).snapshot).toEqual({ ...marked, fund_lifecycle: lifecycleFixture(user.id, manager) })
+    expect(mocks.lifecycle).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ rpc: mocks.rpc }), user.id, manager)
     for (const change of [{ actor_id: organisation }, { environment: 'MAINNET' }, { session_mode: 'STANDARD' },
       { operating_context: { ...manager, organisationId: user.id } }, { allowed_commands: ['publish_product'] }]) {
       expect(isPortalSnapshot({ ...marked, offering_access: { ...access, ...change } }, user.id)).toBe(false)
@@ -208,9 +222,10 @@ describe('actual customer page admission', () => {
     vi.stubEnv('SUPABASE_URL', 'https://oqkevkjbkpugjotihtda.supabase.co'); vi.stubEnv('VERCEL_ENV', 'production'); vi.stubEnv('BLOCKXONE_APP_ORIGIN', 'https://bx1.co.za')
     mocks.user.mockResolvedValueOnce(null)
     const html = renderToStaticMarkup(await RegisterPage({ searchParams: Promise.resolve({}) }))
-    expect(html).toContain('Mainnet environment')
+    expect(mocks.registration).toHaveBeenCalledWith(expect.objectContaining({ environment: 'MAINNET' }))
     expect(html).toContain('Account access terms')
     expect(html).not.toContain('Hosted test environment')
+    expect(html).not.toContain('Testnet terms')
   })
   it('uses submit-capable HTML metadata for clean registration and fixed retry/intent state', async () => {
     const queries: Record<string, string | string[] | undefined>[] = [
@@ -266,6 +281,7 @@ describe('actual customer page admission', () => {
     expect(mocks.rpc).toHaveBeenCalledTimes(2)
     expect(mocks.rpc).toHaveBeenNthCalledWith(1, 'bx1_entry_read')
     expect(mocks.rpc).toHaveBeenNthCalledWith(2, 'bx1_portal_read_scoped', { operating_context: APPLICANT_CONTEXT })
+    expect(mocks.lifecycle).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ rpc: mocks.rpc }), user.id, APPLICANT_CONTEXT)
     expect(mocks.workspace).not.toHaveBeenCalled()
   })
   it.each([
@@ -311,6 +327,7 @@ describe('actual customer page admission', () => {
     expect(mocks.rpc).toHaveBeenCalledTimes(2)
     expect(mocks.rpc).toHaveBeenNthCalledWith(1, 'bx1_entry_read')
     expect(mocks.rpc).toHaveBeenNthCalledWith(2, 'bx1_portal_read_scoped', { operating_context: roleContext })
+    expect(mocks.lifecycle).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ rpc: mocks.rpc }), user.id, roleContext)
     expect(mocks.current).toHaveBeenCalledTimes(2)
   })
   it.each([undefined, APPLICANT_CONTEXT, { ...roleContext, organisationId: '44444444-4444-4444-8444-444444444444' }, { ...roleContext, role: 'OfferingManager' }, { ...roleContext, extra: true }])('rejects a same-actor snapshot with missing, different or extra operating context %#', async actualContext => {

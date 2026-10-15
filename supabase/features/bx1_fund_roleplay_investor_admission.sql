@@ -7,7 +7,7 @@ do $dependencies$
 declare dependency jsonb; target oid; metadata jsonb; source text;
 begin
   for dependency in select value from jsonb_array_elements($pins$[
-    {"signature":"bx1_private.test_roleplay_environment()","sha":"df3f47b7e75c9925105a77a558609cf65a8db2c135bbc857bb84bacb82123c21"},
+    {"signature":"bx1_private.test_roleplay_environment()","sha":"df3f47b7e75c9925105a77a558609cf65a8db2c135bbc857bb84bacb82123c21","acl":["postgres=X/postgres","bx1_authority_owner=X/postgres"]},
     {"signature":"bx1_private.test_roleplay_protected_session()","sha":"0cef4c386c389bb403f99fbae76f82a20faa874a1d7d9749d795c292b2822e14"},
     {"signature":"bx1_private.fund_roleplay_record_current(uuid,integer,uuid,uuid,uuid,jsonb,text)","sha":"fb47db73980dff11c505b4aad7838c89859b0d959ee97a4dda97e8e8a2c0cbe8"},
     {"signature":"bx1_private.fund_roleplay_appointment_current(uuid)","sha":"6fcb9829a5dff3398844bf54d316de411dfea9da51d3c65bbd75cf7267f9adc9"},
@@ -17,7 +17,8 @@ begin
     target:=to_regprocedure(dependency->>'signature');
     select to_jsonb(p),p.prosrc into metadata,source from pg_catalog.pg_proc p where p.oid=target;
     if target is null or metadata->>'proowner' is distinct from 'postgres'::regrole::oid::text
-      or metadata->'prosecdef' is distinct from 'true'::jsonb or metadata->'proacl' is distinct from '["postgres=X/postgres"]'::jsonb
+      or metadata->'prosecdef' is distinct from 'true'::jsonb
+      or metadata->'proacl' is distinct from coalesce(dependency->'acl','["postgres=X/postgres"]'::jsonb)
       or metadata->'proconfig' is distinct from '["search_path=\"\""]'::jsonb
       or encode(sha256(convert_to(btrim(replace(source,E'\r\n',E'\n'),E' \n\t'),'UTF8')),'hex') is distinct from dependency->>'sha' then
       raise exception 'fund_roleplay_admission_dependency_changed: %',dependency->>'signature' using errcode='55000';end if;
@@ -243,7 +244,7 @@ language sql volatile security definer set search_path='' as $$
         and p_context->>'organisationId'=binding.native_organisation_id::text
         and bx1_private.fund_roleplay_admission_binding_current(binding.id)
         and bx1_portal.admission_application_reviewer(p_context,application.reviewer_scope,application.organisation_id)
-        and bx1_private.fund_roleplay_appointed(p_context,binding.product_id,'ComplianceOfficer'))),false);
+        and bx1_private.fund_roleplay_appointed(p_context,binding.product_id,'ComplianceOfficer')),false);
 $$;
 
 create function bx1_private.fund_roleplay_admission_enter(p_context jsonb,p_key uuid,p_payload jsonb) returns void
@@ -447,7 +448,7 @@ begin
     {"signature":"bx1_portal.review_application_transition(uuid,integer,text,text,jsonb,timestamp with time zone)","oid":27054,"sha":"5f2653b65d4bb3b7d41c0a5bcb93232b9f192880018ff2be8cbaaddd17d8c015","cuts":[
       {"from":"if a.id is null or bx1_portal.independent_of(a.user_id) is not true then","to":"if a.id is null or (bx1_portal.independent_of(a.user_id) or bx1_private.fund_roleplay_admission_lane_current(a.id)) is not true then","count":1}
     ]},
-    {"signature":"bx1_portal.read_scoped(jsonb)","oid":27038,"sha":"8f6f44c013f0a84656bee3254a1824c73d43ed09171f3d2a5bd25fc182429ba2","cuts":[
+    {"signature":"bx1_portal.read_scoped(jsonb)","oid":27038,"sha":"8f6f44c013f0a84656bee3254a1824c73d43ed09171f3d2a5bd25fc182429ba2","acl":["postgres=X/postgres","authenticated=X/postgres"],"cuts":[
       {"from":"return bx1_private.fund_roleplay_manager_read(c);","to":"return bx1_private.fund_roleplay_admission_read(c,bx1_private.fund_roleplay_manager_read(c));","count":1},
       {"from":"return roleplay_result;","to":"return bx1_private.fund_roleplay_admission_read(c,roleplay_result);","count":1},
       {"from":"return bx1_portal.read_scoped_pre_entity_eligibility(c);","to":"return bx1_private.fund_roleplay_admission_read(c,bx1_portal.read_scoped_pre_entity_eligibility(c));","count":1},
@@ -468,7 +469,7 @@ begin
     select to_jsonb(p),p.prosrc into before_row,original from pg_catalog.pg_proc p where p.oid=target;
     if target is distinct from (spec->>'oid')::oid or before_row->>'proowner' is distinct from 'postgres'::regrole::oid::text
       or before_row->'prosecdef' is distinct from 'true'::jsonb or before_row->'proconfig' is distinct from '["search_path=\"\""]'::jsonb
-      or before_row->'proacl' is distinct from '["postgres=X/postgres"]'::jsonb
+      or before_row->'proacl' is distinct from coalesce(spec->'acl','["postgres=X/postgres"]'::jsonb)
       or encode(sha256(convert_to(btrim(replace(original,E'\r\n',E'\n'),E' \n\t'),'UTF8')),'hex') is distinct from spec->>'sha' then
       raise exception 'fund_roleplay_admission_native_pin_changed: %',spec->>'signature' using errcode='55000';end if;
     snapshots:=snapshots||jsonb_build_object(spec->>'signature',before_row);
