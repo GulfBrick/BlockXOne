@@ -172,7 +172,7 @@ describe('bounded package read boundary and pre-cutover compatibility', () => {
     mocks.rpc.mockReturnValue({ abortSignal: vi.fn().mockResolvedValue({ data: marked, error: null }) })
     expect((await readPortal({ rpc: mocks.rpc } as never, manager)).snapshot).toEqual({ ...marked, fund_lifecycle: lifecycleFixture(user.id, manager) })
     expect(mocks.lifecycle).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ rpc: mocks.rpc }), user.id, manager)
-    for (const change of [{ actor_id: organisation }, { environment: 'MAINNET' }, { session_mode: 'STANDARD' },
+    for (const change of [{ actor_id: organisation }, { environment: 'MAINNET' }, { session_mode: 'UNVERIFIED' },
       { operating_context: { ...manager, organisationId: user.id } }, { allowed_commands: ['publish_product'] }]) {
       expect(isPortalSnapshot({ ...marked, offering_access: { ...access, ...change } }, user.id)).toBe(false)
     }
