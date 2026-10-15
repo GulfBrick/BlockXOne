@@ -11,6 +11,7 @@ import { hasEvaluationCommandAccess, sameEvaluationGrant, validatedEvaluationAcc
 import { executeFundCommand, FundLifecycleError, isFundCommand, readFundLifecycle, unavailableFundLifecycle } from '@/lib/portal/fund-lifecycle-server'
 import { platformRelease } from '@/lib/platform-release'
 import { appointmentCommitSchema, matchesAppointmentCommit } from '@/lib/portal/appointment-commit'
+import { fundPublicationCommitSchema, matchesFundPublicationCommit } from '@/lib/portal/fund-publication-commit'
 
 function requireSavedSnapshot(value: unknown, actorId: string, context: PortalOperatingContext, before: PortalSnapshot): asserts value is PortalSnapshot {
   if (!isPortalSnapshot(value, actorId) || !portalContextMatches(value.operating_context, context)) throw new PortalError('The saved result could not be read. Refresh before retrying.', 503)
@@ -68,13 +69,18 @@ export async function POST(request: NextRequest) {
       if (['22023', '23514', '23505', '40001', 'P0001'].includes(error.code)) throw new PortalError('The saved state or review requirements changed. Refresh and check the current requirements before retrying.', 409)
       throw new PortalError('The request outcome is uncertain. Refresh to check whether it saved; retry only with the same request key.', 503)
     }
-    if (data && typeof data === 'object' && 'kind' in data && data.kind === 'TEST_FUND_APPOINTMENT_COMMIT') {
-      if (!matchesAppointmentCommit(data, { actorId: user.id, context: context.data, request: command.data,
-        environment: platformRelease(process.env)?.environment })) throw new PortalError('The saved appointment receipt could not be verified. Refresh before retrying.', 503)
-      const committed = appointmentCommitSchema.parse(data)
+    if (data && typeof data === 'object' && 'kind' in data
+      && (data.kind === 'TEST_FUND_APPOINTMENT_COMMIT' || data.kind === 'TEST_FUND_PUBLICATION_COMMIT')) {
+      const expected = { actorId: user.id, context: context.data, request: command.data, environment: platformRelease(process.env)?.environment }
+      const publication = data.kind === 'TEST_FUND_PUBLICATION_COMMIT'
+      if (!(publication ? matchesFundPublicationCommit(data, expected) : matchesAppointmentCommit(data, expected))) {
+        throw new PortalError(publication ? 'The saved publication receipt could not be verified. Refresh before retrying.'
+          : 'The saved appointment receipt could not be verified. Refresh before retrying.', 503)
+      }
+      const committed = publication ? fundPublicationCommitSchema.parse(data) : appointmentCommitSchema.parse(data)
       try {
         // This is a separate RPC after the guarded writer returned a durable
-        // receipt. A failed refresh cannot roll back that committed appointment.
+        // receipt. A failed refresh cannot roll back that committed command.
         const refreshed = await readPortal(client, context.data)
         if (refreshed.user.id !== user.id) throw new PortalError('The signed-in account changed after saving.', 403)
         requireSavedSnapshot(refreshed.snapshot, user.id, context.data, before)

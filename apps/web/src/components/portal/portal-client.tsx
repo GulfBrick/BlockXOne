@@ -8,7 +8,8 @@ import { hasStage2CommandAccess, validatedStage2Access, type Stage2Access } from
 import { hasOfferingCommandAccess, isTestPasswordWorkflow, validatedOfferingAccess, type OfferingAccess } from '@/lib/portal/offering-access'
 import { hasEvaluationCommandAccess, sameEvaluationGrant, validatedEvaluationAccess, type EvaluationAccess } from '@/lib/portal/evaluation-access'
 import { fundLifecycleSnapshotSchema, fundOperationSchema, hasFundLifecycleCommand, isFundLifecycleCommand, validatedFundLifecycle, type FundLifecycleOperation } from '@/lib/portal/fund-lifecycle-contracts'
-import { appointmentCommitSchema, matchesAppointmentCommit } from '@/lib/portal/appointment-commit'
+import { matchesAppointmentCommit } from '@/lib/portal/appointment-commit'
+import { matchesFundPublicationCommit } from '@/lib/portal/fund-publication-commit'
 import { fundingSnapshotSchema } from '@/lib/portal/funding-contracts'
 import styles from './portal.module.css'
 
@@ -87,7 +88,7 @@ export function mayDiscardDeniedPortalRequest(definitive: boolean, hadPendingAtt
 class PortalCommittedRefreshRequiredError extends Error {
   readonly committed = true
   readonly definitive = false
-  constructor() { super('Your appointment change was saved. Refresh the saved result before continuing; do not create a replacement request.') }
+  constructor(command?: PortalCommand['command']) { super(`${command === 'publish_product' ? 'Your publication request' : 'Your appointment change'} was saved. Refresh the saved result before continuing; do not create a replacement request.`) }
 }
 function snapshotConfirmsRequest(snapshot: PortalSnapshot, request: PortalCommand): boolean {
   return Array.isArray(snapshot.requests) && snapshot.requests.some(receipt => receipt?.key === request.key && receipt.command === request.command)
@@ -111,13 +112,13 @@ export async function postPortalCommand(command: PortalCommand, operatingContext
   const result = await response.json()
   let committed = false
   if (result?.committed !== undefined) {
-    const acknowledgement = appointmentCommitSchema.safeParse(result.committed)
+    const expected = { actorId: expectedActor ?? '', context: operatingContext, request: command, environment: expectedEnvironment }
     if (!response.ok || ![200, 202].includes(response.status) || result.error !== undefined
-      || !acknowledgement.success || !matchesAppointmentCommit(acknowledgement.data, {
-        actorId: expectedActor ?? '', context: operatingContext, request: command, environment: expectedEnvironment,
-      })) throw new Error('The platform did not confirm this request in the expected context. Refresh to reconcile the original request.')
+      || !(matchesAppointmentCommit(result.committed, expected) || matchesFundPublicationCommit(result.committed, expected))) {
+      throw new Error('The platform did not confirm this request in the expected context. Refresh to reconcile the original request.')
+    }
     committed = true
-    if (response.status === 202 || result.refresh_required === true || !result.snapshot) throw new PortalCommittedRefreshRequiredError()
+    if (response.status === 202 || result.refresh_required === true || !result.snapshot) throw new PortalCommittedRefreshRequiredError(command.command)
   }
   if (!response.ok || result.error || !result.snapshot) {
     const error = new Error(typeof result.error === 'string' ? result.error : 'The platform could not confirm this request.') as Error & { definitive?: boolean }
@@ -125,7 +126,7 @@ export async function postPortalCommand(command: PortalCommand, operatingContext
     throw error
   }
   try {
-  if (committed && !completeCommitSnapshot(result.snapshot, expectedActor ?? '', operatingContext, expectedEnvironment)) throw new PortalCommittedRefreshRequiredError()
+  if (committed && !completeCommitSnapshot(result.snapshot, expectedActor ?? '', operatingContext, expectedEnvironment)) throw new PortalCommittedRefreshRequiredError(command.command)
   if (!portalContextMatches(result.snapshot.operating_context, operatingContext) || (expectedActor && result.snapshot.actor?.id !== expectedActor)) throw new Error('The saved result belongs to an unverified operating context. Refresh to reconcile the original request.')
   if ('rehearsal' in result.snapshot) throw new Error('The saved result is not a normal admission record. Refresh to reconcile the original request.')
   const savedAccess = validatedStage2Access(result.snapshot, operatingContext)
@@ -148,12 +149,12 @@ export async function postPortalCommand(command: PortalCommand, operatingContext
   if (expectedOfferingAccess && (!savedOfferingAccess || savedOfferingAccess.actor_id !== expectedOfferingAccess.actor_id
     || savedOfferingAccess.environment !== expectedOfferingAccess.environment || savedOfferingAccess.session_mode !== expectedOfferingAccess.session_mode
     || !portalContextMatches(savedOfferingAccess.operating_context, expectedOfferingAccess.operating_context))) throw new Error('The saved result changed offering context. Refresh to reconcile the original request.')
-  if (committed && !snapshotConfirmsRequest(result.snapshot, command)) throw new PortalCommittedRefreshRequiredError()
+  if (committed && !snapshotConfirmsRequest(result.snapshot, command)) throw new PortalCommittedRefreshRequiredError(command.command)
   return result.snapshot as PortalSnapshot
   } catch (error) {
     // A genuine command receipt proves the write, not the readback. Never pass
     // the acknowledgement (or an invalid snapshot) to an application's onSaved.
-    if (committed) throw new PortalCommittedRefreshRequiredError()
+    if (committed) throw new PortalCommittedRefreshRequiredError(command.command)
     throw error
   }
 }
@@ -234,7 +235,7 @@ export function usePortalCommand(onSaved: (snapshot: PortalSnapshot) => void) {
       const snapshot = await postPortalCommand(prepared, context.operatingContext, context.actorId, context.stage2Access, context.offeringAccess, context.evaluationAccess, context.environment)
       if (!isCurrent()) return false
       if (committedReplay && (!completeCommitSnapshot(snapshot, context.actorId, context.operatingContext, context.environment)
-        || !snapshotConfirmsRequest(snapshot, prepared))) throw new PortalCommittedRefreshRequiredError()
+        || !snapshotConfirmsRequest(snapshot, prepared))) throw new PortalCommittedRefreshRequiredError(prepared.command)
       clearPortalMarker(sessionStorage, context.actorId, prepared, context)
       savedRequest.current = null; setUnknown(false); setCommittedRequest(null); onSaved(snapshot); setMessage('Saved to your hosted workspace.'); return true
     } catch (error) {
@@ -245,7 +246,7 @@ export function usePortalCommand(onSaved: (snapshot: PortalSnapshot) => void) {
         setUnknown(false); setMessage(error.message); return false
       }
       if (committedReplay) {
-        setUnknown(false); setMessage('Your appointment change was saved, but the updated workspace is still unavailable. Refresh the saved result before continuing.'); return false
+        setUnknown(false); setMessage(`${request.command === 'publish_product' ? 'Your publication request' : 'Your appointment change'} was saved, but the updated workspace is still unavailable. Refresh the saved result before continuing.`); return false
       }
       if (mayDiscardDeniedPortalRequest(definitive, hadPendingAttempt) && savedRequest.current) { clearPortalMarker(sessionStorage, context.actorId, savedRequest.current, context); savedRequest.current = null }
       setUnknown(Boolean(savedRequest.current) && (hadPendingAttempt || (sent && !definitive)))

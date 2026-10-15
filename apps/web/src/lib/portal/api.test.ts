@@ -173,6 +173,82 @@ describe('scoped portal command endpoint', () => {
   })
 })
 
+describe('committed TEST publication response is separate from its fresh read', () => {
+  const context = { mode: 'ROLE' as const, organisationId: organisation, role: 'OfferingManager' as const }
+  const product = '77777777-7777-4777-8777-777777777777', other = '99999999-9999-4999-8999-999999999999'
+  const publish: PortalCommand = { command: 'publish_product', key: command.key, payload: { product_id: product, expected_revision: 3 } }
+  const scoped = { ...snapshot, operating_context: context }
+  const refreshed = { ...scoped, requests: [{ key: publish.key, command: publish.command }] }
+  const committed = { kind: 'TEST_FUND_PUBLICATION_COMMIT', version: 1, environment: 'TESTNET', execution_mode: 'TEST_ROLE_PLAY',
+    independence_proven: false, actor_id: actor, session_id: other, operating_context: context, policy_id: other, authority_epoch: 2,
+    product_id: product, offering_revision_id: other, product_revision: 4, request: publish, recorded_at: '2026-10-15T12:00:00Z' }
+  function prepare(data: unknown = committed) {
+    mocks.read.mockResolvedValueOnce({ user: { id: actor, email: snapshot.actor.email }, snapshot: scoped })
+      .mockResolvedValue({ user: { id: actor, email: snapshot.actor.email }, snapshot: refreshed })
+    mocks.rpc.mockReturnValue({ abortSignal: vi.fn().mockResolvedValue({ data, error: null }) })
+  }
+  function send() { return POST(request({ ...publish, operating_context: context })) }
+  it('returns a matched publication receipt with only the separately read snapshot, without another write', async () => {
+    prepare()
+    const response = await send()
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ snapshot: refreshed, committed })
+    expect(mocks.rpc).toHaveBeenCalledExactlyOnceWith('bx1_portal_command_scoped', {
+      command: publish.command, request_key: publish.key, payload: publish.payload, operating_context: context,
+    })
+    expect(mocks.read).toHaveBeenCalledTimes(2)
+    expect(mocks.rpc.mock.invocationCallOrder[0]).toBeLessThan(mocks.read.mock.invocationCallOrder[1])
+    expect(mocks.lifecycle).not.toHaveBeenCalled()
+  })
+  it.each([401, 403, 503])('keeps the durable publication receipt private when its post-commit read fails with %s', async status => {
+    prepare()
+    mocks.read.mockReset().mockResolvedValueOnce({ user: { id: actor, email: snapshot.actor.email }, snapshot: scoped })
+      .mockRejectedValueOnce(new PortalError('Private saved-read details.', status))
+    const response = await send()
+    expect(response.status).toBe(202)
+    expect(await response.json()).toEqual({ committed, refresh_required: true })
+    expect(response.headers.get('cache-control')).toContain('private')
+    expect(response.headers.get('cache-control')).toContain('no-store')
+    expect(response.headers.get('referrer-policy')).toBe('no-referrer')
+    expect(mocks.rpc).toHaveBeenCalledOnce()
+  })
+  it.each(['actor', 'context', 'missing', 'package continuity'] as const)('does not return a %s readback as the saved publication snapshot', async failure => {
+    prepare()
+    const before = { ...scoped, ...(failure === 'package continuity' ? { offering_access: { version: 1, environment: 'TESTNET', actor_id: actor,
+      operating_context: context, session_mode: 'STANDARD', allowed_commands: ['request_product_service_appointment'] } } : {}) }
+    const next = failure === 'missing' ? null : failure === 'actor' ? { ...refreshed, actor: { ...snapshot.actor, id: other } }
+      : failure === 'context' ? { ...refreshed, operating_context: APPLICANT_CONTEXT } : refreshed
+    mocks.read.mockReset().mockResolvedValueOnce({ user: { id: actor, email: snapshot.actor.email }, snapshot: before })
+      .mockResolvedValueOnce({ user: { id: actor, email: snapshot.actor.email }, snapshot: next })
+    const response = await send()
+    expect(response.status).toBe(202)
+    expect(await response.json()).toEqual({ committed, refresh_required: true })
+  })
+  it.each([
+    { actor_id: other }, { operating_context: { ...context, organisationId: other } }, { operating_context: { ...context, role: 'SuperAdmin' } },
+    { environment: 'MAINNET' }, { product_id: other }, { product_revision: 0 }, { independence_proven: true }, { extra: true },
+    { request: { ...publish, key: other } }, { request: { ...publish, payload: { ...publish.payload, expected_revision: 4 } } },
+  ])('preserves unknown outcome for a mismatched native publication ACK %#', async change => {
+    prepare({ ...committed, ...change })
+    const response = await send()
+    expect(response.status).toBe(503)
+    const result = await response.json()
+    expect(result).not.toHaveProperty('committed'); expect(result).not.toHaveProperty('snapshot')
+    expect(mocks.read).toHaveBeenCalledOnce()
+  })
+  it('does not accept a publication ACK for another valid command or a MAIN runtime binding', async () => {
+    prepare()
+    expect((await POST(request({ ...command, operating_context: context }))).status).toBe(503)
+    expect(mocks.read).toHaveBeenCalledOnce()
+    mocks.read.mockReset(); prepare()
+    vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'https://oqkevkjbkpugjotihtda.supabase.co')
+    const response = await send()
+    expect(response.status).toBe(503)
+    expect(await response.json()).not.toHaveProperty('committed')
+    expect(mocks.read).toHaveBeenCalledOnce()
+  })
+})
+
 describe('committed TEST appointment response is separate from its fresh read', () => {
   const context = { mode: 'ROLE' as const, organisationId: organisation, role: 'OfferingManager' as const }
   const product = '77777777-7777-4777-8777-777777777777'
