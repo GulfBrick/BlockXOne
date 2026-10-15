@@ -112,3 +112,51 @@ begin
   if after_row-'prosrc' is distinct from before_row-'prosrc' or after_row->>'prosrc' is distinct from next_body then
     raise exception 'fund_setup_prepare_nonce_metadata_not_preserved' using errcode='55000';end if;
 end $setup_prepare_nonce_qualification$;
+
+-- SETUP-PROJECTION revision 3: one explicit local block label only.
+-- All prior qualification sections and every nonce predicate/lock stay unchanged.
+do $setup_shared_nonce_label$
+declare target oid; before_row jsonb; after_row jsonb; original text; next_body text; restored text; definition text;
+  old_declare constant text:=$old_declare$declare sender text;n numeric;safe text;sn numeric;$old_declare$;
+  new_declare constant text:=$new_declare$<<fund_recipient_shared_nonce_guard>>
+declare sender text;n numeric;safe text;sn numeric;$new_declare$;
+  target_metadata constant jsonb:=$nonce_guard_metadata${"oid":"36715","proacl":["postgres=X/postgres"],"probin":null,"procost":100,"prokind":"f","prolang":"13619","proname":"fund_recipient_shared_nonce_guard","prorows":0,"pronargs":0,"proowner":"16388","proconfig":["search_path=\"\""],"proretset":false,"prosecdef":true,"prorettype":"2279","prosqlbody":null,"prosupport":"-","proargmodes":null,"proargnames":null,"proargtypes":[],"proisstrict":false,"proparallel":"u","protrftypes":null,"provariadic":"0","provolatile":"v","proleakproof":false,"pronamespace":"24138","proallargtypes":null,"proargdefaults":null,"pronargdefaults":0}$nonce_guard_metadata$::jsonb;
+  expected_triggers constant jsonb:=$nonce_guard_triggers$[{"oid":"36716","tgargs":"\\x","tgattr":[9,10],"tgfoid":"36715","tgname":"fund_recipient_setup_nonce_boundary","tgqual":null,"tgtype":23,"tgnargs":0,"tgrelid":"33461","tgenabled":"O","tgnewtable":null,"tgoldtable":null,"tgparentid":"0","tgconstraint":"0","tgdeferrable":false,"tgisinternal":false,"tgconstrindid":"0","tgconstrrelid":"0","tginitdeferred":false},{"oid":"36717","tgargs":"\\x","tgattr":[9,14],"tgfoid":"36715","tgname":"fund_recipient_operation_nonce_boundary","tgqual":null,"tgtype":23,"tgnargs":0,"tgrelid":"36514","tgenabled":"O","tgnewtable":null,"tgoldtable":null,"tgparentid":"0","tgconstraint":"0","tgdeferrable":false,"tgisinternal":false,"tgconstrindid":"0","tgconstrrelid":"0","tginitdeferred":false},{"oid":"36718","tgargs":"\\x","tgattr":[12,20],"tgfoid":"36715","tgname":"fund_recipient_safe_nonce_boundary","tgqual":null,"tgtype":23,"tgnargs":0,"tgrelid":"31081","tgenabled":"O","tgnewtable":null,"tgoldtable":null,"tgparentid":"0","tgconstraint":"0","tgdeferrable":false,"tgisinternal":false,"tgconstrindid":"0","tgconstrrelid":"0","tginitdeferred":false}]$nonce_guard_triggers$::jsonb;
+begin
+  if current_user<>'postgres' or session_user<>'postgres' or auth.uid() is not null
+    or bx1_private.test_roleplay_environment() is not true
+    or not exists(select 1 from bx1_portal.entry_configuration where singleton and environment='TESTNET') then
+    raise exception 'fund_setup_shared_nonce_label_exact_test_owner_required' using errcode='42501';end if;
+  if (select pg_catalog.jsonb_agg(pg_catalog.to_jsonb(t) order by t.oid) from pg_catalog.pg_trigger t
+    where t.oid in (36716,36717,36718)) is distinct from expected_triggers then
+    raise exception 'fund_setup_shared_nonce_label_triggers_changed' using errcode='55000';end if;
+  target:=pg_catalog.to_regprocedure('bx1_portal.fund_recipient_shared_nonce_guard()');
+  select pg_catalog.to_jsonb(p),p.prosrc into before_row,original from pg_catalog.pg_proc p where p.oid=target;
+  if target is distinct from 36715::oid or before_row-'prosrc' is distinct from target_metadata then
+    raise exception 'fund_setup_shared_nonce_label_metadata_changed' using errcode='55000';end if;
+  next_body:=original;
+  if pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.btrim(replace(original,E'\r\n',E'\n'),E' \n\t'),'UTF8')),'hex')
+    ='15e2c444370c50c146a4e896ad0439b7a52b4868217b53123ccc58ff28bb1390' then
+    if (length(original)-length(replace(original,old_declare,'')))/length(old_declare)<>1 then
+      raise exception 'fund_setup_shared_nonce_label_cut_not_unique' using errcode='55000';end if;
+    next_body:=replace(original,old_declare,new_declare);
+  else
+    if (length(original)-length(replace(original,new_declare,'')))/length(new_declare)<>1 then
+      raise exception 'fund_setup_shared_nonce_label_repeat_changed' using errcode='55000';end if;
+    restored:=replace(original,new_declare,old_declare);
+    if pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.btrim(replace(restored,E'\r\n',E'\n'),E' \n\t'),'UTF8')),'hex')
+      is distinct from '15e2c444370c50c146a4e896ad0439b7a52b4868217b53123ccc58ff28bb1390' then
+      raise exception 'fund_setup_shared_nonce_label_outside_cut_changed' using errcode='55000';end if;
+  end if;
+  if next_body is distinct from original then
+    definition:=pg_catalog.pg_get_functiondef(target);
+    if (length(definition)-length(replace(definition,original,'')))/length(original)<>1 then
+      raise exception 'fund_setup_shared_nonce_label_definition_not_unique' using errcode='55000';end if;
+    execute replace(definition,original,next_body);
+  end if;
+  select pg_catalog.to_jsonb(p) into after_row from pg_catalog.pg_proc p where p.oid=target;
+  if after_row-'prosrc' is distinct from before_row-'prosrc' or after_row->>'prosrc' is distinct from next_body
+    or (select pg_catalog.jsonb_agg(pg_catalog.to_jsonb(t) order by t.oid) from pg_catalog.pg_trigger t
+      where t.oid in (36716,36717,36718)) is distinct from expected_triggers then
+    raise exception 'fund_setup_shared_nonce_label_metadata_not_preserved' using errcode='55000';end if;
+end $setup_shared_nonce_label$;

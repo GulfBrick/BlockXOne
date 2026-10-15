@@ -136,3 +136,65 @@ begin
     or pg_catalog.current_setting('request.jwt.claim.sub',true) is distinct from before_sub then
     raise exception 'fund_setup_nonce_qualification_proof_claims_changed';end if;
 end $setup_prepare_nonce_qualification_proof$;
+
+-- Revision 3: qualify the declared sender through the explicit local block.
+-- Only extracted cross-family predicates and typed QUERY VALUES are executed.
+do $setup_shared_nonce_label_proof$
+declare target oid; metadata jsonb; source text; restored text; predicate text; query text;
+  fixture jsonb; steps text; recipients text; block_source text; trigger_pin jsonb;
+  ambiguous_denied boolean:=false; cases integer:=0;
+  before_claims text:=pg_catalog.current_setting('request.jwt.claims',true);
+  before_sub text:=pg_catalog.current_setting('request.jwt.claim.sub',true);
+  old_declare constant text:=$old_declare$declare sender text;n numeric;safe text;sn numeric;$old_declare$;
+  new_declare constant text:=$new_declare$<<fund_recipient_shared_nonce_guard>>
+declare sender text;n numeric;safe text;sn numeric;$new_declare$;
+  target_metadata constant jsonb:=$target_metadata${"oid":"36715","proacl":["postgres=X/postgres"],"probin":null,"procost":100,"prokind":"f","prolang":"13619","proname":"fund_recipient_shared_nonce_guard","prorows":0,"pronargs":0,"proowner":"16388","proconfig":["search_path=\"\""],"proretset":false,"prosecdef":true,"prorettype":"2279","prosqlbody":null,"prosupport":"-","proargmodes":null,"proargnames":null,"proargtypes":[],"proisstrict":false,"proparallel":"u","protrftypes":null,"provariadic":"0","provolatile":"v","proleakproof":false,"pronamespace":"24138","proallargtypes":null,"proargdefaults":null,"pronargdefaults":0}$target_metadata$::jsonb;
+  triggers constant jsonb:=$triggers$[{"oid":36716,"sha":"49df98fa465c025fc2284fe25630b64f7fc2765e5089ccdb30723df927c3fdba"},{"oid":36717,"sha":"987afc1f8ee41254af687714c151877bcccb8afed9df974869da80606b900ed4"},{"oid":36718,"sha":"ed28c19a57d372436066d1ccd612a00267ad66df792ef5bb98ef6c8b8c2c52b4"}]$triggers$::jsonb;
+  step_rows constant text:=$step_rows$[{"sender":"sender-a","nonce":"7"},{"sender":"sender-b","nonce":"9"}]$step_rows$;
+  recipient_rows constant text:=$recipient_rows$[{"sender_address":"sender-c","sender_nonce":"11"}]$recipient_rows$;
+begin
+  if current_user<>'postgres' or session_user<>'postgres' or auth.uid() is not null
+    or bx1_private.test_roleplay_environment() is not true
+    or not exists(select 1 from bx1_portal.entry_configuration where singleton and environment='TESTNET') then
+    raise exception 'fund_setup_shared_nonce_proof_exact_test_owner_required';end if;
+  target:=pg_catalog.to_regprocedure('bx1_portal.fund_recipient_shared_nonce_guard()');
+  select pg_catalog.to_jsonb(p),p.prosrc into metadata,source from pg_catalog.pg_proc p where p.oid=target;
+  if target is distinct from 36715::oid or metadata-'prosrc' is distinct from target_metadata
+    or (length(source)-length(replace(source,new_declare,'')))/length(new_declare)<>1 then
+    raise exception 'fund_setup_shared_nonce_proof_metadata_or_label_changed';end if;
+  restored:=replace(source,new_declare,old_declare);
+  if pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.btrim(replace(restored,E'\r\n',E'\n'),E' \n\t'),'UTF8')),'hex')
+    is distinct from '15e2c444370c50c146a4e896ad0439b7a52b4868217b53123ccc58ff28bb1390' then
+    raise exception 'fund_setup_shared_nonce_proof_outside_label_changed';end if;
+  if (select count(*) from pg_catalog.pg_trigger where tgfoid=target)<>3 then
+    raise exception 'fund_setup_shared_nonce_proof_trigger_count_changed';end if;
+  for trigger_pin in select value from pg_catalog.jsonb_array_elements(triggers) loop
+    if (select pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.to_jsonb(t)::text,'UTF8')),'hex')
+        from pg_catalog.pg_trigger t where t.oid=(trigger_pin->>'oid')::oid and t.tgfoid=target)
+      is distinct from trigger_pin->>'sha' then raise exception 'fund_setup_shared_nonce_proof_trigger_changed';end if;
+  end loop;
+  predicate:=substring(source from strpos(source,'  if TG_TABLE_NAME=''fund_setup_steps'' and exists(')+length('  if '));
+  predicate:=substring(predicate from 1 for strpos(predicate,' then raise exception ''fund_recipient_cross_family_nonce_reserved''')-1);
+  if predicate='' or strpos(predicate,'fund_setup_steps.sender=fund_recipient_shared_nonce_guard.sender')<=0 then
+    raise exception 'fund_setup_shared_nonce_proof_predicate_changed';end if;
+  for fixture in select value from pg_catalog.jsonb_array_elements($fixtures$[{"table":"fund_setup_steps","sender":"sender-c","nonce":"11","reserved":true},{"table":"fund_setup_steps","sender":"sender-c","nonce":"12","reserved":false},{"table":"fund_setup_steps","sender":"sender-a","nonce":"11","reserved":false},{"table":"fund_setup_steps","sender":"sender-b","nonce":"9","reserved":false},{"table":"fund_recipient_operations","sender":"sender-a","nonce":"7","reserved":true},{"table":"fund_recipient_operations","sender":"sender-a","nonce":"8","reserved":false},{"table":"fund_recipient_operations","sender":"sender-b","nonce":"7","reserved":false},{"table":"fund_recipient_operations","sender":"sender-c","nonce":"11","reserved":false},{"table":"fund_operations","sender":"sender-a","nonce":"7","reserved":false},{"table":"fund_recipient_operations","sender":null,"nonce":"7","reserved":false},{"table":"fund_recipient_operations","sender":"sender-a","nonce":null,"reserved":false},{"table":"fund_setup_steps","sender":"sender-c","nonce":"11","empty":true,"reserved":false}]$fixtures$::jsonb) loop
+    steps:='pg_catalog.jsonb_to_recordset('||pg_catalog.quote_literal(case when fixture->>'empty'='true' then '[]' else step_rows end)||'::jsonb) as fund_setup_steps(sender text,nonce numeric)';
+    recipients:='pg_catalog.jsonb_to_recordset('||pg_catalog.quote_literal(case when fixture->>'empty'='true' then '[]' else recipient_rows end)||'::jsonb) as fund_recipient_operations(sender_address text,sender_nonce numeric)';
+    query:=replace(replace(predicate,'bx1_portal.fund_setup_steps',steps),'bx1_portal.fund_recipient_operations',recipients);
+    block_source:='do $labelled_nonce$'||E'\n'||'#variable_conflict error'||E'\n'||'<<fund_recipient_shared_nonce_guard>> declare sender text:='||pg_catalog.quote_nullable(fixture->>'sender')||';n numeric:='||pg_catalog.quote_nullable(fixture->>'nonce')||'::numeric;TG_TABLE_NAME text:='||pg_catalog.quote_literal(fixture->>'table')||';reserved boolean;'||
+      'begin select ('||query||') into reserved;if reserved is distinct from '||(fixture->>'reserved')||' then raise exception ''shared_nonce_cross_family_predicate_failed'';end if;end fund_recipient_shared_nonce_guard; $labelled_nonce$;';
+    execute block_source;cases:=cases+1;
+  end loop;
+  if cases<>12 then raise exception 'fund_setup_shared_nonce_proof_cases_missing';end if;
+  -- Both SQL OR arms must bind even when this is the setup-step arm. Without
+  -- the explicit local label, the original qualified sender raises 42P01.
+  begin
+    execute 'do $unlabelled_nonce$'||E'\n'||'#variable_conflict error'||E'\n'||
+      'declare sender text:=''sender-a'';n numeric:=7;TG_TABLE_NAME text:=''fund_setup_steps'';reserved boolean;begin select ('||query||') into reserved;end $unlabelled_nonce$;';
+  exception when undefined_table then ambiguous_denied:=true;
+  end;
+  if not ambiguous_denied then raise exception 'fund_setup_shared_nonce_proof_old_scope_error_not_reproduced';end if;
+  if pg_catalog.current_setting('request.jwt.claims',true) is distinct from before_claims
+    or pg_catalog.current_setting('request.jwt.claim.sub',true) is distinct from before_sub then
+    raise exception 'fund_setup_shared_nonce_proof_claims_changed';end if;
+end $setup_shared_nonce_label_proof$;

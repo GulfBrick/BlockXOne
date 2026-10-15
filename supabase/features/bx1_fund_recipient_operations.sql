@@ -514,6 +514,7 @@ end $$;
 -- New triggers are the only additions to existing tables; no function body or
 -- existing row is changed. UNKNOWN leases are never silently released.
 create function bx1_portal.fund_recipient_shared_nonce_guard() returns trigger language plpgsql volatile security definer set search_path='' as $$
+<<fund_recipient_shared_nonce_guard>>
 declare sender text;n numeric;safe text;sn numeric;
 begin
  if TG_TABLE_NAME='fund_setup_steps' then sender:=NEW.sender;n:=NEW.nonce;
