@@ -133,7 +133,7 @@ export function OfferingFilePanel({ product, context, actorId }: {
     await stage({ file, kind, title: resumeIntent ? title : title.trim() }, formElement)
   }
 
-  async function useSavedDisclosure() {
+  async function prepareSavedDisclosure() {
     if (!canStage || busy || resumeIntent || files?.some(item => item.kind === kind)) return
     const expectedGeneration = generation.current
     setBusy(true); setMessage('')
@@ -255,7 +255,7 @@ export function OfferingFilePanel({ product, context, actorId }: {
       {canStage ? <form className={styles.form} onSubmit={event => void submit(event)}><fieldset className={styles.fieldset} disabled={busy}>
         <Field label="Document category"><select disabled={resumeIntent !== null} value={kind} onChange={event => { setKind(event.target.value as typeof kind); setFile(null); setTitle(''); setMessage('') }}><option value="MEMORANDUM">Offering memorandum</option><option value="RISKS">Risk disclosures</option><option value="SUBSCRIPTION_TERMS">Subscription agreement</option></select></Field>
         <Field label="File title"><input disabled={resumeIntent !== null} required minLength={1} maxLength={160} value={title} onChange={event => setTitle(event.target.value)} /></Field>
-        <button type="button" className={styles.buttonSecondary} disabled={resumeIntent !== null || files?.some(item => item.kind === kind)} onClick={() => void useSavedDisclosure()}>Create PDF from saved disclosure</button>
+        <button type="button" className={styles.buttonSecondary} disabled={resumeIntent !== null || files?.some(item => item.kind === kind)} onClick={() => void prepareSavedDisclosure()}>Create PDF from saved disclosure</button>
         {file ? <p role="status">Ready to stage: {file.name}. No upload has been sent yet.</p> : null}
         <Field label="Private PDF, maximum 4 MiB" hint="Upload an original PDF, or create one from the saved disclosure above."><input key={kind} type="file" required={!file} accept="application/pdf,.pdf" onChange={event => setFile(event.target.files?.[0] ?? null)} /></Field>
         {files?.some(item => item.kind === kind) ? <p className={styles.muted}>This category already has an immutable intent. Resume only the exact original bytes, or resolve it and use a permitted fresh same-terms revision; never overwrite its bytes.</p> : null}

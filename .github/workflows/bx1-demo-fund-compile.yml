@@ -6,7 +6,7 @@ on:
       mode:
         description: Cloud acceptance, empty-form browser proof, or focused UI and password-recovery checks
         type: choice
-        options: [acceptance, registration-browser-proof, fund-dashboard-focused, theme-focused, auth-recovery-focused, connected-session-focused, document-read-recovery-focused, fund-signer-entry-focused, connected-fund-providers-focused]
+        options: [acceptance, registration-browser-proof, fund-dashboard-focused, theme-focused, auth-recovery-focused, connected-session-focused, document-read-recovery-focused, fund-signer-entry-focused, connected-fund-providers-focused, official-scanner-focused]
         default: acceptance
       registration_origin_expectation:
         description: Expected browser-generated Origin on the current hosted TEST document
@@ -174,7 +174,7 @@ permissions:
 jobs:
   document-scanner-engine:
     name: Real scanner engine and bounded producer
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.mode == 'acceptance' || inputs.mode == 'connected-fund-providers-focused' }}
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.mode == 'acceptance' || inputs.mode == 'connected-fund-providers-focused' || inputs.mode == 'official-scanner-focused' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -214,7 +214,7 @@ jobs:
           BX1_SCANNER_PACKAGE_SHA256: d3ee9e401974855a1edc1761b1425417d126de618d5f0c91cd51209f69f6fcc2
         run: node apps/web/scripts/document-scanner-engine-proof.mjs
       - name: Verify current official signature set without accessing any private queue
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'connected-fund-providers-focused' }}
+        if: ${{ github.event_name == 'workflow_dispatch' && (inputs.mode == 'connected-fund-providers-focused' || inputs.mode == 'official-scanner-focused') }}
         shell: bash
         env:
           BX1_SCANNER_OFFICIAL_CLOUD_PROOF: github-clamav-official-1.4.6

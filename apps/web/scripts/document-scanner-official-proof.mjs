@@ -17,33 +17,46 @@ const STAGES = new Set(['ENVIRONMENT', 'UPDATER_BINARY', 'PRIVATE_WORKSPACE', 'U
 const PUBLIC_CODES = new Set(['ENOENT', 'EACCES', 'EPERM', 'ENOSPC', 'ASSERTION_FAILED', 'OFFICIAL_ENGINE_PROOF_FAILED',
   'UPDATER_TIMEOUT', 'UPDATER_OUTPUT_LIMIT', 'UPDATER_SPAWN_FAILED', 'UPDATER_CONFIG_REJECTED',
   'UPDATER_DEPENDENCY_MISSING', 'UPDATER_MIRROR_FORBIDDEN', 'UPDATER_RATE_LIMITED', 'UPDATER_DNS_UNAVAILABLE',
-  'UPDATER_TLS_FAILED', 'UPDATER_EXIT_FAILURE', 'INVALID_SNAPSHOT_PATH', 'INVALID_OFFICIAL_DATABASE',
+  'UPDATER_TLS_FAILED', 'UPDATER_INIT_FAILED', 'UPDATER_EXIT_FAILURE', 'INVALID_SNAPSHOT_PATH', 'INVALID_OFFICIAL_DATABASE',
   'UNSUPPORTED_DATABASE_FUNCTIONALITY', 'INVALID_DATABASE_BUILD_TIME', 'STALE_OFFICIAL_DATABASE',
   'SNAPSHOT_BUILD_FAILED', 'INVALID_SNAPSHOT_MANIFEST', 'SNAPSHOT_UNAVAILABLE', 'DATABASE_HASH_MISMATCH',
   'DATABASE_HEADER_MISMATCH', 'INCOMPLETE_SNAPSHOT_SET', 'SNAPSHOT_HASH_MISMATCH', 'CHANGED_SNAPSHOT_FILE',
   'ENGINE_UNAVAILABLE', 'ENGINE_HASH_MISMATCH', 'ENGINE_VERSION_MISMATCH', 'INCOMPLETE_SCAN', 'OFFICIAL_SNAPSHOT_REQUIRED'])
 
 class OfficialProofFailure extends Error {
-  constructor(stage, code, exitCode) {
+  constructor(stage, code, exitCode, diagnostic) {
     super('Official engine proof did not complete.')
     this.stage = STAGES.has(stage) ? stage : 'UNCLASSIFIED'
     this.code = PUBLIC_CODES.has(code) ? code : 'OFFICIAL_ENGINE_PROOF_FAILED'
     if (Number.isInteger(exitCode) && exitCode >= 0 && exitCode <= 255) this.exitCode = exitCode
+    const safeDiagnostic = sanitisePublicUpdaterDiagnostic(diagnostic)
+    if (safeDiagnostic) this.diagnostic = safeDiagnostic
   }
 }
 async function atStage(stage, operation) {
   try { return await operation() }
   catch (error) {
     if (error instanceof OfficialProofFailure) throw error
-    throw new OfficialProofFailure(stage, error?.code === 'ERR_ASSERTION' ? 'ASSERTION_FAILED' : error?.code, error?.exitCode)
+    throw new OfficialProofFailure(stage, error?.code === 'ERR_ASSERTION' ? 'ASSERTION_FAILED' : error?.code, error?.exitCode, error?.diagnostic)
   }
+}
+/** Public updater only: no inherited app credentials or document bytes exist. */
+export function sanitisePublicUpdaterDiagnostic(raw) {
+  if (typeof raw !== 'string') return ''
+  return raw.slice(0, 65_536)
+    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '')
+    .replace(/[^\x20-\x7e\n]/g, '')
+    .replace(/[A-Za-z]:[\\/][^\s"'<>]*/g, '[path]')
+    .replace(/\/[^\s"'<>]*/g, '[path]')
+    .trim().slice(0, 2048)
 }
 /** Only fixed public engine classifications are emitted, never exception text. */
 export function officialProofFailureReceipt(error) {
   return { ok: false, proof: 'REAL_CLAMAV_OFFICIAL_SNAPSHOT_ENGINE',
     stage: error instanceof OfficialProofFailure ? error.stage : 'UNCLASSIFIED',
     code: error instanceof OfficialProofFailure ? error.code : 'OFFICIAL_ENGINE_PROOF_FAILED',
-    ...(error instanceof OfficialProofFailure && error.exitCode !== undefined ? { updaterExitCode: error.exitCode } : {}) }
+    ...(error instanceof OfficialProofFailure && error.exitCode !== undefined ? { updaterExitCode: error.exitCode } : {}),
+    ...(error instanceof OfficialProofFailure && error.diagnostic ? { publicUpdaterDiagnostic: error.diagnostic } : {}) }
 }
 function updaterFailure(code, raw = '', exitCode) {
   if (code === 'UPDATER_EXIT_FAILURE') {
@@ -52,10 +65,12 @@ function updaterFailure(code, raw = '', exitCode) {
         : /429|too many requests|rate.limit/i.test(raw) ? 'UPDATER_RATE_LIMITED'
           : /403|forbidden|blocked by/i.test(raw) ? 'UPDATER_MIRROR_FORBIDDEN'
             : /could not resolve|can't resolve|dns.*(?:fail|error)/i.test(raw) ? 'UPDATER_DNS_UNAVAILABLE'
-              : /certificate|ssl.*(?:fail|error)|tls.*(?:fail|error)/i.test(raw) ? 'UPDATER_TLS_FAILED' : code
+              : /certificate|ssl.*(?:fail|error)|tls.*(?:fail|error)/i.test(raw) ? 'UPDATER_TLS_FAILED'
+                : exitCode === 2 ? 'UPDATER_INIT_FAILED' : code
   }
   const error = new Error('Official updater did not complete.')
   error.code = code; error.exitCode = exitCode
+  error.diagnostic = sanitisePublicUpdaterDiagnostic(raw)
   return error
 }
 
