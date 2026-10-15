@@ -822,6 +822,7 @@ jobs:
             'src/lib/portal/document-processing.test.ts',
             'src/lib/portal/document-processing-api.test.ts',
             'src/lib/portal/document-scan-legacy-overlay-schema.test.ts',
+            'src/lib/portal/offering-file-roleplay-context-schema.test.ts',
             'src/lib/portal/operating-context.test.ts',
             'src/components/portal/portal.test.tsx',
             'src/components/portal/funding-workflows.test.tsx',
