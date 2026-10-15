@@ -103,6 +103,8 @@ export type PortalInvestingRepresentativeMandate = {
   consent_receipt_id?: string | null; responded_at?: string | null; can_respond?: boolean;
 }
 export type PortalProductEligibility = {
+  /** Explicit TEST same-operator provenance; never a customer admission or provider result. */
+  roleplay?: unknown;
   id: string; investment_account_id: string; product_id: string; organisation_id: string;
   product_revision: number; offering_revision_id?: string | null; terms_hash: string; application_revision: number; revision: number;
   status: 'SUBMITTED' | 'CHANGES_REQUIRED' | 'APPROVED' | 'REJECTED' | 'REVOKED';

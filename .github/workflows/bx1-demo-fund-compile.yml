@@ -8,6 +8,11 @@ on:
         type: choice
         options: [acceptance, registration-browser-proof, fund-dashboard-focused, theme-focused, auth-recovery-focused, connected-session-focused, document-read-recovery-focused, fund-signer-entry-focused, connected-fund-providers-focused, official-scanner-focused, offering-signatures-api-focused, offering-scanner-operating, offering-scanner-source-focused]
         default: acceptance
+      scanner_scope:
+        description: Queue for one protected manual scanner invocation only
+        type: choice
+        options: [OFFERING, ADMISSION]
+        default: OFFERING
       registration_origin_expectation:
         description: Expected browser-generated Origin on the current hosted TEST document
         type: choice
@@ -232,7 +237,7 @@ jobs:
         run: node apps/web/scripts/document-scanner-official-proof.mjs
   offering-scanner-source-focused:
     name: Focused offering worker source acceptance
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'offering-scanner-source-focused' && github.repository == 'GulfBrick/BlockXOne' && github.ref == 'refs/heads/codex/stage2-sandbox-completion-20261011' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.mode == 'offering-scanner-source-focused' || inputs.mode == 'offering-signatures-api-focused') && github.repository == 'GulfBrick/BlockXOne' && github.ref == 'refs/heads/codex/stage2-sandbox-completion-20261011' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -262,6 +267,7 @@ jobs:
       group: bx1-test-offering-scanner
       cancel-in-progress: false
     env:
+      BX1_SCANNER_SCOPE: ${{ inputs.scanner_scope }}
       BX1_SCANNER_APPROVED_SOURCE_COMMIT: ${{ vars.BX1_SCANNER_APPROVED_SOURCE_COMMIT }}
       BX1_SCANNER_OPERATING_CLOUD_RUN: test-offering-scanner-v1
       BX1_SCANNER_PACKAGE_SHA256: d3ee9e401974855a1edc1761b1425417d126de618d5f0c91cd51209f69f6fcc2
@@ -804,6 +810,8 @@ jobs:
             'src/lib/portal/offering-signatures-api.test.ts',
             'src/components/portal/product-service-appointments.test.tsx',
             'src/lib/portal/offering-signature-roleplay-continuation-schema.test.ts',
+            'src/lib/portal/fund-roleplay-eligibility.test.tsx',
+            'src/components/portal/portal.test.tsx',
           ] : process.env.BX1_FOCUSED_UI_MODE === 'connected-fund-providers-focused' ? [
             'src/lib/portal/offering-disclosure-pdf.test.ts',
             'src/components/portal/offering-file-panel.test.tsx',

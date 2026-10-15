@@ -38,7 +38,7 @@ export function ProductAppointmentRequest({ product, snapshot, operatingContext,
   const isManager = operatingContext?.mode === 'ROLE' && operatingContext.role === 'OfferingManager'
     && snapshot.organisations.some(org => org.id === product.organisation_id && org.status === 'ACTIVE'
       && (org.authority_source === 'NATIVE_BINDING' || org.authority_source === 'TEST_ROLE_PLAY'
-        && roleplayManager && org.capabilities?.includes('request_product_service_appointment')
+        && roleplayManager
         || org.authority_source === 'TEST_EVALUATION'
         && evaluation?.product_organisation_id === product.organisation_id
         && evaluation.allowed_commands.includes('request_product_service_appointment'))

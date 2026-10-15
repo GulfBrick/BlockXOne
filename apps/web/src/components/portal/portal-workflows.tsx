@@ -10,6 +10,7 @@ import { ImmutableCommonEnvelopeSummary } from './product-common-envelope'
 import { portalContextKey, portalScopeHref, type PortalOperatingContext } from '@/lib/portal/operating-context'
 import { hasStage2CommandAccess, validatedStage2Access } from '@/lib/portal/stage2-access'
 import { isTestPasswordWorkflow } from '@/lib/portal/offering-access'
+import { validatedFundRoleplayEligibility } from '@/lib/portal/fund-roleplay-eligibility'
 import { CommandFeedback, usePortalCommand, usePortalCommandAllowed } from './portal-client'
 import { ApplicationDetailsSummary, ApplicationDocumentHistory, PrivateDocument } from './onboarding-form'
 import { ProviderEvidenceReview } from './kyc-verification'
@@ -718,20 +719,23 @@ function IndividualProductEligibilityReview({ eligibility, product, snapshot, on
   const currentOffering = Boolean(product && product.id === eligibility.product_id && product.organisation_id === eligibility.organisation_id && isOfferingSubscribable(product) && product.offering_package?.id === eligibility.offering_revision_id && product.revision === eligibility.product_revision && product.terms_hash === eligibility.terms_hash)
   const ownCase = !eligibility.holder_user_id || eligibility.holder_user_id === snapshot.actor.id
   const creatorConflict = product?.created_by === snapshot.actor.id
-  const permitted = eligibility.can_decide === true && snapshot.actor.can_review && eligibility.status === 'SUBMITTED' && !ownCase && !creatorConflict && scopedOffering
+  const roleplay = validatedFundRoleplayEligibility(eligibility, snapshot)
+  const sameOperatorReview = roleplay?.review_allowed === true
+  const permitted = eligibility.can_decide === true && snapshot.actor.can_review && eligibility.status === 'SUBMITTED' && ((!ownCase && !creatorConflict) || sameOperatorReview) && scopedOffering
   const canApprove = eligibility.can_approve === true && permitted && currentAdmission && currentOffering
   const [decision, setDecision] = useState(canApprove ? 'APPROVED' : 'CHANGES_REQUIRED')
   const [notes, setNotes] = useState('')
   const [revokeReason, setRevokeReason] = useState('')
   const command = usePortalCommand(onSaved)
   const allChecked = Object.values(checks).every(Boolean)
-  const canRevoke = eligibility.can_revoke === true && eligibility.status === 'APPROVED' && snapshot.actor.can_review && !ownCase && !creatorConflict && scopedOffering
+  const canRevoke = eligibility.can_revoke === true && eligibility.status === 'APPROVED' && snapshot.actor.can_review && ((!ownCase && !creatorConflict) || roleplay?.revoke_allowed === true) && scopedOffering
   return <div className={styles.wideGrid}><div className={styles.stack}>
     <Notice title="Manual test review only">This is a product-specific decision for a fictional test offering. Provider results do not grant investor eligibility or an operating role.</Notice>
+    {roleplay ? <Notice title="TEST role-play: same operator">This case records the investor and appointed reviewer as one operator under a product-specific TEST policy. Independent human review is not proved. Current customer admission, private evidence and offering checks still apply. Policy expiry: {dateLabel(roleplay.expires_at)}.</Notice> : null}
     <Panel title="Product eligibility case" action={<StatusBadge status={eligibility.status} />}><DetailList rows={[{ label: 'Case reference', value: <span className={styles.mono}>{eligibility.id}</span> }, { label: 'Investment account', value: <span className={styles.mono}>{eligibility.investment_account_id}</span> }, { label: 'Case revision', value: eligibility.revision }, { label: 'Investor admission revision', value: eligibility.application_revision }, { label: 'Offering package reference', value: <span className={styles.mono}>{eligibility.offering_revision_id ?? 'Legacy case; no package binding'}</span> }, { label: 'Product workflow revision', value: eligibility.product_revision }, { label: 'Offering terms fingerprint', value: <span className={styles.mono}>{eligibility.terms_hash}</span> }, { label: 'Submitted', value: dateLabel(eligibility.submitted_at) }]} /><h3 className={styles.sectionGap}>Investor statement</h3><p className={styles.copy}>{eligibility.investor_statement}</p></Panel>
     {application && !isWealthManagerDetailsV2(application.details) ? <><Panel title="Approved investor admission evidence"><DetailList rows={[{ label: 'Application reference', value: application.id }, { label: 'Status', value: <StatusBadge status={application.status} /> }, { label: 'Approval expiry', value: dateLabel(application.approved_until) }]} /><div className={styles.sectionGap}><ApplicationDetailsSummary persona="INVESTOR" details={application.details} /></div></Panel><Panel title="Private supporting evidence" description="Each download rechecks your current review authority.">{application.details.documents?.length ? application.details.documents.map(document => <PrivateDocument key={document.id} document={document} />) : <p className={styles.muted}>No evidence attached.</p>}</Panel></> : <Notice title="Investor admission evidence unavailable" tone="warning">Source documents are outside this review scope. Approval is unavailable; request information or reject with a recorded reason.</Notice>}
     {product ? <><ProductFacts product={product} /><OfferingDocuments product={product} /></> : <Notice title="Offering record unavailable" tone="warning">Refresh the review queue before making a decision.</Notice>}
-  </div><Panel title="Independent eligibility decision" description="The backend rechecks case revision, account holder, appointed scope and published terms.">
+  </div><Panel title={roleplay ? 'TEST role-play eligibility decision' : 'Independent eligibility decision'} description="The backend rechecks case revision, account holder, appointed scope and published terms.">
     <CommandFeedback command={command} />
     {permitted && !canApprove ? <Notice title="Approval unavailable for this case" tone="warning">The source admission evidence or published terms are not current in this review scope. Request updated information or reject with a reason.</Notice> : null}
     {permitted ? <form className={styles.form} onSubmit={event => { event.preventDefault(); if (decision !== 'APPROVED' || canApprove && allChecked) void command.submit('review_product_eligibility', { eligibility_case_id: eligibility.id, expected_revision: eligibility.revision, decision, notes, checks }) }}>

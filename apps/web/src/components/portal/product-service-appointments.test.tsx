@@ -54,7 +54,7 @@ function roleplaySnapshot(): PortalSnapshot {
     products: [product({ allowed_actions: ['request_product_service_appointment'] })],
     organisations: [{ id: productOrganisation, name: 'Fictional Product Organisation', status: 'ACTIVE',
       roles: ['OfferingManager'], native_organisation_id: reviewOrganisation, authority_source: 'TEST_ROLE_PLAY',
-      capabilities: ['request_product_service_appointment'] }],
+      capabilities: [] }],
     offering_access: { version: 1, environment: 'TESTNET', actor_id: person, operating_context: managerContext as {
       mode: 'ROLE'; organisationId: string; role: 'OfferingManager' }, session_mode: 'STANDARD',
       allowed_commands: ['request_product_service_appointment'] },
@@ -83,7 +83,7 @@ describe('connected product service appointment surfaces', () => {
       { ...value, offering_access: { ...access, allowed_commands: [] } },
       { ...value, offering_access: { ...access, environment: 'MAINNET' } } as unknown as PortalSnapshot,
       { ...value, operating_context: { ...managerContext, organisationId: productId } },
-      { ...value, organisations: value.organisations.map(org => ({ ...org, capabilities: [] })) },
+      { ...value, organisations: value.organisations.map(org => ({ ...org, status: 'SUSPENDED' })) },
       { ...value, organisations: value.organisations.map(org => ({ ...org, native_organisation_id: productId })) },
     ]
     for (const denied of cases) {
