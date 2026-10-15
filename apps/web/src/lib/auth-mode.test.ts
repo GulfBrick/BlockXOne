@@ -1,3 +1,5 @@
+import { readdirSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { isSupabaseWebPathAllowed, SUPABASE_ALLOWED_PATHS } from './auth-mode'
 import { isProductionWebPathBlocked } from './release-policy'
@@ -5,6 +7,66 @@ import { isProductionWebPathBlocked } from './release-policy'
 const service = '/api/portal/documents/processing'
 const blocked = (path: string, server = 'supabase', browser = 'supabase') =>
   isProductionWebPathBlocked(path, 'production', 'production', 'production', server, browser)
+
+describe('complete exact native fund route inventory', () => {
+  const paths = [
+    '/api/portal/fund-lifecycle/admission', '/api/portal/fund-lifecycle/approval', '/api/portal/fund-lifecycle/execute',
+    '/api/portal/fund-lifecycle/keys/bind', '/api/portal/fund-lifecycle/keys/read',
+    '/api/portal/fund-lifecycle/payment', '/api/portal/fund-lifecycle/payment/receipt',
+    '/api/portal/fund-lifecycle/payment/reference', '/api/portal/fund-lifecycle/payment/submit',
+    '/api/portal/fund-lifecycle/read',
+    '/api/portal/fund-lifecycle/recipient/claim', '/api/portal/fund-lifecycle/recipient/claim-preview',
+    '/api/portal/fund-lifecycle/recipient/claim-signature', '/api/portal/fund-lifecycle/recipient/command',
+    '/api/portal/fund-lifecycle/recipient/find', '/api/portal/fund-lifecycle/recipient/prepare',
+    '/api/portal/fund-lifecycle/recipient/read', '/api/portal/fund-lifecycle/recipient/signature', '/api/portal/fund-lifecycle/recipient/verify',
+    '/api/portal/fund-lifecycle/setup/command', '/api/portal/fund-lifecycle/setup/prepare',
+    '/api/portal/fund-lifecycle/setup/read', '/api/portal/fund-lifecycle/setup/verify',
+    '/api/portal/fund-lifecycle/signature', '/api/portal/fund-lifecycle/transaction', '/api/portal/fund-lifecycle/verify',
+  ] as const
+
+  it('matches all 26 existing route handlers without admitting a directory or wildcard', () => {
+    const directory = resolve(process.cwd(), 'src/app/api/portal/fund-lifecycle')
+    function routes(relative = ''): string[] {
+      return readdirSync(resolve(directory, relative), { withFileTypes: true }).flatMap(entry => {
+        if (entry.isDirectory()) return routes(relative ? `${relative}/${entry.name}` : entry.name)
+        return entry.isFile() && entry.name === 'route.ts' ? [`/api/portal/fund-lifecycle/${relative}`] : []
+      })
+    }
+    expect(paths).toHaveLength(26)
+    expect(routes().sort()).toEqual([...paths].sort())
+    expect(SUPABASE_ALLOWED_PATHS.filter(path => path.startsWith('/api/portal/fund-lifecycle'))).toEqual([...paths])
+  })
+
+  it.each(paths)('admits exact %s only through the existing paired Supabase boundary', path => {
+    expect(SUPABASE_ALLOWED_PATHS.filter(value => value === path)).toHaveLength(1)
+    expect(isSupabaseWebPathAllowed(path)).toBe(true)
+    expect(blocked(path)).toBe(false)
+    for (const [server, browser] of [['supabase', ''], ['', 'supabase'], ['Supabase', 'Supabase'],
+      ['supabase', 'legacy'], ['legacy', 'supabase'], ['invalid', 'supabase'], ['legacy', 'legacy'], ['', '']]) {
+      expect(blocked(path, server, browser)).toBe(true)
+    }
+    // Reachability is not setup, payment, signing, issuance or holding authority.
+    // Those remain in the unchanged authenticated route and native writer.
+  })
+
+  it.each(paths.flatMap(path => [
+    `${path}/`, `${path}/extra`, `${path}-admin`, `${path}.json`, path.toUpperCase(),
+    path.replace('/portal/', '/Portal/'), path.replace('/fund-lifecycle/', '/%66und-lifecycle/'),
+    path.replace('/portal/', '/portal//'), `/${path}`, path.replaceAll('/', '\\'),
+    `${path}/../unknown`, `${path}/%2e%2e/unknown`, `${path}/*`,
+  ]))('denies raw fund lookalike or nested path %s', path => {
+    expect(isSupabaseWebPathAllowed(path)).toBe(false)
+    expect(blocked(path)).toBe(true)
+  })
+
+  it.each(['/api/portal/fund-lifecycle', '/api/portal/fund-lifecycle/', '/api/portal/fund-lifecycle/unknown',
+    '/api/portal/fund-lifecycle/setup', '/api/portal/fund-lifecycle/keys', '/api/portal/fund-lifecycle/recipient',
+    '/api/portal/fund-lifecycle/recipient/unknown', '/api/portal/fund-lifecycle/setup/deploy',
+  ])('does not admit an unimplemented fund directory or action: %s', path => {
+    expect(isSupabaseWebPathAllowed(path)).toBe(false)
+    expect(blocked(path)).toBe(true)
+  })
+})
 
 describe('exact password-reset request routing', () => {
   it.each(['/forgot-password', '/auth/recover'])('admits only the paired Supabase route %s', path => {

@@ -40,6 +40,20 @@ export const SUPABASE_ALLOWED_PATHS = [
   '/api/portal/offering-documents', '/api/portal/offering-documents/processing',
   '/api/portal/offering-signatures', '/api/portal/offering-signatures/processing', '/api/portal/offering-signatures/provider-status',
   '/api/portal/application-drafts',
+  // Exact native fund routes only. Their existing handlers still enforce live
+  // identity, environment, scope, MFA, evidence and command authority.
+  '/api/portal/fund-lifecycle/admission', '/api/portal/fund-lifecycle/approval', '/api/portal/fund-lifecycle/execute',
+  '/api/portal/fund-lifecycle/keys/bind', '/api/portal/fund-lifecycle/keys/read',
+  '/api/portal/fund-lifecycle/payment', '/api/portal/fund-lifecycle/payment/receipt',
+  '/api/portal/fund-lifecycle/payment/reference', '/api/portal/fund-lifecycle/payment/submit',
+  '/api/portal/fund-lifecycle/read',
+  '/api/portal/fund-lifecycle/recipient/claim', '/api/portal/fund-lifecycle/recipient/claim-preview',
+  '/api/portal/fund-lifecycle/recipient/claim-signature', '/api/portal/fund-lifecycle/recipient/command',
+  '/api/portal/fund-lifecycle/recipient/find', '/api/portal/fund-lifecycle/recipient/prepare',
+  '/api/portal/fund-lifecycle/recipient/read', '/api/portal/fund-lifecycle/recipient/signature', '/api/portal/fund-lifecycle/recipient/verify',
+  '/api/portal/fund-lifecycle/setup/command', '/api/portal/fund-lifecycle/setup/prepare',
+  '/api/portal/fund-lifecycle/setup/read', '/api/portal/fund-lifecycle/setup/verify',
+  '/api/portal/fund-lifecycle/signature', '/api/portal/fund-lifecycle/transaction', '/api/portal/fund-lifecycle/verify',
 ] as const
 
 export function isSupabaseWebPathAllowed(pathname: string): boolean {

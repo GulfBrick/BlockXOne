@@ -3,8 +3,104 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { middleware } from './middleware'
 import { updateSupabaseSession } from './lib/supabase/middleware'
+import { SUPABASE_ALLOWED_PATHS } from './lib/auth-mode'
 
 vi.mock('./lib/supabase/middleware', () => ({ updateSupabaseSession: vi.fn() }))
+
+describe('complete exact fund API middleware boundary', () => {
+  const paths = SUPABASE_ALLOWED_PATHS.filter(path => path.startsWith('/api/portal/fund-lifecycle/'))
+
+  beforeEach(() => {
+    vi.stubEnv('NODE_ENV', 'production')
+    vi.stubEnv('BLOCKXONE_RELEASE_MODE', '')
+    vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_RELEASE_MODE', '')
+    vi.stubEnv('BLOCKXONE_AUTH_MODE', 'supabase')
+    vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_AUTH_MODE', 'supabase')
+    vi.stubEnv('BLOCKXONE_APP_ORIGIN', 'https://testnet.bx1.co.za')
+    vi.stubEnv('SUPABASE_URL', 'https://fegnnnlseuejkrusbbkv.supabase.co')
+    vi.stubEnv('VERCEL_ENV', 'preview')
+    vi.mocked(updateSupabaseSession).mockReset()
+    vi.mocked(updateSupabaseSession).mockResolvedValue(NextResponse.next())
+  })
+  afterEach(() => vi.unstubAllEnvs())
+
+  it.each(paths)('passes POST %s to the existing session boundary without consuming its body or refresh cookies', async path => {
+    const refreshed = NextResponse.next()
+    refreshed.cookies.set('fixture-fund-refresh', 'nonsecret', { httpOnly: true, secure: true, sameSite: 'lax', path: '/' })
+    vi.mocked(updateSupabaseSession).mockResolvedValueOnce(refreshed)
+    const request = new NextRequest(`https://testnet.bx1.co.za${path}`, { method: 'POST',
+      headers: { host: 'testnet.bx1.co.za', origin: 'https://testnet.bx1.co.za', 'content-type': 'application/json' },
+      body: '{"fixture":"not-an-authorised-fund-command"}',
+    })
+    const response = await middleware(request)
+    expect(response).toBe(refreshed)
+    expect(response.status).toBe(200)
+    expect(response.headers.get('x-middleware-next')).toBe('1')
+    expect(response.headers.get('location')).toBeNull()
+    expect(response.cookies.get('fixture-fund-refresh')?.value).toBe('nonsecret')
+    expect(response.headers.get('cache-control')).toBe('private, no-store')
+    expect(response.headers.get('pragma')).toBe('no-cache')
+    expect(response.headers.get('cdn-cache-control')).toBe('no-store')
+    expect(response.headers.get('vercel-cdn-cache-control')).toBe('no-store')
+    expect(response.headers.get('referrer-policy')).toBe('no-referrer')
+    expect(response.headers.get('x-robots-tag')).toBe('noindex, nofollow, noarchive')
+    expect(updateSupabaseSession).toHaveBeenCalledExactlyOnceWith(request)
+    expect(request.bodyUsed).toBe(false)
+    // This only reaches the unchanged handler. It cannot create a session,
+    // satisfy MFA, choose an actor or authorise any database or chain action.
+  })
+
+  it.each(paths.flatMap(path => [`${path}/`, `${path}/extra`, `${path}-admin`, `${path}.json`,
+    path.toUpperCase(), path.replace('/fund-lifecycle/', '/%66und-lifecycle/'), `${path}/*`,
+  ]))('rejects URL-safe fund lookalike %s before session refresh', async path => {
+    const response = await middleware(new NextRequest(`https://testnet.bx1.co.za${path}`, { method: 'POST' }))
+    expect(response.status).toBe(404)
+    expect(response.headers.get('cache-control')).toBe('private, no-store')
+    expect(response.headers.get('referrer-policy')).toBe('no-referrer')
+    expect(response.headers.get('set-cookie')).toBeNull()
+    expect(updateSupabaseSession).not.toHaveBeenCalled()
+  })
+
+  it.each(['/api/portal/fund-lifecycle/unknown', '/api/portal/fund-lifecycle/setup/deploy',
+    '/api/portal/fund-lifecycle/recipient/unknown'])('denies unimplemented fund route %s before refresh', async path => {
+    const response = await middleware(new NextRequest(`https://testnet.bx1.co.za${path}`, { method: 'POST' }))
+    expect(response.status).toBe(404)
+    expect(updateSupabaseSession).not.toHaveBeenCalled()
+  })
+
+  it.each(paths)('preserves an unavailable session response instead of dispatching %s', async path => {
+    const denied = NextResponse.json({ error: 'unavailable' }, { status: 503 })
+    denied.cookies.set('fixture-fund-expired', '', { maxAge: 0, httpOnly: true, secure: true, sameSite: 'lax', path: '/' })
+    vi.mocked(updateSupabaseSession).mockResolvedValueOnce(denied)
+    const request = new NextRequest(`https://testnet.bx1.co.za${path}`, { method: 'POST' })
+    const response = await middleware(request)
+    expect(response).toBe(denied)
+    expect(response.status).toBe(503)
+    expect(response.headers.get('x-middleware-next')).toBeNull()
+    expect(response.cookies.get('fixture-fund-expired')?.maxAge).toBe(0)
+    expect(response.headers.get('cache-control')).toBe('private, no-store')
+    expect(updateSupabaseSession).toHaveBeenCalledExactlyOnceWith(request)
+  })
+
+  it.each(paths)('fails closed when %s cannot refresh its session', async path => {
+    vi.mocked(updateSupabaseSession).mockRejectedValueOnce(new Error('synthetic fund refresh failure'))
+    const response = await middleware(new NextRequest(`https://testnet.bx1.co.za${path}`, { method: 'POST' }))
+    expect(response.status).toBe(503)
+    expect(response.headers.get('cache-control')).toBe('private, no-store')
+    expect(response.headers.get('set-cookie')).toBeNull()
+    expect(updateSupabaseSession).toHaveBeenCalledOnce()
+  })
+
+  it.each(paths.flatMap(path => [['supabase', ''], ['', 'supabase'], ['', '']]
+    .map(([server, browser]) => [path, server, browser])))('keeps %s denied under unpaired or legacy auth %s/%s', async (path, server, browser) => {
+    vi.stubEnv('BLOCKXONE_AUTH_MODE', server)
+    vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_AUTH_MODE', browser)
+    const response = await middleware(new NextRequest(`https://testnet.bx1.co.za${path}`, { method: 'POST' }))
+    expect(response.status).toBe(server === '' && browser === '' ? 404 : 503)
+    expect(response.headers.get('set-cookie')).toBeNull()
+    expect(updateSupabaseSession).not.toHaveBeenCalled()
+  })
+})
 
 describe('exact protected provider-readiness middleware boundary', () => {
   const paths = ['/api/portal/kyc/readiness', '/api/portal/offering-signatures/provider-status'] as const
