@@ -245,7 +245,7 @@ set local role bx1_wallet_owner;
 create function bx1_private.lock_roleplay_wallet_proof(actor uuid,wallet uuid,proof uuid) returns void
 language plpgsql volatile security definer set search_path='' as $$
 begin
-  if actor is distinct from auth.uid() then raise exception 'roleplay_wallet_lock_actor_denied' using errcode='42501';end if;
+  if actor is distinct from coalesce(nullif(pg_catalog.current_setting('request.jwt.claim.sub',true),''),(nullif(pg_catalog.current_setting('request.jwt.claims',true),'')::jsonb->>'sub'))::uuid then raise exception 'roleplay_wallet_lock_actor_denied' using errcode='42501';end if;
   perform id from public.bx1_wallets where id=wallet and user_id=actor and last_proof_id=proof for share;
   if not found then raise exception 'roleplay_wallet_lock_current_proof_required' using errcode='42501';end if;
   perform id from bx1_private.wallet_challenges where id=proof and user_id=actor and used_at is not null for share;
