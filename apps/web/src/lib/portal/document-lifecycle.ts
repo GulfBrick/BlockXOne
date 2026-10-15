@@ -148,6 +148,18 @@ const scannerMessage = z.object({
   observed_at: z.string().datetime({ offset: true }),
 }).strict()
 
+export const recordedDocumentResultBindingSchema = z.object({
+  document_id: z.string().uuid().refine(value => value !== '00000000-0000-0000-0000-000000000000'),
+  attempt_id: z.string().uuid().refine(value => value !== '00000000-0000-0000-0000-000000000000'),
+  authority_epoch: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+}).strict()
+export type RecordedDocumentResultBinding = z.infer<typeof recordedDocumentResultBindingSchema>
+const recordedDocumentResultSchema = scannerMessage.extend({
+  attempt_id: z.string().uuid(), authority_epoch: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  worker_id: z.string().regex(/^[a-z][a-z0-9_-]{2,119}$/), scanner_id: z.string().regex(/^[a-z][a-z0-9_-]{2,119}$/),
+  scan_event_id: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+}).strict()
+
 export function verifyScannerMessage(rawBody: Uint8Array, timestamp: string | null,
   signature: string | null, config: ReturnType<typeof documentScannerConfig>, now = Date.now()) {
   if (rawBody.length > 4096 || !timestamp || !/^[0-9]{10}$/.test(timestamp)
@@ -174,6 +186,37 @@ export async function acceptScannerMessage(rawBody: Uint8Array, timestamp: strin
   signature: string | null): Promise<{ id: string; state: string }> {
   const config = documentScannerConfig()
   const message = verifyScannerMessage(rawBody, timestamp, signature, config)
+  return continueAcceptedScannerResult(message, config)
+}
+
+/** Resume only an immutable DB-accepted result, never a caller-selected verdict. */
+export async function recoverRecordedDocumentResult(binding: RecordedDocumentResultBinding, workerId: string): Promise<{ id: string; state: string }> {
+  if (platformRelease(process.env)?.environment !== 'TESTNET'
+    || process.env.SUPABASE_URL !== 'https://fegnnnlseuejkrusbbkv.supabase.co'
+    || process.env.BLOCKXONE_APP_ORIGIN !== 'https://testnet.bx1.co.za'
+    || !recordedDocumentResultBindingSchema.safeParse(binding).success
+    || !/^[a-z][a-z0-9_-]{2,119}$/.test(workerId)) throw new DocumentLifecycleError('Recorded document recovery is unavailable.', 403)
+  const config = documentScannerConfig()
+  const read = async () => {
+    const result = recordedDocumentResultSchema.safeParse(await scannerQuery<unknown>(
+      'select bx1_private.read_document_processing_recorded_result($1,$2,$3,$4,$5) as result',
+      [binding.document_id, binding.attempt_id, binding.authority_epoch, workerId, config.scannerId]))
+    if (!result.success || result.data.document_id !== binding.document_id || result.data.attempt_id !== binding.attempt_id
+      || result.data.authority_epoch !== binding.authority_epoch || result.data.worker_id !== workerId
+      || result.data.scanner_id !== config.scannerId || result.data.reference !== `bx1-scan:${binding.attempt_id}`) {
+      throw new DocumentLifecycleError('The recorded scanner result could not be verified.', 409)
+    }
+    return result.data
+  }
+  const saved = await read()
+  const recheck = async () => {
+    if (JSON.stringify(await read()) !== JSON.stringify(saved)) throw new DocumentLifecycleError('The recorded scanner result is no longer current.', 409)
+  }
+  return continueAcceptedScannerResult(saved, config, recheck)
+}
+
+async function continueAcceptedScannerResult(message: z.infer<typeof scannerMessage>, config: ReturnType<typeof documentScannerConfig>,
+  recheck?: () => Promise<void>): Promise<{ id: string; state: string }> {
   const item = await scannerQuery<QuarantineRecord>(
     'select bx1_private.read_quarantined_document($1) as result', [message.document_id],
   )
@@ -186,6 +229,7 @@ export async function acceptScannerMessage(rawBody: Uint8Array, timestamp: strin
   // A signed payload is evidence from the configured adapter, not proof that
   // its referenced object was unchanged. Rehash the stored bytes ourselves.
   const bytes = await verifiedDownload(client, quarantineBucket, item.storage_path, item)
+  if (recheck) await recheck()
   const recorded = await scannerQuery<QuarantineRecord>(
     'select bx1_private.record_document_scan($1,$2,$3,$4,$5,$6) as result',
     [item.id, item.sha256, config.scannerId, message.reference, message.verdict, message.observed_at],
@@ -204,6 +248,7 @@ export async function acceptScannerMessage(rawBody: Uint8Array, timestamp: strin
   if (uploaded.error && !/already exists|duplicate/i.test(uploaded.error.message)) {
     throw new DocumentLifecycleError('The scanned document could not be promoted.')
   }
+  if (recheck) await recheck()
   const promoted = await scannerQuery<{ id: string; actor_id: string; storage_path: string;
     sha256: string; validation_state: string }>(
       'select bx1_private.promote_scanned_document($1) as result', [item.id],

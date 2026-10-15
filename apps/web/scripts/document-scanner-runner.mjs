@@ -29,17 +29,22 @@ const reject = code => { throw new RunnerError(code) }
 const exact = (value, keys) => value !== null && typeof value === 'object' && !Array.isArray(value)
   && Object.keys(value).sort().join('|') === [...keys].sort().join('|')
 
-export function runnerConfig(env = process.env) {
+export function runnerRecoveryConfig(env = process.env) {
   const encoded = env.BLOCKXONE_DOCUMENT_SCANNER_HMAC_KEY ?? ''
   const key = /^[A-Za-z0-9_-]{43,86}$/.test(encoded) ? Buffer.from(encoded, 'base64url') : Buffer.alloc(0)
   if (env.BLOCKXONE_ENVIRONMENT !== 'TESTNET' || env.BLOCKXONE_APP_ORIGIN !== TEST_ORIGIN
     || !NAME.test(env.BLOCKXONE_DOCUMENT_PROCESSING_WORKER_ID ?? '')
     || !NAME.test(env.BLOCKXONE_DOCUMENT_SCANNER_ID ?? '') || key.length < 32 || key.length > 64
-    || key.toString('base64url') !== encoded
-    || !path.isAbsolute(env.BX1_SCANNER_DATABASE_PATH ?? '')
-    || !HASH.test(env.BX1_SCANNER_DATABASE_SHA256 ?? '')) reject('INVALID_CONFIGURATION')
+    || key.toString('base64url') !== encoded) reject('INVALID_CONFIGURATION')
   return Object.freeze({ origin: TEST_ORIGIN, workerId: env.BLOCKXONE_DOCUMENT_PROCESSING_WORKER_ID,
-    scannerId: env.BLOCKXONE_DOCUMENT_SCANNER_ID, signingKey: key,
+    scannerId: env.BLOCKXONE_DOCUMENT_SCANNER_ID, signingKey: key })
+}
+
+export function runnerConfig(env = process.env) {
+  const transport = runnerRecoveryConfig(env)
+  if (!path.isAbsolute(env.BX1_SCANNER_DATABASE_PATH ?? '')
+    || !HASH.test(env.BX1_SCANNER_DATABASE_SHA256 ?? '')) { transport.signingKey.fill(0); reject('INVALID_CONFIGURATION') }
+  return Object.freeze({ ...transport,
     databasePath: env.BX1_SCANNER_DATABASE_PATH, databaseSha256: env.BX1_SCANNER_DATABASE_SHA256 })
 }
 
@@ -311,6 +316,24 @@ export async function recoverResult(recovery, config, { fetchImpl = fetch, clock
     } catch { /* Even a bad reply can follow a committed result. Never FAIL/rescan. */ }
   }
   return { outcome: 'RESULT_RECOVERY_REQUIRED', recovery }
+}
+
+/** Transport retries only the server's original immutable event continuation. */
+export async function recoverRecordedResult(binding, config, { fetchImpl = fetch, clock = Date.now } = {}) {
+  if (config.origin !== TEST_ORIGIN || !exact(binding, ['document_id', 'attempt_id', 'authority_epoch'])
+    || !ID.test(binding.document_id ?? '') || !ID.test(binding.attempt_id ?? '')
+    || binding.document_id === '00000000-0000-0000-0000-000000000000' || binding.attempt_id === '00000000-0000-0000-0000-000000000000'
+    || !Number.isSafeInteger(binding.authority_epoch) || binding.authority_epoch < 1) reject('INVALID_RECOVERY')
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const request = signedRequest({ command: 'RECOVER_RESULT', ...binding }, config, 'processing', clock())
+      const reply = await sendSigned(config, request, 'processing', { fetchImpl })
+      if (!exact(reply, ['id', 'state']) || reply.id !== binding.document_id
+        || !['SCANNED_CLEAN', 'REJECTED'].includes(reply.state)) reject('INVALID_RESPONSE')
+      return { outcome: 'RECORDED_RESULT_RECOVERED', state: reply.state }
+    } catch { /* The same accepted event remains recoverable; no CLAIM or FAIL. */ }
+  }
+  return { outcome: 'RECORDED_RESULT_RECOVERY_REQUIRED' }
 }
 
 export async function runOnce(config, { fetchImpl = fetch, engine = scanWithClamav, clock = Date.now, requestId = randomUUID() } = {}) {

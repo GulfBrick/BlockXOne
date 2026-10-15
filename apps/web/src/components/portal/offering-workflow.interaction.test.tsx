@@ -553,6 +553,30 @@ describe('existing product workspace next-step navigation', () => {
     expect(fetchCommand).not.toHaveBeenCalled()
   })
 
+  it('connects the genuine STANDARD TEST role-play manager to the existing fund tabs and DocuSign check without creating authority', async () => {
+    const item = product('FUND', { status: 'IN_REVIEW', offering_package: packageRecord(), allowed_actions: [] })
+    item.terms = prepareCommonEnvelopeUpgrade(item.terms as FundTermsV2, productOrganisation, issuerOrganisation, receiptId)
+    const value = snapshot('OfferingManager', [item])
+    delete value.stage2_access
+    value.offering_access!.session_mode = 'STANDARD'
+    value.offering_access!.allowed_commands = ['request_product_service_appointment']
+    value.organisations[0].authority_source = 'TEST_ROLE_PLAY'
+    value.organisations[0].capabilities = []
+    mount(withFundProgress(value), '/portal/products/detail', productId)
+    expect(screen.getByRole('navigation', { name: 'Product workspace sections' })).toBeTruthy()
+    expect(fetchOfferingReads).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Appointments' }))
+    expect(document.activeElement).toBe(screen.getByRole('region', { name: 'Appointments' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Documents & signing' }))
+    expect(document.activeElement).toBe(screen.getByRole('region', { name: 'Documents & signing' }))
+    expect(screen.getByRole('button', { name: 'Check DocuSign sandbox connection' })).toBeTruthy()
+    await screen.findByText('Signature authority unavailable')
+    expect(screen.queryByRole('button', { name: 'Get my DocuSign signing link' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Submit immutable offering package' })).toBeNull()
+    expect(screen.queryByRole('link', { name: 'Create a product' })).toBeNull()
+    expect(fetchCommand).not.toHaveBeenCalled()
+  })
+
   it.each(['FUND', 'REAL_ESTATE'] as const)('focuses the %s details handoff without losing an unsaved edit or enabling submission', kind => {
     mount(snapshot('OfferingManager', [product(kind)]), '/portal/products/detail', productId)
     const editedName = `Fictional unsaved ${kind} draft`

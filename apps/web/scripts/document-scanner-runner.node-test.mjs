@@ -4,7 +4,7 @@ import { EventEmitter } from 'node:events'
 import { PassThrough } from 'node:stream'
 import { test } from 'node:test'
 import { CLAMAV_EXECUTABLE, CLAMAV_EXECUTABLE_SHA256, CLAMAV_VERSION, RunnerError, TEST_ORIGIN, interpretClamavResult,
-  preflightOfficialScanner, recoverResult, runClamavProcess, runPinnedClamavProcess, runOnce, runnerConfig, sendSigned, signedRequest,
+  preflightOfficialScanner, recoverResult, recoverRecordedResult, runClamavProcess, runPinnedClamavProcess, runOnce, runnerConfig, runnerRecoveryConfig, sendSigned, signedRequest,
   validateManifest, verifyDocumentBytes } from './document-scanner-runner.mjs'
 import { recoverOfferingResult, runOfferingOnce, validateOfferingManifest } from './document-scanner-runner.mjs'
 import { FIXTURE_SNAPSHOT_COVERAGE, OFFICIAL_SNAPSHOT_COVERAGE } from './document-scanner-snapshot.mjs'
@@ -35,6 +35,41 @@ const engine = async value => ({ verdict: 'CLEAN', engineVersion: CLAMAV_VERSION
 const errorCode = expected => error => error instanceof RunnerError && error.code === expected
 const resultBody = verdict => ({ document_id: ids.document, sha256: hash(bytes), verdict,
   reference: `bx1-scan:${ids.attempt}`, observed_at: new Date(now).toISOString() })
+
+test('durable result recovery needs only current TEST transport and sends no verdict, claim or rescan', async () => {
+  const { BX1_SCANNER_DATABASE_PATH: _path, BX1_SCANNER_DATABASE_SHA256: _hash, ...transportEnv } = env
+  const transport = runnerRecoveryConfig(transportEnv)
+  const calls = []
+  const binding = { document_id: ids.document, attempt_id: ids.attempt, authority_epoch: 1 }
+  const result = await recoverRecordedResult(binding, transport, { clock, fetchImpl: async (url, init) => {
+    calls.push({ url, init, body: JSON.parse(init.body.toString()) })
+    return json({ id: ids.document, state: 'SCANNED_CLEAN' })
+  } })
+  assert.deepEqual(result, { outcome: 'RECORDED_RESULT_RECOVERED', state: 'SCANNED_CLEAN' })
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].url, `${TEST_ORIGIN}/api/portal/documents/processing`)
+  assert.equal(calls[0].init.method, 'POST')
+  assert.deepEqual(calls[0].body, { command: 'RECOVER_RESULT', ...binding })
+  assert.equal(calls[0].init.headers['x-bx1-scanner-signature'], signedRequest(calls[0].body, transport, 'processing', now).signature)
+  for (const value of [{ ...binding, verdict: 'CLEAN' }, { ...binding, authority_epoch: 0 }, { ...binding, attempt_id: 'bad' }]) {
+    await assert.rejects(() => recoverRecordedResult(value, transport, { clock }), errorCode('INVALID_RECOVERY'))
+  }
+  assert.throws(() => runnerRecoveryConfig({ ...transportEnv, BLOCKXONE_APP_ORIGIN: 'https://bx1.co.za' }), errorCode('INVALID_CONFIGURATION'))
+})
+
+test('uncertain recovery retries only the same immutable binding with fresh authentication then stops', async () => {
+  let attempts = 0
+  const binding = { document_id: ids.document, attempt_id: ids.attempt, authority_epoch: 1 }
+  const calls = []
+  const result = await recoverRecordedResult(binding, config, { clock: () => now + attempts * 1000, fetchImpl: async (_url, init) => {
+    attempts++; calls.push(init)
+    return json({ id: ids.actor, state: 'SCANNED_CLEAN' })
+  } })
+  assert.deepEqual(result, { outcome: 'RECORDED_RESULT_RECOVERY_REQUIRED' })
+  assert.equal(attempts, 3)
+  for (const call of calls) assert.deepEqual(JSON.parse(call.body.toString()), { command: 'RECOVER_RESULT', ...binding })
+  assert.equal(new Set(calls.map(call => call.headers['x-bx1-scanner-timestamp'])).size, 3)
+})
 function mockTransport({ job = manifest(), byteReply = () => binary(), callback, failReply } = {}) {
   const calls = []
   const fetchImpl = async (url, init) => {

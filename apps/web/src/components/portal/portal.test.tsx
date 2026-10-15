@@ -714,6 +714,68 @@ describe('operational landings and one subscription hand-off', () => {
     value.organisations = [operatorOrganisation()]
     expect(productManagementOrganisations(value, APPLICANT_CONTEXT)).toEqual([])
   })
+  function roleplayManagerSnapshot(): PortalSnapshot {
+    const value = snapshot(), context = operating('OfferingManager')
+    value.operating_context = context
+    value.offering_access = { version: 1, environment: 'TESTNET', actor_id: actor, operating_context: context,
+      session_mode: 'STANDARD', allowed_commands: ['request_product_service_appointment'] }
+    value.organisations = [{ ...operatorOrganisation(), authority_source: 'TEST_ROLE_PLAY', capabilities: [] }]
+    value.products = [product({ status: 'IN_REVIEW', created_by: actor, allowed_actions: [] })]
+    value.fund_lifecycle = fundSnapshot(context)
+    return value
+  }
+  it('keeps the saved STANDARD TEST manager fund in the existing product workspace, not a passive lifecycle fallback', () => {
+    const value = roleplayManagerSnapshot(), context = operating('OfferingManager')
+    expect(productManagementOrganisations(value, context, 'TESTNET')).toEqual(value.organisations)
+    expect(productManagementOrganisations(value)).toEqual([])
+    expect(productManagementOrganisations(value, context)).toEqual([])
+    const fetcher = vi.fn(); vi.stubGlobal('fetch', fetcher)
+    const html = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal/products/detail" id={productId}
+      operatingContext={context} release={{ environment: 'TESTNET', version: 'normal-fixture', source: 'normal-fixture' }} />)
+    expect(html).toContain('Product workspace sections')
+    for (const label of ['Product details', 'Review &amp; next step', 'Documents &amp; signing', 'Appointments', 'Blockchain setup']) expect(html).toContain(label)
+    expect(html).not.toContain('Create a product</a>')
+    expect(html).not.toContain('Edit product draft')
+    expect(html).not.toContain('Submit immutable offering package</button>')
+    expect(fetcher).not.toHaveBeenCalled()
+  })
+  it.each(['environment', 'marker', 'actor', 'context', 'session', 'native organisation', 'source', 'status', 'creator', 'package origin', 'terms', 'role'])(
+    'does not infer TEST manager product access from an invalid %s binding', failure => {
+      const value = roleplayManagerSnapshot()
+      let context = operating('OfferingManager')
+      if (failure === 'marker') delete value.offering_access
+      if (failure === 'actor') value.offering_access!.actor_id = other
+      if (failure === 'context') value.offering_access!.operating_context.organisationId = otherOrganisation
+      if (failure === 'session') value.offering_access!.session_mode = 'TEST_PASSWORD'
+      if (failure === 'native organisation') value.organisations[0].native_organisation_id = otherOrganisation
+      if (failure === 'source') value.organisations[0].authority_source = 'TEST_EVALUATION'
+      if (failure === 'status') value.organisations[0].status = 'REVOKED'
+      if (failure === 'creator') value.products[0].created_by = other
+      if (failure === 'package origin') value.products[0].offering_package!.origin = 'LEGACY_PRODUCT_SNAPSHOT'
+      if (failure === 'terms') value.products[0].offering_package!.terms_hash = 'cd'.repeat(32)
+      if (failure === 'role') context = operating('IssuerFundManager')
+      expect(productManagementOrganisations(value, context, failure === 'environment' ? 'MAINNET' : 'TESTNET')).toEqual([])
+    })
+  it('does not extend one product-bound TEST manager read to another product or create-product action', () => {
+    const value = roleplayManagerSnapshot(), context = operating('OfferingManager')
+    value.organisations[0].capabilities = ['create_product', 'save_product']
+    value.products.push(product({ id: other, created_by: other, terms: { ...fictionalProductTerms(), name: 'Another actor private product' } }))
+    const props = { data: data(value), operatingContext: context, release: { environment: 'TESTNET' as const, version: 'normal-fixture', source: 'normal-fixture' } }
+    const html = renderToStaticMarkup(<PortalScreen {...props} view="/portal" />)
+    expect(html).not.toContain('Another actor private product')
+    expect(html).not.toContain('Create a product</a>')
+    const create = renderToStaticMarkup(<PortalScreen {...props} view="/portal/products/new" />)
+    expect(create).toContain('A scoped product-creation mandate is required')
+    expect(create).not.toContain('Create product draft</button>')
+  })
+  it('shows the Sumsub connection check within the TEST Compliance queue, not as an applicant action or MAIN capability', () => {
+    const value = snapshot(), context = operating('ComplianceOfficer')
+    value.actor.can_review = true; value.operating_context = context
+    const renderQueue = (environment: 'TESTNET' | 'MAINNET') => renderToStaticMarkup(<PortalScreen data={data(value)}
+      view="/portal/compliance" operatingContext={context} release={{ environment, version: 'normal-fixture', source: 'normal-fixture' }} />)
+    expect(renderQueue('TESTNET')).toContain('Check Sumsub sandbox connection</button>')
+    expect(renderQueue('MAINNET')).not.toContain('Check Sumsub sandbox connection</button>')
+  })
   it('does not expose creation, publication or order access without the exact command capability', () => {
     const value = snapshot(); value.operating_context = operating('OfferingManager'); value.organisations = [{ ...operatorOrganisation(), capabilities: ['save_product'] }]; value.products = [product({ status: 'APPROVED' })]; value.subscriptions = [order({ investor_id: other })]
     const html = renderToStaticMarkup(<PortalScreen data={data(value)} view="/portal/products/detail" id={productId} operatingContext={operating('OfferingManager')} />)

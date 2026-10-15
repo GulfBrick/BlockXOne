@@ -189,4 +189,30 @@ describe('mounted issuer execution controls (synthetic transport, not provider a
     expect(screen.getByText(/Historical text-only packages are not upgraded/)).toBeTruthy()
     expect(fetcher).not.toHaveBeenCalled()
   })
+  it('keeps an explicit provider connection check available in the manager panel before signature admission', async () => {
+    const managerContext = { ...context, role: 'OfferingManager' as const }
+    const value = saved({ context: managerContext, admitted: false, allowed_commands: [], authorisations: [], operations: [] })
+    fetcher.mockImplementation(async url => String(url).startsWith('/api/portal/offering-signatures/provider-status?')
+      ? new Response(JSON.stringify({ environment: 'TESTNET', provider: 'DOCUSIGN', check: 'SANDBOX_AUTHENTICATION_ONLY', status: 'AVAILABLE',
+        classifier: 'AUTHENTICATED', checkedAt: '2026-10-15T10:00:00.000Z' }), { headers: { 'content-type': 'application/json' } })
+      : reply(value))
+    render(<OfferingSignatures product={product} context={managerContext} actorId={actor} environment="TESTNET" />)
+    await screen.findByText('Signature processing not admitted')
+    expect(fetcher).toHaveBeenCalledTimes(1)
+    fireEvent.click(screen.getByRole('button', { name: 'Check DocuSign sandbox connection' }))
+    await screen.findByText('DocuSign sandbox authentication confirmed.')
+    expect(screen.getByText('Signature processing not admitted')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Request independent purpose review' })).toBeNull()
+    expect(fetcher).toHaveBeenCalledTimes(2)
+    expect(fetcher.mock.calls.every(([, init]) => init?.method !== 'POST')).toBe(true)
+  })
+  it('does not offer TEST provider checks to MAIN managers or other package roles', async () => {
+    const managerContext = { ...context, role: 'OfferingManager' as const }
+    fetcher.mockResolvedValue(reply(saved({ context: managerContext, admitted: false, allowed_commands: [] })))
+    const view = render(<OfferingSignatures product={product} context={managerContext} actorId={actor} environment="MAINNET" />)
+    await screen.findByText('Signature processing not admitted')
+    expect(screen.queryByRole('button', { name: 'Check DocuSign sandbox connection' })).toBeNull()
+    view.rerender(<OfferingSignatures product={product} context={context} actorId={actor} environment="TESTNET" />)
+    expect(screen.queryByRole('button', { name: 'Check DocuSign sandbox connection' })).toBeNull()
+  })
 })

@@ -4,7 +4,8 @@ import { Pool, type PoolConfig } from 'pg'
 import { z } from 'zod'
 import { platformRelease } from '@/lib/platform-release'
 import supabaseCa from '@/lib/wallets/supabase-ca.json'
-import { DocumentLifecycleError, documentScannerConfig, downloadQuarantinedDocument, strictDocumentUtf8 } from './document-lifecycle'
+import { DocumentLifecycleError, documentScannerConfig, downloadQuarantinedDocument, strictDocumentUtf8,
+  recordedDocumentResultBindingSchema, recoverRecordedDocumentResult } from './document-lifecycle'
 
 type Environment = Record<string, string | undefined>
 const identity = /^[a-z][a-z0-9_-]{2,119}$/
@@ -17,6 +18,7 @@ const commandSchema = z.discriminatedUnion('command', [
   z.object({ command: z.literal('BYTES'), ...leaseBinding }).strict(),
   z.object({ command: z.literal('FAIL'), ...leaseBinding,
     code: z.enum(['ENGINE_UNAVAILABLE', 'INVALID_DOCUMENT', 'DELIVERY_FAILED', 'HASH_MISMATCH']) }).strict(),
+  recordedDocumentResultBindingSchema.extend({ command: z.literal('RECOVER_RESULT') }).strict(),
 ])
 export type DocumentProcessingCommand = z.infer<typeof commandSchema>
 
@@ -119,7 +121,7 @@ async function processingQuery(sql: string, parameters: readonly unknown[], conf
 }
 
 function verifiedManifest(value: unknown, config: ProcessingConfig,
-  command?: Exclude<DocumentProcessingCommand, { command: 'CLAIM' }>): DocumentProcessingManifest {
+  command?: Exclude<DocumentProcessingCommand, { command: 'CLAIM' | 'RECOVER_RESULT' }>): DocumentProcessingManifest {
   const parsed = manifestSchema.safeParse(value)
   if (!parsed.success) throw new DocumentProcessingError('Private document processing manifest is unavailable.', 409)
   const item = parsed.data
@@ -134,7 +136,7 @@ function verifiedManifest(value: unknown, config: ProcessingConfig,
   return item
 }
 
-async function readLease(command: Exclude<DocumentProcessingCommand, { command: 'CLAIM' }>,
+async function readLease(command: Exclude<DocumentProcessingCommand, { command: 'CLAIM' | 'RECOVER_RESULT' }>,
   config: ProcessingConfig): Promise<DocumentProcessingManifest> {
   return verifiedManifest(await processingQuery(
     'select bx1_private.read_document_processing($1,$2,$3,$4,$5) as result',
@@ -146,10 +148,24 @@ export type DocumentProcessingOutcome =
   | { command: 'CLAIM'; job: DocumentProcessingManifest | null }
   | { command: 'BYTES'; documentId: string; bytes: Uint8Array }
   | { command: 'FAIL'; receipt: z.infer<typeof failureSchema> }
+  | { command: 'RECOVER_RESULT'; receipt: { id: string; state: 'SCANNED_CLEAN' | 'REJECTED' } }
 
-/** No clean, promotion, requeue or policy command exists on this worker boundary. */
+/** No caller-selected verdict, promotion, requeue or policy command exists here. */
 export async function executeDocumentProcessing(command: DocumentProcessingCommand,
   config: ProcessingConfig): Promise<DocumentProcessingOutcome> {
+  if (command.command === 'RECOVER_RESULT') {
+    try {
+      const binding = { document_id: command.document_id, attempt_id: command.attempt_id, authority_epoch: command.authority_epoch }
+      const receipt = await recoverRecordedDocumentResult(binding, config.workerId)
+      if (receipt.id !== binding.document_id || (receipt.state !== 'SCANNED_CLEAN' && receipt.state !== 'REJECTED')) {
+        throw new DocumentProcessingError('Recorded document recovery could not be verified.', 409)
+      }
+      return { command: 'RECOVER_RESULT', receipt: { id: receipt.id, state: receipt.state } }
+    } catch (error) {
+      throw new DocumentProcessingError('Recorded document recovery could not be confirmed. Retry the same recorded result.',
+        error instanceof DocumentLifecycleError || error instanceof DocumentProcessingError ? error.status : 503)
+    }
+  }
   if (command.command === 'CLAIM') {
     const value = await processingQuery('select bx1_private.claim_document_processing($1,$2,$3) as result',
       [config.workerId, config.scanner.scannerId, command.request_id], config)

@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { ArrowRight, Building2, Layers3, Plus } from 'lucide-react'
 import { isOfferingSubscribable, isWealthManagerDetailsV2, representativeMandateNextOwnerLabel, validatedEntityProductEligibility, type PortalCapability, type PortalInvestingRepresentativeMandate, type PortalOrganisation, type PortalOrganisationMandate, type PortalPageData, type PortalPath, type PortalProduct, type PortalSnapshot, type PortalSubscription } from '@/lib/portal/contracts'
-import type { PlatformRelease } from '@/lib/platform-release'
+import type { PlatformEnvironment, PlatformRelease } from '@/lib/platform-release'
 import type { DashboardScope } from '@/lib/portal/dashboard'
 import { getRoleDashboard } from '@/lib/portal/role-dashboards'
 import { APPLICANT_CONTEXT, appointedIssuerProducts, hasFundOperatingProducts, isFundOperatingContext, portalContextKey, portalContextMatches, portalScopeHref, portalViewAllowed, type PortalOperatingContext } from '@/lib/portal/operating-context'
@@ -16,6 +16,7 @@ import { CustomerMonitoringDecision, CustomerMonitoringQueue } from './customer-
 import { ProductForm } from './product-form'
 import { OfferingFilePanel } from './offering-file-panel'
 import { OfferingSignatures } from './offering-signatures'
+import { ProviderConnectionCheck } from './provider-connection-check'
 import { ProductAppointmentDecision, ProductAppointmentQueue, ProductAppointmentRequest } from './product-service-appointments'
 import { PrivateDocument } from './onboarding-form'
 import { PortalShell, type PortalNavigationKey } from './portal-shell'
@@ -27,12 +28,26 @@ import { FundSetup } from './fund-setup'
 import { validatedFundLifecycle, type FundProductLifecycle } from '@/lib/portal/fund-lifecycle-contracts'
 import styles from './portal.module.css'
 
-export function productManagementOrganisations(snapshot: PortalSnapshot, context?: PortalOperatingContext) {
+function testRoleplayManagerProduct(snapshot: PortalSnapshot, product: PortalProduct, context?: PortalOperatingContext, environment?: PlatformEnvironment) {
+  if (environment !== 'TESTNET' || context?.mode !== 'ROLE' || context.role !== 'OfferingManager'
+    || validatedOfferingAccess(snapshot, context, environment)?.session_mode !== 'STANDARD'
+    || !portalContextMatches(snapshot.operating_context, context)) return false
+  const organisation = snapshot.organisations.find(org => org.id === product.organisation_id)
+  return Boolean(organisation?.authority_source === 'TEST_ROLE_PLAY' && organisation.status === 'ACTIVE'
+    && organisation.native_organisation_id === context.organisationId && organisation.roles.includes(context.role)
+    && product.created_by === snapshot.actor.id && product.offering_package?.origin === 'SUBMITTED'
+    && /^[0-9a-f]{64}$/.test(product.terms_hash) && product.offering_package.terms_hash === product.terms_hash)
+}
+
+export function productManagementOrganisations(snapshot: PortalSnapshot, context?: PortalOperatingContext, environment?: PlatformEnvironment) {
   if (context?.mode === 'ROLE' && !['IssuerFundManager', 'OfferingManager'].includes(context.role)) return []
   return snapshot.organisations.filter(org => org.status === 'ACTIVE'
     && org.roles.some(role => ['IssuerFundManager', 'OfferingManager'].includes(role))
+    && (org.authority_source !== 'TEST_ROLE_PLAY'
+      || snapshot.products.some(product => product.organisation_id === org.id && testRoleplayManagerProduct(snapshot, product, context, environment)))
     && (!context || (context.mode === 'APPLICANT' ? org.authority_source === 'LEGACY_OWNER'
-      : org.authority_source === 'NATIVE_BINDING' && org.native_organisation_id === context.organisationId && org.roles.includes(context.role))))
+      : org.native_organisation_id === context.organisationId && org.roles.includes(context.role)
+        && (org.authority_source === 'NATIVE_BINDING' || org.authority_source === 'TEST_ROLE_PLAY'))))
 }
 
 function permits(org: PortalOrganisation, command: PortalCapability, context?: PortalOperatingContext): boolean {
@@ -41,9 +56,10 @@ function permits(org: PortalOrganisation, command: PortalCapability, context?: P
 
 type ProductWorkspaceSection = 'DETAILS' | 'REVIEW' | 'DOCUMENTS' | 'APPOINTMENTS' | 'CHAIN_SETUP'
 
-function ProductDetailWorkspace({ product, snapshot, organisations, operatingContext, onSaved, onRefresh, availableCommands, canEdit, canViewIssuerRationale, canReviewIssuer, lifecycle }: {
+function ProductDetailWorkspace({ product, snapshot, organisations, operatingContext, environment, onSaved, onRefresh, availableCommands, canEdit, canViewIssuerRationale, canReviewIssuer, lifecycle }: {
   product: PortalProduct; snapshot: PortalSnapshot; organisations: PortalOrganisation[];
   operatingContext?: PortalOperatingContext; onSaved: (snapshot: PortalSnapshot) => void;
+  environment?: PlatformEnvironment;
   availableCommands?: readonly string[]; canEdit: boolean; canViewIssuerRationale: boolean; canReviewIssuer: boolean;
   onRefresh: () => Promise<void>;
   lifecycle?: FundProductLifecycle;
@@ -115,7 +131,7 @@ function ProductDetailWorkspace({ product, snapshot, organisations, operatingCon
     {documentsMounted ? <div id={`product-${product.id}-DOCUMENTS`} ref={node => { sectionContent.current.DOCUMENTS = node }} role="region" aria-labelledby={`product-${product.id}-section-DOCUMENTS`} tabIndex={-1} className={styles.stack} hidden={section !== 'DOCUMENTS'}>
       {!pkg ? <Panel title="Documents & signing"><EmptyState title="Save and submit the product first" description="The submitted package connects its document versions, uploads and signature evidence. Saving a draft does not create signed documents." /></Panel>
         : <><OfferingDocuments product={product} /><OfferingFilePanel product={product} context={operatingContext} actorId={snapshot.actor.id} />
-          <OfferingSignatures product={product} context={operatingContext} actorId={snapshot.actor.id} appointments={snapshot.product_appointments} /></>}
+          <OfferingSignatures product={product} context={operatingContext} actorId={snapshot.actor.id} appointments={snapshot.product_appointments} environment={environment} /></>}
     </div> : null}
     <div id={`product-${product.id}-APPOINTMENTS`} ref={node => { sectionContent.current.APPOINTMENTS = node }} role="region" aria-labelledby={`product-${product.id}-section-APPOINTMENTS`} tabIndex={-1} hidden={section !== 'APPOINTMENTS'}>
       <ProductAppointmentRequest product={product} snapshot={snapshot} operatingContext={operatingContext} onSaved={onSaved} />
@@ -296,7 +312,7 @@ function ApplicationCaseRows({ snapshot, applications, operatingContext }: { sna
   return <>{applications.map(application => <tr key={application.id}><td><strong>{application.persona === 'WEALTH_MANAGER' ? application.details.company_name || 'Customer organisation application' : application.details.full_name}</strong>{application.persona === 'WEALTH_MANAGER' ? <small>Representative: {application.details.full_name}</small> : null}<small>Submitted {dateLabel(application.submitted_at)}</small><small className={styles.mono}>{application.id}</small></td><td>{application.persona === 'INVESTOR' ? 'Investor admission' : application.admission_purpose === 'LEGACY_REHEARSAL' ? 'Historical rehearsal relationship' : 'Customer organisation admission'}</td><td>{application.revision}</td><td><StatusBadge status={application.status} /><small>{application.user_id === snapshot.actor.id ? 'Another reviewer required' : application.status === 'SUBMITTED' ? 'Compliance reviewer' : application.status === 'CHANGES_REQUIRED' || application.status === 'REJECTED' ? 'Applicant' : application.persona === 'WEALTH_MANAGER' ? 'Applicant: representative appointment' : 'Applicant: investment account'}</small></td><td><Link href={portalScopeHref('/portal/compliance/detail', operatingContext, application.id)}>{application.status !== 'SUBMITTED' ? 'Inspect saved decision' : 'Review case'}</Link></td></tr>)}</>
 }
 
-function ComplianceQueue({ snapshot, operatingContext }: { snapshot: PortalSnapshot; operatingContext?: PortalOperatingContext }) {
+function ComplianceQueue({ snapshot, operatingContext, environment }: { snapshot: PortalSnapshot; operatingContext?: PortalOperatingContext; environment?: PlatformEnvironment }) {
   const passwordWorkflow = isTestPasswordWorkflow(snapshot)
   const applications = snapshot.applications.filter(item => item.status === 'SUBMITTED')
   const applicationHistory = snapshot.applications.filter(item => ['CHANGES_REQUIRED', 'REJECTED', 'APPROVED'].includes(item.status))
@@ -314,6 +330,8 @@ function ComplianceQueue({ snapshot, operatingContext }: { snapshot: PortalSnaps
     : []
   return <div className={styles.stack}>
     <div className={styles.statGrid}><Statistic label="Client applications" value={applications.length} hint="Submitted evidence packages in this review scope" /><Statistic label="Offering reviews" value={products.length} hint="Immutable offering packages awaiting Compliance" /><Statistic label="Product eligibility actions" value={eligibilityUnavailable ? 'Unavailable' : eligibilityCases.length + entityEligibilityCases.length} hint="Submitted cases and revocable approvals in this review scope" /><Statistic label="Product appointments" value={Array.isArray(snapshot.product_appointments) ? snapshot.product_appointments.filter(item => item.can_review || item.can_revoke).length : 'Unavailable'} hint="Exact-product service appointments requiring this role" /><Statistic label="Representative mandates" value={snapshot.mandate_queue_available === true && Array.isArray(snapshot.organisation_mandates) ? scopedMandates(snapshot, operatingContext).filter(item => item.can_review || item.can_revoke).length : 'Unavailable'} hint="Independent customer-role appointment cases" /><Statistic label="Entity investing mandates" value={snapshot.entity_mandate_queue_available === true && Array.isArray(snapshot.investing_representative_mandates) ? scopedEntityMandates(snapshot, operatingContext).filter(item => item.can_review || item.can_revoke).length : 'Unavailable'} hint="Separate legal-holder representative cases" /><Statistic label="Admission decision" value="BlockXOne reviewer" hint="Provider evidence and the platform decision are separate" /></div>
+    {snapshot.actor.can_review && operatingContext?.mode === 'ROLE' && operatingContext.role === 'ComplianceOfficer'
+      ? <ProviderConnectionCheck provider="SUMSUB" actorId={snapshot.actor.id} context={operatingContext} environment={environment} /> : null}
     <RepresentativeMandateQueue snapshot={snapshot} operatingContext={operatingContext} />
     <EntityInvestingMandateQueue snapshot={snapshot} operatingContext={operatingContext} />
     <ProductAppointmentQueue snapshot={snapshot} operatingContext={operatingContext} />
@@ -414,9 +432,9 @@ function OperatingPortalScreen({ data, view, id, operatingContext, release, scop
   if (passwordWorkflow && (!operatingContext || !portalViewAllowed(view, operatingContext, snapshot, id))) return <Notice title="Action unavailable in this capacity" tone="warning">Open your assigned workflow workspace. Financial and signing actions are not granted by customer admission or package preparation.</Notice>
   const organisations = evaluation ? snapshot.organisations.filter(org => evaluation.operating_context.role === 'OfferingManager'
     && org.id === evaluation.product_organisation_id && org.authority_source === 'TEST_EVALUATION' && org.status === 'ACTIVE'
-    && org.native_organisation_id === evaluation.operating_context.organisationId && org.roles.includes('OfferingManager')) : productManagementOrganisations(snapshot, operatingContext)
+    && org.native_organisation_id === evaluation.operating_context.organisationId && org.roles.includes('OfferingManager')) : productManagementOrganisations(snapshot, operatingContext, release?.environment)
   const managerContext = operatingContext?.mode !== 'ROLE' || operatingContext.role === 'OfferingManager'
-  const createOrganisations = managerContext && workflowPermits('create_product') && (!evaluation || evaluation.allowed_views.includes('/portal/products/new')) ? organisations.filter(org => permits(org, 'create_product', operatingContext)) : []
+  const createOrganisations = managerContext && workflowPermits('create_product') && (!evaluation || evaluation.allowed_views.includes('/portal/products/new')) ? organisations.filter(org => org.authority_source !== 'TEST_ROLE_PLAY' && permits(org, 'create_product', operatingContext)) : []
   const canReview = snapshot.actor.can_review && operatingContext?.mode === 'ROLE' && operatingContext.role === 'ComplianceOfficer'
   const role = operatingContext?.mode === 'ROLE' ? operatingContext.role : undefined
   const ownApplications = snapshot.applications.filter(item => item.user_id === snapshot.actor.id)
@@ -436,7 +454,8 @@ function OperatingPortalScreen({ data, view, id, operatingContext, release, scop
   const ownSubscriptions = snapshot.subscriptions.filter(item => item.investor_id === snapshot.actor.id)
   const managedProducts = passwordOffering && operatingContext?.mode === 'ROLE' && role === 'IssuerFundManager'
     ? appointedIssuerProducts(snapshot, operatingContext)
-    : snapshot.products.filter(product => organisations.some(org => org.id === product.organisation_id))
+    : snapshot.products.filter(product => organisations.some(org => org.id === product.organisation_id
+      && (org.authority_source !== 'TEST_ROLE_PLAY' || testRoleplayManagerProduct(snapshot, product, operatingContext, release?.environment))))
   const orderOrganisations = passwordWorkflow ? [] : organisations.filter(org => permits(org, 'read_orders', operatingContext))
   const incomingSubscriptions = snapshot.subscriptions.filter(item => orderOrganisations.some(org => org.id === item.organisation_id) && managedProducts.some(product => product.id === item.product_id))
   const published = snapshot.products.filter(isOfferingSubscribable)
@@ -549,13 +568,13 @@ function OperatingPortalScreen({ data, view, id, operatingContext, release, scop
       const canEdit = Boolean(managerContext && workflowPermits('save_product') && organisation && permits(organisation, 'save_product', operatingContext)
         && selected.allowed_actions?.includes('save_product') === true)
       return <div className={styles.stack}><ProductDetailWorkspace key={selected.id} product={selected} snapshot={snapshot}
-        organisations={organisations.filter(org => permits(org, 'save_product', operatingContext))} operatingContext={operatingContext} onSaved={setSnapshot} onRefresh={refreshFund}
+        organisations={organisations.filter(org => permits(org, 'save_product', operatingContext))} operatingContext={operatingContext} environment={release?.environment} onSaved={setSnapshot} onRefresh={refreshFund}
         availableCommands={managerContext && organisation ? organisation.capabilities ?? (operatingContext ? [] : undefined) : []} canEdit={canEdit && ['DRAFT', 'CHANGES_REQUIRED'].includes(selected.status)}
         canViewIssuerRationale={canViewIssuerRationale} canReviewIssuer={role === 'IssuerFundManager'}
         lifecycle={fundLifecycle?.products.find(item => item.product_id === selected.id)} />
         {!passwordWorkflow ? organisation && permits(organisation, 'read_orders', operatingContext) ? <SubscriptionOrders subscriptions={incomingSubscriptions.filter(item => item.product_id === selected.id)} products={[selected]} incoming onSaved={setSnapshot} operatingContext={operatingContext} funding={snapshot.funding} /> : <Notice title="Order access unavailable">This product’s incoming-order book is not available under your current mandate.</Notice> : null}</div>
     }
-    if (view === '/portal/compliance') return canReview ? <ComplianceQueue snapshot={reviewSnapshot} operatingContext={operatingContext} /> : role === 'SuperAdmin' ? <div className={styles.stack}><RepresentativeMandateQueue snapshot={snapshot} operatingContext={operatingContext} /><EntityInvestingMandateQueue snapshot={snapshot} operatingContext={operatingContext} /><ProductAppointmentQueue snapshot={snapshot} operatingContext={operatingContext} /></div> : unavailable()
+    if (view === '/portal/compliance') return canReview ? <ComplianceQueue snapshot={reviewSnapshot} operatingContext={operatingContext} environment={release?.environment} /> : role === 'SuperAdmin' ? <div className={styles.stack}><RepresentativeMandateQueue snapshot={snapshot} operatingContext={operatingContext} /><EntityInvestingMandateQueue snapshot={snapshot} operatingContext={operatingContext} /><ProductAppointmentQueue snapshot={snapshot} operatingContext={operatingContext} /></div> : unavailable()
     if (view === '/portal/compliance/detail') {
       if (selectedEntityMandate) return <EntityInvestingMandateDecision key={`${selectedEntityMandate.id}-${selectedEntityMandate.revision}`} mandate={selectedEntityMandate} snapshot={snapshot} operatingContext={operatingContext ?? APPLICANT_CONTEXT} onSaved={setSnapshot} />
       if (selectedMandate) return <RepresentativeMandateDecision key={`${selectedMandate.id}-${selectedMandate.revision}`} mandate={selectedMandate} snapshot={snapshot} operatingContext={operatingContext ?? APPLICANT_CONTEXT} onSaved={setSnapshot} />
@@ -580,7 +599,7 @@ function OperatingPortalScreen({ data, view, id, operatingContext, release, scop
       </div>
     }
     if (view === '/portal/portfolio') return canInvest ? passwordAdmission || entityOnly ? <InvestmentAccountPanel snapshot={snapshot} onSaved={setSnapshot} operatingContext={operatingContext} /> : <div className={styles.stack}>{orderStats()}<InvestmentAccountPanel snapshot={snapshot} onSaved={setSnapshot} operatingContext={operatingContext} /><Notice title="Reservations are not holdings">These are subscription instructions with reserved units. A reservation does not confirm funding, token ownership or investment performance.</Notice><SubscriptionOrders subscriptions={ownSubscriptions} products={snapshot.products} incoming={false} onSaved={setSnapshot} operatingContext={operatingContext} funding={snapshot.funding} /></div> : hasNamedRepresentativeProposal ? <Notice title="Representative consent is separate from account access">Respond to your named proposal above. No investment account, entity onboarding evidence or transaction controls are available from a proposal.</Notice> : unavailable()
-    if (role === 'ComplianceOfficer') return canReview ? <ComplianceQueue snapshot={reviewSnapshot} operatingContext={operatingContext} /> : unavailable()
+    if (role === 'ComplianceOfficer') return canReview ? <ComplianceQueue snapshot={reviewSnapshot} operatingContext={operatingContext} environment={release?.environment} /> : unavailable()
     if (role === 'OfferingManager' || role === 'IssuerFundManager') return productWork()
     if (role === 'Investor') return investorWork()
     if ((role === 'TreasuryOperator' || role === 'FinancialController') && operatingContext) return <FundingWorkspace snapshot={snapshot} operatingContext={operatingContext} onSaved={setSnapshot} />

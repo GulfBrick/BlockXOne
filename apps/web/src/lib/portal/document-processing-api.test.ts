@@ -2,7 +2,7 @@ import { createHash, createHmac } from 'node:crypto'
 import { NextRequest } from 'next/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 vi.mock('server-only', () => ({}))
-const boundary = vi.hoisted(() => ({ query: vi.fn(), download: vi.fn(), bucket: vi.fn(), client: vi.fn() }))
+const boundary = vi.hoisted(() => ({ query: vi.fn(), download: vi.fn(), upload: vi.fn(), bucket: vi.fn(), client: vi.fn() }))
 vi.mock('pg', () => ({ Pool: class {
   on() {}
   query = boundary.query
@@ -56,14 +56,37 @@ beforeEach(() => {
   vi.resetAllMocks()
   vi.spyOn(Date, 'now').mockReturnValue(now)
   for (const [key, value] of Object.entries(env)) vi.stubEnv(key, value)
-  boundary.bucket.mockReturnValue({ download: boundary.download })
+  boundary.bucket.mockReturnValue({ download: boundary.download, upload: boundary.upload })
   boundary.client.mockReturnValue({ storage: { from: boundary.bucket } })
   boundary.download.mockResolvedValue({ data: new Blob([bytes]), error: null })
+  boundary.upload.mockResolvedValue({ error: null })
   boundary.query.mockResolvedValue({ rows: [{ result: manifest }] })
 })
 afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks() })
 
 describe('processing POST using the actual command module and mocked external boundaries', () => {
+  it('resumes only the saved accepted result and returns a small private receipt through the same HMAC route', async () => {
+    const recovery = { command: 'RECOVER_RESULT', document_id: document, attempt_id: attempt, authority_epoch: 2 }
+    const accepted = { document_id: document, attempt_id: attempt, authority_epoch: 2, worker_id: 'synthetic_worker',
+      scanner_id: 'synthetic_adapter', scan_event_id: 17, sha256, verdict: 'CLEAN', reference: manifest.reference,
+      observed_at: '2026-10-01T12:00:00Z' }
+    const item = { id: document, actor_id: actor, storage_path: manifest.storage_path, sha256, size: bytes.length,
+      mime_type: 'application/pdf', state: 'SCANNED_CLEAN' }
+    boundary.query.mockImplementation(async (sql: string) => ({ rows: [{ result: sql.includes('read_document_processing_recorded_result')
+      ? accepted : sql.includes('promote_scanned_document') ? { ...item, validation_state: 'SCANNED_CLEAN' } : item }] }))
+    const response = await POST(serviceRequest(recovery))
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ id: document, state: 'SCANNED_CLEAN' })
+    expectPrivate(response)
+    expect(boundary.download).toHaveBeenCalledTimes(2)
+    expect(boundary.query.mock.calls.some(([sql]) => /claim_|fail_/i.test(sql))).toBe(false)
+    for (const headers of [{ origin }, { 'x-bx1-scanner-signature': `sha256=${'0'.repeat(64)}` }]) {
+      boundary.query.mockClear()
+      const denied = await POST(serviceRequest(recovery, headers))
+      expect(denied.status).toBe(403); expectPrivate(denied)
+      expect(boundary.query).not.toHaveBeenCalled()
+    }
+  })
   it('returns only a durable claim manifest or an empty receipt, never a scan/promotion success', async () => {
     const response = await POST(serviceRequest())
     expect(response.status).toBe(200)

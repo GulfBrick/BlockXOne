@@ -5,7 +5,8 @@ import { CLAMAV_EXECUTABLE_SHA256, CLAMAV_PACKAGE_SHA256, CLAMAV_VERSION, TEST_O
   runOfferingOnce, runOnce } from './document-scanner-runner.mjs'
 import { OFFICIAL_SNAPSHOT_COVERAGE } from './document-scanner-snapshot.mjs'
 import { OPERATING_PROJECT, OPERATING_REF, OPERATING_REPOSITORY, OPERATING_SCANNER, OPERATING_WORKER,
-  operatingProducer, operatingReceipt, operatingScopeLabel, validateOperatingEnvironment } from './document-scanner-offering-operating.mjs'
+  operatingProducer, operatingReceipt, operatingScopeLabel, recordedRecoveryBinding, recordedRecoveryReceipt,
+  runOfferingOperatingJob, validateOperatingEnvironment } from './document-scanner-offering-operating.mjs'
 
 // Pure guards/output and source-wiring tests; no live queue, key, engine or provider.
 const sourceCommit = 'a'.repeat(40)
@@ -18,11 +19,11 @@ const environment = () => ({ GITHUB_ACTIONS: 'true', GITHUB_EVENT_NAME: 'workflo
   BX1_SCANNER_OPERATING_CLOUD_RUN: 'test-offering-scanner-v1', BX1_SCANNER_PACKAGE_SHA256: CLAMAV_PACKAGE_SHA256,
   BX1_SCANNER_PROJECT_REF: OPERATING_PROJECT, BLOCKXONE_ENVIRONMENT: 'TESTNET', BLOCKXONE_APP_ORIGIN: TEST_ORIGIN,
   BLOCKXONE_DOCUMENT_PROCESSING_WORKER_ID: OPERATING_WORKER, BLOCKXONE_DOCUMENT_SCANNER_ID: OPERATING_SCANNER,
-  BX1_SCANNER_SCOPE: 'OFFERING' })
+  BX1_SCANNER_SCOPE: 'OFFERING', BX1_SCANNER_OPERATION: 'CLAIM' })
 
 test('operating identity binds reviewed source, protected ref, manual event and TEST only', () => {
-  assert.deepEqual(validateOperatingEnvironment(environment(), 'linux'), { sourceCommit, scope: 'OFFERING' })
-  assert.deepEqual(validateOperatingEnvironment({ ...environment(), BX1_SCANNER_SCOPE: 'ADMISSION' }, 'linux'), { sourceCommit, scope: 'ADMISSION' })
+  assert.deepEqual(validateOperatingEnvironment(environment(), 'linux'), { sourceCommit, scope: 'OFFERING', operation: 'CLAIM' })
+  assert.deepEqual(validateOperatingEnvironment({ ...environment(), BX1_SCANNER_SCOPE: 'ADMISSION' }, 'linux'), { sourceCommit, scope: 'ADMISSION', operation: 'CLAIM' })
   for (const [name, invalid] of [
     ['GITHUB_ACTIONS', 'false'], ['GITHUB_EVENT_NAME', 'pull_request'], ['GITHUB_REPOSITORY', 'other/BlockXOne'],
     ['GITHUB_REF', 'refs/heads/main'], ['GITHUB_WORKFLOW_REF', `${OPERATING_REPOSITORY}/other.yml@${OPERATING_REF}`],
@@ -31,12 +32,62 @@ test('operating identity binds reviewed source, protected ref, manual event and 
     ['BX1_SCANNER_OPERATING_CLOUD_RUN', 'proof'], ['BX1_SCANNER_PACKAGE_SHA256', 'e'.repeat(64)],
     ['BX1_SCANNER_PROJECT_REF', 'oqkevkjbkpugjotihtda'], ['BLOCKXONE_ENVIRONMENT', 'MAINNET'],
     ['BLOCKXONE_APP_ORIGIN', 'https://bx1.co.za'], ['BLOCKXONE_DOCUMENT_PROCESSING_WORKER_ID', 'other-worker'],
-    ['BLOCKXONE_DOCUMENT_SCANNER_ID', 'other-scanner'], ['BX1_SCANNER_SCOPE', 'BOTH'],
+    ['BLOCKXONE_DOCUMENT_SCANNER_ID', 'other-scanner'], ['BX1_SCANNER_SCOPE', 'BOTH'], ['BX1_SCANNER_OPERATION', 'UNKNOWN'],
   ]) assert.throws(() => validateOperatingEnvironment({ ...environment(), [name]: invalid }, 'linux'), undefined, name)
   assert.throws(() => validateOperatingEnvironment(environment(), 'win32'))
   for (const name of Object.keys(environment())) {
     const missing = environment(); delete missing[name]
     assert.throws(() => validateOperatingEnvironment(missing, 'linux'), undefined, `missing ${name}`)
+  }
+})
+
+test('recovery is explicit ADMISSION-only and parses private identifiers without an evidence override', () => {
+  const recovery = { ...environment(), BX1_SCANNER_SCOPE: 'ADMISSION', BX1_SCANNER_OPERATION: 'RECOVER' }
+  assert.equal(validateOperatingEnvironment(recovery, 'linux').operation, 'RECOVER')
+  assert.throws(() => validateOperatingEnvironment({ ...recovery, BX1_SCANNER_SCOPE: 'OFFERING' }, 'linux'))
+  const binding = { document_id: '11111111-1111-4111-8111-111111111111', attempt_id: '22222222-2222-4222-8222-222222222222', authority_epoch: 2 }
+  assert.deepEqual(recordedRecoveryBinding(JSON.stringify(binding)), binding)
+  for (const value of [undefined, '', 'null', '{}', '{', JSON.stringify({ ...binding, verdict: 'CLEAN' }),
+    JSON.stringify({ ...binding, observed_at: '2026-10-01' }), JSON.stringify({ ...binding, authority_epoch: 0 }),
+    JSON.stringify({ ...binding, document_id: '00000000-0000-0000-0000-000000000000' })]) {
+    assert.throws(() => recordedRecoveryBinding(value), /^Error: Recorded result recovery binding rejected\.$/)
+  }
+})
+
+test('recovery output reports continuation, not a new scan, engine run or document identifier', () => {
+  const receipt = recordedRecoveryReceipt({ outcome: 'RECORDED_RESULT_RECOVERED', state: 'SCANNED_CLEAN',
+    recovery: 'PRIVATE_RECOVERY', document_id: 'PRIVATE_ID' }, sourceCommit)
+  assert.equal(receipt.newScanPerformed, false)
+  assert.equal(receipt.evidenceSource, 'ORIGINAL_IMMUTABLE_SCAN_EVENT')
+  assert.equal(receipt.reconciliationRequiredBeforeAnotherInvocation, false)
+  assert.doesNotMatch(JSON.stringify(receipt), /PRIVATE_|document_id|attempt_id|engineVersion|databaseSha256/)
+  assert.equal(recordedRecoveryReceipt({ outcome: 'RECORDED_RESULT_RECOVERY_REQUIRED' }, sourceCommit).reconciliationRequiredBeforeAnotherInvocation, true)
+  assert.throws(() => recordedRecoveryReceipt({ outcome: 'RESULT_ACCEPTED', state: 'SCANNED_CLEAN' }, sourceCommit))
+})
+
+test('the actual protected RECOVER entry calls only recorded continuation without a scanner snapshot or engine', async () => {
+  const binding = { document_id: '11111111-1111-4111-8111-111111111111', attempt_id: '22222222-2222-4222-8222-222222222222', authority_epoch: 2 }
+  const values = { ...environment(), BX1_SCANNER_SCOPE: 'ADMISSION', BX1_SCANNER_OPERATION: 'RECOVER',
+    BLOCKXONE_DOCUMENT_SCANNER_HMAC_KEY: Buffer.alloc(32, 7).toString('base64url'), BX1_SCANNER_RECOVERY_BINDING: JSON.stringify(binding),
+    BX1_SCANNER_DATABASE_PATH: undefined, BX1_SCANNER_DATABASE_SHA256: undefined }
+  const previous = Object.fromEntries(Object.keys(values).map(key => [key, process.env[key]]))
+  const previousFetch = globalThis.fetch
+  const calls = []
+  try {
+    for (const [key, value] of Object.entries(values)) { if (value === undefined) delete process.env[key]; else process.env[key] = value }
+    globalThis.fetch = async (url, init) => {
+      calls.push({ url, body: JSON.parse(init.body.toString()) })
+      return new Response(JSON.stringify({ id: binding.document_id, state: 'SCANNED_CLEAN' }), {
+        headers: { 'content-type': 'application/json', 'cache-control': 'private, no-store' } })
+    }
+    const receipt = await runOfferingOperatingJob()
+    assert.equal(receipt.outcome, 'RECORDED_RESULT_RECOVERED')
+    assert.equal(receipt.newScanPerformed, false)
+    assert.deepEqual(calls, [{ url: `${TEST_ORIGIN}/api/portal/documents/processing`, body: { command: 'RECOVER_RESULT', ...binding } }])
+    assert.doesNotMatch(JSON.stringify(receipt), /11111111|22222222|engineVersion|databaseSha256/)
+  } finally {
+    globalThis.fetch = previousFetch
+    for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value }
   }
 })
 
@@ -109,7 +160,7 @@ test('operating entry uses shared official preflight lifetime and the real singl
   assert.ok(bootstrap.indexOf('return await operation({ config, built') < bootstrap.indexOf("await atStage('CLEANUP'"))
 })
 
-test('manual workflow isolates the only application secret to the final invocation', async () => {
+test('manual workflow isolates the HMAC and private recovery binding to the final invocation', async () => {
   const workflow = (await readFile(new URL('../../../.github/workflows/bx1-demo-fund-compile.yml', import.meta.url), 'utf8')).replace(/\r\n/g, '\n')
   const start = workflow.indexOf('  offering-document-scanner-operating:\n')
   const end = workflow.indexOf('  compile-and-build:\n', start)
@@ -125,10 +176,13 @@ test('manual workflow isolates the only application secret to the final invocati
   assert.match(job, /cancel-in-progress: false/)
   assert.match(job, /ref: \$\{\{ github\.sha \}\}/)
   assert.match(job, /persist-credentials: false/)
-  const invocation = job.indexOf('      - name: Authenticate official snapshot and process at most one TEST offering document')
+  const invocation = job.indexOf('      - name: Process one explicitly selected TEST document operation')
   assert.ok(invocation > 0)
   assert.doesNotMatch(job.slice(0, invocation), /\$\{\{ secrets\.|BLOCKXONE_DOCUMENT_SCANNER_HMAC_KEY/)
-  assert.equal((job.match(/\$\{\{ secrets\./g) ?? []).length, 1)
+  assert.equal((job.match(/secrets\./g) ?? []).length, 2)
   assert.match(job.slice(invocation), /BLOCKXONE_DOCUMENT_SCANNER_HMAC_KEY: \$\{\{ secrets\.BLOCKXONE_DOCUMENT_SCANNER_HMAC_KEY \}\}/)
+  assert.match(job.slice(invocation), /BX1_SCANNER_RECOVERY_BINDING: \$\{\{ inputs\.scanner_operation == 'RECOVER' && secrets\.BX1_SCANNER_RECOVERY_BINDING \|\| '' \}\}/)
+  assert.match(job, /Install pinned official scanner without any application secret\n\s+if: \$\{\{ inputs\.scanner_operation == 'CLAIM' \}\}/)
+  assert.doesNotMatch(workflow, /recovery_document_id:|recovery_attempt_id:|recovery_authority_epoch:/)
   assert.doesNotMatch(job, /upload-artifact|npm |set -x|id-token: write|contents: write/)
 })

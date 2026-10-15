@@ -2,11 +2,13 @@
 
 import { useEffect, useRef, useState } from 'react'
 import type { PortalProduct, PortalProductServiceAppointment } from '@/lib/portal/contracts'
+import type { PlatformEnvironment } from '@/lib/platform-release'
 import { portalContextKey, type PortalOperatingContext } from '@/lib/portal/operating-context'
 import { offeringSignatureSnapshotSchema, offeringSignatureScopeMatches, offeringSignatureUrl, offeringSignatureCommandSchema,
   offeringSignatureResponseSchema, readOfferingSignatureRetry, saveOfferingSignatureRetry, clearOfferingSignatureRetry,
   type OfferingSignatureCommand, type OfferingSignatureSnapshot } from '@/lib/portal/offering-signatures'
 import { Field, Notice, Panel } from './portal-primitives'
+import { ProviderConnectionCheck } from './provider-connection-check'
 import styles from './portal.module.css'
 
 const nextOwner: Record<OfferingSignatureSnapshot['operations'][number]['state'], string> = {
@@ -22,8 +24,9 @@ const nextOwner: Record<OfferingSignatureSnapshot['operations'][number]['state']
   RECOVERY_REQUIRED: 'The authorised recovery owner must resolve the recorded uncertainty; recovery does not permit a blind resend.',
 }
 
-export function OfferingSignatures({ product, context, actorId, appointments = [] }: {
+export function OfferingSignatures({ product, context, actorId, appointments = [], environment }: {
   product: PortalProduct; context?: PortalOperatingContext; actorId: string; appointments?: PortalProductServiceAppointment[];
+  environment?: PlatformEnvironment;
 }) {
   const revisionId = product.terms.terms_version === 3 && product.offering_package?.origin === 'SUBMITTED' ? product.offering_package.id : null
   const identity = JSON.stringify([actorId, product.id, revisionId, product.revision, context && portalContextKey(context)])
@@ -110,6 +113,8 @@ export function OfferingSignatures({ product, context, actorId, appointments = [
 
   return <Panel title="Issuer package execution" description="Synthetic TEST signing purpose, genuine provider evidence and separate independent review.">
     {!scope ? <Notice title="No submitted signature scope">A current submitted v3 package and authorised workspace are required. Historical text-only packages are not upgraded or treated as signed.</Notice> : <div className={styles.stack}>
+      <ProviderConnectionCheck provider="DOCUSIGN" actorId={actorId} context={context} environment={environment}
+        productId={product.id} revisionId={scope.revisionId} productRevision={product.revision} />
       {!current ? <Notice title={unavailable ? 'Signature authority unavailable' : 'Checking signature authority'}>No signer, capability or completed evidence is inferred from missing data.</Notice> : <>
         {!current.admitted ? <Notice title="Signature processing not admitted" tone="warning">The processing owner must verify this environment and scope before execution. No new signature action is available.</Notice> : null}
         {current.blocker ? <Notice title="Current signature blocker" tone="warning">{current.blocker}</Notice> : null}

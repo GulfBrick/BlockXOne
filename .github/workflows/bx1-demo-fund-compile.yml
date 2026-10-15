@@ -6,13 +6,18 @@ on:
       mode:
         description: Cloud acceptance, empty-form browser proof, or focused UI and password-recovery checks
         type: choice
-        options: [acceptance, registration-browser-proof, fund-dashboard-focused, theme-focused, auth-recovery-focused, connected-session-focused, document-read-recovery-focused, fund-signer-entry-focused, connected-fund-providers-focused, official-scanner-focused, offering-signatures-api-focused, offering-scanner-operating, offering-scanner-source-focused, provider-diagnostics-focused]
+        options: [acceptance, registration-browser-proof, fund-dashboard-focused, theme-focused, auth-recovery-focused, connected-session-focused, document-read-recovery-focused, fund-signer-entry-focused, connected-fund-providers-focused, official-scanner-focused, offering-signatures-api-focused, offering-scanner-operating, offering-scanner-source-focused, provider-diagnostics-focused, document-result-recovery-focused]
         default: acceptance
       scanner_scope:
         description: Queue for one protected manual scanner invocation only
         type: choice
         options: [OFFERING, ADMISSION]
         default: OFFERING
+      scanner_operation:
+        description: CLAIM processes one job; RECOVER resumes one already-recorded ADMISSION result without a new scan
+        type: choice
+        options: [CLAIM, RECOVER]
+        default: CLAIM
       registration_origin_expectation:
         description: Expected browser-generated Origin on the current hosted TEST document
         type: choice
@@ -43,6 +48,7 @@ on:
       - supabase/features/bx1_application_admission.sql
       - supabase/features/bx1_customer_handoff.sql
       - supabase/features/bx1_document_processing.sql
+      - supabase/features/bx1_document_result_recovery.sql
       - apps/web/scripts/document-processing-proof.mjs
       - apps/web/scripts/document-scanner-runner.mjs
       - apps/web/scripts/document-scanner-runner.node-test.mjs
@@ -125,6 +131,7 @@ on:
       - supabase/features/bx1_application_admission.sql
       - supabase/features/bx1_customer_handoff.sql
       - supabase/features/bx1_document_processing.sql
+      - supabase/features/bx1_document_result_recovery.sql
       - apps/web/scripts/document-processing-proof.mjs
       - apps/web/scripts/document-scanner-runner.mjs
       - apps/web/scripts/document-scanner-runner.node-test.mjs
@@ -268,6 +275,7 @@ jobs:
       cancel-in-progress: false
     env:
       BX1_SCANNER_SCOPE: ${{ inputs.scanner_scope }}
+      BX1_SCANNER_OPERATION: ${{ inputs.scanner_operation }}
       BX1_SCANNER_APPROVED_SOURCE_COMMIT: ${{ vars.BX1_SCANNER_APPROVED_SOURCE_COMMIT }}
       BX1_SCANNER_OPERATING_CLOUD_RUN: test-offering-scanner-v1
       BX1_SCANNER_PACKAGE_SHA256: d3ee9e401974855a1edc1761b1425417d126de618d5f0c91cd51209f69f6fcc2
@@ -298,6 +306,7 @@ jobs:
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           node --input-type=module -e "import { validateOperatingEnvironment } from './apps/web/scripts/document-scanner-offering-operating.mjs'; validateOperatingEnvironment();"
       - name: Install pinned official scanner without any application secret
+        if: ${{ inputs.scanner_operation == 'CLAIM' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -312,10 +321,11 @@ jobs:
       - name: Validate operating boundary without queue access or credentials
         shell: bash
         run: node --test apps/web/scripts/document-scanner-offering-operating.node-test.mjs
-      - name: Authenticate official snapshot and process at most one TEST offering document
+      - name: Process one explicitly selected TEST document operation
         shell: bash
         env:
           BLOCKXONE_DOCUMENT_SCANNER_HMAC_KEY: ${{ secrets.BLOCKXONE_DOCUMENT_SCANNER_HMAC_KEY }}
+          BX1_SCANNER_RECOVERY_BINDING: ${{ inputs.scanner_operation == 'RECOVER' && secrets.BX1_SCANNER_RECOVERY_BINDING || '' }}
         run: node apps/web/scripts/document-scanner-offering-operating.mjs
   compile-and-build:
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.mode == 'acceptance' }}
@@ -762,7 +772,7 @@ jobs:
 
   fund-dashboard-focused:
     name: Focused dashboard, theme or password-recovery acceptance
-    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.mode == 'fund-dashboard-focused' || inputs.mode == 'theme-focused' || inputs.mode == 'auth-recovery-focused' || inputs.mode == 'connected-session-focused' || inputs.mode == 'document-read-recovery-focused' || inputs.mode == 'fund-signer-entry-focused' || inputs.mode == 'connected-fund-providers-focused' || inputs.mode == 'offering-signatures-api-focused' || inputs.mode == 'provider-diagnostics-focused') && github.ref == 'refs/heads/codex/stage2-sandbox-completion-20261011' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.mode == 'fund-dashboard-focused' || inputs.mode == 'theme-focused' || inputs.mode == 'auth-recovery-focused' || inputs.mode == 'connected-session-focused' || inputs.mode == 'document-read-recovery-focused' || inputs.mode == 'fund-signer-entry-focused' || inputs.mode == 'connected-fund-providers-focused' || inputs.mode == 'offering-signatures-api-focused' || inputs.mode == 'provider-diagnostics-focused' || inputs.mode == 'document-result-recovery-focused') && github.ref == 'refs/heads/codex/stage2-sandbox-completion-20261011' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -806,7 +816,17 @@ jobs:
           node --input-type=module <<'NODE'
           import { spawn } from 'node:child_process'
           import { runHermeticVitest } from './scripts/run-hermetic-tests.mjs'
-          const files = process.env.BX1_FOCUSED_UI_MODE === 'provider-diagnostics-focused' ? [
+          const files = process.env.BX1_FOCUSED_UI_MODE === 'document-result-recovery-focused' ? [
+            'src/lib/portal/document-result-recovery.test.ts',
+            'src/lib/portal/document-lifecycle.test.ts',
+            'src/lib/portal/document-processing.test.ts',
+            'src/lib/portal/document-processing-api.test.ts',
+            'src/lib/portal/document-scan-legacy-overlay-schema.test.ts',
+            'src/components/portal/portal.test.tsx',
+            'src/components/portal/offering-signatures.test.tsx',
+            'src/components/portal/provider-connection-check.test.tsx',
+            'src/components/portal/offering-workflow.interaction.test.tsx',
+          ] : process.env.BX1_FOCUSED_UI_MODE === 'provider-diagnostics-focused' ? [
             'src/lib/auth-mode.test.ts',
             'src/lib/release-policy.test.ts',
             'src/middleware.test.ts',
@@ -910,8 +930,12 @@ jobs:
           })
           NODE
 
+      - name: Check only recovery transport and protected workflow guards without an engine or secrets
+        if: ${{ inputs.mode == 'document-result-recovery-focused' }}
+        run: node --test apps/web/scripts/document-scanner-runner.node-test.mjs apps/web/scripts/document-scanner-offering-operating.node-test.mjs
+
       - name: Typecheck the same reviewed source before requesting its release build
-        if: ${{ (inputs.mode == 'fund-dashboard-focused' || inputs.mode == 'auth-recovery-focused' || inputs.mode == 'connected-session-focused' || inputs.mode == 'document-read-recovery-focused' || inputs.mode == 'fund-signer-entry-focused' || inputs.mode == 'connected-fund-providers-focused' || inputs.mode == 'offering-signatures-api-focused' || inputs.mode == 'provider-diagnostics-focused') && !cancelled() }}
+        if: ${{ (inputs.mode == 'fund-dashboard-focused' || inputs.mode == 'auth-recovery-focused' || inputs.mode == 'connected-session-focused' || inputs.mode == 'document-read-recovery-focused' || inputs.mode == 'fund-signer-entry-focused' || inputs.mode == 'connected-fund-providers-focused' || inputs.mode == 'offering-signatures-api-focused' || inputs.mode == 'provider-diagnostics-focused' || inputs.mode == 'document-result-recovery-focused') && !cancelled() }}
         shell: bash
         working-directory: apps/web
         run: npx tsc --noEmit --incremental false
