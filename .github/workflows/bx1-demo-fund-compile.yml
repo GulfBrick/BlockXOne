@@ -818,6 +818,8 @@ jobs:
           import { runHermeticVitest } from './scripts/run-hermetic-tests.mjs'
           const files = process.env.BX1_FOCUSED_UI_MODE === 'appointment-commit-focused' ? [
             'src/lib/portal/fund-roleplay-appointment-commit-schema.test.ts',
+          'src/lib/portal/fund-roleplay-appointment-source-schema.test.ts',
+          'src/lib/portal/fund-roleplay-review-locks-schema.test.ts',
             'src/lib/portal/appointment-commit.test.ts',
             'src/lib/portal/api.test.ts',
             'src/lib/portal/synthetic-compliance-api.test.ts',
