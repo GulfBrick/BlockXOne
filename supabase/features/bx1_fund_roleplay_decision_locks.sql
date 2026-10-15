@@ -59,8 +59,13 @@ declare
   old_fragment constant text:=$old$  perform bx1_portal.offering_workflow_lock_lineage_people(target_product,r.terms_hash,
     array[new.actor_id,candidate.requested_by_user_id,
     candidate.reviewed_by_user_id,candidate.applied_by_user_id,
-    p.created_by,o.owner_id,r.submitted_by]);$old$;
-  new_fragment constant text:=$new$  declare roleplay_users uuid[];
+    p.created_by,o.owner_id,r.submitted_by]);
+  if bx1_portal.offering_workflow_product_appointment_authorised(
+      new.operating_context,target_product,target_role) is not true
+    or bx1_portal.offering_workflow_product_appointment_effective(candidate.id) is not true
+    or bx1_portal.offering_workflow_lineage_independent(new.actor_id,target_product,r.terms_hash) is not true then
+    raise exception 'offering_product_appointment_required' using errcode='42501'; end if;$old$;
+  intermediate_fragment constant text:=$intermediate$  declare roleplay_users uuid[];
   begin
     if auth.uid() is not null and new.operating_context->>'mode'='ROLE'
       and new.operating_context->>'role'=target_role
@@ -85,6 +90,51 @@ declare
         candidate.reviewed_by_user_id,candidate.applied_by_user_id,
         p.created_by,o.owner_id,r.submitted_by]);
     end if;
+  end;
+  if bx1_portal.offering_workflow_product_appointment_authorised(
+      new.operating_context,target_product,target_role) is not true
+    or bx1_portal.offering_workflow_product_appointment_effective(candidate.id) is not true
+    or bx1_portal.offering_workflow_lineage_independent(new.actor_id,target_product,r.terms_hash) is not true then
+    raise exception 'offering_product_appointment_required' using errcode='42501'; end if;$intermediate$;
+  new_fragment constant text:=$new$  declare roleplay_users uuid[]; roleplay_lineage boolean:=false;
+  begin
+    if auth.uid() is not null and new.operating_context->>'mode'='ROLE'
+      and new.operating_context->>'role'=target_role
+      and bx1_private.fund_roleplay_lane_current(new.operating_context,target_product,
+        case new.decision_kind when 'ISSUER' then 'review_offering_issuer'
+          when 'COMPLIANCE' then 'review_product' end) is true then
+      select pg_catalog.array_agg(distinct locked.user_id order by locked.user_id) into roleplay_users from (
+        select pg_catalog.unnest(array[new.actor_id,candidate.requested_by_user_id,
+          candidate.reviewed_by_user_id,candidate.applied_by_user_id,
+          p.created_by,o.owner_id,r.submitted_by]) user_id
+        union select history.submitted_by from bx1_portal.offering_revisions history
+          where history.product_id=target_product and history.origin='SUBMITTED' and history.terms_hash=r.terms_hash
+      ) locked where locked.user_id is not null;
+    end if;
+    if roleplay_users is not null and pg_catalog.cardinality(roleplay_users)>0
+      and not exists(select 1 from pg_catalog.unnest(roleplay_users) locked(user_id)
+        where locked.user_id is distinct from auth.uid()) then
+      perform bx1_portal.admission_lock_people(roleplay_users);
+      roleplay_lineage:=auth.uid() is not null and new.operating_context->>'mode'='ROLE'
+      and new.operating_context->>'role'=target_role
+      and bx1_private.fund_roleplay_lane_current(new.operating_context,target_product,
+        case new.decision_kind when 'ISSUER' then 'review_offering_issuer'
+          when 'COMPLIANCE' then 'review_product' end) is true
+      and (roleplay_users is not null and pg_catalog.cardinality(roleplay_users)>0
+      and not exists(select 1 from pg_catalog.unnest(roleplay_users) locked(user_id)
+        where locked.user_id is distinct from auth.uid()));
+    else
+      perform bx1_portal.offering_workflow_lock_lineage_people(target_product,r.terms_hash,
+        array[new.actor_id,candidate.requested_by_user_id,
+        candidate.reviewed_by_user_id,candidate.applied_by_user_id,
+        p.created_by,o.owner_id,r.submitted_by]);
+    end if;
+  if bx1_portal.offering_workflow_product_appointment_authorised(
+      new.operating_context,target_product,target_role) is not true
+    or bx1_portal.offering_workflow_product_appointment_effective(candidate.id) is not true
+    or (bx1_portal.offering_workflow_lineage_independent(new.actor_id,target_product,r.terms_hash) is not true
+      and roleplay_lineage is not true) then
+    raise exception 'offering_product_appointment_required' using errcode='42501'; end if;
   end;$new$;
 begin
   if current_user<>'postgres' or session_user<>'postgres' or auth.uid() is not null
@@ -117,6 +167,13 @@ begin
     raise exception 'fund_roleplay_decision_locks_metadata_pin_mismatch' using errcode='55000';end if;
   if (length(original)-length(replace(original,new_fragment,'')))/length(new_fragment)=1 then
     restored:=replace(original,new_fragment,old_fragment);next_body:=original;
+  elsif (length(original)-length(replace(original,intermediate_fragment,'')))/length(intermediate_fragment)=1 then
+    if pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(
+        pg_catalog.btrim(replace(original,E'\r\n',E'\n'),E' \n\t'),'UTF8')),'hex')
+        is distinct from 'e75f2cc0d03cf23a132d5771adf3aa8cc4cbec3af5cb76d4e6bcda02a27866e6' then
+      raise exception 'fund_roleplay_decision_locks_intermediate_drift' using errcode='55000';end if;
+    restored:=replace(original,intermediate_fragment,old_fragment);
+    next_body:=replace(original,intermediate_fragment,new_fragment);
   elsif (length(original)-length(replace(original,old_fragment,'')))/length(old_fragment)=1
       and pg_catalog.strpos(original,new_fragment)=0 then
     restored:=original;next_body:=replace(original,old_fragment,new_fragment);

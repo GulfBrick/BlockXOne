@@ -4,13 +4,18 @@ do $fund_roleplay_decision_locks_proof$
 declare
   target oid:=pg_catalog.to_regprocedure('bx1_portal.guard_offering_decision_appointment()');
   source text;restored text;before_metadata jsonb;role_name text;item jsonb;outcome boolean;
-  entry_expression text;final_expression text;evaluate text;
+  entry_expression text;final_expression text;post_expression text;denial_expression text;evaluate text;
   before_claims text:=pg_catalog.current_setting('request.jwt.claims',true);
   old_fragment constant text:=$old$  perform bx1_portal.offering_workflow_lock_lineage_people(target_product,r.terms_hash,
     array[new.actor_id,candidate.requested_by_user_id,
     candidate.reviewed_by_user_id,candidate.applied_by_user_id,
-    p.created_by,o.owner_id,r.submitted_by]);$old$;
-  new_fragment constant text:=$new$  declare roleplay_users uuid[];
+    p.created_by,o.owner_id,r.submitted_by]);
+  if bx1_portal.offering_workflow_product_appointment_authorised(
+      new.operating_context,target_product,target_role) is not true
+    or bx1_portal.offering_workflow_product_appointment_effective(candidate.id) is not true
+    or bx1_portal.offering_workflow_lineage_independent(new.actor_id,target_product,r.terms_hash) is not true then
+    raise exception 'offering_product_appointment_required' using errcode='42501'; end if;$old$;
+  new_fragment constant text:=$new$  declare roleplay_users uuid[]; roleplay_lineage boolean:=false;
   begin
     if auth.uid() is not null and new.operating_context->>'mode'='ROLE'
       and new.operating_context->>'role'=target_role
@@ -29,12 +34,26 @@ declare
       and not exists(select 1 from pg_catalog.unnest(roleplay_users) locked(user_id)
         where locked.user_id is distinct from auth.uid()) then
       perform bx1_portal.admission_lock_people(roleplay_users);
+      roleplay_lineage:=auth.uid() is not null and new.operating_context->>'mode'='ROLE'
+      and new.operating_context->>'role'=target_role
+      and bx1_private.fund_roleplay_lane_current(new.operating_context,target_product,
+        case new.decision_kind when 'ISSUER' then 'review_offering_issuer'
+          when 'COMPLIANCE' then 'review_product' end) is true
+      and (roleplay_users is not null and pg_catalog.cardinality(roleplay_users)>0
+      and not exists(select 1 from pg_catalog.unnest(roleplay_users) locked(user_id)
+        where locked.user_id is distinct from auth.uid()));
     else
       perform bx1_portal.offering_workflow_lock_lineage_people(target_product,r.terms_hash,
         array[new.actor_id,candidate.requested_by_user_id,
         candidate.reviewed_by_user_id,candidate.applied_by_user_id,
         p.created_by,o.owner_id,r.submitted_by]);
     end if;
+  if bx1_portal.offering_workflow_product_appointment_authorised(
+      new.operating_context,target_product,target_role) is not true
+    or bx1_portal.offering_workflow_product_appointment_effective(candidate.id) is not true
+    or (bx1_portal.offering_workflow_lineage_independent(new.actor_id,target_product,r.terms_hash) is not true
+      and roleplay_lineage is not true) then
+    raise exception 'offering_product_appointment_required' using errcode='42501'; end if;
   end;$new$;
   entry_gate constant text:=$entry$auth.uid() is not null and new.operating_context->>'mode'='ROLE'
       and new.operating_context->>'role'=target_role
@@ -47,7 +66,22 @@ declare
   lane_call constant text:=$lane$bx1_private.fund_roleplay_lane_current(new.operating_context,target_product,
         case new.decision_kind when 'ISSUER' then 'review_offering_issuer'
           when 'COMPLIANCE' then 'review_product' end)$lane$;
-  baseline constant jsonb:='{"actor":"11111111-1111-4111-8111-111111111111","mode":"ROLE","role":"IssuerFundManager","kind":"ISSUER","lane":true,"users":["11111111-1111-4111-8111-111111111111"],"history":[]}';
+  post_gate constant text:=$post$auth.uid() is not null and new.operating_context->>'mode'='ROLE'
+      and new.operating_context->>'role'=target_role
+      and bx1_private.fund_roleplay_lane_current(new.operating_context,target_product,
+        case new.decision_kind when 'ISSUER' then 'review_offering_issuer'
+          when 'COMPLIANCE' then 'review_product' end) is true
+      and (roleplay_users is not null and pg_catalog.cardinality(roleplay_users)>0
+      and not exists(select 1 from pg_catalog.unnest(roleplay_users) locked(user_id)
+        where locked.user_id is distinct from auth.uid()))$post$;
+  denial_gate constant text:=$denial$bx1_portal.offering_workflow_product_appointment_authorised(
+      new.operating_context,target_product,target_role) is not true
+    or bx1_portal.offering_workflow_product_appointment_effective(candidate.id) is not true
+    or (bx1_portal.offering_workflow_lineage_independent(new.actor_id,target_product,r.terms_hash) is not true
+      and roleplay_lineage is not true)$denial$;
+  authorised_call constant text:=$authorised$bx1_portal.offering_workflow_product_appointment_authorised(
+      new.operating_context,target_product,target_role)$authorised$;
+  baseline constant jsonb:='{"actor":"11111111-1111-4111-8111-111111111111","mode":"ROLE","role":"IssuerFundManager","kind":"ISSUER","lane":true,"users":["11111111-1111-4111-8111-111111111111"],"history":[],"authorised":true,"effective":true,"independent":false}';
 begin
   if current_user<>'postgres' or session_user<>'postgres' or auth.uid() is not null
     or not exists(select 1 from bx1_portal.entry_configuration where singleton and environment='TESTNET') then
@@ -71,11 +105,17 @@ begin
       raise exception 'fund_roleplay_decision_locks_proof_private_guard_exposed';end if;
   end loop;
   if strpos(new_fragment,entry_gate)=0 or strpos(new_fragment,final_gate)=0
+    or strpos(new_fragment,'roleplay_lineage:='||post_gate||';')=0 or strpos(new_fragment,denial_gate)=0
     or (length(entry_gate)-length(replace(entry_gate,lane_call,'')))/length(lane_call)<>1 then
     raise exception 'fund_roleplay_decision_locks_proof_gate_extraction_invalid';end if;
   entry_expression:=replace(replace(replace(replace(entry_gate,lane_call,'lane_is_current'),
     'auth.uid()','actor_id'),'new.operating_context','operating_context'),'new.decision_kind','decision_kind');
   final_expression:=replace(final_gate,'auth.uid()','actor_id');
+  post_expression:=replace(replace(replace(replace(post_gate,lane_call,'lane_is_current_after'),
+    'auth.uid()','actor_id_after'),'new.operating_context','operating_context_after'),'new.decision_kind','decision_kind_after');
+  denial_expression:=replace(replace(replace(denial_gate,authorised_call,'authorised'),
+    'bx1_portal.offering_workflow_product_appointment_effective(candidate.id)','effective'),
+    'bx1_portal.offering_workflow_lineage_independent(new.actor_id,target_product,r.terms_hash)','independent');
   evaluate:=$evaluate$
     with value as (select $1::jsonb v),
     input as (select (v->>'actor')::uuid actor_id,
@@ -83,6 +123,12 @@ begin
       v->>'kind' decision_kind,
       case v->>'kind' when 'ISSUER' then 'IssuerFundManager' when 'COMPLIANCE' then 'ComplianceOfficer' end target_role,
       (v->>'lane')::boolean lane_is_current,
+      (case when v?'lane_after' then v->>'lane_after' else v->>'lane' end)::boolean lane_is_current_after,
+      (case when v?'actor_after' then v->>'actor_after' else v->>'actor' end)::uuid actor_id_after,
+      pg_catalog.jsonb_build_object('mode',case when v?'mode_after' then v->>'mode_after' else v->>'mode' end,
+        'role',case when v?'role_after' then v->>'role_after' else v->>'role' end) operating_context_after,
+      v->>'kind' decision_kind_after,
+      (v->>'authorised')::boolean authorised,(v->>'effective')::boolean effective,(v->>'independent')::boolean independent,
       (select pg_catalog.array_agg(distinct user_id order by user_id) from (
         select u::uuid user_id from pg_catalog.jsonb_array_elements_text(v->'users') participants(u)
         union select (h->>'user')::uuid from pg_catalog.jsonb_array_elements(v->'history') history(h)
@@ -90,8 +136,11 @@ begin
       ) lineage where user_id is not null) full_users
       from value),
     scoped as (select input.*,case when $evaluate$||entry_expression||$evaluate$
-      then full_users else null::uuid[] end roleplay_users from input)
-    select ($evaluate$||final_expression||$evaluate$) is true from scoped
+      then full_users else null::uuid[] end roleplay_users from input),
+    delegated as (select scoped.*,($evaluate$||final_expression||$evaluate$) is true delegated from scoped),
+    checked as (select delegated.*,case when delegated then ($evaluate$||post_expression||$evaluate$)
+      else false end roleplay_lineage from delegated)
+    select not ($evaluate$||denial_expression||$evaluate$) from checked
   $evaluate$;
   for item in select value from pg_catalog.jsonb_array_elements($cases$[
     {"label":"current issuer","patch":{},"allow":true},
@@ -114,7 +163,24 @@ begin
     {"label":"same historical submitter","patch":{"history":[{"user":"11111111-1111-4111-8111-111111111111","product":"same-product","origin":"SUBMITTED","terms":"same-terms"}]},"allow":true},
     {"label":"other product not in this lineage","patch":{"history":[{"user":"22222222-2222-4222-8222-222222222222","product":"other-product","origin":"SUBMITTED","terms":"same-terms"}]},"allow":true},
     {"label":"other terms not in this lineage","patch":{"history":[{"user":"22222222-2222-4222-8222-222222222222","product":"same-product","origin":"SUBMITTED","terms":"other-terms"}]},"allow":true},
-    {"label":"unsubmitted revision not in this lineage","patch":{"history":[{"user":"22222222-2222-4222-8222-222222222222","product":"same-product","origin":"DRAFT","terms":"same-terms"}]},"allow":true}
+    {"label":"unsubmitted revision not in this lineage","patch":{"history":[{"user":"22222222-2222-4222-8222-222222222222","product":"same-product","origin":"DRAFT","terms":"same-terms"}]},"allow":true},
+    {"label":"lane revoked after lock","patch":{"lane_after":false},"allow":false},
+    {"label":"lane unknown after lock","patch":{"lane_after":null},"allow":false},
+    {"label":"actor missing after lock","patch":{"actor_after":null},"allow":false},
+    {"label":"actor changed after lock","patch":{"actor_after":"22222222-2222-4222-8222-222222222222"},"allow":false},
+    {"label":"role changed after lock","patch":{"role_after":"ComplianceOfficer"},"allow":false},
+    {"label":"role missing after lock","patch":{"role_after":null},"allow":false},
+    {"label":"context changed after lock","patch":{"mode_after":"APPLICANT"},"allow":false},
+    {"label":"authorised always mandatory","patch":{"authorised":false},"allow":false},
+    {"label":"unknown authorised always denied","patch":{"authorised":null},"allow":false},
+    {"label":"effective always mandatory","patch":{"effective":false},"allow":false},
+    {"label":"unknown effective always denied","patch":{"effective":null},"allow":false},
+    {"label":"ordinary independent path no lane","patch":{"lane":false,"independent":true},"allow":true},
+    {"label":"ordinary independent path post-lane false","patch":{"lane_after":false,"independent":true},"allow":true},
+    {"label":"ordinary independent path no context","patch":{"mode":"APPLICANT","independent":true},"allow":true},
+    {"label":"ordinary independent still needs authority","patch":{"lane":false,"independent":true,"authorised":false},"allow":false},
+    {"label":"ordinary independent still needs effective appointment","patch":{"lane":false,"independent":true,"effective":false},"allow":false},
+    {"label":"unknown independence without local alternative denied","patch":{"lane":false,"independent":null},"allow":false}
   ]$cases$::jsonb) loop
     execute evaluate into outcome using baseline||(item->'patch');
     if outcome is distinct from (item->>'allow')::boolean then
