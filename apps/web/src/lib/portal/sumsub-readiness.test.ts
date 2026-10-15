@@ -69,9 +69,9 @@ describe('private Sumsub Sandbox readiness read', () => {
   })
 
   it('does not infer the company subject from its name or an undocumented provider field', async () => {
-    const fetch = vi.fn<typeof fetch>().mockResolvedValue(response([{ name: 'company-sandbox', type: 'company', rawSecret: token }]))
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(response([{ name: 'company-sandbox', type: 'company', rawSecret: token }]))
     const result = await readSumsubSandboxReadiness({ ...env, BLOCKXONE_SUMSUB_SANDBOX_COMPANY_LEVEL: 'company-sandbox',
-      NEXT_PUBLIC_BLOCKXONE_SUMSUB_SANDBOX_COMPANY_ENABLED: 'true' }, fetch)
+      NEXT_PUBLIC_BLOCKXONE_SUMSUB_SANDBOX_COMPANY_ENABLED: 'true' }, fetcher)
     expect(result.company).toMatchObject({ configured: true, enabled: true, level_present: true,
       provider_subject_type: 'UNKNOWN', classifier: 'LEVEL_SUBJECT_UNCONFIRMED' })
     expect(result.available_levels).toEqual([{ name: 'company-sandbox', applicant_type: 'UNKNOWN' }])
@@ -87,8 +87,8 @@ describe('private Sumsub Sandbox readiness read', () => {
       [[{ name: 'company-sandbox', applicantType: 'individual' }], 'LEVEL_SUBJECT_MISMATCH'],
       [[{ name: 'company-sandbox', applicantType: 'company' }, { name: 'company-sandbox', applicantType: 'company' }], 'LEVEL_AMBIGUOUS'],
     ] as const) {
-      const fetch = vi.fn<typeof fetch>().mockResolvedValue(response([...items]))
-      expect((await readSumsubSandboxReadiness(companyEnv, fetch)).company.classifier).toBe(classifier)
+      const fetcher = vi.fn<typeof fetch>().mockResolvedValue(response([...items]))
+      expect((await readSumsubSandboxReadiness(companyEnv, fetcher)).company.classifier).toBe(classifier)
     }
   })
 
@@ -111,11 +111,11 @@ describe('private Sumsub Sandbox readiness read', () => {
   it.each([
     [401, 'CREDENTIALS_REJECTED'], [403, 'PROVIDER_ACCESS_DENIED'], [429, 'PROVIDER_RATE_LIMITED'], [500, 'PROVIDER_UNAVAILABLE'],
   ] as const)('classifies provider HTTP %s without leaking its error body or retrying', async (status, classifier) => {
-    const fetch = vi.fn<typeof fetch>().mockResolvedValue(new Response('private-provider-error', { status }))
-    const result = await readSumsubSandboxReadiness(env, fetch)
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response('private-provider-error', { status }))
+    const result = await readSumsubSandboxReadiness(env, fetcher)
     expect(result).toMatchObject({ status: 'UNAVAILABLE', classifier, available_levels: [] })
     expect(result.individual.level_present).toBeNull()
-    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(fetcher).toHaveBeenCalledTimes(1)
     expect(JSON.stringify(result)).not.toContain('private-provider-error')
   })
 
@@ -135,11 +135,11 @@ describe('private Sumsub Sandbox readiness read', () => {
   })
 
   it('returns a fixed unavailable classifier on network failure', async () => {
-    const fetch = vi.fn<typeof fetch>().mockRejectedValue(Error('private transport details'))
-    const result = await readSumsubSandboxReadiness(env, fetch)
+    const fetcher = vi.fn<typeof fetch>().mockRejectedValue(Error('private transport details'))
+    const result = await readSumsubSandboxReadiness(env, fetcher)
     expect(result).toMatchObject({ status: 'UNAVAILABLE', classifier: 'PROVIDER_UNAVAILABLE' })
     expect(JSON.stringify(result)).not.toContain('private transport details')
-    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(fetcher).toHaveBeenCalledTimes(1)
   })
 
   it('does not probe MAIN or a mismatched release binding', async () => {
