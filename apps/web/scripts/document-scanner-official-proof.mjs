@@ -108,11 +108,18 @@ function runFreshclam(args, { directory, timeoutMs = 240_000 } = {}) {
   })
 }
 
-export async function runOfficialCloudEngineProof() {
+/** Keep the reviewed, authenticated snapshot alive for the entire operation. */
+export async function withOfficialCloudSnapshot(operation, { purpose = 'PROOF' } = {}) {
   await atStage('ENVIRONMENT', async () => {
     assert.equal(process.platform, 'linux', 'Official snapshot proof requires Linux.')
     assert.equal(process.env.GITHUB_ACTIONS, 'true', 'Official snapshot proof requires GitHub Actions.')
-    assert.equal(process.env.BX1_SCANNER_OFFICIAL_CLOUD_PROOF, 'github-clamav-official-1.4.6', 'Official proof identity mismatch.')
+    assert.ok(purpose === 'PROOF' || purpose === 'OPERATING')
+    assert.equal(typeof operation, 'function')
+    if (purpose === 'PROOF') {
+      assert.equal(process.env.BX1_SCANNER_OFFICIAL_CLOUD_PROOF, 'github-clamav-official-1.4.6', 'Official proof identity mismatch.')
+    } else {
+      assert.equal(process.env.BX1_SCANNER_OPERATING_CLOUD_RUN, 'test-offering-scanner-v1', 'Operating identity mismatch.')
+    }
     assert.equal(process.env.BX1_SCANNER_PACKAGE_SHA256, CLAMAV_PACKAGE_SHA256, 'Package identity mismatch.')
   })
   // CI independently verifies the pinned package before installation. These
@@ -159,6 +166,17 @@ export async function runOfficialCloudEngineProof() {
     const config = { databasePath: path.join(snapshotDirectory, 'manifest.json'), databaseSha256: built.databaseSha256 }
     const preflight = await atStage('OFFICIAL_PREFLIGHT', () => preflightOfficialScanner(config))
     await atStage('OFFICIAL_PREFLIGHT', async () => assert.equal(preflight.coverage, OFFICIAL_SNAPSHOT_COVERAGE))
+    return await operation({ config, built, updaterSha256, updaterStderrPresent: Boolean(updated.stderr.trim()) })
+  } finally {
+    await atStage('CLEANUP', async () => {
+      await chmod(snapshotDirectory, 0o700).catch(() => {})
+      await rm(directory, { recursive: true, force: true })
+    })
+  }
+}
+
+export async function runOfficialCloudEngineProof() {
+  return withOfficialCloudSnapshot(async ({ config, built, updaterSha256, updaterStderrPresent }) => {
     const benign = makePdf('BlockXOne harmless official database scanner proof')
     // Standard harmless antivirus test bytes. This is engine evidence, not a
     // claim that this text file passes the application's PDF evidence profile.
@@ -179,16 +197,11 @@ export async function runOfficialCloudEngineProof() {
     return { ok: true, proof: 'REAL_CLAMAV_OFFICIAL_SNAPSHOT_ENGINE', engineVersion: CLAMAV_VERSION,
       packageSha256: CLAMAV_PACKAGE_SHA256, executableSha256: CLAMAV_EXECUTABLE_SHA256, updaterSha256,
       databaseSha256: built.databaseSha256, coverage: built.coverage, databases: built.databases,
-      updaterStderrPresent: Boolean(updated.stderr.trim()), officialSignaturesOnly: true,
+      updaterStderrPresent, officialSignaturesOnly: true,
       productionMalwareCoverageProved: false, hostedWorkerAcceptanceProved: false,
       benign: { mimeType: 'application/pdf', verdict: clean.verdict, sha256: clean.sha256 },
       detected: { fixture: 'STANDARD_HARMLESS_EICAR_TEXT_NOT_APPLICATION_PDF', verdict: detected.verdict, sha256: detected.sha256 } }
-  } finally {
-    await atStage('CLEANUP', async () => {
-      await chmod(snapshotDirectory, 0o700).catch(() => {})
-      await rm(directory, { recursive: true, force: true })
-    })
-  }
+  })
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

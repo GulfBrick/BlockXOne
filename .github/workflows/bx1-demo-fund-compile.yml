@@ -6,7 +6,7 @@ on:
       mode:
         description: Cloud acceptance, empty-form browser proof, or focused UI and password-recovery checks
         type: choice
-        options: [acceptance, registration-browser-proof, fund-dashboard-focused, theme-focused, auth-recovery-focused, connected-session-focused, document-read-recovery-focused, fund-signer-entry-focused, connected-fund-providers-focused, official-scanner-focused, offering-signatures-api-focused]
+        options: [acceptance, registration-browser-proof, fund-dashboard-focused, theme-focused, auth-recovery-focused, connected-session-focused, document-read-recovery-focused, fund-signer-entry-focused, connected-fund-providers-focused, official-scanner-focused, offering-signatures-api-focused, offering-scanner-operating, offering-scanner-source-focused]
         default: acceptance
       registration_origin_expectation:
         description: Expected browser-generated Origin on the current hosted TEST document
@@ -42,6 +42,11 @@ on:
       - apps/web/scripts/document-scanner-runner.mjs
       - apps/web/scripts/document-scanner-runner.node-test.mjs
       - apps/web/scripts/document-scanner-engine-proof.mjs
+      - apps/web/scripts/document-scanner-official-proof.mjs
+      - apps/web/scripts/document-scanner-snapshot.mjs
+      - apps/web/scripts/document-scanner-snapshot.node-test.mjs
+      - apps/web/scripts/document-scanner-offering-operating.mjs
+      - apps/web/scripts/document-scanner-offering-operating.node-test.mjs
       - supabase/features/bx1_provider_binding.sql
       - supabase/features/bx1_provider_subject_availability.sql
       - apps/web/scripts/provider-binding-proof.mjs
@@ -119,6 +124,11 @@ on:
       - apps/web/scripts/document-scanner-runner.mjs
       - apps/web/scripts/document-scanner-runner.node-test.mjs
       - apps/web/scripts/document-scanner-engine-proof.mjs
+      - apps/web/scripts/document-scanner-official-proof.mjs
+      - apps/web/scripts/document-scanner-snapshot.mjs
+      - apps/web/scripts/document-scanner-snapshot.node-test.mjs
+      - apps/web/scripts/document-scanner-offering-operating.mjs
+      - apps/web/scripts/document-scanner-offering-operating.node-test.mjs
       - supabase/features/bx1_provider_binding.sql
       - supabase/features/bx1_provider_subject_availability.sql
       - apps/web/scripts/provider-binding-proof.mjs
@@ -205,7 +215,7 @@ jobs:
           /usr/local/bin/clamscan --version
       - name: Prove producer protocol negatives without real customer data
         shell: bash
-        run: node --test apps/web/scripts/document-scanner-runner.node-test.mjs apps/web/scripts/document-scanner-snapshot.node-test.mjs
+        run: node --test apps/web/scripts/document-scanner-runner.node-test.mjs apps/web/scripts/document-scanner-snapshot.node-test.mjs apps/web/scripts/document-scanner-offering-operating.node-test.mjs
       - name: Prove real benign and detection-fixture scans
         shell: bash
         env:
@@ -220,6 +230,87 @@ jobs:
           BX1_SCANNER_OFFICIAL_CLOUD_PROOF: github-clamav-official-1.4.6
           BX1_SCANNER_PACKAGE_SHA256: d3ee9e401974855a1edc1761b1425417d126de618d5f0c91cd51209f69f6fcc2
         run: node apps/web/scripts/document-scanner-official-proof.mjs
+  offering-scanner-source-focused:
+    name: Focused offering worker source acceptance
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'offering-scanner-source-focused' && github.repository == 'GulfBrick/BlockXOne' && github.ref == 'refs/heads/codex/stage2-sandbox-completion-20261011' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check out reviewed worker source without credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+          submodules: false
+          lfs: false
+      - name: Select pinned Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22.23.1'
+          check-latest: false
+          package-manager-cache: false
+      - name: Verify only the new operating boundary without secrets or queue access
+        run: node --test apps/web/scripts/document-scanner-offering-operating.node-test.mjs
+  offering-document-scanner-operating:
+    name: Manual protected TEST offering document worker
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'offering-scanner-operating' && github.repository == 'GulfBrick/BlockXOne' && github.ref == 'refs/heads/codex/stage2-sandbox-completion-20261011' && github.run_attempt == 1 }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: bx1-test-offering-scanner
+    concurrency:
+      group: bx1-test-offering-scanner
+      cancel-in-progress: false
+    env:
+      BX1_SCANNER_APPROVED_SOURCE_COMMIT: ${{ vars.BX1_SCANNER_APPROVED_SOURCE_COMMIT }}
+      BX1_SCANNER_OPERATING_CLOUD_RUN: test-offering-scanner-v1
+      BX1_SCANNER_PACKAGE_SHA256: d3ee9e401974855a1edc1761b1425417d126de618d5f0c91cd51209f69f6fcc2
+      BX1_SCANNER_PROJECT_REF: fegnnnlseuejkrusbbkv
+      BLOCKXONE_ENVIRONMENT: TESTNET
+      BLOCKXONE_APP_ORIGIN: https://testnet.bx1.co.za
+      BLOCKXONE_DOCUMENT_PROCESSING_WORKER_ID: bx1-test-offering-document-worker-v1
+      BLOCKXONE_DOCUMENT_SCANNER_ID: bx1-test-clamav-1-4-6-official-v1
+    steps:
+      - name: Check out reviewed operating source without credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+          submodules: false
+          lfs: false
+      - name: Select pinned Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22.23.1'
+          check-latest: false
+          package-manager-cache: false
+      - name: Reject unapproved commit, environment or repeated operating attempt
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          node --input-type=module -e "import { validateOperatingEnvironment } from './apps/web/scripts/document-scanner-offering-operating.mjs'; validateOperatingEnvironment();"
+      - name: Install pinned official scanner without any application secret
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 2 --max-time 180 \
+            'https://github.com/Cisco-Talos/clamav/releases/download/clamav-1.4.6/clamav-1.4.6.linux.x86_64.deb' \
+            --output "$RUNNER_TEMP/bx1-clamav-1.4.6.deb"
+          printf '%s  %s\n' 'd3ee9e401974855a1edc1761b1425417d126de618d5f0c91cd51209f69f6fcc2' "$RUNNER_TEMP/bx1-clamav-1.4.6.deb" | sha256sum --check --strict
+          sudo dpkg --install "$RUNNER_TEMP/bx1-clamav-1.4.6.deb"
+          test -x /usr/local/bin/clamscan
+          printf '%s  %s\n' '08160a5c11103e1a7af3b783b25e947a52bb0a598c40102c7aaa6525e477f7bf' '/usr/local/bin/clamscan' | sha256sum --check --strict
+          /usr/local/bin/clamscan --version
+      - name: Validate operating boundary without queue access or credentials
+        shell: bash
+        run: node --test apps/web/scripts/document-scanner-offering-operating.node-test.mjs
+      - name: Authenticate official snapshot and process at most one TEST offering document
+        shell: bash
+        env:
+          BLOCKXONE_DOCUMENT_SCANNER_HMAC_KEY: ${{ secrets.BLOCKXONE_DOCUMENT_SCANNER_HMAC_KEY }}
+        run: node apps/web/scripts/document-scanner-offering-operating.mjs
   compile-and-build:
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.mode == 'acceptance' }}
     runs-on: ubuntu-24.04
