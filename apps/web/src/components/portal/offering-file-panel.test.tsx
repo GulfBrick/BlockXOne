@@ -2,7 +2,7 @@
 import React from 'react'
 import { webcrypto, createHash } from 'node:crypto'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { PortalProduct } from '@/lib/portal/contracts'
 import { offeringDocumentPayloadText, type OfferingDocumentSnapshot, type OfferingDocumentCommand } from '@/lib/portal/offering-files'
@@ -64,6 +64,52 @@ describe('connected offering document panel (synthetic transport, not hosted/sca
     expect(screen.queryByLabelText(/Private PDF/)).toBeNull()
   })
 
+  it('clears a failed register-read message after a successful single-flight manual refresh', async () => {
+    const staleError = 'The saved portal state is temporarily unavailable.'
+    let completeRefresh!: (value: ReturnType<typeof reply>) => void
+    fetcher.mockResolvedValueOnce(reply({ error: staleError }, 503))
+      .mockImplementationOnce(() => new Promise(resolve => { completeRefresh = resolve }))
+    render(<OfferingFilePanel product={product} context={context} actorId={actorId} />)
+    await screen.findByText(staleError)
+    const refreshButton = screen.getByRole('button', { name: 'Refresh processing state' }) as HTMLButtonElement
+    fireEvent.click(refreshButton)
+    fireEvent.click(refreshButton)
+    expect(fetcher).toHaveBeenCalledTimes(2)
+    expect(screen.queryByText(staleError)).toBeNull()
+    expect(screen.getByRole('button', { name: 'Refreshing processing state…' }).getAttribute('aria-busy')).toBe('true')
+    expect(refreshButton.disabled).toBe(true)
+    await act(async () => { completeRefresh(reply(snapshot())) })
+    await screen.findByText(/document-processing owner must explicitly admit/)
+    expect(screen.queryByText(staleError)).toBeNull()
+    expect(screen.queryByText('Document authority unavailable')).toBeNull()
+    expect((screen.getByRole('button', { name: 'Refresh processing state' }) as HTMLButtonElement).disabled).toBe(false)
+    expect(screen.queryByRole('button', { name: 'Stage in quarantine' })).toBeNull()
+  })
+
+  it('ignores a late failed manual refresh from the old context after the new scope succeeds', async () => {
+    let completeOldRefresh!: (value: ReturnType<typeof reply>) => void
+    const nextContext = { ...context, organisationId: ids[2] }
+    const nextSnapshot = snapshot('PENDING_SCAN')
+    nextSnapshot.document_access.context = nextContext
+    fetcher.mockResolvedValueOnce(reply(snapshot()))
+      .mockImplementationOnce(() => new Promise(resolve => { completeOldRefresh = resolve }))
+      .mockResolvedValueOnce(reply(nextSnapshot))
+    const mounted = render(<OfferingFilePanel product={product} context={context} actorId={actorId} />)
+    await screen.findByText(/document-processing owner must explicitly admit/)
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh processing state' }))
+    await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2))
+    const oldSignal = fetcher.mock.calls[1][1].signal as AbortSignal
+    mounted.rerender(<OfferingFilePanel product={product} context={nextContext} actorId={actorId} />)
+    await screen.findByRole('button', { name: 'Stage in quarantine' })
+    expect(oldSignal.aborted).toBe(true)
+    await act(async () => { completeOldRefresh(reply({ error: 'Old workspace failed after the context changed.' }, 503)) })
+    expect(screen.queryByText('Old workspace failed after the context changed.')).toBeNull()
+    expect(screen.queryByText('Document authority unavailable')).toBeNull()
+    expect((screen.getByRole('button', { name: 'Refresh processing state' }) as HTMLButtonElement).disabled).toBe(false)
+    expect(screen.getByRole('button', { name: 'Stage in quarantine' })).toBeTruthy()
+    expect(fetcher).toHaveBeenCalledTimes(3)
+  })
+
   it('fails closed on an unavailable/malformed or other actor register', async () => {
     const current = snapshot('PENDING_SCAN')
     fetcher.mockResolvedValue(reply({ ...current, document_access: { ...current.document_access, actor_id: ids[0] } }))
@@ -114,6 +160,13 @@ describe('connected offering document panel (synthetic transport, not hosted/sca
     fireEvent.click(screen.getByRole('button', { name: 'Exclude this intent with reason' }))
     await screen.findByText('Document action requires reconciliation')
     expect(screen.queryByRole('button', { name: 'Exclude this intent with reason' })).toBeNull()
+    await waitFor(() => expect((screen.getByRole('button', { name: 'Refresh processing state' }) as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh processing state' }))
+    await waitFor(() => expect((screen.getByRole('button', { name: 'Refresh processing state' }) as HTMLButtonElement).disabled).toBe(false))
+    expect(screen.getByText('Document action requires reconciliation')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Exclude this intent with reason' })).toBeNull()
+    expect(screen.getByText(/Delivery outcome unknown/)).toBeTruthy()
+    expect(sessionStorage.length).toBe(1)
     fireEvent.click(screen.getByRole('button', { name: 'Retry the same document request' }))
     await screen.findByText(/Intent resolution recorded/)
     expect(attempts).toHaveLength(2)

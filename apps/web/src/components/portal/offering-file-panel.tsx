@@ -33,6 +33,7 @@ export function OfferingFilePanel({ product, context, actorId }: {
   const revision = product.offering_package?.origin === 'SUBMITTED' ? product.offering_package.id : null
   const [documents, setDocuments] = useState<OfferingDocumentSnapshot | null | undefined>(null)
   const [message, setMessage] = useState(''), [busy, setBusy] = useState(false)
+  const [loadMessage, setLoadMessage] = useState(''), [refreshing, setRefreshing] = useState(false)
   const [kind, setKind] = useState<'MEMORANDUM' | 'RISKS' | 'SUBSCRIPTION_TERMS'>('MEMORANDUM')
   const [title, setTitle] = useState(''), [file, setFile] = useState<File | null>(null)
   const [reason, setReason] = useState(''), [statement, setStatement] = useState('')
@@ -44,6 +45,7 @@ export function OfferingFilePanel({ product, context, actorId }: {
   const [staleRevision, setStaleRevision] = useState<number | null>(null)
   const needsFreshRevision = staleRevision !== null && product.revision <= staleRevision
   const generation = useRef(0)
+  const manualRefreshFlight = useRef<{ generation: number; controller: AbortController } | null>(null)
   const current = documents && context && documents.revision_id === revision && documents.product_id === product.id
     && documents.document_access.actor_id === actorId && portalContextMatches(documents.document_access.context, context) ? documents : null
   const canStage = Boolean(current?.document_access.can_upload && current.profile === 'PDF_SIGNATURE_REQUIRED_V1'
@@ -68,20 +70,46 @@ export function OfferingFilePanel({ product, context, actorId }: {
     if (generation.current === expectedGeneration && !signal?.aborted) setDocuments(value)
   }
 
+  async function refreshProcessingState() {
+    const expectedGeneration = generation.current
+    if (!revision || !context || busy || documents === null
+      || manualRefreshFlight.current?.generation === expectedGeneration) return
+    const flight = { generation: expectedGeneration, controller: new AbortController() }
+    manualRefreshFlight.current = flight
+    // Only register-load errors are cleared; an unresolved command/upload or
+    // invalid retry journal retains its explanation and original identity.
+    setLoadMessage(''); setRefreshing(true); setBusy(true)
+    try { await refresh(flight.controller.signal, expectedGeneration) }
+    catch (error) {
+      if (!flight.controller.signal.aborted && generation.current === expectedGeneration) {
+        setLoadMessage(error instanceof Error ? error.message : 'The current register is unavailable.')
+      }
+    } finally {
+      if (manualRefreshFlight.current === flight) manualRefreshFlight.current = null
+      if (generation.current === expectedGeneration) { setRefreshing(false); setBusy(false) }
+    }
+  }
+
   useEffect(() => {
     const expectedGeneration = ++generation.current
     const controller = new AbortController()
-    setDocuments(null); setMessage(''); setPending(null); setPendingUpload(null); setRetryBlocked(false); setResumeIntent(null); setStaleRevision(null); setBusy(false); setSelection({}); setFile(null); setTitle(''); setReason(''); setStatement('')
+    setDocuments(null); setMessage(''); setLoadMessage(''); setRefreshing(false); setPending(null); setPendingUpload(null); setRetryBlocked(false); setResumeIntent(null); setStaleRevision(null); setBusy(false); setSelection({}); setFile(null); setTitle(''); setReason(''); setStatement('')
     if (revision && context) {
       try { setPending(readOfferingDocumentRetry(sessionStorage, { actorId, productId: product.id, revisionId: revision, context })) }
       catch { setRetryBlocked(true); setMessage('The saved document request journal is unavailable or invalid. No new action is sent; reconcile the original actor/context/revision first.') }
     }
     if (revision && context) void refresh(controller.signal, expectedGeneration).catch(error => {
       if (!controller.signal.aborted && generation.current === expectedGeneration) {
-        setDocuments(undefined); setMessage(error instanceof Error ? error.message : 'The document register is unavailable.')
+        setDocuments(undefined); setLoadMessage(error instanceof Error ? error.message : 'The document register is unavailable.')
       }
     })
-    return () => { controller.abort(); ++generation.current }
+    return () => {
+      controller.abort()
+      if (manualRefreshFlight.current?.generation === expectedGeneration) {
+        manualRefreshFlight.current.controller.abort(); manualRefreshFlight.current = null
+      }
+      ++generation.current
+    }
   }, [revision, product.id, actorId, context?.mode, context?.mode === 'ROLE' ? context.organisationId : '', context?.mode === 'ROLE' ? context.role : ''])
 
   async function submit(event: FormEvent<HTMLFormElement>) {
@@ -202,7 +230,8 @@ export function OfferingFilePanel({ product, context, actorId }: {
         </li>)}</ul> : <p className={styles.muted}>No immutable PDF intents are recorded for this revision.</p>}
         {!pending && current.document_access.allowed_commands.includes('resolve_offering_file_intent') ? <Field label="Intent resolution reason" hint="20 to 1,000 characters. No active lease or sealed evidence can be excluded."><textarea minLength={20} maxLength={1000} value={reason} onChange={event => setReason(event.target.value)} /></Field> : null}
       </>}
-      <button type="button" className={styles.buttonSecondary} disabled={busy} onClick={() => void refresh().catch(error => setMessage(error instanceof Error ? error.message : 'The current register is unavailable.'))}>Refresh processing state</button>
+      <button type="button" className={styles.buttonSecondary} disabled={busy || documents === null} aria-busy={refreshing} onClick={() => void refreshProcessingState()}>{refreshing ? 'Refreshing processing state…' : 'Refresh processing state'}</button>
+      {loadMessage ? <p className={styles.fieldError} role="status">{loadMessage}</p> : null}
       {message ? <p className={styles.fieldError} role="status">{message}</p> : null}
       {retryBlocked ? <Notice title="Document request journal unavailable" tone="warning">No new action can replace an unverified saved request. Reload the original account/context and reconcile its exact request before continuing.</Notice> : null}
       {needsFreshRevision ? <Notice title="Fresh request rolled back; revision refresh required" tone="warning">No effect was recorded for the matching request. Use Refresh saved state above; a new action needs the latest product revision, not another attempt with the stale input.</Notice> : null}
