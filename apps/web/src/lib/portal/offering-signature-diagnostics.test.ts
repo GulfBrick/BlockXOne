@@ -28,6 +28,7 @@ describe('same-attempt sanitized DocuSign reconciliation diagnostic', () => {
       provider_envelope_status: 'delivered', provider_signer_status: 'completed', signer_count: 1,
       assessment_reason: 'NOT_COMPLETED',
       envelope_identity_matches: true, signer_identity_matches: true,
+      signer_stable_identity_matches: true, signer_display_name_matches: true,
       provider_signed_at: '2026-10-15T19:34:00.000Z', provider_completed_at: null,
       envelope_observed_at: now, recipients_observed_at: now + 10,
     })
@@ -46,6 +47,8 @@ describe('same-attempt sanitized DocuSign reconciliation diagnostic', () => {
       const value = fixture(); change(value)
       const result = offeringSignatureDiagnostic(value)
       expect(index < 2 ? result?.envelope_identity_matches : result?.signer_identity_matches).toBe(false)
+      if (index === 4) expect(result).toMatchObject({ signer_stable_identity_matches: true, signer_display_name_matches: false })
+      if ([2, 3, 5].includes(index)) expect(result?.signer_stable_identity_matches).toBe(false)
       expect(JSON.stringify(result)).not.toMatch(/PRIVATE_NAME|example\.invalid/)
     })
     const foreign = fixture(); foreign.expected.operationId = actor
@@ -63,11 +66,20 @@ describe('same-attempt sanitized DocuSign reconciliation diagnostic', () => {
     logOfferingSignatureDiagnostic(value)
     expect(info).toHaveBeenCalledTimes(1)
     const line = info.mock.calls[0][0] as string
-    expect(line).not.toMatch(/PRIVATE_|MARKER|https?:|example\.invalid|clientUserId|name|email|privateToken/)
+    expect(line).not.toMatch(/PRIVATE_|MARKER|https?:|example\.invalid|clientUserId|"name"|"email"|privateToken/)
     expect(line).not.toContain(actor)
     expect(line.length).toBeLessThan(1200)
     expect(JSON.parse(line)).toMatchObject({ provider_envelope_status: 'UNRECOGNISED',
       provider_signer_status: 'UNRECOGNISED', assessment_reason: 'OTHER', provider_signed_at: null, provider_completed_at: null })
+  })
+
+  it('reports stable identity separately from an adopted placeholder display name without logging either name', () => {
+    const value = fixture()
+    value.expected.signer.name = value.expected.signer.email
+    const result = offeringSignatureDiagnostic(value)
+    expect(result).toMatchObject({ signer_identity_matches: false, signer_stable_identity_matches: true,
+      signer_display_name_matches: false })
+    expect(JSON.stringify(result)).not.toMatch(/PRIVATE_NAME|example\.invalid|clientUserId|"name"|"email"/)
   })
 
   it('has bounded signer count and never treats a multiple-signer list as the frozen signer', () => {

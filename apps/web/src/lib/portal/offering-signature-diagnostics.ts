@@ -57,6 +57,9 @@ export function offeringSignatureDiagnostic(input: DiagnosticInput) {
       signer_identity_matches: signer !== null && signer.recipientId === '1'
         && signer.clientUserId === input.expected.signer.clientUserId
         && signer.name === input.expected.signer.name && signer.email === input.expected.signer.email,
+      signer_stable_identity_matches: signer !== null && signer.recipientId === '1'
+        && signer.clientUserId === input.expected.signer.clientUserId && signer.email === input.expected.signer.email,
+      signer_display_name_matches: signer !== null && signer.name === input.expected.signer.name,
       provider_signed_at: instant(signer?.signedDateTime), provider_completed_at: instant(envelope.completedDateTime),
       envelope_observed_at: observed(input.envelope.observedAt), recipients_observed_at: observed(input.recipients.observedAt),
     }

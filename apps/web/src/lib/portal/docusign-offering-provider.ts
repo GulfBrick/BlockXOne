@@ -392,7 +392,11 @@ export function assessOfferingCompletion(expected: OfferingEnvelopeExpectation, 
   if (!recipients.success) return unresolved('RECIPIENTS_INVALID')
   if (Object.entries(recipients.data).some(([key, value]) => key !== 'signers' && Array.isArray(value) && value.length)) return noncurrent('EXTRA_RECIPIENT')
   const signer = recipients.data.signers[0]
-  if (signer.recipientId !== '1' || signer.clientUserId !== expected.signer.clientUserId || signer.name !== expected.signer.name
+  const exactName = signer.name === expected.signer.name
+  // Only the exact frozen verified-email fallback may acquire a display name.
+  // It remains a candidate until the embedded audit and signed-tab proof below.
+  const adoptedPlaceholderName = expected.signer.name === expected.signer.email && text(100).safeParse(signer.name).success
+  if (signer.recipientId !== '1' || signer.clientUserId !== expected.signer.clientUserId || (!exactName && !adoptedPlaceholderName)
     || signer.email !== expected.signer.email || signer.status !== 'completed') return noncurrent('RECIPIENT_MISMATCH')
   const docs = z.object({ envelopeId: uuid.optional(), envelopeDocuments: z.array(z.object({ documentId: z.string(), name: z.string(), type: z.string().optional() })).max(5) }).safeParse(snapshot.documents)
   if (!docs.success || docs.data.envelopeId && docs.data.envelopeId !== binding.envelopeId) return unresolved('DOCUMENTS_INVALID')
@@ -406,7 +410,7 @@ export function assessOfferingCompletion(expected: OfferingEnvelopeExpectation, 
     if (matching.length !== 1 || matching[0].value !== value) return noncurrent('CUSTOM_FIELDS_CHANGED')
   }
   const tabs = z.object({ signHereTabs: z.array(z.object({ documentId: z.string(), pageNumber: z.string(), xPosition: z.string(),
-    yPosition: z.string(), tabLabel: z.string(), optional: z.string().optional() })).length(1) }).passthrough().safeParse(snapshot.tabs)
+    yPosition: z.string(), tabLabel: z.string(), optional: z.string().optional() }).passthrough()).length(1) }).passthrough().safeParse(snapshot.tabs)
   if (!tabs.success) return unresolved('TABS_INVALID')
   const tab = tabs.data.signHereTabs[0]
   if (tab.documentId !== '4' || tab.pageNumber !== '1' || tab.xPosition !== '72' || tab.yPosition !== '650'
@@ -415,7 +419,9 @@ export function assessOfferingCompletion(expected: OfferingEnvelopeExpectation, 
   const audit = z.object({ auditEvents: z.array(z.object({ eventFields: z.array(z.object({ name: z.string(), value: z.string() })).max(100) })).min(1).max(1000) }).safeParse(snapshot.audit_events)
   if (!audit.success) return unresolved('AUDIT_MISSING')
   const benign = new Set(['Created', 'Sent', 'Delivered', 'Viewed', 'Signed', 'Completed', 'Printable Copy Delivered', 'Archive Delivered'])
+  const embedded = new Set(['Registered', 'Opened', 'Viewed In-Session', 'Signed'])
   const actions = new Set<string>()
+  const progression: { action: string; at: number; timestamp: string; states: string[] }[] = []
   const sent = Date.parse(envelope.data.sentDateTime), completed = Date.parse(envelope.data.completedDateTime)
   if (completed < sent || Date.parse(signer.signedDateTime) < sent || Date.parse(signer.signedDateTime) > completed) return unresolved('TIMELINE_INVALID')
   for (const event of audit.data.auditEvents) {
@@ -423,9 +429,43 @@ export function assessOfferingCompletion(expected: OfferingEnvelopeExpectation, 
     if (names.length !== 1 || times.length !== 1 || !Number.isFinite(Date.parse(times[0].value))) return unresolved('AUDIT_INVALID')
     const action = names[0].value
     if (/correct|reassign|replace|change|void|declin/i.test(action)) return noncurrent('PROVIDER_INTEGRITY_CHANGED')
-    if (!benign.has(action)) return unresolved('AUDIT_UNKNOWN_ACTION')
+    if (!benign.has(action) && !embedded.has(action)) return unresolved('AUDIT_UNKNOWN_ACTION')
     actions.add(action)
+    progression.push({ action, at: Date.parse(times[0].value), timestamp: times[0].value,
+      states: event.eventFields.filter(field => field.name === 'EnvelopeStatus').map(field => field.value) })
   }
-  if (!['Sent', 'Signed', 'Completed'].every(action => actions.has(action))) return unresolved('AUDIT_INCOMPLETE')
+  if (progression.every(event => benign.has(event.action))) {
+    // Preserve the legacy audit vocabulary and its original acceptance rules.
+    if (!['Sent', 'Signed', 'Completed'].every(action => actions.has(action))) return unresolved('AUDIT_INCOMPLETE')
+    if (!exactName) return noncurrent('RECIPIENT_MISMATCH')
+  } else {
+    // The observed embedded ceremony has no invented Sent/Completed audit rows.
+    // Do not mix its vocabulary with another partially recognised event flow.
+    if (progression.some(event => !embedded.has(event.action))) return unresolved('AUDIT_UNKNOWN_ACTION')
+    if (progression.filter(event => event.action === 'Registered').length !== 1
+      || progression.filter(event => event.action === 'Signed').length !== 1) return unresolved('AUDIT_INCOMPLETE')
+    if (tab.status !== 'signed' || tab.recipientId !== '1' || tab.stampType !== 'signature' || tab.tabType !== 'signhere') return noncurrent('TABS_CHANGED')
+    let stage = 0, previous = Number.NEGATIVE_INFINITY
+    for (const event of progression) {
+      if (!z.string().datetime({ offset: true }).safeParse(event.timestamp).success
+        || event.at < previous || event.at > completed || event.states.length !== 1) return unresolved('AUDIT_INVALID')
+      previous = event.at
+      if (event.action === 'Registered') {
+        if (stage !== 0 || event.states[0] !== 'created') return unresolved('AUDIT_INCOMPLETE')
+        stage = 1
+      } else if (event.action === 'Opened') {
+        if (stage < 1 || stage >= 4 || event.at < sent || !['sent', 'delivered'].includes(event.states[0])) return unresolved('AUDIT_INCOMPLETE')
+        stage = Math.max(stage, 2)
+      } else if (event.action === 'Viewed In-Session') {
+        if (stage < 2 || stage >= 4 || event.at < sent || event.states[0] !== 'delivered') return unresolved('AUDIT_INCOMPLETE')
+        stage = 3
+      } else {
+        if (stage !== 3 || event.states[0] !== 'completed') return unresolved('AUDIT_INCOMPLETE')
+        if (event.at !== Date.parse(signer.signedDateTime)) return unresolved('TIMELINE_INVALID')
+        stage = 4
+      }
+    }
+    if (stage !== 4) return unresolved('AUDIT_INCOMPLETE')
+  }
   return { integrity: 'CURRENT_CANDIDATE', reason: 'AUTHENTICATED_COMPLETION_REQUIRES_RETAINED_ARTIFACTS_AND_CURRENT_AUTHORITY' }
 }

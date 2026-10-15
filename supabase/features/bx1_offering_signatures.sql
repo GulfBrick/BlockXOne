@@ -777,7 +777,21 @@ begin
         when 'VOIDED' then 'VOIDED' when 'SENT' then 'SENT' else 'UNKNOWN_RECONCILIATION' end,
       next_action=case p_result->>'status' when 'COMPLETED' then 'RETAIN' when 'DECLINED' then 'NONE' when 'VOIDED' then 'NONE'
         else case when not is_current and envelope is not null then 'VOID' else 'RECONCILE' end end,
-      noncurrent_reason=case when p_result->>'status'='COMPLETED' and p_result->'integrity_verified' is distinct from 'true'::jsonb
+      noncurrent_reason=case when noncurrent_reason is not null then
+        case when p_action='RECONCILE_RESULT' and t.action='RECONCILE'
+          and p_result->>'status'='COMPLETED' and p_result->'integrity_verified'='true'::jsonb
+          and is_current is true and o.state='RECOVERY_REQUIRED' and o.environment='TESTNET'
+          and o.noncurrent_reason='PROVIDER_INTEGRITY_UNPROVED'
+          and o.envelope_id is not null and envelope=o.envelope_id
+          and exists(select 1 from bx1_private.offering_signature_observations failed
+            where failed.operation_id=o.id and failed.action in ('RECONCILE_RESULT','VOID_RESULT')
+              and failed.result->>'status'='COMPLETED' and failed.result->'integrity_verified'='false'::jsonb)
+          and (select count(*) from pg_catalog.jsonb_each(data))=6
+          and not exists(select 1 from pg_catalog.jsonb_each(data) observed
+            where observed.value->'observedAt' is null or pg_catalog.jsonb_typeof(observed.value->'observedAt') is distinct from 'number'
+              or (observed.value->>'observedAt')::numeric<extract(epoch from t.created_at)*1000)
+          then null else noncurrent_reason end
+        when p_result->>'status'='COMPLETED' and p_result->'integrity_verified' is distinct from 'true'::jsonb
         then 'PROVIDER_INTEGRITY_UNPROVED' else noncurrent_reason end,
       next_check_at=case when p_result->>'status'='COMPLETED' then at else scheduled end,lease_expires_at=at where id=o.id;
   elsif p_action in ('ARTIFACT_RESERVED','ARTIFACT_RETAINED') then

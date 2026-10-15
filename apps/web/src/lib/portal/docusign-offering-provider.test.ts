@@ -45,6 +45,39 @@ function snapshot(): OfferingCompletionSnapshot {
     ] })) },
   }
 }
+type AuditFixture = { eventFields: { name: string; value: string }[] }
+const auditOf = (value: OfferingCompletionSnapshot) => value.audit_events.auditEvents as AuditFixture[]
+const signerOf = (value: OfferingCompletionSnapshot) => (value.recipients.signers as Record<string, unknown>[])[0]
+const tabOf = (value: OfferingCompletionSnapshot) => (value.tabs.signHereTabs as Record<string, unknown>[])[0]
+function embeddedFixture(placeholder = true) {
+  // Redacted observed response SHAPE only. IDs, identity and evidence here are
+  // synthetic; no real operation, provider authentication or finalization proof.
+  const original = input()
+  original.validFrom = '2026-10-15T16:45:00Z'; original.validUntil = '2026-10-20T16:00:00Z'
+  original.signer.name = placeholder ? original.signer.email : 'Deliberately Supplied Frozen Name'
+  const expected = buildOfferingEnvelope(original).expected, value = snapshot()
+  value.envelope = { envelopeId: binding.envelopeId, transactionId: binding.operationId, status: 'completed',
+    sentDateTime: '2026-10-15T16:55:11Z', completedDateTime: '2026-10-15T20:38:23.9170000Z' }
+  value.recipients = { signers: [{ ...original.signer, recipientId: '1', status: 'completed',
+    name: placeholder ? 'Synthetic Adopted Full Name' : original.signer.name,
+    signedDateTime: '2026-10-15T20:38:23.9170000Z' }] }
+  value.custom_fields = { textCustomFields: Object.entries(expected.customFields).map(([name, field]) => ({ name, value: field })) }
+  value.tabs = { signHereTabs: [{ documentId: '4', pageNumber: '1', xPosition: '72', yPosition: '650',
+    tabLabel: 'bx1_issuer_execution', optional: 'false', status: 'signed', recipientId: '1', stampType: 'signature', tabType: 'signhere' }] }
+  value.audit_events = { auditEvents: [
+    ['Registered', 'created', '2026-10-15T16:55:11.1000000Z'],
+    ['Opened', 'sent', '2026-10-15T17:07:51Z'],
+    ['Viewed In-Session', 'delivered', '2026-10-15T17:07:58Z'],
+    ['Opened', 'delivered', '2026-10-15T18:10:11Z'],
+    ['Viewed In-Session', 'delivered', '2026-10-15T18:10:19Z'],
+    ['Opened', 'delivered', '2026-10-15T20:35:20Z'],
+    ['Viewed In-Session', 'delivered', '2026-10-15T20:35:25Z'],
+    ['Signed', 'completed', '2026-10-15T20:38:23.9173151Z'],
+  ].map(([Action, EnvelopeStatus, logTime]) => ({ eventFields: [
+    { name: 'logTime', value: logTime }, { name: 'Action', value: Action }, { name: 'EnvelopeStatus', value: EnvelopeStatus },
+  ] })) }
+  return { expected, value }
+}
 beforeEach(() => { signing.sign.mockClear() })
 
 function frozenBinding(): FrozenOfferingBinding {
@@ -294,4 +327,127 @@ describe('authenticated completion assessment fixtures, not provider acceptance'
     }
     expect(assessOfferingCompletion(buildOfferingEnvelope(input()).expected, binding, value).integrity).toBe('UNRESOLVED')
   })
+})
+
+describe('exact embedded completion compatibility, not provider or business acceptance', () => {
+  it('preserves legacy acceptance of unrelated tab metadata rather than applying embedded-only predicates', () => {
+    const value = snapshot()
+    Object.assign(tabOf(value), { status: 1, recipientId: null, stampType: true, tabType: [] })
+    expect(assessOfferingCompletion(buildOfferingEnvelope(input()).expected, binding, value).integrity).toBe('CURRENT_CANDIDATE')
+  })
+
+  it('accepts the redacted embedded audit and placeholder adoption only as a current candidate', () => {
+    const { expected, value } = embeddedFixture(), before = JSON.stringify({ expected, value })
+    expect(expected.signer.name).toBe(expected.signer.email)
+    expect(signerOf(value).name).not.toBe(expected.signer.name)
+    expect(Date.parse('2026-10-15T20:38:23.9173151Z')).toBe(Date.parse(String(signerOf(value).signedDateTime)))
+    expect(assessOfferingCompletion(expected, binding, value)).toEqual({ integrity: 'CURRENT_CANDIDATE',
+      reason: 'AUTHENTICATED_COMPLETION_REQUIRES_RETAINED_ARTIFACTS_AND_CURRENT_AUTHORITY' })
+    expect(JSON.stringify({ expected, value })).toBe(before)
+    expect(auditOf(value).map(event => event.eventFields.find(field => field.name === 'Action')?.value))
+      .toEqual(['Registered', 'Opened', 'Viewed In-Session', 'Opened', 'Viewed In-Session', 'Opened', 'Viewed In-Session', 'Signed'])
+  })
+
+  it('also accepts an unchanged deliberately supplied name through the exact embedded path', () => {
+    const { expected, value } = embeddedFixture(false)
+    expect(assessOfferingCompletion(expected, binding, value).integrity).toBe('CURRENT_CANDIDATE')
+    signerOf(value).name = 'An Adopted Different Name'
+    expect(assessOfferingCompletion(expected, binding, value)).toEqual({ integrity: 'NON_CURRENT', reason: 'RECIPIENT_MISMATCH' })
+  })
+
+  it.each(['', ' ', ' Name', 'Name ', 'Name\nInjected', 'Name\u0000Injected', 'x'.repeat(101)])(
+    'does not accept an empty, unbounded or control-bearing adopted name (%j)', name => {
+      const { expected, value } = embeddedFixture(); signerOf(value).name = name
+      expect(assessOfferingCompletion(expected, binding, value)).toEqual({ integrity: 'NON_CURRENT', reason: 'RECIPIENT_MISMATCH' })
+    })
+
+  it('does not extend placeholder adoption to the legacy audit vocabulary', () => {
+    const { expected, value } = embeddedFixture()
+    value.audit_events = snapshot().audit_events
+    expect(assessOfferingCompletion(expected, binding, value)).toEqual({ integrity: 'NON_CURRENT', reason: 'RECIPIENT_MISMATCH' })
+  })
+
+  it.each(['account', 'operation', 'envelope', 'transaction', 'recipient-id', 'client-user', 'email', 'recipient-state',
+    'extra-signer', 'extra-recipient', 'document', 'document-name', 'purpose', 'cover-hash', 'not-completed',
+    'recipient-time-missing', 'recipient-time-before-sent', 'recipient-time-after-completed', 'completed-time-missing', 'completed-before-sent'] as const)(
+    'keeps the unchanged %s binding mandatory for an adopted placeholder name', change => {
+      const { expected, value } = embeddedFixture()
+      if (change === 'account') expected.accountId = id(99)
+      if (change === 'operation') expected.operationId = id(99)
+      if (change === 'envelope') value.envelope.envelopeId = id(99)
+      if (change === 'transaction') value.envelope.transactionId = id(99)
+      if (change === 'recipient-id') signerOf(value).recipientId = '2'
+      if (change === 'client-user') signerOf(value).clientUserId = id(99)
+      if (change === 'email') signerOf(value).email = 'another@example.invalid'
+      if (change === 'recipient-state') signerOf(value).status = 'delivered'
+      if (change === 'extra-signer') (value.recipients.signers as unknown[]).push({ ...signerOf(value) })
+      if (change === 'extra-recipient') value.recipients.carbonCopies = [{ recipientId: '2' }]
+      if (change === 'document') (value.documents.envelopeDocuments as Record<string, unknown>[])[0].documentId = '99'
+      if (change === 'document-name') (value.documents.envelopeDocuments as Record<string, unknown>[])[0].name = 'replacement.pdf'
+      if (change === 'purpose' || change === 'cover-hash') {
+        const fields = value.custom_fields.textCustomFields as { name: string; value: string }[]
+        fields.find(field => field.name === (change === 'purpose' ? 'bx1_purpose' : 'bx1_cover_sha256'))!.value = 'changed'
+      }
+      if (change === 'not-completed') value.envelope.status = 'signed'
+      if (change === 'recipient-time-missing') delete signerOf(value).signedDateTime
+      if (change === 'recipient-time-before-sent') signerOf(value).signedDateTime = '2026-10-15T16:55:10Z'
+      if (change === 'recipient-time-after-completed') signerOf(value).signedDateTime = '2026-10-15T20:38:23.918Z'
+      if (change === 'completed-time-missing') delete value.envelope.completedDateTime
+      if (change === 'completed-before-sent') value.envelope.completedDateTime = '2026-10-15T16:55:10Z'
+      expect(assessOfferingCompletion(expected, binding, value).integrity).not.toBe('CURRENT_CANDIDATE')
+    })
+
+  it.each(['Registered', 'Opened', 'Viewed In-Session', 'Signed'])(
+    'denies embedded evidence without the %s progression', action => {
+      const { expected, value } = embeddedFixture()
+      value.audit_events.auditEvents = auditOf(value).filter(event => !event.eventFields.some(field => field.name === 'Action' && field.value === action))
+      expect(assessOfferingCompletion(expected, binding, value).integrity).not.toBe('CURRENT_CANDIDATE')
+    })
+
+  it.each(['duplicate-signed', 'duplicate-registered', 'signed-state-missing', 'signed-state-duplicate', 'signed-state-wrong',
+    'registered-state-wrong', 'opened-state-wrong', 'viewed-state-wrong', 'duplicate-action', 'duplicate-time',
+    'invalid-time', 'non-ISO-time', 'signed-time-mismatch', 'out-of-order', 'after-completed', 'opened-before-sent',
+    'viewed-before-opened', 'event-after-signed', 'mixed-legacy', 'unknown-action'] as const)(
+    'denies inconsistent embedded audit evidence: %s', change => {
+      const { expected, value } = embeddedFixture(), events = auditOf(value), signed = events.at(-1)!
+      const field = (event: AuditFixture, name: string) => event.eventFields.find(item => item.name === name)!
+      if (change === 'duplicate-signed') events.push(structuredClone(signed))
+      if (change === 'duplicate-registered') events.unshift(structuredClone(events[0]))
+      if (change === 'signed-state-missing') signed.eventFields = signed.eventFields.filter(item => item.name !== 'EnvelopeStatus')
+      if (change === 'signed-state-duplicate') signed.eventFields.push({ name: 'EnvelopeStatus', value: 'completed' })
+      if (change === 'signed-state-wrong') field(signed, 'EnvelopeStatus').value = 'delivered'
+      if (change === 'registered-state-wrong') field(events[0], 'EnvelopeStatus').value = 'sent'
+      if (change === 'opened-state-wrong') field(events[1], 'EnvelopeStatus').value = 'completed'
+      if (change === 'viewed-state-wrong') field(events[2], 'EnvelopeStatus').value = 'sent'
+      if (change === 'duplicate-action') signed.eventFields.push({ name: 'Action', value: 'Signed' })
+      if (change === 'duplicate-time') signed.eventFields.push({ name: 'logTime', value: '2026-10-15T20:38:23.917Z' })
+      if (change === 'invalid-time') field(signed, 'logTime').value = 'not a time'
+      if (change === 'non-ISO-time') field(signed, 'logTime').value = 'October 15 2026 20:38:23 GMT'
+      if (change === 'signed-time-mismatch') field(signed, 'logTime').value = '2026-10-15T20:38:23.916Z'
+      if (change === 'out-of-order') [events[3], events[4]] = [events[4], events[3]]
+      if (change === 'after-completed') field(signed, 'logTime').value = '2026-10-15T20:38:23.918Z'
+      if (change === 'opened-before-sent') field(events[1], 'logTime').value = '2026-10-15T16:55:10Z'
+      if (change === 'viewed-before-opened') [events[1], events[2]] = [events[2], events[1]]
+      if (change === 'event-after-signed') events.push(structuredClone(events[6]))
+      if (change === 'mixed-legacy') field(events[1], 'Action').value = 'Sent'
+      if (change === 'unknown-action') field(events[1], 'Action').value = 'Arbitrary consequential event'
+      expect(assessOfferingCompletion(expected, binding, value).integrity).not.toBe('CURRENT_CANDIDATE')
+    })
+
+  it.each(['Corrected', 'Reassigned', 'Replaced', 'Changed', 'Voided', 'Declined'])(
+    'denies every %s event, even after otherwise complete embedded evidence', action => {
+      const { expected, value } = embeddedFixture()
+      auditOf(value).push({ eventFields: [{ name: 'Action', value: action }, { name: 'logTime', value: '2026-10-15T20:38:23.917Z' }] })
+      expect(assessOfferingCompletion(expected, binding, value)).toEqual({ integrity: 'NON_CURRENT', reason: 'PROVIDER_INTEGRITY_CHANGED' })
+    })
+
+  it.each(['status', 'recipientId', 'stampType', 'tabType', 'documentId', 'pageNumber', 'xPosition', 'yPosition', 'tabLabel', 'optional'])(
+    'denies missing and altered signed-cover-tab %s', key => {
+      for (const missing of [true, false]) {
+        const { expected, value } = embeddedFixture()
+        if (missing) delete tabOf(value)[key]
+        else tabOf(value)[key] = 'changed'
+        expect(assessOfferingCompletion(expected, binding, value).integrity).not.toBe('CURRENT_CANDIDATE')
+      }
+    })
 })
