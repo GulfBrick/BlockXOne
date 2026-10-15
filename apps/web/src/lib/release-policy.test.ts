@@ -13,7 +13,7 @@ describe('native Auth admission', () => {
   it('lists exactly the reviewed native routes; TEST customer admission remains server-gated', () => {
     expect([...SUPABASE_ALLOWED_PATHS]).toEqual([
       '/login', '/forgot-password', '/auth/recover', '/auth/confirm', '/auth/login', '/auth/setup', '/auth/logout',
-      '/workspace', '/workspace/access-denied', '/api/wallet/challenge', '/api/wallet/verify',
+      '/workspace', '/workspace/access-denied', '/api/wallet/challenge', '/api/wallet/verify', '/api/wallet/context',
       '/login/mfa', '/workspace/security', '/auth/mfa-enroll', '/auth/mfa-verify', '/auth/mfa-restart-setup',
       '/workspace/administration', '/workspace/administration/staff-invitations', '/auth/admin-command', '/auth/staff-invite', '/workspace/staff-invite',
       '/workspace/testnet-fund', '/api/testnet-fund/command',

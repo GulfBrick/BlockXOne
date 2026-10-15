@@ -26,7 +26,7 @@ export function isLegacyClientAuthDisabled(
 export const SUPABASE_ALLOWED_PATHS = [
   '/login', '/forgot-password', '/auth/recover', '/auth/confirm', '/auth/login', '/auth/setup', '/auth/logout',
   '/workspace', '/workspace/access-denied',
-  '/api/wallet/challenge', '/api/wallet/verify',
+  '/api/wallet/challenge', '/api/wallet/verify', '/api/wallet/context',
   '/login/mfa', '/workspace/security', '/auth/mfa-enroll', '/auth/mfa-verify', '/auth/mfa-restart-setup',
   '/workspace/administration', '/workspace/administration/staff-invitations', '/auth/admin-command', '/auth/staff-invite', '/workspace/staff-invite',
   '/workspace/testnet-fund', '/api/testnet-fund/command',

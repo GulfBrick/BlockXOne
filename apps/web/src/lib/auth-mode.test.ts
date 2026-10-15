@@ -8,6 +8,35 @@ const service = '/api/portal/documents/processing'
 const blocked = (path: string, server = 'supabase', browser = 'supabase') =>
   isProductionWebPathBlocked(path, 'production', 'production', 'production', server, browser)
 
+describe('exact connected wallet context routing', () => {
+  const path = '/api/wallet/context'
+
+  it('admits only the three implemented wallet actions through paired Supabase auth', () => {
+    expect(SUPABASE_ALLOWED_PATHS.filter(value => value.startsWith('/api/wallet/'))).toEqual([
+      '/api/wallet/challenge', '/api/wallet/verify', path,
+    ])
+    expect(SUPABASE_ALLOWED_PATHS.filter(value => value === path)).toHaveLength(1)
+    expect(isSupabaseWebPathAllowed(path)).toBe(true)
+    expect(blocked(path)).toBe(false)
+    // This reaches the existing wallet handler; it does not satisfy its actor,
+    // origin, live session, MFA or native organisation/account ownership guard.
+  })
+
+  it.each([`${path}/`, `${path}/extra`, `${path}-admin`, `${path}.json`, path.toUpperCase(),
+    '/api/wallet/Context', '/api/wallet/%63ontext', '/api/wallet//context', '//api/wallet/context',
+    '/api\\wallet\\context', `${path}/../unknown`, `${path}/%2e%2e/unknown`, '/api/wallet', '/api/wallet/unknown',
+  ])('denies unimplemented, nested or lookalike wallet context %s', value => {
+    expect(isSupabaseWebPathAllowed(value)).toBe(false)
+    expect(blocked(value)).toBe(true)
+  })
+
+  it.each([['supabase', ''], ['', 'supabase'], ['Supabase', 'Supabase'], ['supabase', 'legacy'],
+    ['legacy', 'supabase'], ['invalid', 'supabase'], ['legacy', 'legacy'], ['', ''],
+  ])('keeps context denied under unpaired or legacy auth %s/%s', (server, browser) => {
+    expect(blocked(path, server, browser)).toBe(true)
+  })
+})
+
 describe('complete exact native fund route inventory', () => {
   const paths = [
     '/api/portal/fund-lifecycle/admission', '/api/portal/fund-lifecycle/approval', '/api/portal/fund-lifecycle/execute',

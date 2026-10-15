@@ -7,6 +7,85 @@ import { SUPABASE_ALLOWED_PATHS } from './lib/auth-mode'
 
 vi.mock('./lib/supabase/middleware', () => ({ updateSupabaseSession: vi.fn() }))
 
+describe('exact connected wallet context middleware boundary', () => {
+  const path = '/api/wallet/context'
+  beforeEach(() => {
+    vi.stubEnv('NODE_ENV', 'production')
+    vi.stubEnv('BLOCKXONE_RELEASE_MODE', '')
+    vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_RELEASE_MODE', '')
+    vi.stubEnv('BLOCKXONE_AUTH_MODE', 'supabase')
+    vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_AUTH_MODE', 'supabase')
+    vi.stubEnv('BLOCKXONE_APP_ORIGIN', 'https://testnet.bx1.co.za')
+    vi.stubEnv('SUPABASE_URL', 'https://fegnnnlseuejkrusbbkv.supabase.co')
+    vi.stubEnv('VERCEL_ENV', 'preview')
+    vi.mocked(updateSupabaseSession).mockReset()
+    vi.mocked(updateSupabaseSession).mockResolvedValue(NextResponse.next())
+  })
+  afterEach(() => vi.unstubAllEnvs())
+
+  it('passes the original form POST and refresh cookies to the unchanged authenticated wallet handler', async () => {
+    const refreshed = NextResponse.next()
+    refreshed.cookies.set('fixture-wallet-refresh', 'nonsecret', { httpOnly: true, secure: true, sameSite: 'lax', path: '/' })
+    vi.mocked(updateSupabaseSession).mockResolvedValueOnce(refreshed)
+    const request = new NextRequest(`https://testnet.bx1.co.za${path}`, { method: 'POST',
+      headers: { host: 'testnet.bx1.co.za', origin: 'https://testnet.bx1.co.za',
+        'content-type': 'application/x-www-form-urlencoded;charset=UTF-8', 'x-bx1-expected-actor': '00000000-0000-4000-8000-000000000001' },
+      body: 'organisationId=00000000-0000-4000-8000-000000000002',
+    })
+    const response = await middleware(request)
+    expect(response).toBe(refreshed)
+    expect(response.headers.get('x-middleware-next')).toBe('1')
+    expect(response.headers.get('location')).toBeNull()
+    expect(response.cookies.get('fixture-wallet-refresh')?.value).toBe('nonsecret')
+    expect(response.headers.get('cache-control')).toBe('private, no-store')
+    expect(response.headers.get('pragma')).toBe('no-cache')
+    expect(response.headers.get('cdn-cache-control')).toBe('no-store')
+    expect(response.headers.get('vercel-cdn-cache-control')).toBe('no-store')
+    expect(response.headers.get('referrer-policy')).toBe('no-referrer')
+    expect(response.headers.get('x-robots-tag')).toBe('noindex, nofollow, noarchive')
+    expect(updateSupabaseSession).toHaveBeenCalledExactlyOnceWith(request)
+    expect(request.bodyUsed).toBe(false)
+    // No wallet context, signing key or ownership proof is manufactured here.
+  })
+
+  it.each([`${path}/`, `${path}/extra`, `${path}-admin`, `${path}.json`, path.toUpperCase(),
+    '/api/wallet/%63ontext', '/api/wallet/unknown',
+  ])('rejects wallet context lookalike %s before session refresh', async value => {
+    const response = await middleware(new NextRequest(`https://testnet.bx1.co.za${value}`, { method: 'POST' }))
+    expect(response.status).toBe(404)
+    expect(response.headers.get('cache-control')).toBe('private, no-store')
+    expect(response.headers.get('set-cookie')).toBeNull()
+    expect(updateSupabaseSession).not.toHaveBeenCalled()
+  })
+
+  it.each([['supabase', ''], ['', 'supabase'], ['Supabase', 'Supabase'], ['', '']])('denies wallet context under auth %s/%s', async (server, browser) => {
+    vi.stubEnv('BLOCKXONE_AUTH_MODE', server)
+    vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_AUTH_MODE', browser)
+    const response = await middleware(new NextRequest(`https://testnet.bx1.co.za${path}`, { method: 'POST' }))
+    expect(response.status).toBe(server === '' && browser === '' ? 404 : 503)
+    expect(response.headers.get('set-cookie')).toBeNull()
+    expect(updateSupabaseSession).not.toHaveBeenCalled()
+  })
+
+  it('preserves denied sessions and privately fails closed on session-refresh failure', async () => {
+    const denied = NextResponse.json({ error: 'unavailable' }, { status: 503 })
+    denied.cookies.set('fixture-wallet-expired', '', { maxAge: 0, httpOnly: true, secure: true, sameSite: 'lax', path: '/' })
+    vi.mocked(updateSupabaseSession).mockResolvedValueOnce(denied)
+    const response = await middleware(new NextRequest(`https://testnet.bx1.co.za${path}`, { method: 'POST' }))
+    expect(response).toBe(denied)
+    expect(response.status).toBe(503)
+    expect(response.headers.get('x-middleware-next')).toBeNull()
+    expect(response.cookies.get('fixture-wallet-expired')?.maxAge).toBe(0)
+    expect(response.headers.get('cache-control')).toBe('private, no-store')
+    vi.mocked(updateSupabaseSession).mockRejectedValueOnce(new Error('synthetic wallet refresh failure'))
+    const failed = await middleware(new NextRequest(`https://testnet.bx1.co.za${path}`, { method: 'POST' }))
+    expect(failed.status).toBe(503)
+    expect(failed.headers.get('cache-control')).toBe('private, no-store')
+    expect(failed.headers.get('set-cookie')).toBeNull()
+    expect(updateSupabaseSession).toHaveBeenCalledTimes(2)
+  })
+})
+
 describe('complete exact fund API middleware boundary', () => {
   const paths = SUPABASE_ALLOWED_PATHS.filter(path => path.startsWith('/api/portal/fund-lifecycle/'))
 
