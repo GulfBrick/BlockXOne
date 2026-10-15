@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: Cloud acceptance, one empty-form browser proof, or focused fund dashboard checks
+        description: Cloud acceptance, empty-form browser proof, or focused UI and password-recovery checks
         type: choice
-        options: [acceptance, registration-browser-proof, fund-dashboard-focused, theme-focused]
+        options: [acceptance, registration-browser-proof, fund-dashboard-focused, theme-focused, auth-recovery-focused]
         default: acceptance
       registration_origin_expectation:
         description: Expected browser-generated Origin on the current hosted TEST document
@@ -24,6 +24,9 @@ on:
       - apps/web/src/lib/runtime-scope*
       - apps/web/src/lib/instrument-term-options*
       - apps/web/src/app/login/**
+      - apps/web/src/app/forgot-password/**
+      - apps/web/src/components/auth/password-recovery-form.tsx
+      - apps/web/src/lib/supabase/password-recovery.ts
       - apps/web/src/app/wm/funds/new/**
       - apps/web/src/app/tokenisation-agent/deploy/**
       - apps/web/src/app/tokenisation-agent/mint/**
@@ -98,6 +101,9 @@ on:
       - apps/web/src/lib/runtime-scope*
       - apps/web/src/lib/instrument-term-options*
       - apps/web/src/app/login/**
+      - apps/web/src/app/forgot-password/**
+      - apps/web/src/components/auth/password-recovery-form.tsx
+      - apps/web/src/lib/supabase/password-recovery.ts
       - apps/web/src/app/wm/funds/new/**
       - apps/web/src/app/tokenisation-agent/deploy/**
       - apps/web/src/app/tokenisation-agent/mint/**
@@ -651,8 +657,8 @@ jobs:
         run: node apps/web/scripts/test-registration-browser.mjs
 
   fund-dashboard-focused:
-    name: Focused dashboard or shared-theme acceptance
-    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.mode == 'fund-dashboard-focused' || inputs.mode == 'theme-focused') && github.ref == 'refs/heads/codex/stage2-sandbox-completion-20261011' }}
+    name: Focused dashboard, theme or password-recovery acceptance
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.mode == 'fund-dashboard-focused' || inputs.mode == 'theme-focused' || inputs.mode == 'auth-recovery-focused') && github.ref == 'refs/heads/codex/stage2-sandbox-completion-20261011' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -696,7 +702,19 @@ jobs:
           node --input-type=module <<'NODE'
           import { spawn } from 'node:child_process'
           import { runHermeticVitest } from './scripts/run-hermetic-tests.mjs'
-          const files = process.env.BX1_FOCUSED_UI_MODE === 'theme-focused' ? [
+          const files = process.env.BX1_FOCUSED_UI_MODE === 'auth-recovery-focused' ? [
+            'src/app/auth/recover/route.test.ts',
+            'src/app/forgot-password/forgot-password.test.tsx',
+            'src/app/login/login.test.tsx',
+            'src/app/auth/auth-routes.test.ts',
+            'src/app/auth/portal-auth.test.ts',
+            'src/lib/auth-mode.test.ts',
+            'src/lib/auth-referrer-policy.test.ts',
+            'src/lib/platform-release.test.ts',
+            'src/lib/release-policy.test.ts',
+            'src/middleware.test.ts',
+            'src/lib/supabase/middleware.test.ts',
+          ] : process.env.BX1_FOCUSED_UI_MODE === 'theme-focused' ? [
             'src/app/homepage-v4.test.tsx',
             'src/app/auth/auth-routes.test.ts',
             'src/app/auth/portal-auth.test.ts',
@@ -746,8 +764,8 @@ jobs:
           })
           NODE
 
-      - name: Typecheck the same fund source before requesting its release build
-        if: ${{ inputs.mode == 'fund-dashboard-focused' && !cancelled() }}
+      - name: Typecheck the same reviewed source before requesting its release build
+        if: ${{ (inputs.mode == 'fund-dashboard-focused' || inputs.mode == 'auth-recovery-focused') && !cancelled() }}
         shell: bash
         working-directory: apps/web
         run: npx tsc --noEmit --incremental false

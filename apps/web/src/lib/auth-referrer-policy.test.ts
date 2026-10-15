@@ -4,6 +4,16 @@ import { AUTH_ERROR_COPY } from './supabase/contracts'
 import { REGISTRATION_ERRORS } from './portal/registration'
 
 describe('Auth document referrer policy', () => {
+  it('keeps reset-request forms submit-capable only for fixed non-sensitive presentation state', () => {
+    for (const query of [{}, { status: 'check-email' }, { error: 'email-invalid' }, { error: 'invalid-request' }, { error: 'unavailable' }, { error: 'rate-limited' }]) {
+      expect(authDocumentReferrerPolicy('/forgot-password', query)).toBe('strict-origin')
+    }
+    for (const query of [{ email: 'private@example.invalid' }, { token_hash: 'secret' }, { code: 'secret' }, { next: 'https://evil.test' }, { error: ['unavailable'] }, { status: 'unknown' }]) {
+      expect(authDocumentReferrerPolicy('/forgot-password', query)).toBe('no-referrer')
+    }
+    expect(authDocumentReferrerPolicy('/forgot-password', new URLSearchParams('error=unavailable&error=unavailable'))).toBe('no-referrer')
+    expect(authDocumentReferrerPolicy('/auth/recover', {})).toBe('no-referrer')
+  })
   it('permits only clean canonical administration selectors for native signout', () => {
     const id = '11111111-1111-4111-8111-111111111111'
     for (const query of [{}, { organisation: id }, { proposal: id }, { organisation: id, proposal: id }]) {

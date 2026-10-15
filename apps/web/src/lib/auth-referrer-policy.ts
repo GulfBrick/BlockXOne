@@ -1,6 +1,7 @@
 import { isAuthErrorCode } from './supabase/contracts'
 import { parseAdministrationQuery } from './administration/query'
 import { isRegistrationError, isRegistrationIntent, registrationFailureReference } from './portal/registration'
+import { isPasswordRecoveryError } from './supabase/password-recovery'
 
 export type AuthReferrerPolicy = 'no-referrer' | 'strict-origin'
 type AuthSearchParams = Record<string, string | string[] | undefined>
@@ -14,7 +15,7 @@ export function authDocumentReferrerPolicy(
   searchParams: URLSearchParams | AuthSearchParams,
 ): AuthReferrerPolicy {
   if (pathname === '/workspace/administration') return parseAdministrationQuery(searchParams) ? 'strict-origin' : 'no-referrer'
-  if (!['/login', '/login/mfa', '/register', '/workspace', '/workspace/security', '/auth/confirm'].includes(pathname)) return 'no-referrer'
+  if (!['/login', '/forgot-password', '/login/mfa', '/register', '/workspace', '/workspace/security', '/auth/confirm'].includes(pathname)) return 'no-referrer'
   const entries = searchParams instanceof URLSearchParams ? [...searchParams.entries()] : Object.entries(searchParams).filter(([, value]) => value !== undefined)
   const registrationError = entries.find(([key]) => key === 'error')?.[1]
   const seen = new Set<string>()
@@ -24,6 +25,8 @@ export function authDocumentReferrerPolicy(
     if (pathname === '/login/mfa' && key === 'continue' && value === 'setup') continue
     if (pathname === '/login' && key === 'setup' && value === '1') continue
     if (pathname === '/login' && key === 'error' && isAuthErrorCode(value)) continue
+    if (pathname === '/forgot-password' && key === 'status' && value === 'check-email') continue
+    if (pathname === '/forgot-password' && key === 'error' && isPasswordRecoveryError(value)) continue
     if (pathname === '/register' && key === 'intent' && isRegistrationIntent(value)) continue
     if (pathname === '/register' && key === 'error' && isRegistrationError(value)) continue
     if (pathname === '/register' && key === 'ref' && registrationFailureReference(registrationError, value)) continue

@@ -1,6 +1,7 @@
 'use client'
 
 import { useRef, useState, useEffect, type FormEvent } from 'react'
+import Link from 'next/link'
 import { Button } from '@/components/ui/button'
 import { AUTH_ERROR_COPY, type AuthErrorCode } from '@/lib/supabase/contracts'
 import { validateSetupPassword } from '@/lib/supabase/password-setup'
@@ -69,6 +70,7 @@ export function SupabaseAuthForm({ mode, error, initialEmail = '' }: Props) {
         <label htmlFor="bx1-password" className="block text-sm font-semibold text-bxo-text-primary">{setup ? 'New password' : 'Password'}</label>
         <input id="bx1-password" name="password" type="password" autoComplete={setup ? 'new-password' : 'current-password'} minLength={setup ? 12 : 1} maxLength={1024} required className={inputClass} aria-invalid={passwordInvalid || undefined} aria-describedby={setup ? `bx1-password-help${passwordInvalid ? ' bx1-auth-error' : ''}` : undefined} />
         {setup ? <p id="bx1-password-help" className="mt-2 text-sm leading-6 text-bxo-text-secondary">Use at least 12 characters. A unique passphrase is recommended.</p> : null}
+        {!setup ? <Link href="/forgot-password" className="mt-2 inline-flex min-h-11 items-center text-sm font-semibold text-bxo-accent-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bxo-accent-primary">Forgot password?</Link> : null}
       </div>
       {setup ? (
         <div>

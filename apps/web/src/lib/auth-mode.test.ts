@@ -6,6 +6,20 @@ const service = '/api/portal/documents/processing'
 const blocked = (path: string, server = 'supabase', browser = 'supabase') =>
   isProductionWebPathBlocked(path, 'production', 'production', 'production', server, browser)
 
+describe('exact password-reset request routing', () => {
+  it.each(['/forgot-password', '/auth/recover'])('admits only the paired Supabase route %s', path => {
+    expect(SUPABASE_ALLOWED_PATHS.filter(value => value === path)).toHaveLength(1)
+    expect(isSupabaseWebPathAllowed(path)).toBe(true)
+    expect(blocked(path)).toBe(false)
+    expect(blocked(path, 'supabase', '')).toBe(true)
+    expect(blocked(path, '', '')).toBe(true)
+  })
+  it.each(['/forgot-password/', '/forgot-password/extra', '/Forgot-password', '/%66orgot-password', '/auth/recover/', '/auth/recover/extra', '/auth/Recover'])('denies recovery lookalike %s', path => {
+    expect(isSupabaseWebPathAllowed(path)).toBe(false)
+    expect(blocked(path)).toBe(true)
+  })
+})
+
 describe('exact offering-document service routing', () => {
   const offeringServices = ['/api/portal/offering-documents', '/api/portal/offering-documents/processing',
     '/api/portal/offering-signatures', '/api/portal/offering-signatures/processing'] as const

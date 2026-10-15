@@ -4,6 +4,7 @@ export { isSupabaseAuthMode, isSupabaseWebPathAllowed, SUPABASE_ALLOWED_PATHS } 
 const PRODUCTION_BLOCKED_PREFIXES = [
   '/register',
   '/login',
+  '/forgot-password',
   '/api',
   '/auth',
   '/workspace',
@@ -123,7 +124,7 @@ export function isProductionWebPathBlocked(
   if (!isProtectedApplicationPath(normalized)) return false
   // Native identity routes have no legacy/development fallback.
   const nativeFamily = normalized.toLowerCase()
-  if (nativeFamily === '/auth' || nativeFamily.startsWith('/auth/') || nativeFamily === '/workspace' || nativeFamily.startsWith('/workspace/') || nativeFamily === '/portal' || nativeFamily.startsWith('/portal/')) return true
+  if (nativeFamily === '/forgot-password' || nativeFamily.startsWith('/forgot-password/') || nativeFamily === '/auth' || nativeFamily.startsWith('/auth/') || nativeFamily === '/workspace' || nativeFamily.startsWith('/workspace/') || nativeFamily === '/portal' || nativeFamily.startsWith('/portal/')) return true
   if (
     ['dev', 'development', 'test'].includes(normalizedEnvironment) &&
     (releaseMode || '').trim().toLowerCase() !== 'pilot' &&

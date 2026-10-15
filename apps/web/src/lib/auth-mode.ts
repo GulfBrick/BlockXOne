@@ -24,7 +24,7 @@ export function isLegacyClientAuthDisabled(
 }
 
 export const SUPABASE_ALLOWED_PATHS = [
-  '/login', '/auth/confirm', '/auth/login', '/auth/setup', '/auth/logout',
+  '/login', '/forgot-password', '/auth/recover', '/auth/confirm', '/auth/login', '/auth/setup', '/auth/logout',
   '/workspace', '/workspace/access-denied',
   '/api/wallet/challenge', '/api/wallet/verify',
   '/login/mfa', '/workspace/security', '/auth/mfa-enroll', '/auth/mfa-verify', '/auth/mfa-restart-setup',

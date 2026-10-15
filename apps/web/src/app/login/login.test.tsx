@@ -70,6 +70,13 @@ describe('server login/setup admission', () => {
     expect(html).toContain('action="/auth/login"')
     expect(html).not.toContain('Investor sign in')
     expect(html).not.toContain('/register')
+    expect(html).toContain('href="/forgot-password"')
+    expect(html).toContain('Forgot password?')
+  })
+  it('does not offer another recovery request inside an active password-setup form', async () => {
+    const html = renderToStaticMarkup(await LoginPage({ searchParams: Promise.resolve({ setup: '1' }) }))
+    expect(html).toContain('action="/auth/setup"')
+    expect(html).not.toContain('href="/forgot-password"')
   })
   it('keeps MAIN sign-in local and gives separate canonical Testnet sign-in and registration links', async () => {
     configureMainIdentity()
