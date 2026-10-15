@@ -365,6 +365,9 @@ export function PortalScreen(props: PortalScreenProps) {
 function OperatingPortalScreen({ data, view, id, operatingContext, release, scope, scopes }: PortalScreenProps) {
   const [snapshot, setSnapshot] = useState(data.snapshot)
   const [refreshMessage, setRefreshMessage] = useState('')
+  const [signerSetupOpen, setSignerSetupOpen] = useState(false), [signerSetupMounted, setSignerSetupMounted] = useState(false)
+  const signerSetupRegion = useRef<HTMLDivElement | null>(null)
+  useEffect(() => { if (signerSetupOpen) signerSetupRegion.current?.focus() }, [signerSetupOpen])
   const context = operatingContext ?? APPLICANT_CONTEXT
   const fundLifecycle = release ? validatedFundLifecycle(snapshot.fund_lifecycle, data.user.id, context, release.environment) : null
   const fundOperatingProducts = Boolean(fundLifecycle && release && hasFundOperatingProducts(snapshot, context, release.environment))
@@ -478,7 +481,22 @@ function OperatingPortalScreen({ data, view, id, operatingContext, release, scop
     if (fundLifecycle?.availability === 'AVAILABLE') {
       const fund = fundLifecycle.products.find(item => item.product_id === id)
       const orderFund = fundLifecycle.products.find(item => item.orders.some(order => order.subscription_id === id))
-      if (view === '/portal/products/detail' && fund && !selected) return <FundLifecycleWorkspace lifecycle={fund} actorId={snapshot.actor.id} operatingContext={context} onRefresh={refreshFund} />
+      if (view === '/portal/products/detail' && fund && !selected) return <div className={styles.stack}>
+        <FundLifecycleWorkspace lifecycle={fund} actorId={snapshot.actor.id} operatingContext={context} onRefresh={refreshFund} />
+        {release?.environment === 'TESTNET' && context.mode === 'ROLE' && context.role === 'TokenisationAgent'
+          && snapshot.actor.id === data.user.id && portalContextMatches(snapshot.operating_context, context) ? <>
+          <button id={`fund-${fund.product_id}-signer-setup-toggle`} type="button" className={styles.buttonSecondary}
+            aria-expanded={signerSetupOpen} aria-controls={`fund-${fund.product_id}-signer-setup`}
+            onClick={() => { setSignerSetupMounted(true); setSignerSetupOpen(value => !value) }}>
+            {signerSetupOpen ? 'Hide signer wallets and blockchain setup' : 'Open signer wallets and blockchain setup'}
+          </button>
+          {signerSetupMounted ? <div id={`fund-${fund.product_id}-signer-setup`} ref={signerSetupRegion} role="region"
+            aria-labelledby={`fund-${fund.product_id}-signer-setup-toggle`} tabIndex={-1} hidden={!signerSetupOpen}>
+            <FundSetup key={`${data.user.id}:${fund.product_id}:${portalContextKey(context)}`} productId={fund.product_id}
+              productRevision={fund.product_revision} actorId={data.user.id} operatingContext={context} onRefresh={refreshFund} />
+          </div> : null}
+        </> : null}
+      </div>
       if (view === '/portal/orders/detail' && orderFund && id) {
         const subscription = snapshot.subscriptions.find(item => item.id === id)
         return <div className={styles.stack}><FundLifecycleOrder lifecycle={orderFund} subscriptionId={id} actorId={snapshot.actor.id} operatingContext={context} onRefresh={refreshFund} />

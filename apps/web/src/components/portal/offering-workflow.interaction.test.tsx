@@ -416,6 +416,66 @@ describe('existing product workspace next-step navigation', () => {
     }))
   })
 
+  function lifecycleOnlyOperator(role: 'TokenisationAgent' | 'TransferAgent' = 'TokenisationAgent'): PortalSnapshot {
+    const prepared = withFundProgress(snapshot('OfferingManager', [product('FUND', { revision: 7 })]))
+    const operatingContext: PortalOperatingContext = { mode: 'ROLE', organisationId: managerOrganisation, role }
+    return { actor: prepared.actor, operating_context: operatingContext, base_records_available: false,
+      applications: [], organisations: [], products: [], subscriptions: [], events: [], requests: [],
+      fund_lifecycle: { ...prepared.fund_lifecycle!, operating_context: operatingContext } }
+  }
+
+  it('opens the existing guarded signer-wallet setup from a Tokenisation Agent lifecycle-only fund record', async () => {
+    const value = lifecycleOnlyOperator(), operatingContext = value.operating_context!
+    const setupResponse = { schema_version: 1, actor_id: manager, environment: 'TESTNET', operating_context: operatingContext,
+      observed_at: past(), product_id: productId, product_revision: 7, offering_revision_id: firstPackageId,
+      terms_hash: hash, configuration_hash: null, source_pin: 'b6c5fabf86e733ede017fef754d59eeb8f80e3f4',
+      roleplay_policy: { policy_id: receiptId, epoch: 1, expires_at: expiry(), label: 'TEST ROLE PLAY - one operator; not independent human approval' },
+      availability: 'UNAVAILABLE', reason_code: 'READ_DENIED', setup: null }
+    const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+      const result = url.endsWith('/setup/read') ? setupResponse : url.endsWith('/keys/read') ? { policy: {
+        policy_id: receiptId, authority_epoch: 1, expires_at: expiry(), wallet_slots: [
+          { slot: 'owner_1', wallet_address: `0x${'ab'.repeat(20)}`, control_proof_current: false, wallet_id: null },
+          { slot: 'owner_2', wallet_address: `0x${'cd'.repeat(20)}`, control_proof_current: false, wallet_id: null },
+        ],
+      } } : url === '/api/wallet/context' ? { ok: true, context: { organisation: { id: managerOrganisation, name: 'Synthetic scoped organisation' }, configured: false, wallets: [] } } : null
+      if (result === null) throw new Error('No write or chain request is allowed in this navigation fixture')
+      if (url.endsWith('/setup/read') || url.endsWith('/keys/read')) expect(JSON.parse(String(init?.body))).toMatchObject({ product_id: productId, operating_context: operatingContext })
+      return new Response(JSON.stringify(result), { headers: { 'content-type': 'application/json' } })
+    })
+    vi.stubGlobal('fetch', fetcher)
+    mount(value, '/portal/products/detail', productId)
+    const button = screen.getByRole('button', { name: 'Open signer wallets and blockchain setup' })
+    expect(button.getAttribute('aria-expanded')).toBe('false')
+    expect(fetcher).not.toHaveBeenCalled()
+    fireEvent.click(button)
+    await screen.findByRole('heading', { name: 'Prove the appointed signing wallets' })
+    const region = screen.getByRole('region', { name: 'Hide signer wallets and blockchain setup' })
+    expect(button.getAttribute('aria-expanded')).toBe('true')
+    expect(document.activeElement).toBe(region)
+    expect(screen.getByText('Blockchain setup is not available in this capacity')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Create saved blockchain setup' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Bind this verified key to its signing slot' })).toBeNull()
+    await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(3))
+    fireEvent.click(button)
+    expect(screen.queryByRole('region', { name: 'Open signer wallets and blockchain setup' })).toBeNull()
+    fireEvent.click(button)
+    expect(screen.getByRole('heading', { name: 'Prove the appointed signing wallets' })).toBeTruthy()
+    expect(fetcher).toHaveBeenCalledTimes(3)
+  })
+
+  it.each(['other-role', 'no-fund', 'read-denied', 'wrong-actor', 'wrong-context', 'main'] as const)('does not infer a signer setup entry for %s', fault => {
+    const value = lifecycleOnlyOperator(fault === 'other-role' ? 'TransferAgent' : 'TokenisationAgent')
+    if (fault === 'no-fund') value.fund_lifecycle!.products = []
+    if (fault === 'read-denied') { value.fund_lifecycle!.availability = 'UNAVAILABLE'; value.fund_lifecycle!.reason_code = 'READ_DENIED' }
+    if (fault === 'wrong-actor') value.fund_lifecycle!.actor_id = issuer
+    if (fault === 'wrong-context') value.fund_lifecycle!.operating_context = { mode: 'ROLE', organisationId: reviewOrganisation, role: 'TokenisationAgent' }
+    if (fault === 'main') value.fund_lifecycle!.environment = 'MAINNET'
+    mount(value, '/portal/products/detail', productId, fault === 'main' ? { ...release, environment: 'MAINNET' } : release)
+    expect(screen.queryByRole('button', { name: 'Open signer wallets and blockchain setup' })).toBeNull()
+    expect(screen.queryByRole('heading', { name: 'Set up the fund’s blockchain' })).toBeNull()
+    expect(fetchCommand).not.toHaveBeenCalled()
+  })
+
   it('opens the single shared account menu and preserves full-document account boundaries', () => {
     mount(snapshot('OfferingManager'))
     const account = screen.getByRole('button', { name: 'Account' })
