@@ -887,6 +887,7 @@ jobs:
             'src/lib/portal/fund-roleplay-eligibility.test.tsx',
             'src/components/portal/portal.test.tsx',
           ] : process.env.BX1_FOCUSED_UI_MODE === 'connected-fund-providers-focused' ? [
+            'src/lib/portal/offering-signature-diagnostics.test.ts',
             'src/lib/portal/offering-disclosure-pdf.test.ts',
             'src/components/portal/offering-file-panel.test.tsx',
             'src/lib/portal/offering-provider-status.test.ts',

@@ -18,6 +18,7 @@ import { assessOfferingCompletion, buildOfferingEnvelope, createDocusignOffering
   type OfferingCoverBinding, type OfferingProviderResource, type OfferingProviderRead } from './docusign-offering-provider'
 import { offeringSignatureSnapshotSchema, offeringSignatureCommandSchema,
   type OfferingSignatureSnapshot, type OfferingSignatureCommand } from './offering-signatures'
+import { logOfferingSignatureDiagnostic } from './offering-signature-diagnostics'
 
 type Environment = Record<string, string | undefined>
 const projects = { TESTNET: 'fegnnnlseuejkrusbbkv', MAINNET: 'oqkevkjbkpugjotihtda' } as const
@@ -439,6 +440,8 @@ async function processSignatureAction(action: SignatureViewAction, wakeDeadline?
         : providerState === 'voided' ? 'VOIDED' : ['sent','delivered','signed'].includes(String(providerState)) ? 'SENT' : 'UNKNOWN'
       const assessment = assessOfferingCompletion(expected, binding, { envelope: parsed.envelope.value, recipients: parsed.recipients.value,
         documents: parsed.documents.value, custom_fields: parsed.custom_fields.value, audit_events: parsed.audit_events.value, tabs: parsed.tabs.value })
+      logOfferingSignatureDiagnostic({ environment: item.environment, operationId: item.operation_id, envelopeId,
+        generation: item.generation, assessmentReason: assessment.reason, expected, envelope: parsed.envelope, recipients: parsed.recipients })
       const evidenceJson = JSON.stringify(parsed)
       if (Buffer.byteLength(evidenceJson) > 6_291_456) throw new DocusignOfferingError('EVIDENCE_TOO_LARGE')
       return await record(action, 'RECONCILE_RESULT', { status, envelope_id: envelopeId,

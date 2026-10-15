@@ -97,21 +97,66 @@ describe('signature actor API using real application guards and synthetic extern
     expect(response.status).toBe(200)
     expect(await response.json()).toEqual(snapshot())
     expect(response.headers.get('cache-control')).toContain('no-store')
-    expect(mocks.rpc).toHaveBeenCalledWith('bx1_portal_read_scoped', { operating_context: context })
-    expect(mocks.rpc).toHaveBeenCalledWith('bx1_portal_fund_lifecycle_read_scoped', { operating_context: context })
+    expect(response.headers.get('cache-control')).toContain('private')
+    expect(response.headers.get('referrer-policy')).toBe('no-referrer')
+    expect(mocks.rpc).not.toHaveBeenCalled()
     expect(mocks.query.mock.calls[0][1].slice(0, 5)).toEqual([actor, sessionId, 'aal1', JSON.stringify(context), revision])
     expect(mocks.fetch).not.toHaveBeenCalled()
     expect(mocks.after).not.toHaveBeenCalled()
   })
-  it.each([{ actor_id: product }, { environment: 'MAINNET' }, { operating_context: { ...context, role: 'ComplianceOfficer' } }])(
-    'retains the real fund reader scope guard before any signature receipt access (%j)', async mismatch => {
-      mocks.lifecycle.mockResolvedValueOnce({ data: { ...fundLifecycle(), ...mismatch }, error: null })
+  it.each([{ actor_id: product }, { environment: 'MAINNET' }, { context: { ...context, role: 'ComplianceOfficer' } },
+    { session_id: product }, { revision_id: product }])(
+    'retains native signature snapshot binding without relying on a full dashboard (%j)', async mismatch => {
+      mocks.query.mockResolvedValueOnce({ rows: [{ result: { ...snapshot(), ...mismatch } }] })
       const response = await GET(get())
-      expect(response.status).toBe(503)
-      expect(await response.json()).toEqual({ error: 'Fund progress could not be verified for this account and workspace.' })
-      expect(mocks.query).not.toHaveBeenCalled()
+      expect(response.status).toBe(409)
+      expect(await response.json()).toEqual({ error: 'The signature record did not match the active account, application or environment.' })
+      expect(mocks.rpc).not.toHaveBeenCalled()
+      expect(mocks.query).toHaveBeenCalledExactlyOnceWith(expect.stringContaining('bx1_private.read_offering_signatures'), expect.any(Array))
       expect(mocks.after).not.toHaveBeenCalled()
     })
+  it.each(['GET', 'POST'] as const)('does not make a %s signature operation depend on a timed-out dashboard projection', async method => {
+    mocks.scoped.mockRejectedValue(new Error('Synthetic dashboard57014'))
+    mocks.lifecycle.mockRejectedValue(new Error('Synthetic fund projection unavailable'))
+    const response = method === 'GET' ? await GET(get()) : await POST(post(body('REQUEST_RECONCILIATION')))
+    expect(response.status).toBe(200)
+    expect(mocks.rpc).not.toHaveBeenCalled()
+    expect(mocks.scoped).not.toHaveBeenCalled(); expect(mocks.lifecycle).not.toHaveBeenCalled()
+    expect(mocks.query.mock.calls[0][0]).toContain(method === 'GET' ? 'read_offering_signatures' : 'execute_offering_signature_command')
+  })
+  const identityFailures = ['missing', 'email', 'unconfirmed', 'anonymous', 'foreign actor'] as const
+  it.each(identityFailures.flatMap(failure => (['GET', 'POST'] as const).map(method => ({ failure, method }))))(
+    'rejects $failure identity before $method native signature access', async ({ failure, method }) => {
+      const value = failure === 'missing' ? null : { ...user,
+        ...(failure === 'email' ? { email: undefined } : {}),
+        ...(failure === 'unconfirmed' ? { email_confirmed_at: null } : {}),
+        ...(failure === 'anonymous' ? { is_anonymous: true } : {}),
+        ...(failure === 'foreign actor' ? { id: product } : {}) }
+      mocks.user.mockResolvedValueOnce({ data: { user: value }, error: null })
+      const response = method === 'GET' ? await GET(get()) : await POST(post(body('REQUEST_RECONCILIATION')))
+      expect(response.status).toBe(failure === 'foreign actor' ? 403 : 401)
+      expect(mocks.session).not.toHaveBeenCalled()
+      expect(mocks.query).not.toHaveBeenCalled(); expect(mocks.rpc).not.toHaveBeenCalled()
+      expect(mocks.after).not.toHaveBeenCalled()
+    })
+  it.each(['GET', 'POST'] as const)('keeps restricted native scope/MFA denial authoritative for %s without exposing details', async method => {
+    mocks.query.mockRejectedValueOnce(Object.assign(new Error('Private native authority details'), { code: '42501' }))
+    const response = method === 'GET' ? await GET(get()) : await POST(post(body('REQUEST_RECONCILIATION')))
+    expect(response.status).toBe(503)
+    expect(await response.text()).not.toContain('Private native authority details')
+    expect(mocks.rpc).not.toHaveBeenCalled(); expect(mocks.query).toHaveBeenCalledOnce()
+    expect(mocks.after).not.toHaveBeenCalled()
+  })
+  it('keeps MAIN unavailable before any signature identity, session or native access', async () => {
+    vi.stubEnv('VERCEL_ENV', 'production')
+    vi.stubEnv('BLOCKXONE_APP_ORIGIN', 'https://bx1.co.za')
+    vi.stubEnv('SUPABASE_URL', 'https://oqkevkjbkpugjotihtda.supabase.co')
+    expect((await GET(get())).status).toBe(404)
+    expect((await POST(post(body('REQUEST_RECONCILIATION')))).status).toBe(404)
+    expect(mocks.user).not.toHaveBeenCalled(); expect(mocks.session).not.toHaveBeenCalled()
+    expect(mocks.query).not.toHaveBeenCalled(); expect(mocks.rpc).not.toHaveBeenCalled()
+    expect(mocks.after).not.toHaveBeenCalled()
+  })
   it.each(['&revision_id=duplicate', '&mode=applicant', '&path=arbitrary', `&expected_actor=${actor}`, `&id=${key}`, '&download=0'])(
     'rejects ambiguous or unsolicited query data %s before database access', async extra => {
       expect((await GET(get(extra))).status).toBe(400)
@@ -144,6 +189,7 @@ describe('signature actor API using real application guards and synthetic extern
     expect(writes).toHaveLength(1)
     expect(JSON.stringify(writes[0][1])).toContain(operation)
     expect(mocks.query).toHaveBeenCalledTimes(2)
+    expect(mocks.rpc).not.toHaveBeenCalled()
     expect(mocks.fetch).not.toHaveBeenCalled()
     expect(mocks.after).not.toHaveBeenCalled()
   })
@@ -220,7 +266,44 @@ describe('signature actor API using real application guards and synthetic extern
     expect(response.headers.get('content-security-policy')).toContain("default-src 'none'")
     expect(mocks.download).toHaveBeenCalledWith(`testnet/${revision}/${operation}/${key}.pdf`)
     expect(mocks.query).toHaveBeenCalledTimes(2)
+    // Initial authority is native/purpose-local; the full AFTER download fence
+    // still checks the independently refreshed portal and lifecycle context.
+    expect(mocks.rpc).toHaveBeenCalledWith('bx1_portal_read_scoped', { operating_context: context })
+    expect(mocks.rpc).toHaveBeenCalledWith('bx1_portal_fund_lifecycle_read_scoped', { operating_context: context })
+    expect(mocks.rpc).toHaveBeenCalledTimes(2)
+    expect(mocks.scoped).toHaveBeenCalledOnce(); expect(mocks.lifecycle).toHaveBeenCalledOnce()
   })
+  it('withholds downloaded bytes when the unchanged AFTER dashboard fence times out or loses the actor', async () => {
+    mocks.query.mockResolvedValue({ rows: [{ result: evidence() }] })
+    mocks.scoped.mockResolvedValueOnce({ data: null, error: { code: '57014', message: 'Private dashboard timeout' } })
+    const timedOut = await GET(get(`&download=1&id=${key}&expected_actor=${actor}`))
+    expect(timedOut.status).toBe(503)
+    expect(timedOut.headers.get('content-type')).toContain('application/json')
+    expect(await timedOut.text()).not.toContain('Private dashboard timeout')
+    expect(mocks.download).toHaveBeenCalledOnce(); expect(mocks.query).toHaveBeenCalledOnce()
+    mocks.user.mockResolvedValueOnce({ data: { user }, error: null })
+      .mockResolvedValueOnce({ data: { user }, error: null })
+      .mockResolvedValueOnce({ data: { user: { ...user, id: product } }, error: null })
+    const changedActor = await GET(get(`&download=1&id=${key}&expected_actor=${actor}`))
+    expect(changedActor.status).not.toBe(200)
+    expect(changedActor.headers.get('content-type')).toContain('application/json')
+    expect(mocks.download).toHaveBeenCalledTimes(2)
+    expect(mocks.after).not.toHaveBeenCalled()
+  })
+  it.each(['actor', 'environment', 'context', 'read failure'] as const)(
+    'withholds downloaded evidence when the AFTER lifecycle check has %s mismatch or failure', async failure => {
+      mocks.query.mockResolvedValue({ rows: [{ result: evidence() }] })
+      mocks.lifecycle.mockResolvedValueOnce(failure === 'read failure' ? { data: null, error: { code: '57014', message: 'Private lifecycle detail' } }
+        : { data: { ...fundLifecycle(), ...(failure === 'actor' ? { actor_id: product } : failure === 'environment'
+          ? { environment: 'MAINNET' } : { operating_context: { ...context, role: 'ComplianceOfficer' } }) }, error: null })
+      const response = await GET(get(`&download=1&id=${key}&expected_actor=${actor}`))
+      expect(response.status).toBe(503)
+      expect(response.headers.get('content-type')).toContain('application/json')
+      expect(await response.text()).not.toContain('Private lifecycle detail')
+      expect(mocks.download).toHaveBeenCalledOnce(); expect(mocks.query).toHaveBeenCalledOnce()
+      expect(mocks.rpc).toHaveBeenCalledWith('bx1_portal_fund_lifecycle_read_scoped', { operating_context: context })
+      expect(mocks.after).not.toHaveBeenCalled()
+    })
   it('does not release downloaded bytes when retained evidence disappears after I/O', async () => {
     mocks.query.mockResolvedValueOnce({ rows: [{ result: evidence() }] }).mockResolvedValueOnce({ rows: [{ result: snapshot() }] })
     const response = await GET(get(`&download=1&id=${key}&expected_actor=${actor}`))

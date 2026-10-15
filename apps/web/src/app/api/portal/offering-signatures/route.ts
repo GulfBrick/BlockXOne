@@ -8,7 +8,7 @@ import { verifiedOfferingFileSession } from '@/lib/portal/offering-files-server'
 import { readOfferingSignatures, executeOfferingSignatureCommand, downloadOfferingSignatureArtifact,
   createOfferingSigningView, OfferingSignatureError } from '@/lib/portal/offering-signatures-server'
 import { hasCanonicalOrigin, privateResponse, responseCookieAdapter } from '@/lib/supabase/http'
-import { createRequestSupabaseClient } from '@/lib/supabase/server'
+import { createRequestSupabaseClient, readVerifiedUser } from '@/lib/supabase/server'
 import { scheduleOfferingSignatureWake } from '@/lib/portal/offering-signature-wake'
 
 export const dynamic = 'force-dynamic'
@@ -31,7 +31,11 @@ export async function GET(request: NextRequest) {
     const context = portalOperatingContextSchema.parse(params.get('mode') === 'applicant' && !params.has('organisation') && !params.has('role')
       ? { mode: 'APPLICANT' } : !params.has('mode') ? { mode: 'ROLE', organisationId: params.get('organisation'), role: params.get('role') } : null)
     const client = createRequestSupabaseClient(jar.adapter)
-    const before = await readPortal(client, context)
+    // Identity is not signature authority. The restricted native reader checks
+    // the exact session/MFA, current scope and package without a dashboard read.
+    const user = await readVerifiedUser(client)
+    if (!user?.email || !user.email_confirmed_at || user.is_anonymous) throw new PortalError('Sign in with your verified email to continue.', 401)
+    const before = { user }
     if (before.user.id !== expectedActor) throw new PortalError('The signed-in account changed. Reload the current workspace.', 403)
     const session = await verifiedOfferingFileSession(client, before.user.id)
     const input = { actorId: before.user.id, session, context, revisionId }
@@ -69,7 +73,9 @@ export async function POST(request: NextRequest) {
     try { body = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(raw)) } catch { throw new PortalError('Invalid signature request.', 400) }
     const instruction = offeringSignatureRequestSchema.parse(body)
     const client = createRequestSupabaseClient(jar.adapter)
-    const before = await readPortal(client, instruction.operating_context)
+    const user = await readVerifiedUser(client)
+    if (!user?.email || !user.email_confirmed_at || user.is_anonymous) throw new PortalError('Sign in with your verified email to continue.', 401)
+    const before = { user }
     if (before.user.id !== instruction.expected_actor) throw new PortalError('The signed-in account changed. Reload the current workspace.', 403)
     const session = await verifiedOfferingFileSession(client, before.user.id)
     const input = { actorId: before.user.id, session, context: instruction.operating_context, revisionId: instruction.request.payload.offering_revision_id }
