@@ -10,6 +10,7 @@ import {
   CLAMAV_VERSION,
   scanWithClamav,
 } from './document-scanner-runner.mjs';
+import { FIXTURE_SNAPSHOT_COVERAGE } from './document-scanner-snapshot.mjs';
 
 const PACKAGE_SHA256 = 'd3ee9e401974855a1edc1761b1425417d126de618d5f0c91cd51209f69f6fcc2';
 const CLOUD_PROOF_ID = 'github-clamav-1.4.6';
@@ -32,7 +33,7 @@ function assertCloudProofEnvironment() {
 }
 
 // Valid, unencrypted, uncompressed one-page PDF; the document never becomes a file.
-function makePdf(text) {
+export function makePdf(text) {
   assert.match(text, /^[A-Za-z0-9 _-]+$/);
   const stream = `BT /F1 12 Tf 72 720 Td (${text}) Tj ET\n`;
   const objects = [
@@ -63,6 +64,9 @@ function assertScanReceipt(result, verdict, bytes, databaseSha256) {
   assert.equal(result.engineSha256, CLAMAV_EXECUTABLE_SHA256, 'Real engine executable identity mismatch.');
   assert.equal(result.databaseSha256, databaseSha256, 'Real engine database identity mismatch.');
   assert.equal(result.sha256, sha256(bytes), 'Real engine document identity mismatch.');
+  assert.equal(result.coverage, FIXTURE_SNAPSHOT_COVERAGE, 'Custom signature must remain fixture-only.');
+  assert.equal(result.officialSignaturesOnly, false, 'Fixture must not claim official database coverage.');
+  assert.equal(result.productionMalwareCoverageProved, false, 'Fixture must not claim production coverage.');
 }
 
 export async function runCloudEngineProof(withOfferingFixture) {
@@ -97,9 +101,9 @@ export async function runCloudEngineProof(withOfferingFixture) {
     assert.equal(sha256(await readFile(databasePath)), databaseSha256, 'Written proof database identity mismatch.');
 
     // No spawn override: both calls must use the runner's real pinned subprocess path.
-    const benign = await scanWithClamav(benignPdf, { databasePath, databaseSha256 });
+    const benign = await scanWithClamav(benignPdf, { databasePath, databaseSha256, allowFixtureDatabase: true });
     assertScanReceipt(benign, 'CLEAN', benignPdf, databaseSha256);
-    const detected = await scanWithClamav(detectionPdf, { databasePath, databaseSha256 });
+    const detected = await scanWithClamav(detectionPdf, { databasePath, databaseSha256, allowFixtureDatabase: true });
     assertScanReceipt(detected, 'MALICIOUS', detectionPdf, databaseSha256);
 
     // Additive connected SQL proof borrows this pinned fixture only while its

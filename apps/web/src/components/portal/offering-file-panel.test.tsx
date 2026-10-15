@@ -38,6 +38,26 @@ beforeEach(() => { fetcher.mockReset(); sessionStorage.clear(); vi.stubGlobal('f
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 
 describe('connected offering document panel (synthetic transport, not hosted/scanner proof)', () => {
+  it('prepares saved text without uploading and discards it when the category changes', async () => {
+    const text = 'Exact current disclosure text for a fictional TEST offering. '.repeat(3)
+    const ready = { ...product, terms_hash: 'a'.repeat(64), terms: { name: 'Fictional fund', documents: {
+      memorandum: text, risks: text, subscription_terms: text } },
+      offering_package: { ...product.offering_package!, terms_hash: 'a'.repeat(64), document_hashes: {
+        memorandum: createHash('sha256').update(text).digest('hex'), risks: createHash('sha256').update(text).digest('hex'),
+        subscription_terms: createHash('sha256').update(text).digest('hex') } } } as PortalProduct
+    fetcher.mockResolvedValue(reply(snapshot('PENDING_SCAN')))
+    render(<OfferingFilePanel product={ready} context={context} actorId={actorId} />)
+    const generate = await screen.findByRole('button', { name: 'Create PDF from saved disclosure' })
+    fireEvent.click(generate)
+    await screen.findByText(/Ready to stage: bx1-.*-memorandum.pdf/)
+    expect(fetcher).toHaveBeenCalledTimes(1)
+    expect((screen.getByRole('button', { name: 'Stage in quarantine' }) as HTMLButtonElement).disabled).toBe(false)
+    fireEvent.change(screen.getByLabelText('Document category'), { target: { value: 'RISKS' } })
+    expect(screen.queryByText(/Ready to stage:/)).toBeNull()
+    expect((screen.getByLabelText('File title') as HTMLInputElement).value).toBe('')
+    expect((screen.getByRole('button', { name: 'Stage in quarantine' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(fetcher).toHaveBeenCalledTimes(1)
+  })
   it('shows current v2 signature handoffs without rewriting legacy sealed evidence', async () => {
     const current = cleanSnapshot(true)
     fetcher.mockResolvedValue(reply({ ...current, document_access: { ...current.document_access, version: 2,

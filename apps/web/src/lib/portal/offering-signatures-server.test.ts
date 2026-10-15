@@ -26,6 +26,8 @@ const env = {
   BLOCKXONE_OFFERING_SIGNATURE_WORKER_ID: 'synthetic-signatures', BLOCKXONE_OFFERING_SIGNATURE_HMAC_KEY: key.toString('base64url'),
   BLOCKXONE_DOCUMENT_RECEIPT_DATABASE_URL: 'postgresql://bx1_document_receipt_writer:synthetic@db.fegnnnlseuejkrusbbkv.supabase.co:5432/postgres?sslmode=verify-full',
   BLOCKXONE_DOCUMENT_SCANNER_DATABASE_URL: 'postgresql://bx1_document_scanner_writer:synthetic@db.fegnnnlseuejkrusbbkv.supabase.co:5432/postgres?sslmode=verify-full',
+  BLOCKXONE_DOCUMENT_PROCESSING_DATABASE_URL: 'postgresql://bx1_document_processing_worker:synthetic@db.fegnnnlseuejkrusbbkv.supabase.co:5432/postgres?sslmode=verify-full',
+  BLOCKXONE_DOCUMENT_PROCESSING_WORKER_ID: 'synthetic-documents',
   BLOCKXONE_DOCUMENT_STORAGE_SECRET_KEY: `sb_secret_${'synthetic'.repeat(4)}`, BLOCKXONE_DOCUMENT_SCANNER_ID: 'synthetic-scanner', BLOCKXONE_DOCUMENT_SCANNER_HMAC_KEY: key.toString('base64url'),
   BLOCKXONE_DOCUSIGN_CLIENT_ID: DOCUSIGN_OFFERING_SANDBOX.clientId, BLOCKXONE_DOCUSIGN_USER_ID: DOCUSIGN_OFFERING_SANDBOX.userId,
   BLOCKXONE_DOCUSIGN_ACCOUNT_ID: DOCUSIGN_OFFERING_SANDBOX.accountId, BLOCKXONE_DOCUSIGN_BASE_URI: DOCUSIGN_OFFERING_SANDBOX.baseUri,
@@ -66,7 +68,7 @@ beforeEach(() => {
   mocks.download.mockResolvedValue({ data: new Blob([new Uint8Array(pdf)], { type: 'application/pdf' }), error: null })
   mocks.query.mockResolvedValue({ rows: [{ result: snapshot() }] })
 })
-afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals() })
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.unstubAllGlobals() })
 
 describe('restricted signature server boundary - synthetic external dependencies only', () => {
   it('pins worker identity, project, TLS and database role with no owner/service-role fallback', () => {
@@ -79,6 +81,8 @@ describe('restricted signature server boundary - synthetic external dependencies
     const now = 1791849600000, timestamp = String(now / 1000), raw = Buffer.from(JSON.stringify({ command: 'CLAIM', request_id: requestId }))
     const sign = (bytes: Uint8Array, time = timestamp, domain = 'bx1-offering-signatures-worker-v1:') => createHmac('sha256', key).update(domain).update(time).update(':').update(bytes).digest('hex')
     expect(verifySignatureWorkerMessage(raw, timestamp, sign(raw), signatureWorkerConfig(env), now)).toEqual({ command: 'CLAIM', request_id: requestId })
+    const wake = Buffer.from(JSON.stringify({ command: 'WAKE', request_id: requestId }))
+    expect(verifySignatureWorkerMessage(wake, timestamp, sign(wake), signatureWorkerConfig(env), now)).toEqual({ command: 'WAKE', request_id: requestId })
     for (const [body, time, digest] of [[raw, timestamp, '0'.repeat(64)], [Buffer.concat([raw, Buffer.from(' ')]), timestamp, sign(raw)], [raw, timestamp, sign(raw, timestamp, 'other-domain:')], [raw, String(now / 1000 - 301), sign(raw)], [Buffer.alloc(4097), timestamp, sign(Buffer.alloc(4097))]] as const) expect(() => verifySignatureWorkerMessage(body, time, digest, signatureWorkerConfig(env), now)).toThrow()
     const view = Buffer.from(JSON.stringify({ command: 'VIEW', request_id: requestId }))
     expect(() => verifySignatureWorkerMessage(view, timestamp, sign(view), signatureWorkerConfig(env), now)).toThrow()
@@ -107,6 +111,96 @@ describe('restricted signature server boundary - synthetic external dependencies
     const checkpoint = mocks.query.mock.calls.find(call => String(call[0]).includes('record_offering_signature_action'))
     expect(checkpoint?.[1][4]).toBe(signatureResultId(action, 'RECONCILE:INFLIGHT'))
     expect(signatureResultId(action, 'RECONCILE:INFLIGHT')).not.toBe(signatureResultId({ ...action, generation: 2 }, 'RECONCILE:INFLIGHT'))
+  })
+  it('does not claim a job for a missing, invalid or already exhausted WAKE deadline', async () => {
+    const now = Date.now()
+    vi.spyOn(Date, 'now').mockReturnValue(now)
+    for (const deadline of [undefined, NaN, Infinity, now - 1, now + 8000]) {
+      await expect(executeSignatureProcessing({ command: 'WAKE', request_id: requestId }, deadline)).rejects.toThrow('wake deadline')
+    }
+    expect(mocks.query).not.toHaveBeenCalled()
+    expect(mocks.fetch).not.toHaveBeenCalled()
+    expect(mocks.create).not.toHaveBeenCalled()
+  })
+  it('reports an idle WAKE without starting provider or storage work', async () => {
+    mocks.query.mockResolvedValueOnce({ rows: [{ result: null }] })
+    expect(await executeSignatureProcessing({ command: 'WAKE', request_id: requestId }, Date.now() + 50000)).toEqual({ outcome: 'IDLE' })
+    expect(mocks.query).toHaveBeenCalledTimes(1)
+    expect(mocks.query.mock.calls[0][0]).toContain('claim_offering_signature_action')
+    expect(mocks.fetch).not.toHaveBeenCalled()
+    expect(mocks.create).not.toHaveBeenCalled()
+  })
+  it('rejects a background VIEW claim and a different saved request before processing', async () => {
+    mocks.query.mockResolvedValueOnce({ rows: [{ result: worker('VIEW') }] })
+    await expect(executeSignatureProcessing({ command: 'WAKE', request_id: requestId }, Date.now() + 50000)).rejects.toThrow()
+    mocks.query.mockResolvedValueOnce({ rows: [{ result: { ...worker(), request_id: actor } }] })
+    await expect(executeSignatureProcessing({ command: 'WAKE', request_id: requestId }, Date.now() + 50000)).rejects.toThrow()
+    expect(mocks.query).toHaveBeenCalledTimes(2)
+    expect(mocks.fetch).not.toHaveBeenCalled()
+    expect(mocks.create).not.toHaveBeenCalled()
+  })
+  it('counts claim and current-action reads against the aggregate WAKE deadline', async () => {
+    let now = Date.now()
+    const start = now, item = worker('PREPARE')
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    mocks.query.mockImplementation(async (sql: string) => {
+      if (sql.includes('read_offering_signature_action')) now = start + 43000
+      return { rows: [{ result: item }] }
+    })
+    await expect(executeSignatureProcessing({ command: 'WAKE', request_id: requestId }, start + 50000)).rejects.toThrow()
+    expect(mocks.query).toHaveBeenCalledTimes(2)
+    expect(mocks.query.mock.calls.some(call => String(call[0]).includes('record_offering_signature_action'))).toBe(false)
+    expect(mocks.fetch).not.toHaveBeenCalled()
+    expect(mocks.create).not.toHaveBeenCalled()
+  })
+  it('does not report IDLE if claiming consumed the reserved completion budget', async () => {
+    let now = Date.now()
+    const start = now
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    mocks.query.mockImplementation(async () => { now = start + 43000; return { rows: [{ result: null }] } })
+    await expect(executeSignatureProcessing({ command: 'WAKE', request_id: requestId }, start + 50000)).rejects.toThrow('wake deadline')
+    expect(mocks.query).toHaveBeenCalledTimes(1)
+    expect(mocks.fetch).not.toHaveBeenCalled()
+  })
+  it('does not turn a consumed saved checkpoint into another provider request during WAKE', async () => {
+    mocks.query.mockImplementation(async (sql: string) => ({ rows: [{ result:
+      sql.includes('record_offering_signature_action') ? record : worker() }] }))
+    expect(await executeSignatureProcessing({ command: 'WAKE', request_id: requestId }, Date.now() + 50000)).toEqual({ outcome: 'PROCESSED' })
+    expect(mocks.query).toHaveBeenCalledTimes(3)
+    expect(mocks.fetch).not.toHaveBeenCalled()
+    expect(mocks.create).not.toHaveBeenCalled()
+  })
+  it('propagates the shared WAKE abort to exact clean-PDF downloads before provider creation', async () => {
+    const controllers: AbortController[] = [], timeouts: number[] = []
+    vi.spyOn(AbortSignal, 'timeout').mockImplementation(milliseconds => {
+      timeouts.push(milliseconds)
+      const controller = new AbortController(); controllers.push(controller); return controller.signal
+    })
+    mocks.query.mockImplementation(async () => ({ rows: [{ result: worker('PREPARE') }] }))
+    mocks.fetch.mockImplementation(async (_url: unknown, init?: RequestInit) => new Promise((_resolve, reject) => {
+      const signal = init?.signal
+      if (!signal) { reject(new Error('Missing shared deadline')); return }
+      if (signal.aborted) { reject(new Error('Aborted synthetic download')); return }
+      signal.addEventListener('abort', () => reject(new Error('Aborted synthetic download')), { once: true })
+    }))
+    mocks.create.mockImplementation((_url: unknown, _key: unknown, options: { global: { fetch: typeof fetch } }) => ({ storage: {
+      from: () => ({ download: async (path: string) => {
+        const response = await options.global.fetch(env.SUPABASE_URL + '/storage/v1/object/bx1-offering-documents/' + path, { method: 'GET' })
+        return { data: await response.blob(), error: null }
+      } }),
+    } }))
+    const attempt = executeSignatureProcessing({ command: 'WAKE', request_id: requestId }, Date.now() + 50000)
+    const rejection = expect(attempt).rejects.toThrow('interrupted')
+    await vi.waitFor(() => expect(mocks.fetch).toHaveBeenCalledTimes(3))
+    expect(timeouts).toHaveLength(1)
+    expect(timeouts[0]).toBeGreaterThan(0)
+    expect(timeouts[0]).toBeLessThanOrEqual(42000)
+    for (const [, init] of mocks.fetch.mock.calls) expect(init.signal).toBe(controllers[0].signal)
+    controllers[0].abort()
+    await rejection
+    expect(mocks.fetch.mock.calls.every(([url]) => String(url).startsWith(env.SUPABASE_URL + '/storage/'))).toBe(true)
+    expect(mocks.query.mock.calls.some(call => String(call[0]).includes('record_offering_signature_action'))).toBe(false)
+    expect(mocks.upload).not.toHaveBeenCalled()
   })
   it('binds actor reads and command results to session, environment, revision and stripped view lease', async () => {
     expect(await readOfferingSignatures(input)).toEqual(snapshot())

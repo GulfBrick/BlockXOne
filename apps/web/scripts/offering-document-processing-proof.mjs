@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto'
 import { runCloudEngineProof } from './document-scanner-engine-proof.mjs'
-import { runOfferingOnce, recoverOfferingResult, signedRequest, TEST_ORIGIN } from './document-scanner-runner.mjs'
+import { runOfferingOnce, recoverOfferingResult, scanWithClamav, signedRequest, TEST_ORIGIN } from './document-scanner-runner.mjs'
+import { FIXTURE_SNAPSHOT_COVERAGE } from './document-scanner-snapshot.mjs'
 
 // This is a disposable PostgreSQL/Storage-HTTP fixture, NEVER hosted Storage,
 // independent-human, signature-provider, malware-coverage or Stage3 acceptance.
@@ -563,6 +564,13 @@ export async function proveOfferingDocuments(db, clients, featureSql, proveConne
     await runCloudEngineProof(async fixture=>{
       const config={origin:TEST_ORIGIN,workerId:worker,scannerId:scanner,signingKey:Buffer.alloc(32,71),databasePath:fixture.databasePath,databaseSha256:fixture.databaseSha256}
       const fetchImpl=fixtureFetch(config)
+      // Explicit isolated fixture engine, never the ordinary official-snapshot producer.
+      const fixtureEngine=async(bytes,options)=>{
+        const receipt=await scanWithClamav(bytes,{...options,allowFixtureDatabase:true})
+        eq(receipt.coverage,FIXTURE_SNAPSHOT_COVERAGE,'custom signature remains fixture-only coverage')
+        eq(receipt.productionMalwareCoverageProved,false,'custom fixture is not production malware coverage')
+        return receipt
+      }
       const variant=label=>{
         const bytes=Buffer.from(fixture.benignPdf),text='BlockXOne harmless clean scanner fixture',offset=bytes.indexOf(Buffer.from(text))
         truth(offset>=0,'independently produced valid uncompressed PDF contains expected text stream')
@@ -578,10 +586,10 @@ export async function proveOfferingDocuments(db, clients, featureSql, proveConne
         const abandoned=await reserve(p,'SUBSCRIPTION_TERMS',variant(`${asset} abandoned reservation`))
         await denied('unresolved intents prevent canonical correction',()=>reopen(p),'23514')
         lostAcknowledgement=true
-        const clean=await runOfferingOnce(config,{fetchImpl})
+        const clean=await runOfferingOnce(config,{fetchImpl,engine:fixtureEngine})
         eq(clean.outcome,'RESULT_ACCEPTED','real clean engine result recovers lost acknowledgement without FAIL/rescan')
         eq(clean.verdict,'CLEAN','actual pinned engine clean verdict');eq(clean.engine.byteSha256,memor.sha256,'real engine receipt binds exact first original bytes')
-        const malicious=await runOfferingOnce(config,{fetchImpl})
+        const malicious=await runOfferingOnce(config,{fetchImpl,engine:fixtureEngine})
         eq(malicious.outcome,'RESULT_ACCEPTED','actual harmless detection PDF is terminally rejected');eq(malicious.verdict,'MALICIOUS','real pinned custom fixture detection, not SQL injected')
         const resolveBody=fileBody(p,{intent_id:abandoned.id,reason:'Synthetic abandoned reservation intentionally excluded without uploading bytes or fabricating a scan.'}),resolveKey=randomUUID()
         const resolved=await fileCommand(p,'resolve_offering_file_intent',resolveBody,resolveKey)
@@ -595,7 +603,7 @@ export async function proveOfferingDocuments(db, clients, featureSql, proveConne
         for(const kind of ['MEMORANDUM','RISKS','SUBSCRIPTION_TERMS'])files.push(await register(p,kind,variant(`${asset} ${kind} PDF`)))
         eq(new Set(files.map(file=>file.sha256)).size,3,'three actual PDF byte digests remain distinct')
         for(let index=0;index<3;index++){
-          const result=await runOfferingOnce(config,{fetchImpl})
+          const result=await runOfferingOnce(config,{fetchImpl,engine:fixtureEngine})
           eq(result.outcome,'RESULT_ACCEPTED','actual original PDF processed through real pinned engine/verified callback/copy');eq(result.verdict,'CLEAN','no injected CLEAN positive')
           eq(result.engine.databaseSha256,fixture.databaseSha256,'actual controlled fixture database hash pinned')
         }
@@ -657,7 +665,7 @@ export async function proveOfferingDocuments(db, clients, featureSql, proveConne
       ])await isolated(async()=>{
         const p=await create('FUND',`Synthetic ${label} processing fence`),file=await register(p,'MEMORANDUM',bytes)
         corruptBytes=tamper
-        try{const result=await runOfferingOnce(config,{fetchImpl});eq(result.outcome,'PROCESSING_FAILED',`${label}: real wire-to-SQL processing fails closed`);eq(result.code,expectedCode,'specific byte-validation failure, not a mock verdict');eq(result.state,'EXHAUSTED','invalid immutable bytes cannot silently retry into CLEAN')}
+        try{const result=await runOfferingOnce(config,{fetchImpl,engine:fixtureEngine});eq(result.outcome,'PROCESSING_FAILED',`${label}: real wire-to-SQL processing fails closed`);eq(result.code,expectedCode,'specific byte-validation failure, not a mock verdict');eq(result.state,'EXHAUSTED','invalid immutable bytes cannot silently retry into CLEAN')}
         finally{corruptBytes=false}
         await admin()
         eq(await scalar('select count(*)::int from bx1_private.offering_document_scan_events where file_id=$1',[file.id]),0,'bad-byte processing creates no CLEAN/MALICIOUS scan attestation')

@@ -149,10 +149,15 @@ function verifiedManifest(value: unknown, config: ProcessingConfig,
   return item
 }
 
-function storageAdmin(config: ProcessingConfig): SupabaseClient {
+function storageAdmin(config: ProcessingConfig, signal?: AbortSignal): SupabaseClient {
   return createClient(config.scanner.url, config.scanner.storageKey, {
     auth: { autoRefreshToken: false, persistSession: false, detectSessionInUrl: false },
-    global: { fetch: (input, init) => globalThis.fetch(input, { ...init, cache: 'no-store' }) },
+    global: { fetch: (input, init) => {
+      if (!signal) return globalThis.fetch(input, { ...init, cache: 'no-store' })
+      const combined = init?.signal ? AbortSignal.any([init.signal, signal]) : signal
+      combined.throwIfAborted()
+      return globalThis.fetch(input, { ...init, cache: 'no-store', signal: combined })
+    } },
   })
 }
 
@@ -275,12 +280,12 @@ export type CleanOfferingDocumentReference = {
 }
 
 /** Only a DB-authorised clean reference may be passed; route rechecks it after this I/O. */
-export async function downloadCleanOfferingDocument(reference: CleanOfferingDocumentReference): Promise<Uint8Array> {
+export async function downloadCleanOfferingDocument(reference: CleanOfferingDocumentReference, signal?: AbortSignal): Promise<Uint8Array> {
   if (![reference.id, reference.revision_id, reference.uploader_id].every(value => uuid.safeParse(value).success)
     || reference.storage_path !== `${reference.revision_id}/${reference.uploader_id}/${reference.id}`
     || !hash.safeParse(reference.sha256).success || !Number.isSafeInteger(reference.size)
     || reference.size < 1 || reference.size > maxBytes || reference.mime_type !== 'application/pdf') {
     throw new OfferingDocumentProcessingError('Invalid clean offering document reference.', 409)
   }
-  return verifiedDownload(storageAdmin(offeringDocumentProcessingConfig()), cleanBucket, reference)
+  return verifiedDownload(storageAdmin(offeringDocumentProcessingConfig(), signal), cleanBucket, reference)
 }

@@ -30,7 +30,7 @@ beforeEach(() => {
   vi.stubGlobal('fetch', mocks.fetch)
   mocks.query.mockResolvedValue({ rows: [{ result: null }] })
 })
-afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs() })
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs() })
 
 describe('signature processing route with real HMAC, DTO and restricted worker transport', () => {
   it('accepts a signed bounded CLAIM and returns no provider credentials or signing URL', async () => {
@@ -41,6 +41,24 @@ describe('signature processing route with real HMAC, DTO and restricted worker t
     expect(mocks.query).toHaveBeenCalledTimes(1)
     expect(mocks.query.mock.calls[0][0]).toContain('bx1_private.claim_offering_signature_action')
     expect(mocks.query.mock.calls[0][1]).toEqual(['synthetic-signatures', requestId])
+    expect(mocks.fetch).not.toHaveBeenCalled()
+  })
+  it('accepts a signed WAKE as one bounded worker attempt, not a completion receipt', async () => {
+    const response = await POST(request({ command: 'WAKE', request_id: requestId }))
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ outcome: 'IDLE' })
+    expect(response.headers.get('cache-control')).toContain('no-store')
+    expect(mocks.query).toHaveBeenCalledTimes(1)
+    expect(mocks.query.mock.calls[0][0]).toContain('claim_offering_signature_action')
+    expect(mocks.fetch).not.toHaveBeenCalled()
+  })
+  it('starts the aggregate WAKE clock at route entry, before body/authentication work', async () => {
+    const value = request({ command: 'WAKE', request_id: requestId }), start = Date.now()
+    vi.spyOn(Date, 'now').mockReturnValueOnce(start).mockReturnValue(start + 43000)
+    const response = await POST(value)
+    expect(response.status).toBe(503)
+    expect((await response.json()).error).toContain('wake deadline')
+    expect(mocks.query).not.toHaveBeenCalled()
     expect(mocks.fetch).not.toHaveBeenCalled()
   })
   it.each([{ hmac: '0'.repeat(64) }, { timestamp: '1' }, { timestamp: String(Math.floor(Date.now() / 1000) - 301) }])(
@@ -55,6 +73,7 @@ describe('signature processing route with real HMAC, DTO and restricted worker t
       expect(mocks.query).not.toHaveBeenCalled()
     })
   it.each([{ command: 'VIEW', request_id: requestId }, { ...claim, signing_url: 'https://demo.docusign.net/Signing/test' },
+    { command: 'WAKE', request_id: requestId, operation_id: requestId },
     { command: 'PROCESS', request_id: requestId, operation_id: requestId, lease_id: requestId, generation: 0 }])(
     'rejects unsupported or authority-bearing worker input', async value => {
       expect((await POST(request(value))).status).toBe(400)

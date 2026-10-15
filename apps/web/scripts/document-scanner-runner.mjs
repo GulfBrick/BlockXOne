@@ -1,8 +1,10 @@
 import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto'
 import { spawn } from 'node:child_process'
-import { chmod, lstat, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
+import { chmod, lstat, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
+import { FIXTURE_SNAPSHOT_COVERAGE, OFFICIAL_SNAPSHOT_COVERAGE, ScannerSnapshotError,
+  loadOfficialSnapshot } from './document-scanner-snapshot.mjs'
 
 export const TEST_ORIGIN = 'https://testnet.bx1.co.za'
 export const CLAMAV_VERSION = '1.4.6'
@@ -132,7 +134,8 @@ export async function sendSigned(config, request, kind, { fetchImpl = fetch, tim
 export function interpretClamavResult({ code, signal, stdout, stderr }) {
   if (signal || (code !== 0 && code !== 1) || stderr.trim() || /Heuristics\.(?:Limits\.Exceeded|Encrypted)|\b(?:ERROR|WARNING)\b/i.test(stdout)) reject('ENGINE_UNAVAILABLE')
   const summary = stdout.split(/-+\s*SCAN SUMMARY\s*-+/)
-  if (summary.length !== 2 || !/^Scanned files:\s*1\s*$/m.test(summary[1])
+  if (summary.length !== 2 || !/^Known viruses:\s*[1-9][0-9]*\s*$/m.test(summary[1])
+    || !/^Scanned files:\s*1\s*$/m.test(summary[1])
     || !/^Engine version:\s*1\.4\.6\s*$/m.test(summary[1])
     || /^Total errors:\s*[1-9]/m.test(summary[1])
     || !new RegExp(`^Infected files:\\s*${code}\\s*$`, 'm').test(summary[1])) reject('INCOMPLETE_SCAN')
@@ -181,49 +184,94 @@ export async function runPinnedClamavProcess(args, input, { readExecutable = rea
   return runClamavProcess(args, input, options)
 }
 
-export async function scanWithClamav(bytes, { databasePath, databaseSha256, clock = Date.now,
+export async function scanWithClamav(bytes, { databasePath, databaseSha256, clock = Date.now, allowFixtureDatabase = false,
   spawnImpl = spawn, timeoutMs = SCAN_TIMEOUT, outputLimit = 16_384 } = {}) {
   if (!(bytes instanceof Uint8Array) || !bytes.byteLength || bytes.byteLength > MAX_BYTES
     || !path.isAbsolute(databasePath ?? '') || !HASH.test(databaseSha256 ?? '')
     || !Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > SCAN_TIMEOUT
     || !Number.isInteger(outputLimit) || outputLimit < 1 || outputLimit > 16_384) reject('INVALID_ENGINE_INPUT')
   let binaryHash
-  let database
+  let databases
+  let snapshot
+  let coverage
   try {
-    const [engineStat, databaseStat] = await Promise.all([lstat(CLAMAV_EXECUTABLE), lstat(databasePath)])
+    const engineStat = await lstat(CLAMAV_EXECUTABLE)
     if (!engineStat.isFile() || (engineStat.mode & 0o022) || await realpath(CLAMAV_EXECUTABLE) !== CLAMAV_EXECUTABLE
-      || !databaseStat.isFile() || databaseStat.size < 1 || databaseStat.size > 512 * 1024 * 1024
-      || (databaseStat.mode & 0o022) || await realpath(databasePath) !== databasePath) reject('INVALID_ENGINE_INPUT')
-    database = await readFile(databasePath)
-    if (sha(database) !== databaseSha256) reject('INVALID_DATABASE')
+      || typeof allowFixtureDatabase !== 'boolean') reject('INVALID_ENGINE_INPUT')
+    if (path.extname(databasePath) === '.json') {
+      snapshot = await loadOfficialSnapshot(databasePath, databaseSha256, { clock })
+      databases = snapshot.databases
+      coverage = OFFICIAL_SNAPSHOT_COVERAGE
+    } else {
+      // This escape hatch exists solely for the retained cloud proof. The
+      // ordinary producer never accepts a custom/single-file CLEAN result.
+      if (!allowFixtureDatabase || process.platform !== 'linux' || process.env.GITHUB_ACTIONS !== 'true'
+        || process.env.BX1_SCANNER_CLOUD_PROOF !== 'github-clamav-1.4.6') reject('OFFICIAL_SNAPSHOT_REQUIRED')
+      const extension = path.extname(databasePath).toLowerCase()
+      const databaseStat = await lstat(databasePath)
+      if (!['.ndb', '.hdb', '.hsb', '.ldb'].includes(extension) || !databaseStat.isFile()
+        || databaseStat.size < 1 || databaseStat.size > 512 * 1024 * 1024
+        || (databaseStat.mode & 0o022) || await realpath(databasePath) !== databasePath) reject('INVALID_ENGINE_INPUT')
+      const database = await readFile(databasePath)
+      if (database.length !== databaseStat.size || sha(database) !== databaseSha256) reject('INVALID_DATABASE')
+      databases = [{ name: `fixture-only${extension}`, bytes: database }]
+      coverage = FIXTURE_SNAPSHOT_COVERAGE
+    }
     binaryHash = sha(await readFile(CLAMAV_EXECUTABLE))
     if (binaryHash !== CLAMAV_EXECUTABLE_SHA256) reject('ENGINE_HASH_MISMATCH')
-  } catch (error) { if (error instanceof RunnerError) throw error; reject('ENGINE_UNAVAILABLE') }
-  // One immutable snapshot is the entire loaded database; no implicit default
-  // signature directory is mixed into its hash. Internal extraction is private
-  // memory-backed scratch, not a promise that libclamav never creates files.
+  } catch (error) {
+    if (error instanceof RunnerError) throw error
+    if (error instanceof ScannerSnapshotError) reject(error.code)
+    reject('ENGINE_UNAVAILABLE')
+  }
+  // The complete manifested set is the entire loaded database. The extraction
+  // directory is separate, so no ambient signatures are picked up from it.
   let scratch
   try {
     scratch = await mkdtemp('/dev/shm/bx1-scan-')
     await chmod(scratch, 0o700)
-    const extension = path.extname(databasePath).toLowerCase()
-    if (!['.ndb', '.hdb', '.hsb', '.ldb', '.cvd', '.cld'].includes(extension)) reject('INVALID_DATABASE')
-    const snapshot = path.join(scratch, `signatures${extension}`)
-    await writeFile(snapshot, database, { flag: 'wx', mode: 0o400 })
+    const signatures = path.join(scratch, 'signatures')
+    await mkdir(signatures, { mode: 0o700 })
+    for (const database of databases) await writeFile(path.join(signatures, database.name), database.bytes, { flag: 'wx', mode: 0o400 })
+    await chmod(signatures, 0o500)
     const started = clock()
     const version = await runPinnedClamavProcess(['--version'], Buffer.alloc(0), { spawnImpl, timeoutMs: Math.min(timeoutMs, 5000), outputLimit })
     if (version.code !== 0 || version.signal || version.stderr.trim()
       || !/^ClamAV 1\.4\.6(?:\/[^\r\n]+)?\r?\n?$/.test(version.stdout)) reject('ENGINE_VERSION_MISMATCH')
     const remaining = timeoutMs - (clock() - started)
     if (remaining < 1) reject('ENGINE_UNAVAILABLE')
-    const result = await runPinnedClamavProcess(['--database', snapshot, '--tempdir', scratch,
+    const result = await runPinnedClamavProcess(['--database', signatures, '--tempdir', scratch,
+      `--official-db-only=${coverage === OFFICIAL_SNAPSHOT_COVERAGE ? 'yes' : 'no'}`,
+      '--bytecode=yes', '--bytecode-unsigned=no',
       '--scan-pdf=yes', '--scan-image=yes', '--alert-encrypted=yes', '--alert-exceeds-max=yes',
       '--max-filesize=4M', '--max-scansize=16M', '--max-files=128', '--max-recursion=8',
       `--max-scantime=${remaining}`, '--bytecode-timeout=1000', '-'], bytes, { spawnImpl, timeoutMs: remaining, outputLimit })
     return Object.freeze({ verdict: interpretClamavResult(result), engineVersion: CLAMAV_VERSION,
-      engineSha256: binaryHash, databaseSha256, sha256: sha(bytes) })
+      engineSha256: binaryHash, databaseSha256, sha256: sha(bytes), coverage,
+      officialSignaturesOnly: coverage === OFFICIAL_SNAPSHOT_COVERAGE,
+      databaseVersions: snapshot ? snapshot.manifest.databases : [], productionMalwareCoverageProved: false })
   } catch (error) { if (error instanceof RunnerError) throw error; reject('ENGINE_UNAVAILABLE') }
-  finally { if (scratch) await rm(scratch, { recursive: true, force: true }) }
+  finally {
+    if (scratch) {
+      await chmod(path.join(scratch, 'signatures'), 0o700).catch(() => {})
+      await rm(scratch, { recursive: true, force: true })
+    }
+  }
+}
+
+/** Authenticate/load the complete current signed set before leasing any job. */
+export async function preflightOfficialScanner(config, { clock = Date.now, scan = scanWithClamav } = {}) {
+  // No real customer bytes, HTTP call, CLAIM or result is involved in preflight.
+  const receipt = await scan(Buffer.from('BlockXOne official scanner database preflight\n', 'ascii'), {
+    databasePath: config.databasePath, databaseSha256: config.databaseSha256, clock,
+  })
+  if (receipt?.verdict !== 'CLEAN' || receipt.engineVersion !== CLAMAV_VERSION
+    || receipt.engineSha256 !== CLAMAV_EXECUTABLE_SHA256 || receipt.databaseSha256 !== config.databaseSha256
+    || receipt.coverage !== OFFICIAL_SNAPSHOT_COVERAGE || receipt.officialSignaturesOnly !== true
+    || !Array.isArray(receipt.databaseVersions) || receipt.databaseVersions.length !== 3)
+    reject('OFFICIAL_SNAPSHOT_REQUIRED')
+  return Object.freeze({ coverage: receipt.coverage, databaseSha256: receipt.databaseSha256,
+    databaseVersions: receipt.databaseVersions, productionMalwareCoverageProved: false })
 }
 
 function validateFailure(value, job, code) {
@@ -267,6 +315,7 @@ export async function recoverResult(recovery, config, { fetchImpl = fetch, clock
 
 export async function runOnce(config, { fetchImpl = fetch, engine = scanWithClamav, clock = Date.now, requestId = randomUUID() } = {}) {
   if (!ID.test(requestId) || config.origin !== TEST_ORIGIN) reject('INVALID_CONFIGURATION')
+  if (engine === scanWithClamav) await preflightOfficialScanner(config, { clock })
   const claimRequest = signedRequest({ command: 'CLAIM', request_id: requestId }, config, 'processing', clock())
   let claim
   for (let attempt = 0; attempt < 3; attempt++) {
@@ -287,7 +336,10 @@ export async function runOnce(config, { fetchImpl = fetch, engine = scanWithClam
     scan = await engine(bytes, { databasePath: config.databasePath, databaseSha256: config.databaseSha256, clock })
     if (!scan || !['CLEAN', 'MALICIOUS'].includes(scan.verdict) || scan.engineVersion !== CLAMAV_VERSION
       || scan.engineSha256 !== CLAMAV_EXECUTABLE_SHA256
-      || scan.databaseSha256 !== config.databaseSha256 || scan.sha256 !== job.sha256) reject('ENGINE_UNAVAILABLE')
+      || scan.databaseSha256 !== config.databaseSha256 || scan.sha256 !== job.sha256
+      || ![OFFICIAL_SNAPSHOT_COVERAGE, FIXTURE_SNAPSHOT_COVERAGE].includes(scan.coverage)
+      || scan.officialSignaturesOnly !== (scan.coverage === OFFICIAL_SNAPSHOT_COVERAGE)
+      || scan.productionMalwareCoverageProved !== false) reject('ENGINE_UNAVAILABLE')
     if (Date.parse(job.lease_expires_at) - clock() < DELIVERY_MARGIN) reject('LEASE_EXPIRED')
   } catch (error) {
     const code = error instanceof RunnerError && ['HASH_MISMATCH', 'INVALID_DOCUMENT', 'DELIVERY_FAILED'].includes(error.code)
@@ -302,7 +354,9 @@ export async function runOnce(config, { fetchImpl = fetch, engine = scanWithClam
     reference: job.reference, observed_at: new Date(clock()).toISOString() }, config, 'result', clock())
   const result = await recoverResult({ kind: 'RESULT_RECOVERY', request, documentId: job.document_id, verdict: scan.verdict }, config, { fetchImpl, clock })
   return { ...result, engine: { version: scan.engineVersion, executableSha256: scan.engineSha256,
-    databaseSha256: scan.databaseSha256, byteSha256: scan.sha256 } }
+    databaseSha256: scan.databaseSha256, byteSha256: scan.sha256, coverage: scan.coverage,
+    officialSignaturesOnly: scan.officialSignaturesOnly === true,
+    productionMalwareCoverageProved: false, ...(scan.databaseVersions ? { databaseVersions: scan.databaseVersions } : {}) } }
 }
 
 /** Separate exact offering wire schema: admission manifests can never cross it. */
@@ -371,6 +425,7 @@ export async function recoverOfferingResult(recovery, config, { fetchImpl = fetc
 
 export async function runOfferingOnce(config, { fetchImpl = fetch, engine = scanWithClamav, clock = Date.now, requestId = randomUUID() } = {}) {
   if (!ID.test(requestId) || config.origin !== TEST_ORIGIN) reject('INVALID_CONFIGURATION')
+  if (engine === scanWithClamav) await preflightOfficialScanner(config, { clock })
   const claimRequest = signedRequest({ command: 'CLAIM', request_id: requestId }, config, 'offering-processing', clock())
   let claim
   for (let attempt = 0; attempt < 3; attempt++) {
@@ -391,7 +446,10 @@ export async function runOfferingOnce(config, { fetchImpl = fetch, engine = scan
     if (Date.parse(job.lease_expires_at) - clock() < SCAN_TIMEOUT + DELIVERY_MARGIN) reject('LEASE_EXPIRED')
     scan = await engine(bytes, { databasePath: config.databasePath, databaseSha256: config.databaseSha256, clock })
     if (!scan || !['CLEAN', 'MALICIOUS'].includes(scan.verdict) || scan.engineVersion !== CLAMAV_VERSION
-      || scan.engineSha256 !== CLAMAV_EXECUTABLE_SHA256 || scan.databaseSha256 !== config.databaseSha256 || scan.sha256 !== job.sha256) reject('ENGINE_UNAVAILABLE')
+      || scan.engineSha256 !== CLAMAV_EXECUTABLE_SHA256 || scan.databaseSha256 !== config.databaseSha256 || scan.sha256 !== job.sha256
+      || ![OFFICIAL_SNAPSHOT_COVERAGE, FIXTURE_SNAPSHOT_COVERAGE].includes(scan.coverage)
+      || scan.officialSignaturesOnly !== (scan.coverage === OFFICIAL_SNAPSHOT_COVERAGE)
+      || scan.productionMalwareCoverageProved !== false) reject('ENGINE_UNAVAILABLE')
     if (Date.parse(job.lease_expires_at) - clock() < DELIVERY_MARGIN) reject('LEASE_EXPIRED')
   } catch (error) {
     const code = error instanceof RunnerError && ['HASH_MISMATCH', 'INVALID_DOCUMENT', 'DELIVERY_FAILED'].includes(error.code)
@@ -407,7 +465,9 @@ export async function runOfferingOnce(config, { fetchImpl = fetch, engine = scan
     scanner_authority_epoch: job.scanner_authority_epoch }, config, 'offering-result', clock())
   const result = await recoverOfferingResult({ kind: 'OFFERING_RESULT_RECOVERY', request, fileId: job.file_id, verdict: scan.verdict }, config, { fetchImpl, clock })
   return { ...result, engine: { version: scan.engineVersion, executableSha256: scan.engineSha256,
-    databaseSha256: scan.databaseSha256, byteSha256: scan.sha256 } }
+    databaseSha256: scan.databaseSha256, byteSha256: scan.sha256, coverage: scan.coverage,
+    officialSignaturesOnly: scan.officialSignaturesOnly === true,
+    productionMalwareCoverageProved: false, ...(scan.databaseVersions ? { databaseVersions: scan.databaseVersions } : {}) } }
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

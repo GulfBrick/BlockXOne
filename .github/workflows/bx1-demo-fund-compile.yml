@@ -6,7 +6,7 @@ on:
       mode:
         description: Cloud acceptance, empty-form browser proof, or focused UI and password-recovery checks
         type: choice
-        options: [acceptance, registration-browser-proof, fund-dashboard-focused, theme-focused, auth-recovery-focused, connected-session-focused, document-read-recovery-focused, fund-signer-entry-focused]
+        options: [acceptance, registration-browser-proof, fund-dashboard-focused, theme-focused, auth-recovery-focused, connected-session-focused, document-read-recovery-focused, fund-signer-entry-focused, connected-fund-providers-focused]
         default: acceptance
       registration_origin_expectation:
         description: Expected browser-generated Origin on the current hosted TEST document
@@ -174,9 +174,9 @@ permissions:
 jobs:
   document-scanner-engine:
     name: Real scanner engine and bounded producer
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.mode == 'acceptance' }}
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.mode == 'acceptance' || inputs.mode == 'connected-fund-providers-focused' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - name: Check out exact scanner source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -205,7 +205,7 @@ jobs:
           /usr/local/bin/clamscan --version
       - name: Prove producer protocol negatives without real customer data
         shell: bash
-        run: node --test apps/web/scripts/document-scanner-runner.node-test.mjs
+        run: node --test apps/web/scripts/document-scanner-runner.node-test.mjs apps/web/scripts/document-scanner-snapshot.node-test.mjs
       - name: Prove real benign and detection-fixture scans
         shell: bash
         env:
@@ -213,6 +213,13 @@ jobs:
           BX1_SCANNER_CLOUD_ENGINE: /usr/local/bin/clamscan
           BX1_SCANNER_PACKAGE_SHA256: d3ee9e401974855a1edc1761b1425417d126de618d5f0c91cd51209f69f6fcc2
         run: node apps/web/scripts/document-scanner-engine-proof.mjs
+      - name: Verify current official signature set without accessing any private queue
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'connected-fund-providers-focused' }}
+        shell: bash
+        env:
+          BX1_SCANNER_OFFICIAL_CLOUD_PROOF: github-clamav-official-1.4.6
+          BX1_SCANNER_PACKAGE_SHA256: d3ee9e401974855a1edc1761b1425417d126de618d5f0c91cd51209f69f6fcc2
+        run: node apps/web/scripts/document-scanner-official-proof.mjs
   compile-and-build:
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.mode == 'acceptance' }}
     runs-on: ubuntu-24.04
@@ -658,7 +665,7 @@ jobs:
 
   fund-dashboard-focused:
     name: Focused dashboard, theme or password-recovery acceptance
-    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.mode == 'fund-dashboard-focused' || inputs.mode == 'theme-focused' || inputs.mode == 'auth-recovery-focused' || inputs.mode == 'connected-session-focused' || inputs.mode == 'document-read-recovery-focused' || inputs.mode == 'fund-signer-entry-focused') && github.ref == 'refs/heads/codex/stage2-sandbox-completion-20261011' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.mode == 'fund-dashboard-focused' || inputs.mode == 'theme-focused' || inputs.mode == 'auth-recovery-focused' || inputs.mode == 'connected-session-focused' || inputs.mode == 'document-read-recovery-focused' || inputs.mode == 'fund-signer-entry-focused' || inputs.mode == 'connected-fund-providers-focused') && github.ref == 'refs/heads/codex/stage2-sandbox-completion-20261011' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -702,7 +709,20 @@ jobs:
           node --input-type=module <<'NODE'
           import { spawn } from 'node:child_process'
           import { runHermeticVitest } from './scripts/run-hermetic-tests.mjs'
-          const files = process.env.BX1_FOCUSED_UI_MODE === 'fund-signer-entry-focused' ? [
+          const files = process.env.BX1_FOCUSED_UI_MODE === 'connected-fund-providers-focused' ? [
+            'src/lib/portal/offering-disclosure-pdf.test.ts',
+            'src/components/portal/offering-file-panel.test.tsx',
+            'src/lib/portal/offering-provider-status.test.ts',
+            'src/lib/portal/docusign-offering-provider.test.ts',
+            'src/app/api/portal/offering-signatures/provider-status/route.test.ts',
+            'src/lib/portal/provider-evidence.test.ts',
+            'src/lib/portal/provider-evidence-api.test.ts',
+            'src/lib/portal/sumsub-readiness.test.ts',
+            'src/app/api/portal/kyc/readiness/route.test.ts',
+            'src/lib/portal/offering-document-processing.test.ts',
+            'src/lib/portal/offering-signatures-server.test.ts',
+            'src/app/api/portal/offering-signatures/processing/route.test.ts',
+          ] : process.env.BX1_FOCUSED_UI_MODE === 'fund-signer-entry-focused' ? [
             'src/components/portal/offering-workflow.interaction.test.tsx',
           ] : process.env.BX1_FOCUSED_UI_MODE === 'document-read-recovery-focused' ? [
             'src/components/portal/offering-file-panel.test.tsx',
@@ -778,7 +798,7 @@ jobs:
           NODE
 
       - name: Typecheck the same reviewed source before requesting its release build
-        if: ${{ (inputs.mode == 'fund-dashboard-focused' || inputs.mode == 'auth-recovery-focused' || inputs.mode == 'connected-session-focused' || inputs.mode == 'document-read-recovery-focused' || inputs.mode == 'fund-signer-entry-focused') && !cancelled() }}
+        if: ${{ (inputs.mode == 'fund-dashboard-focused' || inputs.mode == 'auth-recovery-focused' || inputs.mode == 'connected-session-focused' || inputs.mode == 'document-read-recovery-focused' || inputs.mode == 'fund-signer-entry-focused' || inputs.mode == 'connected-fund-providers-focused') && !cancelled() }}
         shell: bash
         working-directory: apps/web
         run: npx tsc --noEmit --incremental false

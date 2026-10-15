@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import type { PortalProduct } from '@/lib/portal/contracts'
+import { createOfferingDisclosurePdf } from '@/lib/portal/offering-disclosure-pdf'
 import { portalContextMatches, type PortalOperatingContext } from '@/lib/portal/operating-context'
 import { offeringDocumentSnapshotSchema, offeringFileKindSchema, offeringFileReceiptSchema, offeringFileMaxBytes,
   readOfferingDocumentRetry, saveOfferingDocumentRetry, clearOfferingDocumentRetry,
@@ -132,6 +133,20 @@ export function OfferingFilePanel({ product, context, actorId }: {
     await stage({ file, kind, title: resumeIntent ? title : title.trim() }, formElement)
   }
 
+  async function useSavedDisclosure() {
+    if (!canStage || busy || resumeIntent || files?.some(item => item.kind === kind)) return
+    const expectedGeneration = generation.current
+    setBusy(true); setMessage('')
+    try {
+      const disclosure = await createOfferingDisclosurePdf(product, kind)
+      if (generation.current !== expectedGeneration) return
+      setFile(new File([disclosure.bytes as BlobPart], disclosure.filename, { type: 'application/pdf' }))
+      setTitle(disclosure.title)
+      setMessage('PDF prepared from the saved offering text. Stage it below to send these bytes for scanning; it is not yet signed or approved.')
+    } catch (error) { if (generation.current === expectedGeneration) setMessage(error instanceof Error ? error.message : 'The saved text could not be converted. Upload its original PDF instead.') }
+    finally { if (generation.current === expectedGeneration) setBusy(false) }
+  }
+
   async function stage(attempt: { file: File; kind: typeof kind; title: string }, formElement?: HTMLFormElement) {
     if (!context || !revision || busy || !current?.document_access.can_upload) return
     const expectedGeneration = generation.current
@@ -238,9 +253,11 @@ export function OfferingFilePanel({ product, context, actorId }: {
       {pending ? <Notice title="Document action requires reconciliation" tone="warning">No new document action is available while this request is unresolved. <button type="button" className={styles.buttonSecondary} disabled={busy || !current?.document_access.allowed_commands.includes(pending.command)} onClick={() => void act(pending)}>Retry the same document request</button></Notice> : null}
       {pendingUpload ? <Notice title="Upload requires reconciliation" tone="warning">The same file, category and title are retained. No replacement upload or manifest action is available. <button type="button" className={styles.buttonSecondary} disabled={busy || !current?.document_access.can_upload} onClick={() => void stage(pendingUpload)}>Retry the same PDF bytes</button></Notice> : null}
       {canStage ? <form className={styles.form} onSubmit={event => void submit(event)}><fieldset className={styles.fieldset} disabled={busy}>
-        <Field label="Document category"><select disabled={resumeIntent !== null} value={kind} onChange={event => setKind(event.target.value as typeof kind)}><option value="MEMORANDUM">Offering memorandum</option><option value="RISKS">Risk disclosures</option><option value="SUBSCRIPTION_TERMS">Subscription agreement</option></select></Field>
+        <Field label="Document category"><select disabled={resumeIntent !== null} value={kind} onChange={event => { setKind(event.target.value as typeof kind); setFile(null); setTitle(''); setMessage('') }}><option value="MEMORANDUM">Offering memorandum</option><option value="RISKS">Risk disclosures</option><option value="SUBSCRIPTION_TERMS">Subscription agreement</option></select></Field>
         <Field label="File title"><input disabled={resumeIntent !== null} required minLength={1} maxLength={160} value={title} onChange={event => setTitle(event.target.value)} /></Field>
-        <Field label="Private PDF, maximum 4 MiB"><input type="file" required accept="application/pdf,.pdf" onChange={event => setFile(event.target.files?.[0] ?? null)} /></Field>
+        <button type="button" className={styles.buttonSecondary} disabled={resumeIntent !== null || files?.some(item => item.kind === kind)} onClick={() => void useSavedDisclosure()}>Create PDF from saved disclosure</button>
+        {file ? <p role="status">Ready to stage: {file.name}. No upload has been sent yet.</p> : null}
+        <Field label="Private PDF, maximum 4 MiB" hint="Upload an original PDF, or create one from the saved disclosure above."><input key={kind} type="file" required={!file} accept="application/pdf,.pdf" onChange={event => setFile(event.target.files?.[0] ?? null)} /></Field>
         {files?.some(item => item.kind === kind) ? <p className={styles.muted}>This category already has an immutable intent. Resume only the exact original bytes, or resolve it and use a permitted fresh same-terms revision; never overwrite its bytes.</p> : null}
         <button type="submit" className={styles.buttonSecondary} disabled={!file || !title.trim() || files?.some(item => item.kind === kind && item.id !== resumeIntent)}>{busy ? 'Staging exact private bytes…' : resumeIntent ? 'Resume exact reserved PDF' : 'Stage in quarantine'}</button>
         {files?.filter(item => item.intent_state === 'PENDING').map(item => <button type="button" key={item.id} className={styles.buttonSecondary} onClick={() => { setResumeIntent(item.id); setKind(item.kind); setTitle(item.title); setFile(null); setMessage('Select the exact original PDF. Its size and byte hash must match this immutable reservation before any request is sent.') }}>Select {item.kind.replaceAll('_', ' ').toLowerCase()} reservation to resume</button>)}

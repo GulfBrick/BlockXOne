@@ -4,9 +4,10 @@ import { EventEmitter } from 'node:events'
 import { PassThrough } from 'node:stream'
 import { test } from 'node:test'
 import { CLAMAV_EXECUTABLE, CLAMAV_EXECUTABLE_SHA256, CLAMAV_VERSION, RunnerError, TEST_ORIGIN, interpretClamavResult,
-  recoverResult, runClamavProcess, runPinnedClamavProcess, runOnce, runnerConfig, sendSigned, signedRequest,
+  preflightOfficialScanner, recoverResult, runClamavProcess, runPinnedClamavProcess, runOnce, runnerConfig, sendSigned, signedRequest,
   validateManifest, verifyDocumentBytes } from './document-scanner-runner.mjs'
 import { recoverOfferingResult, runOfferingOnce, validateOfferingManifest } from './document-scanner-runner.mjs'
+import { FIXTURE_SNAPSHOT_COVERAGE, OFFICIAL_SNAPSHOT_COVERAGE } from './document-scanner-snapshot.mjs'
 
 // HTTP/subprocess mocks prove boundary negatives, NOT hosted Storage or malware detection.
 const now = Date.UTC(2026, 9, 11, 12)
@@ -29,7 +30,8 @@ const json = (value, extra = {}) => new Response(JSON.stringify(value), { header
 const binary = (value = bytes) => new Response(value, { headers: {
   'content-type': 'application/octet-stream', 'content-length': String(value.length), 'cache-control': 'private, no-store' } })
 const engine = async value => ({ verdict: 'CLEAN', engineVersion: CLAMAV_VERSION, engineSha256: CLAMAV_EXECUTABLE_SHA256,
-  databaseSha256: config.databaseSha256, sha256: hash(value) })
+  databaseSha256: config.databaseSha256, sha256: hash(value), coverage: FIXTURE_SNAPSHOT_COVERAGE,
+  officialSignaturesOnly: false, productionMalwareCoverageProved: false })
 const errorCode = expected => error => error instanceof RunnerError && error.code === expected
 const resultBody = verdict => ({ document_id: ids.document, sha256: hash(bytes), verdict,
   reference: `bx1-scan:${ids.attempt}`, observed_at: new Date(now).toISOString() })
@@ -267,6 +269,43 @@ test('a fabricated engine executable receipt cannot send a result callback', asy
   assert.equal(fixture.calls.some(x => x.init.method === 'PATCH'), false)
 })
 
+test('unlabelled engine coverage cannot manufacture an accepted document result', async () => {
+  for (const run of [runOnce, runOfferingOnce]) {
+    const fixture = run === runOnce ? mockTransport() : mockOfferingTransport()
+    const result = await run(config, { ...fixture, clock, requestId: ids.request,
+      engine: async value => ({ ...await engine(value), coverage: undefined }) })
+    assert.equal(result.outcome, 'PROCESSING_FAILED')
+    assert.equal(fixture.calls.some(call => call.init.method === 'PATCH'), false)
+  }
+})
+
+test('official preflight refuses fixture, incomplete, wrong-engine and non-clean receipts', async () => {
+  const accepted = { ...await engine(bytes), coverage: OFFICIAL_SNAPSHOT_COVERAGE,
+    officialSignaturesOnly: true, databaseVersions: [{ name: 'main.cvd' }, { name: 'daily.cvd' }, { name: 'bytecode.cvd' }] }
+  const receipt = await preflightOfficialScanner(config, { clock, scan: async (_value, options) => {
+    assert.equal(options.databasePath, config.databasePath)
+    assert.equal(options.databaseSha256, config.databaseSha256)
+    assert.equal('allowFixtureDatabase' in options, false)
+    return accepted
+  } })
+  assert.equal(receipt.coverage, OFFICIAL_SNAPSHOT_COVERAGE)
+  assert.equal(receipt.productionMalwareCoverageProved, false)
+  for (const delta of [{ coverage: FIXTURE_SNAPSHOT_COVERAGE }, { officialSignaturesOnly: false },
+    { databaseVersions: [] }, { databaseVersions: [{ name: 'daily.cvd' }] }, { engineSha256: 'a'.repeat(64) },
+    { engineVersion: '1.4.5' }, { verdict: 'MALICIOUS' }, { databaseSha256: 'b'.repeat(64) }]) {
+    await assert.rejects(preflightOfficialScanner(config, { clock, scan: async () => ({ ...accepted, ...delta }) }),
+      errorCode('OFFICIAL_SNAPSHOT_REQUIRED'))
+  }
+})
+
+test('ordinary admission and offering producers fail preflight before CLAIM with a single fixture database', async () => {
+  for (const run of [runOnce, runOfferingOnce]) {
+    let calls = 0
+    await assert.rejects(run(config, { clock, requestId: ids.request, fetchImpl: async () => { calls++; assert.fail('Fixture claimed a job') } }), RunnerError)
+    assert.equal(calls, 0)
+  }
+})
+
 test('expired or too-short lease never releases a new result and expiry cannot FAIL', async () => {
   const stale = mockTransport({ job: { ...manifest(), lease_expires_at: new Date(now - 1).toISOString() } })
   await assert.rejects(runOnce(config, { ...stale, clock, engine, requestId: ids.request }), errorCode('INVALID_MANIFEST'))
@@ -335,6 +374,7 @@ test('engine report interpretation requires one complete scan, rejecting errors/
   for (const value of [{ ...report(), code: 2 }, { ...report(), signal: 'SIGKILL' }, { ...report(), stderr: 'warning private' },
     report(1, 'stdin: Heuristics.Encrypted.PDF FOUND'), report(1, 'stdin: Heuristics.Limits.Exceeded FOUND'),
     { ...report(), stdout: report().stdout.replace('Scanned files: 1', 'Scanned files: 0') },
+    { ...report(), stdout: report().stdout.replace('Known viruses: 1', 'Known viruses: 0') },
     { ...report(), stdout: report().stdout.replace('1.4.6', '1.4.5') },
     { ...report(), stdout: report().stdout.replace('Infected files: 0', 'Infected files: 1') },
     { ...report(), stdout: `${report().stdout}\nWARNING: private path` },

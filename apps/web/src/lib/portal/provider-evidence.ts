@@ -188,9 +188,117 @@ export function parseSumsubWebhook(raw: Uint8Array, expectedClientId: string) {
   }
 }
 
-export function sumsubRequestSignature(timestamp: string, path: string, body: string, secret: string): string {
-  return createHmac('sha256', secret).update(timestamp).update('POST').update(path).update(body).digest('hex')
+export function sumsubRequestSignature(timestamp: string, path: string, body: string, secret: string, method: 'POST' | 'GET' = 'POST'): string {
+  if (!['POST', 'GET'].includes(method) || (method === 'GET' && body !== '')) throw new PortalError('Invalid identity provider request.', 400)
+  return createHmac('sha256', secret).update(timestamp).update(method).update(path).update(body).digest('hex')
 }
+
+type SumsubSubject = 'individual' | 'company'
+type SumsubLevel = { name: string; applicant_type: SumsubSubject | 'UNKNOWN' }
+export type SumsubSubjectReadiness = {
+  configured: boolean; enabled: boolean; level_present: boolean | null;
+  provider_subject_type: SumsubSubject | 'UNKNOWN' | null;
+  classifier: 'LEVEL_NOT_CONFIGURED' | 'SUBJECT_DISABLED' | 'CONNECTION_NOT_VERIFIED' | 'LEVEL_NOT_FOUND'
+    | 'LEVEL_AMBIGUOUS' | 'LEVEL_SUBJECT_MISMATCH' | 'LEVEL_SUBJECT_UNCONFIRMED' | 'LEVEL_PRESENT';
+}
+export type SumsubSandboxReadiness = {
+  provider: 'SUMSUB'; environment: 'TESTNET'; status: 'CONNECTED' | 'NOT_CONFIGURED' | 'UNAVAILABLE';
+  classifier: 'AUTHENTICATED_LEVELS_READ' | 'CREDENTIALS_NOT_CONFIGURED' | 'CREDENTIALS_REJECTED'
+    | 'PROVIDER_ACCESS_DENIED' | 'PROVIDER_RATE_LIMITED' | 'PROVIDER_UNAVAILABLE' | 'PROVIDER_RESPONSE_INVALID';
+  sandbox_enabled: boolean; individual: SumsubSubjectReadiness; company: SumsubSubjectReadiness;
+  available_levels: SumsubLevel[];
+  webhook: { configured: boolean; delivery_proved: false };
+  evidence_writer: { configured: boolean; connection_proved: false };
+  verification_proved: false; admission_granted: false;
+}
+const SUMSUB_LEVELS_PATH = '/resources/applicants/-/levels'
+const SUMSUB_LEVELS_LIMIT = 262_144
+const sumsubLevelCatalog = z.object({ list: z.object({
+  items: z.array(z.object({ name: boundedText(120) }).passthrough()).max(200),
+  totalItems: z.number().int().min(0).max(200).optional(),
+}).passthrough() }).passthrough()
+
+function configuredSumsubLevel(value: string | undefined): string | null {
+  return typeof value === 'string' && boundedText(120).safeParse(value).success ? value : null
+}
+
+async function readSumsubLevelCatalog(response: Response): Promise<SumsubLevel[]> {
+  if (response.redirected || !/^application\/json(?:\s*;|$)/i.test(response.headers.get('content-type') ?? '')) throw new Error()
+  const length = response.headers.get('content-length')
+  if (length && (!/^[0-9]+$/.test(length) || Number(length) > SUMSUB_LEVELS_LIMIT)) throw new Error()
+  const reader = response.body?.getReader()
+  if (!reader) throw new Error()
+  const chunks: Uint8Array[] = []; let size = 0
+  try {
+    for (;;) {
+      const part = await reader.read()
+      if (part.done) break
+      size += part.value.byteLength
+      if (size > SUMSUB_LEVELS_LIMIT) throw new Error()
+      chunks.push(part.value)
+    }
+  } finally { await reader.cancel().catch(() => {}); reader.releaseLock() }
+  const bytes = new Uint8Array(size); let offset = 0
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength }
+  const catalog = sumsubLevelCatalog.parse(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)))
+  if (catalog.list.totalItems !== undefined && catalog.list.totalItems !== catalog.list.items.length) throw new Error()
+  return catalog.list.items.map((level): SumsubLevel => ({ name: level.name,
+    // An absent/unknown provider subject is not inferred from a level's name.
+    applicant_type: level.applicantType === 'individual' || level.applicantType === 'company' ? level.applicantType : 'UNKNOWN' }))
+}
+
+/** Staff diagnostic only: fixed read-only provider resource, never a token or applicant outcome. */
+export async function readSumsubSandboxReadiness(env: Environment = process.env,
+  fetchImpl: typeof fetch = fetch): Promise<SumsubSandboxReadiness> {
+  requireTestnet(env)
+  const sandboxEnabled = env.NEXT_PUBLIC_BLOCKXONE_SUMSUB_SANDBOX_ENABLED === 'true'
+  let webhookConfigured = false; let writerConfigured = false
+  try { sumsubWebhookConfig(env); webhookConfigured = true } catch { /* Status only; never expose configuration data. */ }
+  try { providerEvidenceDatabaseConfig(env); writerConfigured = true } catch { /* Parsing is not a database connection proof. */ }
+  let status: SumsubSandboxReadiness['status'] = 'NOT_CONFIGURED'
+  let classifier: SumsubSandboxReadiness['classifier'] = 'CREDENTIALS_NOT_CONFIGURED'
+  let levels: SumsubLevel[] = []
+  let credentials: { appToken: string; appSecret: string } | null = null
+  try { credentials = { appToken: required(env.BLOCKXONE_SUMSUB_SANDBOX_APP_TOKEN, 16),
+    appSecret: required(env.BLOCKXONE_SUMSUB_SANDBOX_APP_SECRET, 20) } } catch { /* No provider request without complete credentials. */ }
+  if (credentials) {
+    const timestamp = Math.floor(Date.now() / 1000).toString()
+    try {
+      const response = await fetchImpl(`https://api.sumsub.com${SUMSUB_LEVELS_PATH}`, {
+        method: 'GET', cache: 'no-store', redirect: 'error', signal: AbortSignal.timeout(10000),
+        headers: { Accept: 'application/json', 'X-App-Token': credentials.appToken, 'X-App-Access-Ts': timestamp,
+          'X-App-Access-Sig': sumsubRequestSignature(timestamp, SUMSUB_LEVELS_PATH, '', credentials.appSecret, 'GET') },
+      })
+      status = 'UNAVAILABLE'
+      if (!response.ok) {
+        classifier = response.status === 401 ? 'CREDENTIALS_REJECTED' : response.status === 403 ? 'PROVIDER_ACCESS_DENIED'
+          : response.status === 429 ? 'PROVIDER_RATE_LIMITED' : 'PROVIDER_UNAVAILABLE'
+        await response.body?.cancel().catch(() => {})
+      } else {
+        try { levels = await readSumsubLevelCatalog(response); status = 'CONNECTED'; classifier = 'AUTHENTICATED_LEVELS_READ' }
+        catch { await response.body?.cancel().catch(() => {}); classifier = 'PROVIDER_RESPONSE_INVALID' }
+      }
+    } catch { status = 'UNAVAILABLE'; classifier = 'PROVIDER_UNAVAILABLE' }
+  }
+  function subjectReadiness(subject: SumsubSubject): SumsubSubjectReadiness {
+    const levelName = configuredSumsubLevel(subject === 'individual'
+      ? env.BLOCKXONE_SUMSUB_SANDBOX_INDIVIDUAL_LEVEL : env.BLOCKXONE_SUMSUB_SANDBOX_COMPANY_LEVEL)
+    const enabled = sandboxEnabled && (subject === 'individual'
+      ? env.NEXT_PUBLIC_BLOCKXONE_SUMSUB_SANDBOX_INDIVIDUAL_ENABLED : env.NEXT_PUBLIC_BLOCKXONE_SUMSUB_SANDBOX_COMPANY_ENABLED) === 'true'
+    const matches = status === 'CONNECTED' && levelName ? levels.filter(level => level.name === levelName) : []
+    const levelPresent = status === 'CONNECTED' && levelName ? matches.length > 0 : null
+    const providerSubject = matches.length === 1 ? matches[0].applicant_type : null
+    return { configured: levelName !== null, enabled, level_present: levelPresent, provider_subject_type: providerSubject,
+      classifier: !levelName ? 'LEVEL_NOT_CONFIGURED' : !enabled ? 'SUBJECT_DISABLED' : status !== 'CONNECTED' ? 'CONNECTION_NOT_VERIFIED'
+        : matches.length === 0 ? 'LEVEL_NOT_FOUND' : matches.length > 1 ? 'LEVEL_AMBIGUOUS'
+          : providerSubject === 'UNKNOWN' ? 'LEVEL_SUBJECT_UNCONFIRMED' : providerSubject !== subject ? 'LEVEL_SUBJECT_MISMATCH' : 'LEVEL_PRESENT' }
+  }
+  return { provider: 'SUMSUB', environment: 'TESTNET', status, classifier, sandbox_enabled: sandboxEnabled,
+    individual: subjectReadiness('individual'), company: subjectReadiness('company'), available_levels: levels,
+    webhook: { configured: webhookConfigured, delivery_proved: false },
+    evidence_writer: { configured: writerConfigured, connection_proved: false }, verification_proved: false, admission_granted: false }
+}
+
 export async function issueSumsubSandboxToken(externalUserId: string, levelName: string,
   config: Pick<ReturnType<typeof sumsubSessionConfig>, 'appToken' | 'appSecret'>): Promise<string> {
   const body = JSON.stringify({ userId: externalUserId, levelName, ttlInSecs: 600 })

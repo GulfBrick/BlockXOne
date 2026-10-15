@@ -142,6 +142,7 @@ async function workerQuery(sql: string, values: unknown[], env: Environment = pr
 }
 
 export const signatureProcessingRequestSchema = z.discriminatedUnion('command', [
+  z.object({ command: z.literal('WAKE'), request_id: uuid }).strict(),
   z.object({ command: z.literal('CLAIM'), request_id: uuid }).strict(),
   z.object({ command: z.literal('PROCESS'), request_id: uuid, operation_id: uuid, lease_id: uuid, generation }).strict(),
 ])
@@ -273,12 +274,20 @@ function frozenExpectation(item: SignatureWorkerAction) {
     { ...purposeBinding(item), signer: { accountId: item.signer.actor_id, personId: item.signer.person_id,
       clientUserId: item.signer.client_user_id }, documents: originals(item).map(file => ({ documentId: file.documentId, sha256: file.file.sha256 })) })
 }
-function boundedProvider(item: SignatureWorkerAction) {
-  const milliseconds = Math.min(50_000, Date.parse(item.lease_expires_at) - Date.now() - 8000)
+function boundedProvider(item: SignatureWorkerAction, wakeDeadline?: number) {
+  const now = Date.now()
+  const milliseconds = Math.min(50_000, Date.parse(item.lease_expires_at) - now - 8000,
+    wakeDeadline === undefined ? Infinity : wakeDeadline - now - 8000)
   if (milliseconds <= 0) throw new OfferingSignatureError('The processing lease has expired; resume its saved operation.', 409)
   const signal = AbortSignal.timeout(milliseconds)
   const provider = createDocusignOfferingProvider(docusignOfferingConfig(), {
-    fetch: (input, init) => globalThis.fetch(input, { ...init, signal: init?.signal ? AbortSignal.any([init.signal, signal]) : signal }),
+    fetch: (input, init) => {
+      if (wakeDeadline !== undefined) {
+        if (Date.now() >= wakeDeadline - 8000) throw new OfferingSignatureError('The worker wake has no provider time remaining.')
+        signal.throwIfAborted()
+      }
+      return globalThis.fetch(input, { ...init, signal: init?.signal ? AbortSignal.any([init.signal, signal]) : signal })
+    },
   })
   return { provider, signal }
 }
@@ -296,7 +305,25 @@ function completedEvidence(item: SignatureWorkerAction) {
 }
 
 /** Background processing never requests a signing view or returns provider URLs/credentials. */
-export async function executeSignatureProcessing(instruction: SignatureProcessingRequest) {
+export async function executeSignatureProcessing(instruction: SignatureProcessingRequest, wakeDeadline?: number) {
+  if (instruction.command === 'WAKE') {
+    const requireTime = (reserve: number) => {
+      if (wakeDeadline === undefined || !Number.isFinite(wakeDeadline) || wakeDeadline - Date.now() <= reserve) {
+        throw new OfferingSignatureError('The worker wake deadline expired. Its saved operation will resume on a later wake.')
+      }
+    }
+    requireTime(8000)
+    const raw = await claimSignatureAction(instruction.request_id)
+    requireTime(8000)
+    if (raw === null) return { outcome: 'IDLE' as const }
+    const item = verifiedWorkerAction(raw)
+    if (item.request_id !== instruction.request_id || item.action === 'VIEW') throw new OfferingSignatureError()
+    await processSignatureAction({ operation_id: item.operation_id, lease_id: item.lease_id,
+      generation: item.generation, request_id: item.request_id }, wakeDeadline)
+    requireTime(0)
+    // An attempt returned; this is not a claim that signing or archival completed.
+    return { outcome: 'PROCESSED' as const }
+  }
   if (instruction.command === 'CLAIM') {
     const raw = await claimSignatureAction(instruction.request_id)
     if (raw === null) return { action: null }
@@ -310,11 +337,18 @@ export async function executeSignatureProcessing(instruction: SignatureProcessin
   return processSignatureAction(action)
 }
 
-async function processSignatureAction(action: SignatureViewAction) {
+async function processSignatureAction(action: SignatureViewAction, wakeDeadline?: number) {
   let item = await freshAction(action)
   if (item.action === 'VIEW') throw new OfferingSignatureError('A background worker cannot generate a signing view.', 403)
-  const { provider, signal } = boundedProvider(item)
-  const live = async () => { signal.throwIfAborted(); item = await freshAction(action); return item }
+  const { provider, signal } = boundedProvider(item, wakeDeadline)
+  const live = async () => {
+    signal.throwIfAborted(); item = await freshAction(action)
+    if (wakeDeadline !== undefined) {
+      if (Date.now() >= wakeDeadline - 8000) throw new OfferingSignatureError('The worker wake has no processing time remaining.')
+      signal.throwIfAborted()
+    }
+    return item
+  }
   const recovery = async (reason: string, evidence: string | null = null, retryAt?: number) => record(action, 'RECOVERY_REQUIRED',
     { reason, evidence_sha256: evidence, ...(retryAt !== undefined ? { next_check_at: new Date(Math.max(Date.now() + 900_000, retryAt)).toISOString() } : {}) }, `RECOVERY:${reason}`)
   try {
@@ -325,7 +359,7 @@ async function processSignatureAction(action: SignatureViewAction) {
       const documents = await Promise.all(originals(item).map(async ({ file, documentId }) => ({ documentId,
         sha256: file.sha256, bytes: await downloadCleanOfferingDocument({ id: file.file_id, revision_id: item.revision_id,
           uploader_id: file.uploader_id, storage_path: file.storage_path, sha256: file.sha256,
-          size: file.size, mime_type: 'application/pdf' }) })))
+          size: file.size, mime_type: 'application/pdf' }, wakeDeadline === undefined ? undefined : signal) })))
       await live()
       const prepared = buildOfferingEnvelope({ ...purposeBinding(item), signer: { accountId: item.signer.actor_id,
         personId: item.signer.person_id, clientUserId: item.signer.client_user_id, name: item.signer.name!, email: item.signer.email! }, documents })
