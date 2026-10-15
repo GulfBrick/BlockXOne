@@ -35,10 +35,10 @@ export const SUPABASE_ALLOWED_PATHS = [
   '/portal/compliance', '/portal/compliance/detail', '/portal/opportunities',
   '/portal/opportunities/detail', '/portal/portfolio', '/portal/orders/detail',
   '/api/portal/command', '/api/portal/documents', '/api/portal/funding/verify', '/api/portal/entry',
-  '/api/portal/kyc/session', '/api/portal/kyc/webhook', '/api/portal/kyc/evidence',
+  '/api/portal/kyc/session', '/api/portal/kyc/webhook', '/api/portal/kyc/evidence', '/api/portal/kyc/readiness',
   '/api/portal/documents/processing',
   '/api/portal/offering-documents', '/api/portal/offering-documents/processing',
-  '/api/portal/offering-signatures', '/api/portal/offering-signatures/processing',
+  '/api/portal/offering-signatures', '/api/portal/offering-signatures/processing', '/api/portal/offering-signatures/provider-status',
   '/api/portal/application-drafts',
 ] as const
 

@@ -20,6 +20,36 @@ describe('exact password-reset request routing', () => {
   })
 })
 
+describe('exact protected provider-readiness routing', () => {
+  const paths = ['/api/portal/kyc/readiness', '/api/portal/offering-signatures/provider-status'] as const
+
+  it.each(paths)('admits only the canonical route %s in paired Supabase mode', path => {
+    expect(SUPABASE_ALLOWED_PATHS.filter(value => value === path)).toHaveLength(1)
+    expect(isSupabaseWebPathAllowed(path)).toBe(true)
+    expect(blocked(path)).toBe(false)
+    // Admission only reaches the unchanged authenticated handlers. It does not
+    // activate MAIN providers or grant an actor, product, session or MFA scope.
+  })
+
+  it.each(paths.flatMap(path => [
+    `${path}/`, `${path}/extra`, `${path}-admin`, `${path}.json`, path.toUpperCase(),
+    path.replace('/portal/', '/Portal/'), path.replace('/portal/', '/%70ortal/'),
+    path.replace('/portal/', '/portal//'), `/${path}`, path.replaceAll('/', '\\'),
+    `${path}/../command`, `${path}/%2e%2e/command`, `${path}/*`,
+  ]))('denies readiness lookalike %s without admitting a provider prefix', path => {
+    expect(isSupabaseWebPathAllowed(path)).toBe(false)
+    expect(blocked(path)).toBe(true)
+  })
+
+  it.each(paths.flatMap(path => [
+    ['supabase', ''], ['', 'supabase'], ['Supabase', 'Supabase'],
+    ['supabase', 'legacy'], ['legacy', 'supabase'], ['invalid', 'supabase'],
+    ['legacy', 'legacy'], ['', ''],
+  ].map(([server, browser]) => [path, server, browser])))('denies readiness route %s under mode %s/%s', (path, server, browser) => {
+    expect(blocked(path, server, browser)).toBe(true)
+  })
+})
+
 describe('exact offering-document service routing', () => {
   const offeringServices = ['/api/portal/offering-documents', '/api/portal/offering-documents/processing',
     '/api/portal/offering-signatures', '/api/portal/offering-signatures/processing'] as const
