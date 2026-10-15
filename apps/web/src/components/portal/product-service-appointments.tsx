@@ -4,7 +4,7 @@ import { useState } from 'react'
 import Link from 'next/link'
 import type { PortalProduct, PortalProductServiceAppointment, PortalSnapshot } from '@/lib/portal/contracts'
 import { portalScopeHref, type PortalOperatingContext } from '@/lib/portal/operating-context'
-import { hasOfferingCommandAccess, isTestPasswordWorkflow } from '@/lib/portal/offering-access'
+import { hasOfferingCommandAccess, isTestPasswordWorkflow, validatedOfferingAccess } from '@/lib/portal/offering-access'
 import { validatedEvaluationAccess } from '@/lib/portal/evaluation-access'
 import { CommandFeedback, usePortalCommand, usePortalCommandAllowed } from './portal-client'
 import { DetailList, EmptyState, Field, Notice, Panel, StatusBadge, dateLabel } from './portal-primitives'
@@ -26,9 +26,20 @@ export function ProductAppointmentRequest({ product, snapshot, operatingContext,
   const candidates = snapshot.product_appointment_candidates?.filter(item => item.product_id === product.id && item.role === role) ?? []
   const candidate = candidates.find(item => item.membership_id === membershipId)
   const evaluation = validatedEvaluationAccess(snapshot, operatingContext)
+  const offering = validatedOfferingAccess(snapshot, operatingContext, 'TESTNET')
+  const roleplayManager = offering?.session_mode === 'STANDARD'
+    && offering.allowed_commands.includes('request_product_service_appointment')
+    && snapshot.organisations.some(org => org.id === product.organisation_id && org.authority_source === 'TEST_ROLE_PLAY'
+      && org.status === 'ACTIVE' && operatingContext?.mode === 'ROLE'
+      && org.native_organisation_id === operatingContext.organisationId && org.roles.includes('OfferingManager'))
+    && product.allowed_actions?.includes('request_product_service_appointment') === true
+    && snapshot.products.some(item => item.id === product.id && item.revision === product.revision
+      && item.terms_hash === product.terms_hash && item.offering_package?.id === product.offering_package?.id)
   const isManager = operatingContext?.mode === 'ROLE' && operatingContext.role === 'OfferingManager'
     && snapshot.organisations.some(org => org.id === product.organisation_id && org.status === 'ACTIVE'
-      && (org.authority_source === 'NATIVE_BINDING' || org.authority_source === 'TEST_EVALUATION'
+      && (org.authority_source === 'NATIVE_BINDING' || org.authority_source === 'TEST_ROLE_PLAY'
+        && roleplayManager && org.capabilities?.includes('request_product_service_appointment')
+        || org.authority_source === 'TEST_EVALUATION'
         && evaluation?.product_organisation_id === product.organisation_id
         && evaluation.allowed_commands.includes('request_product_service_appointment'))
       && org.native_organisation_id === operatingContext.organisationId
@@ -39,7 +50,7 @@ export function ProductAppointmentRequest({ product, snapshot, operatingContext,
     || (['SUBMITTED', 'APPROVED'].includes(item.status) && Date.parse(item.requested_until) > Date.now())))
   const canRequest = requestAvailable && isManager && Boolean(candidate) && !hasOpenRole && evidence.trim().length >= 20 && Boolean(expiryDay)
 
-  return <Panel title="Product service appointments" description="Appoint separate people for this exact product. An issuer name or manager relationship does not grant review or signing authority.">
+  return <Panel title="Product service appointments" description={roleplayManager ? 'TEST role-play records separate review capacities for this product. One operator is not independent human approval.' : 'Appoint separate people for this exact product. An issuer name or manager relationship does not grant review or signing authority.'}>
     {!Array.isArray(snapshot.product_appointments) || !Array.isArray(snapshot.product_appointment_candidates)
       ? <Notice title="Appointment service unavailable" tone="warning">Refresh saved state. Do not infer that no appointments exist while this service is unavailable.</Notice>
       : <>{appointments.length ? <div className={styles.tableWrap}><table className={styles.table}><thead><tr><th scope="col">Appointment</th><th scope="col">State</th><th scope="col">Validity</th><th scope="col">Next owner</th></tr></thead><tbody>{appointments.map(item => <tr key={item.id}><td><strong>{roleLabel(item.role)}</strong><small className={styles.mono}>{item.id}</small></td><td><StatusBadge status={item.status} />{item.status === 'APPLIED' && !item.effective ? <small>Not currently effective</small> : null}</td><td>{dateLabel(item.requested_until)}</td><td>{item.status === 'APPLIED' && !item.effective ? 'Super Admin: revoke inactive appointment before replacement' : item.next_owner === 'COMPLIANCE' ? 'Independent Compliance' : item.next_owner === 'SUPER_ADMIN' ? 'Super Admin' : item.next_owner === 'OFFERING_MANAGER' ? 'Offering Manager' : 'No pending hand-off'}</td></tr>)}</tbody></table></div> : <p className={styles.muted}>No product-specific appointment is recorded in this scope.</p>}
@@ -52,9 +63,9 @@ export function ProductAppointmentRequest({ product, snapshot, operatingContext,
             native_membership_id: candidate.membership_id, expected_product_revision: product.revision,
             evidence_reference: evidence.trim(), requested_until: requestedUntil,
           })
-        }}><h3>Request an independent service appointment</h3><p className={styles.muted}>Candidates already hold a native role in the review organisation. This request does not activate it for this product; Compliance reviews and a separate Super Admin applies it.</p>
+        }}><h3>{roleplayManager ? 'Request a TEST service appointment' : 'Request an independent service appointment'}</h3><p className={styles.muted}>{roleplayManager ? 'Use the recorded capacity for this exact fund. Continue through Compliance review and Super Admin application; the TEST policy records that the same operator is playing these roles.' : 'Candidates already hold a native role in the review organisation. This request does not activate it for this product; Compliance reviews and a separate Super Admin applies it.'}</p>
           <Field label="Service role"><select value={role} onChange={event => { setRole(event.target.value as typeof role); setMembershipId('') }}><option value="IssuerFundManager">Issuer Fund Manager</option><option value="ComplianceOfficer">Compliance Officer</option></select></Field>
-          <Field label="Existing role member"><select required value={membershipId} onChange={event => setMembershipId(event.target.value)}><option value="">Select a different person</option>{candidates.map(item => <option key={item.membership_id} value={item.membership_id}>{item.display_name || item.email} · {item.email}</option>)}</select></Field>
+          <Field label="Existing role member"><select required value={membershipId} onChange={event => setMembershipId(event.target.value)}><option value="">{roleplayManager ? 'Select the recorded TEST capacity' : 'Select a different person'}</option>{candidates.map(item => <option key={item.membership_id} value={item.membership_id}>{item.display_name || item.email} · {item.email}</option>)}</select></Field>
           {!candidates.length ? <Notice title="No eligible role member">A role member must be assigned and visible in the review organisation before an appointment can be requested. This form cannot create that person or role.</Notice> : null}
           <Field label="Appointment evidence reference" hint="20 to 400 characters identifying the synthetic appointment evidence. This is not an uploaded or verified document."><textarea required minLength={20} maxLength={400} value={evidence} onChange={event => setEvidence(event.target.value)} /></Field>
           <Field label="Appointment end date" hint="Choose a date more than one hour and no more than 90 days ahead; the server enforces the limit."><input required type="date" value={expiryDay} onChange={event => setExpiryDay(event.target.value)} /></Field>

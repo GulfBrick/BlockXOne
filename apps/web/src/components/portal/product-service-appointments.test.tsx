@@ -49,8 +49,53 @@ function snapshot(change: Partial<PortalSnapshot> = {}): PortalSnapshot {
     product_appointments: [], product_appointment_candidates: [{ product_id: productId, role: 'IssuerFundManager',
       user_id: appointee, membership_id: membership, display_name: 'Separate Issuer', email: 'issuer@example.invalid' }], ...change }
 }
+function roleplaySnapshot(): PortalSnapshot {
+  return snapshot({ operating_context: managerContext,
+    products: [product({ allowed_actions: ['request_product_service_appointment'] })],
+    organisations: [{ id: productOrganisation, name: 'Fictional Product Organisation', status: 'ACTIVE',
+      roles: ['OfferingManager'], native_organisation_id: reviewOrganisation, authority_source: 'TEST_ROLE_PLAY',
+      capabilities: ['request_product_service_appointment'] }],
+    offering_access: { version: 1, environment: 'TESTNET', actor_id: person, operating_context: managerContext as {
+      mode: 'ROLE'; organisationId: string; role: 'OfferingManager' }, session_mode: 'STANDARD',
+      allowed_commands: ['request_product_service_appointment'] },
+    product_appointment_candidates: [{ product_id: productId, role: 'IssuerFundManager', user_id: person,
+      membership_id: membership, display_name: 'Actual TEST operator', email: 'manager@example.invalid' }] })
+}
 
 describe('connected product service appointment surfaces', () => {
+  it('opens the normal appointment form for the exact server-returned TEST role-play manager', () => {
+    const value = roleplaySnapshot()
+    const html = renderToStaticMarkup(<ProductAppointmentRequest product={value.products[0]} snapshot={value} operatingContext={managerContext} onSaved={() => {}} />)
+    expect(html).toContain('Request a TEST service appointment')
+    expect(html).toContain('Actual TEST operator')
+    expect(html).toContain('Select the recorded TEST capacity')
+    expect(html).toContain('One operator is not independent human approval')
+    expect(html).toContain('Request appointment review')
+    expect(html).not.toContain('Select a different person')
+  })
+  it('does not treat a role-play label as authority without the exact validated context and command', () => {
+    const value = roleplaySnapshot()
+    const access = value.offering_access!
+    const cases: PortalSnapshot[] = [
+      { ...value, offering_access: undefined },
+      { ...value, offering_access: { ...access, actor_id: appointee } },
+      { ...value, offering_access: { ...access, session_mode: 'TEST_PASSWORD' } },
+      { ...value, offering_access: { ...access, allowed_commands: [] } },
+      { ...value, offering_access: { ...access, environment: 'MAINNET' } } as unknown as PortalSnapshot,
+      { ...value, operating_context: { ...managerContext, organisationId: productId } },
+      { ...value, organisations: value.organisations.map(org => ({ ...org, capabilities: [] })) },
+      { ...value, organisations: value.organisations.map(org => ({ ...org, native_organisation_id: productId })) },
+    ]
+    for (const denied of cases) {
+      const html = renderToStaticMarkup(<ProductAppointmentRequest product={value.products[0]} snapshot={denied} operatingContext={managerContext} onSaved={() => {}} />)
+      expect(html).not.toContain('Request a TEST service appointment')
+      expect(html).not.toContain('Request appointment review')
+    }
+    for (const changed of [product({ revision: 3, allowed_actions: ['request_product_service_appointment'] }), product()]) {
+      const html = renderToStaticMarkup(<ProductAppointmentRequest product={changed} snapshot={value} operatingContext={managerContext} onSaved={() => {}} />)
+      expect(html).not.toContain('Request appointment review')
+    }
+  })
   it('shows product-level manager requests with an existing role candidate', () => {
     const html = renderToStaticMarkup(<ProductAppointmentRequest product={product()} snapshot={snapshot()} operatingContext={managerContext} onSaved={() => {}} />)
     expect(html).toContain('Request an independent service appointment')
