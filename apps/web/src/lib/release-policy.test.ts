@@ -7,12 +7,12 @@ import {
   PILOT_ALLOWED_PREFIXES,
   PRODUCTION_BLOCKED_PREFIXES
 } from './release-policy'
-import { resolveAuthMode, isLegacyClientAuthDisabled, SUPABASE_ALLOWED_PATHS } from './auth-mode'
+import { resolveAuthMode, isLegacyClientAuthDisabled, isSupabaseWebPathAllowed, SUPABASE_ALLOWED_PATHS } from './auth-mode'
 
 describe('native Auth admission', () => {
   it('lists exactly the reviewed native routes; TEST customer admission remains server-gated', () => {
     expect([...SUPABASE_ALLOWED_PATHS]).toEqual([
-      '/login', '/auth/confirm', '/auth/login', '/auth/setup', '/auth/logout',
+      '/login', '/forgot-password', '/auth/recover', '/auth/confirm', '/auth/login', '/auth/setup', '/auth/logout',
       '/workspace', '/workspace/access-denied', '/api/wallet/challenge', '/api/wallet/verify',
       '/login/mfa', '/workspace/security', '/auth/mfa-enroll', '/auth/mfa-verify', '/auth/mfa-restart-setup',
       '/workspace/administration', '/workspace/administration/staff-invitations', '/auth/admin-command', '/auth/staff-invite', '/workspace/staff-invite',
@@ -28,6 +28,17 @@ describe('native Auth admission', () => {
       '/api/portal/offering-signatures', '/api/portal/offering-signatures/processing',
       '/api/portal/application-drafts',
     ])
+  })
+  it.each(['/forgot-password', '/auth/recover'])('keeps recovery route %s native-only and exact', pathname => {
+    expect(isProductionWebPathBlocked(pathname, 'production', '', '', 'supabase', 'supabase')).toBe(false)
+    for (const environment of ['production', 'development', 'dev', 'test']) {
+      expect(isProductionWebPathBlocked(pathname, environment, 'pilot', 'pilot', '', '')).toBe(true)
+      expect(isProductionWebPathBlocked(pathname, environment, '', '', 'supabase', '')).toBe(true)
+    }
+    for (const variant of [`${pathname}/`, `${pathname}/extra`, pathname.toUpperCase(), pathname.replaceAll('/', '\\')]) {
+      expect(isProductionWebPathBlocked(variant, 'production', '', '', 'supabase', 'supabase')).toBe(true)
+    }
+    expect(isSupabaseWebPathAllowed(`${pathname}.json`)).toBe(false)
   })
   it.each(['/workspace/administration', '/auth/admin-command'])('admits only exact administration path %s in paired mode', pathname => {
     expect(isProductionWebPathBlocked(pathname, 'production', '', '', 'supabase', 'supabase')).toBe(false)

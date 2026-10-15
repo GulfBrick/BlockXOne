@@ -86,7 +86,7 @@ describe('server login/setup admission', () => {
     expect(html).toContain('Signing in does not enable financial operations')
     expect(html).toContain('href="https://testnet.bx1.co.za/login"')
     expect(html).toContain('href="https://testnet.bx1.co.za/register"')
-    expect(html).toContain('accounts and sessions are separate from Mainnet')
+    expect(html).toContain('accounts and sessions are isolated from Mainnet')
     expect(html).toContain('href="/register"')
     expect(html).toContain('Registration does not grant approval or signing authority')
     expect(html).not.toContain('.vercel.app')
