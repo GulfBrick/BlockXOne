@@ -79,3 +79,60 @@ begin
     or pg_catalog.current_setting('request.jwt.claim.sub',true) is distinct from before_sub then
     raise exception 'fund_setup_projection_qualification_proof_claims_changed';end if;
 end $setup_projection_qualification_proof$;
+
+-- Revision 2: the nonce RHS must read the labelled function argument, not the
+-- conflicting step-row intent. No setup writer or worker entry is invoked.
+do $setup_prepare_nonce_qualification_proof$
+declare target oid; metadata jsonb; source text; restored text; rhs text; old_rhs text;
+  nonce_value text; row_intent jsonb; block_source text; ambiguous_denied boolean:=false; cases integer:=0;
+  before_claims text:=pg_catalog.current_setting('request.jwt.claims',true);
+  before_sub text:=pg_catalog.current_setting('request.jwt.claim.sub',true);
+  old_nonce constant text:=$old_nonce$nonce=(intent->>'nonce')::numeric$old_nonce$;
+  new_nonce constant text:=$new_nonce$nonce=(prepare_fund_setup_step.intent->>'nonce')::numeric$new_nonce$;
+  target_metadata constant jsonb:=$target_metadata${"oid":"33621","proacl":["postgres=X/postgres","bx1_fund_execution_worker=X/postgres"],"probin":null,"procost":100,"prokind":"f","prolang":"13619","proname":"prepare_fund_setup_step","prorows":0,"pronargs":2,"proowner":"16388","proconfig":["search_path=\"\""],"proretset":false,"prosecdef":true,"prorettype":"3802","prosqlbody":null,"prosupport":"-","proargmodes":null,"proargnames":["preparation","intent"],"proargtypes":["3802","3802"],"proisstrict":false,"proparallel":"u","protrftypes":null,"provariadic":"0","provolatile":"v","proleakproof":false,"pronamespace":"24138","proallargtypes":null,"proargdefaults":null,"pronargdefaults":0}$target_metadata$::jsonb;
+begin
+  if current_user<>'postgres' or session_user<>'postgres' or auth.uid() is not null
+    or bx1_private.test_roleplay_environment() is not true
+    or not exists(select 1 from bx1_portal.entry_configuration where singleton and environment='TESTNET') then
+    raise exception 'fund_setup_nonce_qualification_proof_exact_test_owner_required';end if;
+  target:=pg_catalog.to_regprocedure('bx1_portal.prepare_fund_setup_step(jsonb,jsonb)');
+  select pg_catalog.to_jsonb(p),p.prosrc into metadata,source from pg_catalog.pg_proc p where p.oid=target;
+  if target is distinct from 33621::oid or metadata-'prosrc' is distinct from target_metadata
+    or (length(source)-length(replace(source,new_nonce,'')))/length(new_nonce)<>1
+    or strpos(source,old_nonce)>0 then
+    raise exception 'fund_setup_nonce_qualification_proof_metadata_or_cut_changed';end if;
+  restored:=replace(source,new_nonce,old_nonce);
+  if pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.btrim(replace(restored,E'\r\n',E'\n'),E' \n\t'),'UTF8')),'hex')
+    is distinct from '3c44dc6dc3fbd9f5de71a0599fb33223deaf635629acacd3242d19c9e150260d' then
+    raise exception 'fund_setup_nonce_qualification_proof_outside_cut_changed';end if;
+  rhs:=substring(source from strpos(source,new_nonce)+length('nonce=') for length(new_nonce)-length('nonce='));
+  old_rhs:=substring(restored from strpos(restored,old_nonce)+length('nonce=') for length(old_nonce)-length('nonce='));
+  -- Compile the ACTUAL extracted RHS under an identically named local block.
+  -- The typed row deliberately has a same-named intent containing a different
+  -- nonce or NULL. Numeric precision is checked without floating-point casts.
+  foreach nonce_value in array array['0','7','115792089237316195423570985008687907853269984665640564039457584007913129639935'] loop
+    foreach row_intent in array array[pg_catalog.jsonb_build_object('nonce','99'),null::jsonb] loop
+      block_source:='do $nonce_query$'||E'\n'||'#variable_conflict error'||E'\n'||
+        '<<prepare_fund_setup_step>> declare intent jsonb:='||pg_catalog.quote_literal(pg_catalog.jsonb_build_object('nonce',nonce_value)::text)||'::jsonb;actual_nonce numeric;'||
+        'begin select '||rhs||' into actual_nonce from (values ('||pg_catalog.quote_nullable(row_intent::text)||'::jsonb)) sample_row(intent);'||
+        'if actual_nonce is distinct from '||pg_catalog.quote_literal(nonce_value)||'::numeric then raise exception ''setup_prepare_nonce_argument_value_changed'';end if;'||
+        'end prepare_fund_setup_step; $nonce_query$;';
+      execute block_source;
+      cases:=cases+1;
+    end loop;
+  end loop;
+  if cases<>6 then raise exception 'fund_setup_nonce_qualification_proof_cases_missing';end if;
+  -- The old exact RHS is ambiguous with the same local argument and row
+  -- column. Catch only 42702; every other compile/runtime error propagates.
+  begin
+    execute 'do $old_nonce_query$'||E'\n'||'#variable_conflict error'||E'\n'||
+      '<<prepare_fund_setup_step>> declare intent jsonb:=''{"nonce":"7"}''::jsonb;actual_nonce numeric;'||
+      'begin select '||old_rhs||' into actual_nonce from (values (''{"nonce":"99"}''::jsonb)) sample_row(intent);'||
+      'end prepare_fund_setup_step; $old_nonce_query$;';
+  exception when ambiguous_column then ambiguous_denied:=true;
+  end;
+  if not ambiguous_denied then raise exception 'fund_setup_nonce_qualification_proof_old_ambiguity_not_reproduced';end if;
+  if pg_catalog.current_setting('request.jwt.claims',true) is distinct from before_claims
+    or pg_catalog.current_setting('request.jwt.claim.sub',true) is distinct from before_sub then
+    raise exception 'fund_setup_nonce_qualification_proof_claims_changed';end if;
+end $setup_prepare_nonce_qualification_proof$;

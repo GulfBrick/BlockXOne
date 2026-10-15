@@ -458,7 +458,7 @@ begin
     end if;
   else
     before_rev:=s.revision;
-    update bx1_portal.fund_setup_steps set state='PREPARED',actor_id=s.actor_id,sender=preparation->>'sender',nonce=(intent->>'nonce')::numeric,
+    update bx1_portal.fund_setup_steps set state='PREPARED',actor_id=s.actor_id,sender=preparation->>'sender',nonce=(prepare_fund_setup_step.intent->>'nonce')::numeric,
       intent=prepare_fund_setup_step.intent,intent_hash=bx1_portal.fund_digest(prepare_fund_setup_step.intent),
       data_hash=pg_catalog.encode(pg_catalog.sha256(pg_catalog.decode(pg_catalog.substr(prepare_fund_setup_step.intent->>'data',3),'hex')),'hex'),
       expires_at=least(s.expires_at,pg_catalog.clock_timestamp()+interval '5 minutes'),revision=revision+1 where id=t.id;
