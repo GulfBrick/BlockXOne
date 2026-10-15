@@ -41,6 +41,19 @@ $old_span$;
         or bx1_portal.test_offering_lane_current(c,p.id,request_key,'review_product')) then raise exception 'portal_review_denied' using errcode='42501'; end if;
       end;
 $new_span$;
+  audit_old constant text:=$audit_old$      v_summary:='Independent test offering review: '||(payload->>'decision')||'.';$audit_old$;
+  audit_new constant text:=$audit_new$      v_summary:=case when (p.created_by=auth.uid() and ((
+          command='review_product' and auth.uid() is not null
+          and c->>'mode'='ROLE' and c->>'role'='ComplianceOfficer'
+          and bx1_private.test_roleplay_environment() is true
+          and exists(select 1 from bx1_private.fund_roleplay_command_lanes lane
+            where lane.transaction_id=pg_catalog.pg_current_xact_id() and lane.actor_id=auth.uid()
+              and lane.request_key=offering_workflow_base_command.request_key
+              and lane.product_id=p.id and lane.action='review_product' and lane.operating_context=c)
+          and bx1_private.fund_roleplay_lane_current(c,p.id,'review_product') is true
+        ) is true)) is true
+        then 'TEST role-play offering review (independence not proved): '||(payload->>'decision')||'.'
+        else 'Independent test offering review: '||(payload->>'decision')||'.' end;$audit_new$;
   identity_terms constant jsonb:=$identities$[{"old":"bx1_portal.offering_workflow_base_independent(c,p.created_by)","next":"(bx1_portal.offering_workflow_base_independent(c,p.created_by) or (same_operator_lane and p.created_by=auth.uid()) is true)"},{"old":"bx1_portal.offering_workflow_base_independent(c,o.owner_id)","next":"(bx1_portal.offering_workflow_base_independent(c,o.owner_id) or (same_operator_lane and o.owner_id=auth.uid()) is true)"}]$identities$::jsonb;
   default_actor constant uuid:='11111111-1111-4111-8111-111111111111';
   default_key constant uuid:='33333333-3333-4333-8333-333333333333';
@@ -66,7 +79,9 @@ begin
   if target is distinct from 29619::oid or metadata-'prosrc' is distinct from target_metadata
     or (length(source)-length(replace(source,new_span,'')))/length(new_span)<>1 then
     raise exception 'fund_base_review_proof_native_or_cut_changed';end if;
-  restored:=replace(source,new_span,old_span);
+  if (length(source)-length(replace(source,audit_new,'')))/length(audit_new)<>1 then
+    raise exception 'fund_base_review_proof_truthful_audit_changed';end if;
+  restored:=replace(replace(source,audit_new,audit_old),new_span,old_span);
   if pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.btrim(replace(restored,E'\r\n',E'\n'),E' \n\t'),'UTF8')),'hex')
     is distinct from 'a6417519b5b6268cc66c1257343ec601bc944651f1b9f79e3b63b3946a6a7836' then
     raise exception 'fund_base_review_proof_outside_cut_changed';end if;
@@ -251,3 +266,264 @@ begin
     or pg_catalog.current_setting('request.jwt.claim.sub',true) is distinct from before_sub then
     raise exception 'fund_base_review_proof_claims_changed';end if;
 end $fund_base_review_proof$;
+
+-- Revision 2 persistence proof. All rows below are typed QUERY VALUES only.
+-- It evaluates predicates extracted from the installed trigger/constraint;
+-- it never invokes a business writer or sets actor/session claims.
+do $fund_base_review_persistence_proof$
+declare helper oid; metadata jsonb; trigger_source text; check_source text; part text;
+  insert_input text; update_input text; reset_expression text; binding_expression text;
+  tuple_expression text; history_expression text; transition_expression text; session_expression text;
+  lane_query text; expression text; case_row jsonb; old_value jsonb; new_value jsonb;
+  outcome boolean; binding_result boolean; tuple_result boolean; count_cases integer:=0;
+  before_claims text:=pg_catalog.current_setting('request.jwt.claims',true);
+  before_sub text:=pg_catalog.current_setting('request.jwt.claim.sub',true);
+  actor constant uuid:='11111111-1111-4111-8111-111111111111';
+  other_actor constant uuid:='22222222-2222-4222-8222-222222222222';
+  policy_id constant uuid:='33333333-3333-4333-8333-333333333333';
+  product_id constant uuid:='44444444-4444-4444-8444-444444444444';
+  organisation_id constant uuid:='55555555-5555-4555-8555-555555555555';
+  offering_id constant uuid:='66666666-6666-4666-8666-666666666666';
+  session_id constant uuid:='77777777-7777-4777-8777-777777777777';
+  request_id constant uuid:='88888888-8888-4888-8888-888888888888';
+  term_hash constant text:='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+  baseline jsonb; historical jsonb; default_context jsonb; default_lane jsonb; default_policy jsonb; default_marker jsonb;
+begin
+  if current_user<>'postgres' or session_user<>'postgres' or auth.uid() is not null
+    or bx1_private.test_roleplay_environment() is not true then
+    raise exception 'fund_base_review_persistence_proof_exact_test_owner_required';end if;
+  helper:=pg_catalog.to_regprocedure('bx1_private.guard_product_test_review_provenance()');
+  select pg_catalog.to_jsonb(p),p.prosrc into metadata,trigger_source from pg_catalog.pg_proc p where p.oid=helper;
+  if helper is null or metadata->>'proowner' is distinct from 'postgres'::regrole::oid::text
+    or metadata->'prosecdef' is distinct from 'true'::jsonb or metadata->>'provolatile' is distinct from 'v'
+    or metadata->'proacl' is distinct from '["postgres=X/postgres"]'::jsonb
+    or metadata->'proconfig' is distinct from pg_catalog.to_jsonb(array['search_path=""']::text[])
+    or metadata->>'pronargs' is distinct from '0' or metadata->>'prorettype' is distinct from 'trigger'::regtype::oid::text
+    or metadata->>'prolang' is distinct from (select oid::text from pg_catalog.pg_language where lanname='plpgsql')
+    or pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(trigger_source,'UTF8')),'hex')
+      is distinct from 'cecee253319a56d7a60f21893fb75c71f997ba85a1aacc039a51f5fe4fce823f' then
+    raise exception 'fund_base_review_persistence_proof_trigger_changed';end if;
+  if exists(select 1 from pg_catalog.pg_proc p
+    cross join lateral pg_catalog.aclexplode(coalesce(p.proacl,pg_catalog.acldefault('f',p.proowner))) a
+    where p.oid=helper and a.grantee<>p.proowner)
+    or pg_catalog.has_function_privilege('anon',helper,'EXECUTE')
+    or pg_catalog.has_function_privilege('authenticated',helper,'EXECUTE')
+    or pg_catalog.has_function_privilege('service_role',helper,'EXECUTE') then
+    raise exception 'fund_base_review_persistence_proof_private_acl_changed';end if;
+  if (select count(*) from pg_catalog.pg_attribute a where a.attrelid='bx1_portal.products'::regclass
+      and a.attnum in(19,20) and not a.attisdropped and not a.attnotnull and not a.atthasdef
+      and a.attacl is null and a.attidentity='' and a.attgenerated=''
+      and ((a.attnum=19 and a.attname='review_roleplay_policy_id' and a.atttypid='uuid'::regtype)
+        or (a.attnum=20 and a.attname='review_roleplay_epoch' and a.atttypid='integer'::regtype)))<>2 then
+    raise exception 'fund_base_review_persistence_proof_columns_changed';end if;
+  if not exists(select 1 from pg_catalog.pg_constraint c where c.conrelid='bx1_portal.products'::regclass
+      and c.conname='bx1_product_test_review_policy_fk' and c.contype='f' and c.convalidated
+      and c.confrelid='bx1_private.roleplay_policies'::regclass and c.conkey=array[19]::smallint[] and c.confkey=array[1]::smallint[]
+      and not c.condeferrable and not c.condeferred and c.confupdtype='a' and c.confdeltype='r' and c.confmatchtype='s')
+    or not exists(select 1 from pg_catalog.pg_index i
+      where i.indexrelid=pg_catalog.to_regclass('bx1_portal.bx1_product_test_review_policy_idx')
+        and i.indrelid='bx1_portal.products'::regclass and i.indisvalid and i.indisready and i.indislive
+        and not i.indisunique and not i.indisprimary and i.indnkeyatts=1 and i.indnatts=1 and i.indkey::text='19'
+        and pg_catalog.pg_get_expr(i.indpred,i.indrelid)='(review_roleplay_policy_id IS NOT NULL)')
+    or not exists(select 1 from pg_catalog.pg_trigger t where t.tgrelid='bx1_portal.products'::regclass
+      and t.tgname='bx1_product_test_review_provenance' and t.tgfoid=helper and t.tgtype=23 and t.tgenabled='O'
+      and not t.tgisinternal and t.tgconstraint=0 and t.tgqual is null and t.tgnargs=0 and t.tgargs=''::bytea) then
+    raise exception 'fund_base_review_persistence_proof_schema_changed';end if;
+  select pg_catalog.pg_get_expr(c.conbin,c.conrelid) into check_source from pg_catalog.pg_constraint c
+    where c.conrelid='bx1_portal.products'::regclass and c.conname='products_check2'
+      and c.contype='c' and c.convalidated and not c.condeferrable and not c.condeferred;
+  if check_source is distinct from '(((((reviewer_id IS NULL) OR (reviewer_id <> created_by)) AND (review_roleplay_policy_id IS NULL) AND (review_roleplay_epoch IS NULL)) OR ((reviewer_id IS NOT NULL) AND (reviewer_id = created_by) AND (review_roleplay_policy_id IS NOT NULL) AND (review_roleplay_epoch IS NOT NULL) AND (review_roleplay_epoch > 0))) IS TRUE)' then
+    raise exception 'fund_base_review_persistence_proof_static_check_changed';end if;
+  -- The CHECK proves shape/history only: never execute current auth or policy
+  -- lookups when an existing reviewed product receives an unrelated update.
+  if check_source ~* '(auth[.]|bx1_|current_setting|clock_timestamp|select)' then
+    raise exception 'fund_base_review_persistence_proof_live_check_denied';end if;
+  baseline:=pg_catalog.jsonb_build_object('id',product_id,'organisation_id',organisation_id,'created_by',actor,
+    'revision',3,'status','IN_REVIEW','terms','{}'::jsonb,'terms_hash',term_hash,'current_offering_revision_id',offering_id,
+    'reserved_units',0,'cap_units',100,'unit_price_minor',10000000,'minimum_units',1,
+    'reviewer_id',null,'reviewed_at',null,'review_notes',null,'review_checks','{}'::jsonb,
+    'review_roleplay_policy_id',null,'review_roleplay_epoch',null);
+  historical:=baseline||pg_catalog.jsonb_build_object('reviewer_id',actor,'reviewed_at','2026-10-15T23:00:00Z',
+    'review_notes','Fictional canonical review rationale.','review_checks','{"issuer":true,"terms":true,"disclosures":true,"eligibility":true}'::jsonb,
+    'status','APPROVED','revision',4,'review_roleplay_policy_id',policy_id,'review_roleplay_epoch',2);
+  for case_row in select value from pg_catalog.jsonb_array_elements($check_cases$[
+    {"name":"unreviewed ordinary","patch":{},"allow":true},
+    {"name":"independent ordinary","patch":{"reviewer_id":"22222222-2222-4222-8222-222222222222"},"allow":true},
+    {"name":"untagged same operator","patch":{"reviewer_id":"11111111-1111-4111-8111-111111111111"},"allow":false},
+    {"name":"complete historical TEST pair","historical":true,"patch":{},"allow":true},
+    {"name":"policy only","historical":true,"patch":{"review_roleplay_epoch":null},"allow":false},
+    {"name":"epoch only","historical":true,"patch":{"review_roleplay_policy_id":null},"allow":false},
+    {"name":"zero epoch","historical":true,"patch":{"review_roleplay_epoch":0},"allow":false},
+    {"name":"negative epoch","historical":true,"patch":{"review_roleplay_epoch":-1},"allow":false},
+    {"name":"tag cannot label independent reviewer","historical":true,"patch":{"reviewer_id":"22222222-2222-4222-8222-222222222222"},"allow":false},
+    {"name":"tag cannot label null reviewer","historical":true,"patch":{"reviewer_id":null},"allow":false},
+    {"name":"null creator cannot qualify","historical":true,"patch":{"created_by":null},"allow":false}
+  ]$check_cases$::jsonb) loop
+    execute 'select '||check_source||' from pg_catalog.jsonb_populate_record(null::bx1_portal.products,$1) value'
+      into outcome using (case when case_row->>'historical'='true' then historical else baseline end)||(case_row->'patch');
+    if outcome is distinct from (case_row->>'allow')::boolean then
+      raise exception 'fund_base_review_persistence_proof_check_case_failed: %',case_row->>'name';end if;
+    count_cases:=count_cases+1;
+  end loop;
+  if count_cases<>11 then raise exception 'fund_base_review_persistence_proof_check_cases_missing';end if;
+  -- Extract exact branch expressions from the installed function, not a copied
+  -- alternative implementation. All database/actor inputs below become values.
+  part:=substring(trigger_source from strpos(trigger_source,'    if new.review_roleplay_policy_id')+length('    if '));
+  insert_input:=substring(part from 1 for strpos(part,' then')-1);
+  part:=substring(trigger_source from strpos(trigger_source,'  elsif new.review_roleplay_policy_id')+length('  elsif '));
+  update_input:=substring(part from 1 for strpos(part,' then')-1);
+  part:=substring(trigger_source from strpos(trigger_source,'  if new.reviewer_id is null')+length('  if '));
+  reset_expression:=substring(part from 1 for strpos(part,' then')-1);
+  part:=substring(trigger_source from strpos(trigger_source,'    binding_same:=')+length('    binding_same:='));
+  binding_expression:=substring(part from 1 for strpos(part,';')-1);
+  part:=substring(trigger_source from strpos(trigger_source,'    review_tuple_same:=')+length('    review_tuple_same:='));
+  tuple_expression:=substring(part from 1 for strpos(part,';')-1);
+  part:=substring(trigger_source from strpos(trigger_source,'    if binding_same is true')+length('    if '));
+  history_expression:=substring(part from 1 for strpos(part,' then')-1);
+  part:=substring(trigger_source from strpos(trigger_source,'  if tg_op<>')+length('  if '));
+  transition_expression:=substring(part from 1 for strpos(part,' then')-1);
+  part:=substring(trigger_source from strpos(trigger_source,'  if auth.uid() is null')+length('  if '));
+  session_expression:=substring(part from 1 for strpos(part,' then')-1);
+  if insert_input='' or update_input='' or reset_expression='' or binding_expression='' or tuple_expression=''
+    or history_expression='' or transition_expression='' or session_expression=''
+    or strpos(trigger_source,'product_test_review_provenance_input_denied')>strpos(trigger_source,'new.review_roleplay_policy_id:=null')
+    or strpos(trigger_source,'if binding_same is true')>strpos(trigger_source,'product_test_review_session_denied')
+    or strpos(trigger_source,'product_test_review_session_denied')>strpos(trigger_source,'select lane.* into strict review_lane')
+    or strpos(trigger_source,'new.review_roleplay_policy_id:=review_lane.policy_id;')<=0
+    or strpos(trigger_source,'new.review_roleplay_epoch:=review_lane.authority_epoch;')<=0 then
+    raise exception 'fund_base_review_persistence_proof_branch_order_changed';end if;
+  for case_row in select value from pg_catalog.jsonb_array_elements($branch_cases$[
+    {"name":"ordinary insert absent markers","predicate":"insert","patch":{},"allow":false},
+    {"name":"injected insert policy","predicate":"insert","patch":{"review_roleplay_policy_id":"33333333-3333-4333-8333-333333333333"},"allow":true},
+    {"name":"unchanged caller markers","predicate":"input","historical":true,"patch":{},"allow":false},
+    {"name":"relabel policy","predicate":"input","historical":true,"patch":{"review_roleplay_policy_id":"22222222-2222-4222-8222-222222222222"},"allow":true},
+    {"name":"relabel epoch","predicate":"input","historical":true,"patch":{"review_roleplay_epoch":3},"allow":true},
+    {"name":"caller cannot clear first","predicate":"input","historical":true,"patch":{"review_roleplay_policy_id":null,"review_roleplay_epoch":null},"allow":true},
+    {"name":"null reviewer clears internally","predicate":"reset","historical":true,"patch":{"reviewer_id":null},"allow":true},
+    {"name":"independent review clears internally","predicate":"reset","historical":true,"patch":{"reviewer_id":"22222222-2222-4222-8222-222222222222"},"allow":true},
+    {"name":"same reviewer not reset","predicate":"reset","historical":true,"patch":{},"allow":false},
+    {"name":"reserved units keep history","predicate":"history","historical":true,"patch":{"reserved_units":1},"allow":true},
+    {"name":"publication keeps history","predicate":"history","historical":true,"patch":{"status":"PUBLISHED","revision":5},"allow":true},
+    {"name":"internal status keeps history","predicate":"history","historical":true,"patch":{"status":"IN_REVIEW"},"allow":true},
+    {"name":"changed notes need fresh review","predicate":"history","historical":true,"patch":{"review_notes":"Changed fictional review rationale."},"allow":false},
+    {"name":"changed checks need fresh review","predicate":"history","historical":true,"patch":{"review_checks":{}},"allow":false},
+    {"name":"changed timestamp needs fresh review","predicate":"history","historical":true,"patch":{"reviewed_at":"2026-10-15T23:01:00Z"},"allow":false},
+    {"name":"terms do not carry history","predicate":"history","historical":true,"patch":{"terms":{"changed":true}},"allow":false},
+    {"name":"package does not carry history","predicate":"history","historical":true,"patch":{"current_offering_revision_id":null},"allow":false},
+    {"name":"fresh approved transition","predicate":"transition","fresh":true,"patch":{},"allow":false},
+    {"name":"fresh changes transition","predicate":"transition","fresh":true,"patch":{"status":"CHANGES_REQUIRED"},"allow":false},
+    {"name":"insert self review denied","predicate":"transition","fresh":true,"operation":"INSERT","patch":{},"allow":true},
+    {"name":"old approved cannot fresh review","predicate":"transition","fresh":true,"old_patch":{"status":"APPROVED"},"patch":{},"allow":true},
+    {"name":"revision must increment once","predicate":"transition","fresh":true,"patch":{"revision":5},"allow":true},
+    {"name":"published is not review transition","predicate":"transition","fresh":true,"patch":{"status":"PUBLISHED"},"allow":true},
+    {"name":"changed binding denied","predicate":"transition","fresh":true,"patch":{"terms_hash":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},"allow":true},
+    {"name":"missing review time denied","predicate":"transition","fresh":true,"patch":{"reviewed_at":null},"allow":true},
+    {"name":"genuine protected actor session","predicate":"session","fresh":true,"patch":{},"allow":false},
+    {"name":"no actor denied","predicate":"session","fresh":true,"actor":null,"patch":{},"allow":true},
+    {"name":"wrong actor denied","predicate":"session","fresh":true,"actor":"22222222-2222-4222-8222-222222222222","patch":{},"allow":true},
+    {"name":"MAIN denied","predicate":"session","fresh":true,"environment":false,"patch":{},"allow":true},
+    {"name":"unprotected session denied","predicate":"session","fresh":true,"protected":false,"patch":{},"allow":true},
+    {"name":"unknown protection denied","predicate":"session","fresh":true,"protected":null,"patch":{},"allow":true}
+  ]$branch_cases$::jsonb) loop
+    old_value:=(case when case_row->>'historical'='true' then historical else baseline end)||coalesce(case_row->'old_patch','{}'::jsonb);
+    new_value:=(case when case_row->>'fresh'='true' then historical||'{"review_roleplay_policy_id":null,"review_roleplay_epoch":null}'::jsonb else old_value end)||(case_row->'patch');
+    expression:=pg_catalog.regexp_replace(pg_catalog.regexp_replace(binding_expression,'\mnew[.]','proof_new.','gi'),'\mold[.]','proof_old.','gi');
+    execute 'select '||expression||' from pg_catalog.jsonb_populate_record(null::bx1_portal.products,$1) proof_new cross join pg_catalog.jsonb_populate_record(null::bx1_portal.products,$2) proof_old'
+      into binding_result using new_value,old_value;
+    expression:=pg_catalog.regexp_replace(pg_catalog.regexp_replace(tuple_expression,'\mnew[.]','proof_new.','gi'),'\mold[.]','proof_old.','gi');
+    execute 'select '||expression||' from pg_catalog.jsonb_populate_record(null::bx1_portal.products,$1) proof_new cross join pg_catalog.jsonb_populate_record(null::bx1_portal.products,$2) proof_old'
+      into tuple_result using new_value,old_value;
+    expression:=case case_row->>'predicate' when 'insert' then insert_input when 'input' then update_input when 'reset' then reset_expression
+      when 'history' then history_expression when 'transition' then transition_expression when 'session' then session_expression end;
+    expression:=replace(replace(expression,'bx1_private.test_roleplay_environment()','proof_environment'),'bx1_private.test_roleplay_protected_session()','proof_protected');
+    expression:=replace(expression,'auth.uid()','proof_actor');
+    expression:=pg_catalog.regexp_replace(pg_catalog.regexp_replace(expression,'\mnew[.]','proof_new.','gi'),'\mold[.]','proof_old.','gi');
+    if expression is null or expression ~ '(bx1_private[.]|auth[.])' then raise exception 'fund_base_review_persistence_proof_branch_extraction_incomplete';end if;
+    execute 'select ('||expression||') is true from pg_catalog.jsonb_populate_record(null::bx1_portal.products,$1) proof_new cross join pg_catalog.jsonb_populate_record(null::bx1_portal.products,$2) proof_old cross join (select $3::boolean binding_same,$4::boolean review_tuple_same,$5::text tg_op,$6::uuid proof_actor,$7::boolean proof_environment,$8::boolean proof_protected) inputs'
+      into outcome using new_value,old_value,binding_result,tuple_result,coalesce(case_row->>'operation','UPDATE'),
+        (case when case_row ? 'actor' then (case_row->>'actor')::uuid else actor end),
+        (case when case_row ? 'environment' then (case_row->>'environment')::boolean else true end),
+        (case when case_row ? 'protected' then (case_row->>'protected')::boolean else true end);
+    if outcome is distinct from (case_row->>'allow')::boolean then
+      raise exception 'fund_base_review_persistence_proof_branch_case_failed: %',case_row->>'name';end if;
+  end loop;
+  -- The exact SELECT ... INTO STRICT lane query becomes an EXISTS over values.
+  -- This preserves both joins, the actual session/key/context marker and the
+  -- two mandatory post-wait current-lane calls, with no live business records.
+  part:=substring(trigger_source from strpos(trigger_source,'    select lane.* into strict review_lane'));
+  lane_query:=substring(part from 1 for strpos(part,';')-1);
+  lane_query:=replace(lane_query,'select lane.* into strict review_lane','select lane.*');
+  lane_query:=replace(lane_query,'bx1_private.fund_roleplay_command_lanes lane',
+    'pg_catalog.jsonb_to_record($1) as lane(transaction_id xid8,actor_id uuid,policy_id uuid,authority_epoch integer,product_id uuid,offering_revision_id uuid,operating_context jsonb,action text,request_key uuid)');
+  lane_query:=replace(lane_query,'bx1_private.roleplay_policies policy',
+    'pg_catalog.jsonb_to_record($2) as policy(id uuid,authority_epoch integer,product_id uuid,offering_revision_id uuid,environment text,project_ref text,assurance text,independence_proven boolean,product_organisation_id uuid,terms_hash text,native_organisation_id uuid)');
+  lane_query:=replace(lane_query,'bx1_private.test_workspace_product_commands marker',
+    'pg_catalog.jsonb_to_record($3) as marker(transaction_id xid8,actor_id uuid,session_id uuid,request_key uuid,operating_context jsonb,product_organisation_id uuid,target_product_id uuid,command text)');
+  lane_query:=replace(lane_query,'bx1_portal.test_offering_lane_current(lane.operating_context,new.id,lane.request_key,''review_product'')','proof_legacy_current');
+  lane_query:=replace(lane_query,'bx1_private.fund_roleplay_lane_current(lane.operating_context,new.id,''review_product'')','proof_fund_current');
+  lane_query:=replace(lane_query,'auth.jwt()->>''session_id''','proof_session::text');
+  lane_query:=replace(lane_query,'auth.uid()','proof_actor');
+  lane_query:=replace(lane_query,'pg_catalog.pg_current_xact_id()','proof_xact');
+  lane_query:=pg_catalog.regexp_replace(lane_query,'\mnew[.]','proof_new.','gi');
+  if lane_query ~ '(bx1_private[.]|bx1_portal[.]|auth[.]|into strict)' then
+    raise exception 'fund_base_review_persistence_proof_lane_extraction_incomplete';end if;
+  default_context:=pg_catalog.jsonb_build_object('mode','ROLE','organisationId',organisation_id,'role','ComplianceOfficer');
+  default_lane:=pg_catalog.jsonb_build_object('transaction_id','1','actor_id',actor,'policy_id',policy_id,'authority_epoch',2,
+    'product_id',product_id,'offering_revision_id',offering_id,'operating_context',default_context,'action','review_product','request_key',request_id);
+  default_policy:=pg_catalog.jsonb_build_object('id',policy_id,'authority_epoch',2,'product_id',product_id,'offering_revision_id',offering_id,
+    'environment','TESTNET','project_ref','fegnnnlseuejkrusbbkv','assurance','TEST_ROLE_PLAY','independence_proven',false,
+    'product_organisation_id',organisation_id,'terms_hash',term_hash,'native_organisation_id',organisation_id);
+  default_marker:=pg_catalog.jsonb_build_object('transaction_id','1','actor_id',actor,'session_id',session_id,'request_key',request_id,
+    'operating_context',default_context,'product_organisation_id',organisation_id,'target_product_id',product_id,'command','review_product');
+  count_cases:=0;
+  for case_row in select value from pg_catalog.jsonb_array_elements($provenance_lane_cases$[
+    {"name":"exact canonical lane","allow":true},
+    {"name":"missing fund lane","lane":null,"allow":false},
+    {"name":"wrong transaction","lane":{"transaction_id":"2"},"allow":false},
+    {"name":"wrong actor","lane":{"actor_id":"22222222-2222-4222-8222-222222222222"},"allow":false},
+    {"name":"wrong product","lane":{"product_id":"22222222-2222-4222-8222-222222222222"},"allow":false},
+    {"name":"wrong offering","lane":{"offering_revision_id":"22222222-2222-4222-8222-222222222222"},"allow":false},
+    {"name":"wrong action","lane":{"action":"publish_product"},"allow":false},
+    {"name":"wrong role","lane":{"operating_context":{"mode":"ROLE","organisationId":"55555555-5555-4555-8555-555555555555","role":"IssuerFundManager"}},"allow":false},
+    {"name":"wrong mode","lane":{"operating_context":{"mode":"APPLICANT"}},"allow":false},
+    {"name":"wrong original policy","policy":{"id":"22222222-2222-4222-8222-222222222222"},"allow":false},
+    {"name":"wrong epoch","policy":{"authority_epoch":3},"allow":false},
+    {"name":"wrong policy organisation","policy":{"product_organisation_id":"22222222-2222-4222-8222-222222222222"},"allow":false},
+    {"name":"wrong policy terms","policy":{"terms_hash":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},"allow":false},
+    {"name":"wrong native context","policy":{"native_organisation_id":"22222222-2222-4222-8222-222222222222"},"allow":false},
+    {"name":"MAIN policy","policy":{"environment":"MAINNET"},"allow":false},
+    {"name":"wrong project","policy":{"project_ref":"oqkevkjbkpugjotihtda"},"allow":false},
+    {"name":"wrong assurance","policy":{"assurance":"STANDARD"},"allow":false},
+    {"name":"false independence claim","policy":{"independence_proven":true},"allow":false},
+    {"name":"unknown independence","policy":{"independence_proven":null},"allow":false},
+    {"name":"missing canonical marker","marker":null,"allow":false},
+    {"name":"wrong marker session","marker":{"session_id":"22222222-2222-4222-8222-222222222222"},"allow":false},
+    {"name":"wrong marker key","marker":{"request_key":"22222222-2222-4222-8222-222222222222"},"allow":false},
+    {"name":"wrong marker context","marker":{"operating_context":{"mode":"APPLICANT"}},"allow":false},
+    {"name":"wrong marker product","marker":{"target_product_id":"22222222-2222-4222-8222-222222222222"},"allow":false},
+    {"name":"wrong marker action","marker":{"command":"publish_product"},"allow":false},
+    {"name":"expired or revoked fund lane","fund_current":false,"allow":false},
+    {"name":"unknown fund lane","fund_current":null,"allow":false},
+    {"name":"source withdrawn","legacy_current":false,"allow":false},
+    {"name":"unknown source lane","legacy_current":null,"allow":false},
+    {"name":"null actual actor","actor":null,"allow":false},
+    {"name":"null actual session","session":null,"allow":false}
+  ]$provenance_lane_cases$::jsonb) loop
+    execute 'select exists('||lane_query||') from pg_catalog.jsonb_populate_record(null::bx1_portal.products,$4) proof_new cross join (select $5::uuid proof_actor,$6::uuid proof_session,$7::xid8 proof_xact,$8::boolean proof_legacy_current,$9::boolean proof_fund_current) inputs'
+      into outcome using
+        (case when case_row ? 'lane' and case_row->'lane'='null'::jsonb then null::jsonb else default_lane||coalesce(case_row->'lane','{}'::jsonb) end),
+        (case when case_row ? 'policy' and case_row->'policy'='null'::jsonb then null::jsonb else default_policy||coalesce(case_row->'policy','{}'::jsonb) end),
+        (case when case_row ? 'marker' and case_row->'marker'='null'::jsonb then null::jsonb else default_marker||coalesce(case_row->'marker','{}'::jsonb) end),historical,
+        (case when case_row ? 'actor' then (case_row->>'actor')::uuid else actor end),
+        (case when case_row ? 'session' then (case_row->>'session')::uuid else session_id end),'1',
+        (case when case_row ? 'legacy_current' then (case_row->>'legacy_current')::boolean else true end),
+        (case when case_row ? 'fund_current' then (case_row->>'fund_current')::boolean else true end);
+    if outcome is distinct from (case_row->>'allow')::boolean then
+      raise exception 'fund_base_review_persistence_proof_lane_case_failed: %',case_row->>'name';end if;
+    count_cases:=count_cases+1;
+  end loop;
+  if count_cases<>31 then raise exception 'fund_base_review_persistence_proof_lane_cases_missing';end if;
+  if pg_catalog.current_setting('request.jwt.claims',true) is distinct from before_claims
+    or pg_catalog.current_setting('request.jwt.claim.sub',true) is distinct from before_sub then
+    raise exception 'fund_base_review_persistence_proof_claims_changed';end if;
+end $fund_base_review_persistence_proof$;
