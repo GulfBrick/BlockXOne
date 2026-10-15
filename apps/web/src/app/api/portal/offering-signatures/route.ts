@@ -9,10 +9,12 @@ import { readOfferingSignatures, executeOfferingSignatureCommand, downloadOfferi
   createOfferingSigningView, OfferingSignatureError } from '@/lib/portal/offering-signatures-server'
 import { hasCanonicalOrigin, privateResponse, responseCookieAdapter } from '@/lib/supabase/http'
 import { createRequestSupabaseClient } from '@/lib/supabase/server'
+import { scheduleOfferingSignatureWake } from '@/lib/portal/offering-signature-wake'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
 export const runtime = 'nodejs'
+export const maxDuration = 60
 const id = z.string().uuid().regex(/^[0-9a-f-]{36}$/)
 
 export async function GET(request: NextRequest) {
@@ -56,6 +58,7 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  const wakeDeadline = Date.now() + 50_000
   const jar = responseCookieAdapter(request)
   try {
     requirePortalEnvironment()
@@ -90,7 +93,10 @@ export async function POST(request: NextRequest) {
       }
     }
     const response = offeringSignatureResponseSchema.parse({ snapshot, command: instruction.request.command, key: instruction.request.key, ...view })
-    return jar.finish(privateResponse(NextResponse.json(response)))
+    const result = jar.finish(privateResponse(NextResponse.json(response)))
+    scheduleOfferingSignatureWake(response, { actorId: before.user.id, sessionId: currentSession.id, aal: currentSession.aal,
+      context: input.context, productId: instruction.request.payload.product_id, revisionId: input.revisionId }, wakeDeadline)
+    return result
   } catch (error) {
     return jar.finish(portalFailure(error instanceof OfferingSignatureError ? new PortalError(error.message, error.status)
       : error instanceof z.ZodError ? new PortalError('The signature request or confirmed response is invalid. Refresh its saved state before retrying.', 400) : error))

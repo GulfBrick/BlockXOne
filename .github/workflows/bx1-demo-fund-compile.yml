@@ -721,6 +721,8 @@ jobs:
             'src/app/api/portal/kyc/readiness/route.test.ts',
             'src/lib/portal/offering-document-processing.test.ts',
             'src/lib/portal/offering-signatures-server.test.ts',
+            'src/lib/portal/offering-signature-wake.test.ts',
+            'src/lib/portal/offering-signatures-api.test.ts',
             'src/app/api/portal/offering-signatures/processing/route.test.ts',
           ] : process.env.BX1_FOCUSED_UI_MODE === 'fund-signer-entry-focused' ? [
             'src/components/portal/offering-workflow.interaction.test.tsx',

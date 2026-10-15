@@ -147,12 +147,14 @@ export async function runOfficialCloudEngineProof() {
     await atStage('UPDATER_VERSION', async () => {
       // FreshClam parses configuration BEFORE --version in its tagged1.4.6
       // main(), unlike clamscan. Never depend on an absent ambient config file.
-      const version = await runFreshclam(['--config-file', configFile, '--version'], { directory, timeoutMs: 5000 })
+      const version = await runFreshclam([`--config-file=${configFile}`, '--version'], { directory, timeoutMs: 5000 })
       assert.match(version.stdout, /^ClamAV 1\.4\.6(?:\/[^\r\n]+)?\r?\n?$/)
       assert.equal(version.stderr.trim(), '')
     })
     // Fixed public official mirror only; no app endpoint, credentials or queue.
-    const updated = await atStage('OFFICIAL_DATABASE_UPDATE', () => runFreshclam(['--config-file', configFile, '--datadir', source, '--stdout'], { directory }))
+    // 1.4.6 common/optparser.c:259,817: bare optional --datadir selects the
+    // compiled default and overrides this reviewed config. Use config alone.
+    const updated = await atStage('OFFICIAL_DATABASE_UPDATE', () => runFreshclam([`--config-file=${configFile}`, '--stdout'], { directory }))
     const built = await atStage('SNAPSHOT_BUILD', () => writeOfficialSnapshot(source, snapshotDirectory))
     const config = { databasePath: path.join(snapshotDirectory, 'manifest.json'), databaseSha256: built.databaseSha256 }
     const preflight = await atStage('OFFICIAL_PREFLIGHT', () => preflightOfficialScanner(config))

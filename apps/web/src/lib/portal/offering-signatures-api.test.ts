@@ -3,7 +3,8 @@ import { NextRequest } from 'next/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 vi.mock('server-only', () => ({}))
 const mocks = vi.hoisted(() => ({ query: vi.fn(), user: vi.fn(), session: vi.fn(), rpc: vi.fn(), scoped: vi.fn(),
-  client: vi.fn(), storage: vi.fn(), download: vi.fn(), fetch: vi.fn() }))
+  client: vi.fn(), storage: vi.fn(), download: vi.fn(), fetch: vi.fn(), after: vi.fn() }))
+vi.mock('next/server', async original => ({ ...await original<object>(), after: mocks.after }))
 vi.mock('pg', async original => ({ ...await original<object>(), Pool: class {
   on() { return this }
   query(...args: unknown[]) { return mocks.query(...args) }
@@ -26,11 +27,15 @@ const env = { NODE_ENV: 'production', VERCEL_ENV: 'preview', BLOCKXONE_TESTNET_F
   BLOCKXONE_DOCUMENT_RECEIPT_DATABASE_URL: 'postgresql://bx1_document_receipt_writer:synthetic@db.fegnnnlseuejkrusbbkv.supabase.co:5432/postgres?sslmode=verify-full',
   BLOCKXONE_DOCUMENT_SCANNER_DATABASE_URL: 'postgresql://bx1_document_scanner_writer:synthetic@db.fegnnnlseuejkrusbbkv.supabase.co:5432/postgres?sslmode=verify-full',
   BLOCKXONE_DOCUMENT_STORAGE_SECRET_KEY: `sb_secret_${'synthetic'.repeat(4)}`, BLOCKXONE_DOCUMENT_SCANNER_ID: 'synthetic-scanner',
-  BLOCKXONE_DOCUMENT_SCANNER_HMAC_KEY: Buffer.alloc(32, 17).toString('base64url') }
+  BLOCKXONE_DOCUMENT_SCANNER_HMAC_KEY: Buffer.alloc(32, 17).toString('base64url'),
+  BLOCKXONE_OFFERING_SIGNATURE_DATABASE_URL: 'postgresql://bx1_offering_signature_worker:synthetic@db.fegnnnlseuejkrusbbkv.supabase.co:5432/postgres?sslmode=verify-full',
+  BLOCKXONE_OFFERING_SIGNATURE_WORKER_ID: 'synthetic-signature-worker',
+  BLOCKXONE_OFFERING_SIGNATURE_HMAC_KEY: Buffer.alloc(32, 19).toString('base64url') }
 const user = { id: actor, email: 'synthetic@example.invalid', email_confirmed_at: '2026-01-01T00:00:00Z', is_anonymous: false }
-function authSession(id = sessionId) {
-  const claims = { iss: `${env.SUPABASE_URL}/auth/v1`, sub: actor, session_id: id, role: 'authenticated', aal: 'aal1',
-    exp: 4102444800, is_anonymous: false, amr: [{ method: 'password', timestamp: 1700000000 }] }
+function authSession(id = sessionId, aal: 'aal1' | 'aal2' = 'aal1') {
+  const claims = { iss: `${env.SUPABASE_URL}/auth/v1`, sub: actor, session_id: id, role: 'authenticated', aal,
+    exp: 4102444800, is_anonymous: false, amr: [{ method: 'password', timestamp: 1700000000 },
+      ...(aal === 'aal2' ? [{ method: 'totp', timestamp: 1700000001 }] : [])] }
   return { data: { session: { access_token: `synthetic.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.synthetic` } }, error: null }
 }
 function snapshot(): OfferingSignatureSnapshot {
@@ -49,8 +54,11 @@ function get(extra = '', expectedActor = actor) {
   return new NextRequest(`${base}?${query}${extra}`, { headers: { 'x-bx1-expected-actor': expectedActor } })
 }
 function body(command = 'REQUEST_SIGNING_VIEW') {
+  const target = { product_id: product, offering_revision_id: revision, expected_revision: 3 }
   return { expected_actor: actor, operating_context: context, request: { command, key,
-    payload: { product_id: product, offering_revision_id: revision, expected_revision: 3, operation_id: operation } } }
+    payload: command === 'PREPARE_EXECUTION' ? { ...target, authorisation_id: product }
+      : { ...target, operation_id: operation, ...(command === 'REQUEST_RECOVERY'
+        ? { reason: 'Resume this existing sandbox operation.' } : {}) } } }
 }
 function post(value: unknown = body(), headers: Record<string, string> = {}, suffix = '') {
   return new NextRequest(`${base}${suffix}`, { method: 'POST', headers: { origin, host: new URL(origin).host, 'content-type': 'application/json', ...headers }, body: JSON.stringify(value) })
@@ -70,7 +78,7 @@ beforeEach(() => {
   mocks.download.mockResolvedValue({ data: new Blob([pdf], { type: 'application/pdf' }), error: null })
   mocks.query.mockResolvedValue({ rows: [{ result: snapshot() }] })
 })
-afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs() })
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs() })
 
 describe('signature actor API using real application guards and synthetic external clients', () => {
   it('reads only the exact expected actor, session and operating context with private headers', async () => {
@@ -81,6 +89,7 @@ describe('signature actor API using real application guards and synthetic extern
     expect(mocks.rpc).toHaveBeenCalledWith('bx1_portal_read_scoped', { operating_context: context })
     expect(mocks.query.mock.calls[0][1].slice(0, 5)).toEqual([actor, sessionId, 'aal1', JSON.stringify(context), revision])
     expect(mocks.fetch).not.toHaveBeenCalled()
+    expect(mocks.after).not.toHaveBeenCalled()
   })
   it.each(['&revision_id=duplicate', '&mode=applicant', '&path=arbitrary', `&expected_actor=${actor}`, `&id=${key}`, '&download=0'])(
     'rejects ambiguous or unsolicited query data %s before database access', async extra => {
@@ -115,6 +124,7 @@ describe('signature actor API using real application guards and synthetic extern
     expect(JSON.stringify(writes[0][1])).toContain(operation)
     expect(mocks.query).toHaveBeenCalledTimes(2)
     expect(mocks.fetch).not.toHaveBeenCalled()
+    expect(mocks.after).not.toHaveBeenCalled()
   })
   it('withholds POST acknowledgement when session changes after the committed command', async () => {
     mocks.session.mockResolvedValueOnce(authSession()).mockResolvedValueOnce(authSession(product))
@@ -122,12 +132,53 @@ describe('signature actor API using real application guards and synthetic extern
     expect(response.status).toBe(403)
     expect(await response.json()).not.toHaveProperty('snapshot')
     expect(mocks.query).toHaveBeenCalledTimes(1)
+    expect(mocks.after).not.toHaveBeenCalled()
   })
   it('keeps ordinary command acknowledgements free of signing-view fields', async () => {
     const response = await POST(post(body('REQUEST_RECONCILIATION')))
     expect(response.status).toBe(200)
     expect(await response.json()).toEqual({ snapshot: snapshot(), command: 'REQUEST_RECONCILIATION', key })
     expect(mocks.fetch).not.toHaveBeenCalled()
+    expect(mocks.after).not.toHaveBeenCalled()
+  })
+  it.each(['PREPARE_EXECUTION', 'REQUEST_RECONCILIATION', 'REQUEST_RECOVERY'])(
+    'wakes the real existing lease boundary only after confirmed AAL2 %s returns', async command => {
+      mocks.session.mockResolvedValue(authSession(sessionId, 'aal2'))
+      const response = await POST(post(body(command)))
+      expect(response.status).toBe(200)
+      expect(await response.json()).toEqual({ snapshot: snapshot(), command, key })
+      expect(mocks.after).toHaveBeenCalledTimes(1)
+      expect(mocks.query).toHaveBeenCalledTimes(2)
+      // Synthetic DB IDLE proves the callback invokes the canonical lease, not a provider directly.
+      mocks.query.mockResolvedValueOnce({ rows: [{ result: null }] })
+      await mocks.after.mock.calls[0][0]()
+      expect(mocks.query).toHaveBeenCalledTimes(3)
+      expect(mocks.query.mock.calls[2][0]).toContain('bx1_private.claim_offering_signature_action')
+      expect(mocks.fetch).not.toHaveBeenCalled()
+    })
+  it('does not wake after failed commands, invalid confirmed DTOs or changed protected sessions', async () => {
+    mocks.session.mockResolvedValue(authSession(sessionId, 'aal2'))
+    mocks.query.mockRejectedValueOnce(new Error('Synthetic command failure'))
+    expect((await POST(post(body('REQUEST_RECONCILIATION')))).status).not.toBe(200)
+    expect(mocks.after).not.toHaveBeenCalled()
+    mocks.query.mockResolvedValueOnce({ rows: [{ result: snapshot() }] })
+      .mockResolvedValueOnce({ rows: [{ result: { ...snapshot(), product_id: 'invalid' } }] })
+    expect((await POST(post(body('REQUEST_RECONCILIATION')))).status).not.toBe(200)
+    expect(mocks.after).not.toHaveBeenCalled()
+    mocks.query.mockResolvedValue({ rows: [{ result: snapshot() }] })
+    mocks.session.mockResolvedValueOnce(authSession(sessionId, 'aal2')).mockResolvedValueOnce(authSession(product, 'aal2'))
+    expect((await POST(post(body('REQUEST_RECONCILIATION')))).status).toBe(403)
+    expect(mocks.after).not.toHaveBeenCalled()
+  })
+  it('keeps the saved command response successful when post-response scheduling is unavailable', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    mocks.session.mockResolvedValue(authSession(sessionId, 'aal2'))
+    mocks.after.mockImplementationOnce(() => { throw new Error('Synthetic scheduler unavailable') })
+    const response = await POST(post(body('REQUEST_RECONCILIATION')))
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ snapshot: snapshot(), command: 'REQUEST_RECONCILIATION', key })
+    expect(mocks.query).toHaveBeenCalledTimes(2)
+    expect(console.error).toHaveBeenCalledExactlyOnceWith('bx1_offering_signature_wake_schedule_failed')
   })
   it('withholds acknowledgement when the post-command restricted snapshot changes scope', async () => {
     mocks.query.mockResolvedValueOnce({ rows: [{ result: snapshot() }] })
