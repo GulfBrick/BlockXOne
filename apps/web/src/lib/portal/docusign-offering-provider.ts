@@ -420,6 +420,7 @@ export function assessOfferingCompletion(expected: OfferingEnvelopeExpectation, 
   if (!audit.success) return unresolved('AUDIT_MISSING')
   const benign = new Set(['Created', 'Sent', 'Delivered', 'Viewed', 'Signed', 'Completed', 'Printable Copy Delivered', 'Archive Delivered'])
   const embedded = new Set(['Registered', 'Opened', 'Viewed In-Session', 'Signed'])
+  const delivery = new Set(['Printable Copy Delivered', 'Archive Delivered'])
   const actions = new Set<string>()
   const progression: { action: string; at: number; timestamp: string; states: string[] }[] = []
   const sent = Date.parse(envelope.data.sentDateTime), completed = Date.parse(envelope.data.completedDateTime)
@@ -441,15 +442,20 @@ export function assessOfferingCompletion(expected: OfferingEnvelopeExpectation, 
   } else {
     // The observed embedded ceremony has no invented Sent/Completed audit rows.
     // Do not mix its vocabulary with another partially recognised event flow.
-    if (progression.some(event => !embedded.has(event.action))) return unresolved('AUDIT_UNKNOWN_ACTION')
+    if (progression.some(event => !embedded.has(event.action) && !delivery.has(event.action))) return unresolved('AUDIT_UNKNOWN_ACTION')
     if (progression.filter(event => event.action === 'Registered').length !== 1
       || progression.filter(event => event.action === 'Signed').length !== 1) return unresolved('AUDIT_INCOMPLETE')
     if (tab.status !== 'signed' || tab.recipientId !== '1' || tab.stampType !== 'signature' || tab.tabType !== 'signhere') return noncurrent('TABS_CHANGED')
     let stage = 0, previous = Number.NEGATIVE_INFINITY
     for (const event of progression) {
+      const isDelivery = delivery.has(event.action)
       if (!z.string().datetime({ offset: true }).safeParse(event.timestamp).success
-        || event.at < previous || event.at > completed || event.states.length !== 1) return unresolved('AUDIT_INVALID')
+        || event.at < previous || (!isDelivery && event.at > completed) || event.states.length !== 1) return unresolved('AUDIT_INVALID')
       previous = event.at
+      if (isDelivery) {
+        if (stage !== 4 || event.states[0] !== 'completed' || event.at < completed) return unresolved('AUDIT_INCOMPLETE')
+        continue
+      }
       if (event.action === 'Registered') {
         if (stage !== 0 || event.states[0] !== 'created') return unresolved('AUDIT_INCOMPLETE')
         stage = 1

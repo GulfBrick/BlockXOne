@@ -330,6 +330,10 @@ describe('authenticated completion assessment fixtures, not provider acceptance'
 })
 
 describe('exact embedded completion compatibility, not provider or business acceptance', () => {
+  const deliveryEvent = (action: string, at = '2026-10-15T20:40:41.0980433Z'): AuditFixture => ({ eventFields: [
+    { name: 'Action', value: action }, { name: 'EnvelopeStatus', value: 'completed' }, { name: 'logTime', value: at },
+  ] })
+
   it('preserves legacy acceptance of unrelated tab metadata rather than applying embedded-only predicates', () => {
     const value = snapshot()
     Object.assign(tabOf(value), { status: 1, recipientId: null, stampType: true, tabType: [] })
@@ -354,6 +358,70 @@ describe('exact embedded completion compatibility, not provider or business acce
     signerOf(value).name = 'An Adopted Different Name'
     expect(assessOfferingCompletion(expected, binding, value)).toEqual({ integrity: 'NON_CURRENT', reason: 'RECIPIENT_MISMATCH' })
   })
+
+  it('accepts the redacted ninth Printable Copy Delivered event without inventing another signature', () => {
+    const { expected, value } = embeddedFixture()
+    auditOf(value).push(deliveryEvent('Printable Copy Delivered'))
+    const before = JSON.stringify(value)
+    expect(auditOf(value)).toHaveLength(9)
+    expect(assessOfferingCompletion(expected, binding, value).integrity).toBe('CURRENT_CANDIDATE')
+    expect(JSON.stringify(value)).toBe(before)
+    expect(auditOf(value).filter(event => event.eventFields.some(field => field.name === 'Action' && field.value === 'Signed'))).toHaveLength(1)
+  })
+
+  it.each(['Printable Copy Delivered', 'Archive Delivered'])(
+    'accepts %s only as a completed, chronological post-Signed suffix at or after completion', action => {
+      const { expected, value } = embeddedFixture()
+      auditOf(value).push(deliveryEvent(action, '2026-10-15T20:38:23.9170000Z'))
+      auditOf(value).push(deliveryEvent(action))
+      expect(assessOfferingCompletion(expected, binding, value).integrity).toBe('CURRENT_CANDIDATE')
+    })
+
+  it('accepts a monotonic Printable/Archive suffix while preserving the previous legacy path', () => {
+    const { expected, value } = embeddedFixture()
+    auditOf(value).push(deliveryEvent('Printable Copy Delivered'), deliveryEvent('Archive Delivered', '2026-10-15T20:41:00Z'))
+    expect(assessOfferingCompletion(expected, binding, value).integrity).toBe('CURRENT_CANDIDATE')
+    const legacy = snapshot()
+    auditOf(legacy).push({ eventFields: [{ name: 'Action', value: 'Printable Copy Delivered' },
+      { name: 'logTime', value: '2026-10-13T10:07:00Z' }] })
+    expect(assessOfferingCompletion(buildOfferingEnvelope(input()).expected, binding, legacy).integrity).toBe('CURRENT_CANDIDATE')
+  })
+
+  it.each(['before-signed', 'missing-signed', 'before-completion', 'out-of-order', 'missing-status', 'duplicate-status',
+    'wrong-status', 'non-ISO-time', 'missing-time', 'duplicate-time', 'duplicate-action', 'unknown-delivery',
+    'core-after-delivery', 'mixed-legacy-after-delivery'] as const)(
+    'denies an invalid post-Signed delivery suffix: %s', change => {
+      const { expected, value } = embeddedFixture(), events = auditOf(value), suffix = deliveryEvent('Printable Copy Delivered')
+      const field = (name: string) => suffix.eventFields.find(item => item.name === name)!
+      if (change === 'before-signed') events.splice(events.length - 1, 0, suffix)
+      else events.push(suffix)
+      if (change === 'missing-signed') value.audit_events.auditEvents = events.filter(event => !event.eventFields.some(item => item.name === 'Action' && item.value === 'Signed'))
+      if (change === 'before-completion') {
+        value.envelope.completedDateTime = '2026-10-15T20:38:23.919Z'
+        field('logTime').value = '2026-10-15T20:38:23.918Z'
+      }
+      if (change === 'out-of-order') events.push(deliveryEvent('Archive Delivered', '2026-10-15T20:40:40Z'))
+      if (change === 'missing-status') suffix.eventFields = suffix.eventFields.filter(item => item.name !== 'EnvelopeStatus')
+      if (change === 'duplicate-status') suffix.eventFields.push({ name: 'EnvelopeStatus', value: 'completed' })
+      if (change === 'wrong-status') field('EnvelopeStatus').value = 'delivered'
+      if (change === 'non-ISO-time') field('logTime').value = 'October 15 2026 20:40:41 GMT'
+      if (change === 'missing-time') suffix.eventFields = suffix.eventFields.filter(item => item.name !== 'logTime')
+      if (change === 'duplicate-time') suffix.eventFields.push({ name: 'logTime', value: '2026-10-15T20:40:41Z' })
+      if (change === 'duplicate-action') suffix.eventFields.push({ name: 'Action', value: 'Printable Copy Delivered' })
+      if (change === 'unknown-delivery') field('Action').value = 'Other Copy Delivered'
+      if (change === 'core-after-delivery') events.push({ eventFields: [
+        { name: 'Action', value: 'Opened' }, { name: 'EnvelopeStatus', value: 'delivered' }, { name: 'logTime', value: '2026-10-15T20:41:00Z' },
+      ] })
+      if (change === 'mixed-legacy-after-delivery') events.push(deliveryEvent('Completed', '2026-10-15T20:41:00Z'))
+      expect(assessOfferingCompletion(expected, binding, value).integrity).not.toBe('CURRENT_CANDIDATE')
+    })
+
+  it.each(['Corrected', 'Reassigned', 'Replaced', 'Changed', 'Voided', 'Declined'])(
+    'still denies %s after otherwise valid delivery receipts', action => {
+      const { expected, value } = embeddedFixture()
+      auditOf(value).push(deliveryEvent('Printable Copy Delivered'), deliveryEvent(action, '2026-10-15T20:41:00Z'))
+      expect(assessOfferingCompletion(expected, binding, value)).toEqual({ integrity: 'NON_CURRENT', reason: 'PROVIDER_INTEGRITY_CHANGED' })
+    })
 
   it.each(['', ' ', ' Name', 'Name ', 'Name\nInjected', 'Name\u0000Injected', 'x'.repeat(101)])(
     'does not accept an empty, unbounded or control-bearing adopted name (%j)', name => {
