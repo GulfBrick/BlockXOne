@@ -38,7 +38,7 @@ export async function PortalPage({ view, id, query = {} }: { view: PortalPath; i
       ordinaryStepUpRequired = true
       throw new PortalError('Complete authenticator verification before opening protected operations.', 403)
     }
-    if (data.portal && !portalViewAllowed(view, data.operatingContext, data.portal.snapshot, id)) throw new PortalError('This action is not available in your selected context.', 403)
+    if (data.portal && !portalViewAllowed(view, data.operatingContext, data.portal.snapshot, id, data.release.environment)) throw new PortalError('This action is not available in your selected context.', 403)
     if (!data.portal && view !== '/portal' && view !== '/portal/onboarding') throw new PortalError('Saved portal state is unavailable.', 503)
   } catch (error) { data = null; if (error instanceof PortalError) status = error.status }
   if (!data && status === 404) notFound()

@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { BX1_ROLES } from '@/lib/supabase/contracts'
-import type { PortalPath, PortalSnapshot } from './contracts'
+import type { PortalPath, PortalProduct, PortalProductServiceAppointment, PortalSnapshot } from './contracts'
+import type { PlatformEnvironment } from '@/lib/platform-release'
 import { hasStage2CommandAccess, validatedStage2Access } from './stage2-access'
 import { hasOfferingCommandAccess, isTestPasswordWorkflow, validatedOfferingAccess } from './offering-access'
 import { validatedEvaluationAccess } from './evaluation-access'
@@ -35,8 +36,92 @@ export function portalContextMatches(actual: unknown, expected: PortalOperatingC
 const appliedHandoffProofSchema = z.object({
   approval_receipt_id: z.string().uuid(), applied_at: z.string().datetime({ offset: true }),
 })
+/** Presentation of a current guarded TEST package, never command authority. */
+function standardTestOfferingProduct(snapshot: PortalSnapshot, context: PortalOperatingContext, environment: PlatformEnvironment | undefined, productId: string) {
+  if (environment !== 'TESTNET' || context.mode !== 'ROLE' || !portalContextMatches(snapshot.operating_context, context)
+    || validatedOfferingAccess(snapshot, context, environment)?.session_mode !== 'STANDARD') return null
+  const matches = snapshot.products.filter(product => product.id === productId)
+  const product = matches.length === 1 ? matches[0] : undefined
+  return product?.offering_package?.origin === 'SUBMITTED' && z.string().uuid().safeParse(product.offering_package.id).success
+    && /^[0-9a-f]{64}$/.test(product.terms_hash) && product.offering_package.terms_hash === product.terms_hash ? product : null
+}
+
+export function testOfferingReviewAvailable(snapshot: PortalSnapshot, context: PortalOperatingContext, environment: PlatformEnvironment | undefined,
+  product: PortalProduct, action: 'review_product' | 'review_offering_issuer'): boolean {
+  const current = standardTestOfferingProduct(snapshot, context, environment, product.id)
+  const pkg = current?.offering_package
+  const role = action === 'review_product' ? 'ComplianceOfficer' : 'IssuerFundManager'
+  if (!current || !pkg || context.mode !== 'ROLE' || context.role !== role || current.created_by !== snapshot.actor.id
+    || current.revision !== product.revision || current.offering_package?.id !== product.offering_package?.id
+    || current.terms_hash !== product.terms_hash || current.status !== 'IN_REVIEW'
+    || !current.allowed_actions?.includes(action)
+    || !validatedOfferingAccess(snapshot, context, environment)?.allowed_commands.includes(action)
+    || (action === 'review_product' ? !snapshot.actor.can_review || pkg.can_review_compliance !== true
+      : pkg.can_review_issuer !== true)) return false
+  return snapshot.product_appointments?.some(appointment => appointment.product_id === current.id && appointment.role === role
+    && appointment.appointee_user_id === snapshot.actor.id && appointment.reviewer_scope_organisation_id === context.organisationId
+    && appointment.status === 'APPLIED' && appointment.effective === true && Boolean(appointment.approval_receipt_id)
+    && appointment.terms_hash_at_request === current.terms_hash && Number.isFinite(Date.parse(appointment.requested_until))
+    && Date.parse(appointment.requested_until) > Date.now()) === true
+}
+
+export function standardTestIssuerProductAvailable(snapshot: PortalSnapshot, context: PortalOperatingContext,
+  environment: PlatformEnvironment | undefined, product: PortalProduct): boolean {
+  const current = standardTestOfferingProduct(snapshot, context, environment, product.id)
+  return Boolean(current && context.mode === 'ROLE' && context.role === 'IssuerFundManager'
+    && current.revision === product.revision && current.terms_hash === product.terms_hash
+    && current.offering_package?.id === product.offering_package?.id
+    && snapshot.product_appointments?.some(appointment => appointment.product_id === current.id
+      && appointment.appointee_user_id === snapshot.actor.id && appointment.role === 'IssuerFundManager'
+      && appointment.reviewer_scope_organisation_id === context.organisationId && appointment.status === 'APPLIED'
+      && appointment.effective === true && Boolean(appointment.approval_receipt_id)
+      && appointment.terms_hash_at_request === current.terms_hash && Number.isFinite(Date.parse(appointment.requested_until))
+      && Date.parse(appointment.requested_until) > Date.now()))
+}
+
+function testProductAppointmentApplyAvailable(snapshot: PortalSnapshot, context: PortalOperatingContext,
+  environment: PlatformEnvironment | undefined, appointment: PortalProductServiceAppointment): boolean {
+  const product = standardTestOfferingProduct(snapshot, context, environment, appointment.product_id)
+  return Boolean(product && context.mode === 'ROLE' && context.role === 'SuperAdmin'
+    && validatedOfferingAccess(snapshot, context, environment)?.allowed_commands.includes('apply_product_service_appointment')
+    && product.created_by === snapshot.actor.id && appointment.appointee_user_id === snapshot.actor.id
+    && appointment.requested_by_user_id === snapshot.actor.id && appointment.reviewed_by_user_id === snapshot.actor.id
+    && appointment.reviewer_scope_organisation_id === context.organisationId
+    && appointment.terms_hash_at_request === product.terms_hash && z.string().uuid().safeParse(appointment.approval_receipt_id).success
+    && (appointment.status === 'APPROVED' && appointment.can_apply === true
+      || appointment.status === 'APPLIED' && appointment.can_apply === false && appointment.applied_by_user_id === snapshot.actor.id))
+}
+
+/** Exact TEST TST row actions already emitted by the guarded finance reader. */
+export function testFundFinanceActionAvailable(snapshot: PortalSnapshot | undefined, context: PortalOperatingContext,
+  environment: PlatformEnvironment | undefined, kind: 'ROUTE' | 'REFERENCE' | 'REVERSAL', recordId: string,
+  action: 'approve_funding_route' | 'reconcile_funding' | 'approve_funding_reversal'): boolean {
+  if (!snapshot || environment !== 'TESTNET' || context.mode !== 'ROLE' || context.role !== 'FinancialController'
+    || !portalContextMatches(snapshot.operating_context, context) || !hasFundOperatingProducts(snapshot, context, environment)
+    || !snapshot.funding || action !== ({ ROUTE: 'approve_funding_route', REFERENCE: 'reconcile_funding', REVERSAL: 'approve_funding_reversal' } as const)[kind]) return false
+  const funding = snapshot.funding
+  const records = kind === 'ROUTE' ? funding.routes.filter(row => row.id === recordId)
+    : kind === 'REFERENCE' ? funding.references.filter(row => row.id === recordId) : funding.reversals.filter(row => row.id === recordId)
+  if (records.length !== 1 || !records[0].allowed_actions.includes(action)) return false
+  const record = records[0]
+  const obligation = 'obligation_id' in record ? funding.obligations.find(row => row.id === record.obligation_id) : undefined
+  const routeId = obligation?.route_id ?? recordId
+  const routes = funding.routes.filter(row => row.id === routeId)
+  if (routes.length !== 1 || kind !== 'ROUTE' && (!obligation || obligation.currency !== 'TST' || obligation.token_decimals !== 6)) return false
+  const route = routes[0], products = snapshot.products.filter(product => product.id === route.product_id)
+  const product = products.length === 1 ? products[0] : undefined
+  const fund = snapshot.fund_lifecycle?.products.find(item => item.product_id === route.product_id)
+  return Boolean(route.currency === 'TST' && route.conversion_policy === 'TST_BASE_UNITS_V1' && route.chain_id === 80002 && route.token_decimals === 6
+    && product?.terms.asset_type === 'FUND' && product.terms.currency === 'TST'
+    && product.revision === route.product_revision && product.terms_hash === route.terms_hash
+    && product.offering_package?.origin === 'SUBMITTED' && product.offering_package.terms_hash === product.terms_hash
+    && fund?.availability === 'AVAILABLE' && fund.product_revision === product.revision && fund.terms_hash === product.terms_hash
+    && fund.offering_revision_id === product.offering_package.id && fund.organisation_id === product.organisation_id
+    && snapshot.organisations.some(org => org.id === product.organisation_id && org.id === route.organisation_id && org.status === 'ACTIVE'
+      && org.authority_source === 'TEST_ROLE_PLAY' && org.native_organisation_id === context.organisationId && org.roles.includes(context.role)))
+}
 /** Open one approved apply handoff or its own applied result, never a review queue. */
-function superAdminApplyDetailAllowed(context: PortalOperatingContext, snapshot: PortalSnapshot, id?: string): boolean {
+function superAdminApplyDetailAllowed(context: PortalOperatingContext, snapshot: PortalSnapshot, id?: string, environment?: PlatformEnvironment): boolean {
   if (context.mode !== 'ROLE' || context.role !== 'SuperAdmin' || !id
     || !portalContextMatches(snapshot.operating_context, context)) return false
   const matches = [
@@ -58,7 +143,8 @@ function superAdminApplyDetailAllowed(context: PortalOperatingContext, snapshot:
     || Date.parse(item.requested_until) <= Date.now()) return false
   const independent = (person: string | null) => typeof person === 'string' && person.length > 0 && person !== snapshot.actor.id
   if ('appointee_user_id' in item) return ['IssuerFundManager', 'ComplianceOfficer'].includes(item.role)
-    && independent(item.appointee_user_id) && independent(item.requested_by_user_id) && independent(item.reviewed_by_user_id)
+    && (independent(item.appointee_user_id) && independent(item.requested_by_user_id) && independent(item.reviewed_by_user_id)
+      || testProductAppointmentApplyAvailable(snapshot, context, environment, item))
     && Boolean(item.approval_receipt_id)
   const currentAdmission = applied || item.admission_approved_until !== null
     && Number.isFinite(Date.parse(item.admission_approved_until)) && Date.parse(item.admission_approved_until) > Date.now()
@@ -103,7 +189,7 @@ export function hasFundOperatingProducts(snapshot: PortalSnapshot, context: Port
     && ['TESTNET', 'MAINNET'].includes(fund.environment) && (environment === undefined || fund.environment === environment)
     && portalContextMatches(fund.operating_context, context) && fund.availability === 'AVAILABLE' && Array.isArray(fund.products)
 }
-export function portalViewAllowed(view: PortalPath, context: PortalOperatingContext, snapshot: PortalSnapshot, id?: string): boolean {
+export function portalViewAllowed(view: PortalPath, context: PortalOperatingContext, snapshot: PortalSnapshot, id?: string, environment?: PlatformEnvironment): boolean {
   if ('rehearsal' in snapshot) {
     return false
   }
@@ -131,6 +217,12 @@ export function portalViewAllowed(view: PortalPath, context: PortalOperatingCont
     return true
   }
   if (view === '/portal/products' && hasFundOperatingProducts(snapshot, context)) return true
+  if (environment === 'TESTNET' && context.mode === 'ROLE' && context.role === 'IssuerFundManager'
+    && validatedOfferingAccess(snapshot, context, environment)?.session_mode === 'STANDARD'
+    && portalContextMatches(snapshot.operating_context, context) && view.startsWith('/portal/products')) {
+    const products = snapshot.products.filter(product => standardTestIssuerProductAvailable(snapshot, context, environment, product))
+    return view === '/portal/products' ? products.length > 0 : view === '/portal/products/detail' && products.some(product => product.id === id)
+  }
   if (isTestPasswordWorkflow(snapshot)) {
     if (view === '/portal' || view === '/portal/onboarding') return true
     if (view === '/portal/portfolio') return context.mode === 'APPLICANT'
@@ -140,7 +232,7 @@ export function portalViewAllowed(view: PortalPath, context: PortalOperatingCont
         && (hasStage2CommandAccess(snapshot, 'review_application', context)
           || hasOfferingCommandAccess(snapshot, 'review_product', context)
           || hasOfferingCommandAccess(snapshot, 'review_product_service_appointment', context))
-        || view === '/portal/compliance/detail' && superAdminApplyDetailAllowed(context, snapshot, id)
+        || view === '/portal/compliance/detail' && superAdminApplyDetailAllowed(context, snapshot, id, environment)
     }
     if (view.startsWith('/portal/products')) {
       if (context.mode !== 'ROLE' || !validatedOfferingAccess(snapshot, context)) return false
@@ -160,7 +252,7 @@ export function portalViewAllowed(view: PortalPath, context: PortalOperatingCont
   }
   if (view === '/portal' || view === '/portal/onboarding') return true
   if (view.startsWith('/portal/compliance')) return context.mode === 'ROLE' && context.role === 'ComplianceOfficer' && snapshot.actor.can_review
-    || view === '/portal/compliance/detail' && superAdminApplyDetailAllowed(context, snapshot, id)
+    || view === '/portal/compliance/detail' && superAdminApplyDetailAllowed(context, snapshot, id, environment)
   if (view === '/portal/orders/detail') {
     if (context.mode === 'APPLICANT' || context.role === 'Investor') return true
     return ['OfferingManager', 'IssuerFundManager', 'TreasuryOperator', 'FinancialController'].includes(context.role)

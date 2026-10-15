@@ -10,6 +10,7 @@ import { FundingOrderDetail, FundingWorkspace, fundingReferencePayload, fundingR
 import { PortalCommandProvider } from './portal-client'
 import { PortalScreen } from './portal-screens'
 import { fictionalProductTerms } from './product-form'
+import { fundStageKeys } from '@/lib/portal/fund-lifecycle-contracts'
 
 const actor = '11111111-1111-4111-8111-111111111111'
 const record = '22222222-2222-4222-8222-222222222222'
@@ -33,6 +34,61 @@ function snapshot(role: 'Investor' | 'TreasuryOperator' | 'FinancialController' 
 function detail(value = snapshot(), fundFlow?: { allocationBasisCurrent: boolean }) { return renderToStaticMarkup(<PortalCommandProvider snapshot={value} operatingContext={value.operating_context}><FundingOrderDetail subscription={value.subscriptions[0]} snapshot={value} operatingContext={value.operating_context!} onSaved={vi.fn()} fundFlow={fundFlow} /></PortalCommandProvider>) }
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }) }))
 afterEach(() => { vi.unstubAllGlobals() })
+
+describe('guarded one-operator TEST finance presentation', () => {
+  function current(): PortalSnapshot {
+    const value = snapshot('FinancialController'), product = value.products[0]
+    value.organisations[0].authority_source = 'TEST_ROLE_PLAY'
+    product.offering_package = { id: accountId, package_number: 1, origin: 'SUBMITTED', terms_hash: product.terms_hash,
+      document_hashes: { memorandum: 'a'.repeat(64), risks: 'b'.repeat(64), subscription_terms: 'c'.repeat(64) },
+      submitted_at: '2026-10-01T00:00:00Z', issuer_status: 'APPROVED', compliance_status: 'APPROVED', technical_readiness_status: 'VERIFIED' }
+    value.funding!.routes = [route({ currency: 'TST', conversion_policy: 'TST_BASE_UNITS_V1', proposed_by: actor, allowed_actions: ['approve_funding_route'] })]
+    value.funding!.obligations = [obligation({ currency: 'TST', amount_minor: '1000000000' })]
+    value.funding!.references = [reference({ acceptance_proposed_by: actor, allowed_actions: ['reconcile_funding'] })]
+    value.funding!.journals = [{ id: record, obligation_id: obligationId, reference_id: referenceId, kind: 'FUNDING', amount_base_units: '1000000000',
+      token_address: token, token_decimals: 6, created_at: '2026-10-01T00:00:00Z', original_journal_id: null, posted_by: actor, allowed_actions: [],
+      lines: [{ account: 'TEST_SETTLEMENT_TOKEN_ASSET', side: 'DEBIT', amount_base_units: '1000000000' },
+        { account: 'TEST_CUSTOMER_FUNDING_LIABILITY', side: 'CREDIT', amount_base_units: '1000000000' }] }]
+    value.funding!.reversals = [{ id: accountId, obligation_id: obligationId, journal_id: record, status: 'PROPOSED',
+      reason: 'Synthetic reversal for a guarded presentation check.', proposed_by: actor, approved_by: null, allowed_actions: ['approve_funding_reversal'] }]
+    value.fund_lifecycle = { schema_version: 1, projection_revision: 1, actor_id: actor, environment: 'TESTNET', operating_context: context('FinancialController'),
+      observed_at: '2026-10-15T00:00:00Z', availability: 'AVAILABLE', reason_code: null, products: [{ product_id: productId,
+        organisation_id: organisation, native_organisation_id: nativeOrganisation, product_revision: product.revision, offering_revision_id: accountId,
+        class_id: record, product_name: product.terms.name, terms_hash: product.terms_hash, configuration_hash: null, availability: 'AVAILABLE',
+        stages: fundStageKeys.map(key => ({ key, state: 'NOT_STARTED', label: key, description: 'Synthetic UI binding fixture only.',
+          reason_code: null, owner_role: 'FinancialController', evidence_ids: [] })), next_action: null, actions: [], orders: [], operations: [], holdings: [] }] }
+    return value
+  }
+  function show(value: PortalSnapshot, environment: 'TESTNET' | 'MAINNET' = 'TESTNET') {
+    return renderToStaticMarkup(<PortalCommandProvider snapshot={value} operatingContext={value.operating_context} environment={environment}>
+      <FundingOrderDetail subscription={value.subscriptions[0]} snapshot={value} operatingContext={value.operating_context!} onSaved={vi.fn()} />
+    </PortalCommandProvider>)
+  }
+  it('uses the actual row actions for route approval, reconciliation and reversal without claiming independent people', () => {
+    const html = show(current())
+    expect(html).toContain('Approve this reviewed route</button>')
+    expect(html).toContain('Reconcile evidence and post balanced journal</button>')
+    expect(html).toContain('Approve opposite-line accounting reversal</button>')
+    expect(html).toContain('Independent human approval is not proved')
+  })
+  it.each(['MAIN', 'source', 'context', 'product', 'package', 'currency', 'lifecycle actor', 'allowed actions'])(
+    'does not expose own-approval controls for a missing or changed %s binding', failure => {
+      const value = current()
+      if (failure === 'source') value.organisations[0].authority_source = 'NATIVE_BINDING'
+      if (failure === 'context') value.organisations[0].native_organisation_id = accountId
+      if (failure === 'product') value.products[0].revision++
+      if (failure === 'package') value.fund_lifecycle!.products[0].offering_revision_id = routeId
+      if (failure === 'currency') value.funding!.routes[0].currency = 'ZAR_TEST'
+      if (failure === 'lifecycle actor') value.fund_lifecycle!.actor_id = record
+      if (failure === 'allowed actions') {
+        value.funding!.routes[0].allowed_actions = []; value.funding!.references[0].allowed_actions = []; value.funding!.reversals[0].allowed_actions = []
+      }
+      const html = show(value, failure === 'MAIN' ? 'MAINNET' : 'TESTNET')
+      expect(html).not.toContain('Approve this reviewed route</button>')
+      expect(html).not.toContain('Reconcile evidence and post balanced journal</button>')
+      expect(html).not.toContain('Approve opposite-line accounting reversal</button>')
+    })
+})
 
 describe('funding exact units and verification transport', () => {
   it('keeps token precision separate from two-decimal synthetic amounts', () => {

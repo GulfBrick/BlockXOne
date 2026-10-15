@@ -79,6 +79,57 @@ export function recordedRecoveryReceipt(result, sourceCommit) {
     operatingMode: 'MANUAL_RECORDED_RESULT_RECOVERY_NO_SCHEDULER' }
 }
 
+/** Fixed classifications only. This deliberately does not identify the failing layer. */
+export async function recoveryHttpDiagnostic(response) {
+  const diagnostic = { http_status: Number.isInteger(response?.status) && response.status >= 100 && response.status <= 599
+    ? response.status : null, classifier: 'unknown' }
+  const messages = {
+    unavailable: 'unavailable',
+    'The request outcome is unavailable. Refresh before retrying; do not create a second request.': 'portal-unavailable',
+    'Recorded document recovery could not be confirmed. Retry the same recorded result.': 'recovery-unconfirmed',
+    'Document processing authentication failed.': 'hmac-denied',
+    'Private document processing is not configured.': 'processing-unconfigured',
+    'Private document scanner is not configured. No document has been released.': 'scanner-unconfigured',
+    'Independent scanner result writer is not configured.': 'scanner-writer-unconfigured',
+    'Independent scanner result could not be recorded.': 'scanner-result-unconfirmed',
+  }
+  let timer
+  try {
+    const copy = response.clone()
+    const length = copy.headers.get('content-length')
+    if ((length !== null && (!/^[0-9]+$/.test(length) || Number(length) > 4096)) || !copy.body) {
+      if (copy.body) void copy.body.cancel().catch(() => {})
+      return diagnostic
+    }
+    const reader = copy.body.getReader()
+    const body = await Promise.race([
+      (async () => {
+        const chunks = []; let size = 0
+        try {
+          for (;;) {
+            const chunk = await reader.read()
+            if (chunk.done) break
+            size += chunk.value.byteLength
+            if (size > 4096) { void reader.cancel().catch(() => {}); return null }
+            chunks.push(chunk.value)
+          }
+          return new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks))
+        } catch { return null }
+        finally { reader.releaseLock() }
+      })(),
+      new Promise(resolve => { timer = setTimeout(() => { void reader.cancel().catch(() => {}); resolve(null) }, 1000) }),
+    ])
+    if (body === null) return diagnostic
+    const value = JSON.parse(body)
+    if (!value || typeof value !== 'object' || Array.isArray(value) || typeof value.error !== 'string'
+      || !Object.keys(value).every(key => key === 'error' || key === 'code')
+      || (Object.hasOwn(value, 'code') && typeof value.code !== 'string')
+      || !Object.hasOwn(messages, value.error)) return diagnostic
+    return { ...diagnostic, classifier: messages[value.error] }
+  } catch { return diagnostic }
+  finally { clearTimeout(timer) }
+}
+
 /** Allowlist output: no document identifiers, hashes, bytes, paths or recovery body. */
 export function operatingReceipt(result, sourceCommit, databaseSha256, scope) {
   const label = operatingScopeLabel(scope)
@@ -104,7 +155,15 @@ export async function runOfferingOperatingJob() {
   if (operation === 'RECOVER') {
     const binding = recordedRecoveryBinding(process.env.BX1_SCANNER_RECOVERY_BINDING)
     const config = runnerRecoveryConfig()
-    try { return recordedRecoveryReceipt(await recoverRecordedResult(binding, config), sourceCommit) }
+    const httpDiagnostics = []
+    try {
+      const result = await recoverRecordedResult(binding, config, { fetchImpl: async (input, init) => {
+        const response = await fetch(input, init)
+        if (httpDiagnostics.length < 3) httpDiagnostics.push(await recoveryHttpDiagnostic(response))
+        return response
+      } })
+      return { ...recordedRecoveryReceipt(result, sourceCommit), httpDiagnostics }
+    }
     finally { config.signingKey.fill(0) }
   }
   const run = operatingProducer(scope)

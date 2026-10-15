@@ -727,6 +727,7 @@ describe('operational landings and one subscription hand-off', () => {
   }
   it('keeps the saved STANDARD TEST manager fund in the existing product workspace, not a passive lifecycle fallback', () => {
     const value = roleplayManagerSnapshot(), context = operating('OfferingManager')
+    value.base_records_available = false
     expect(productManagementOrganisations(value, context, 'TESTNET')).toEqual(value.organisations)
     expect(productManagementOrganisations(value)).toEqual([])
     expect(productManagementOrganisations(value, context)).toEqual([])

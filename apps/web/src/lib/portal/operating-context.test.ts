@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { BX1_ROLES } from '../supabase/contracts'
 import type { PortalInvestingRepresentativeMandate, PortalOrganisationMandate, PortalProduct, PortalProductServiceAppointment, PortalSnapshot } from './contracts'
-import { APPLICANT_CONTEXT, appointedIssuerProducts, hasFundOperatingProducts, portalContextKey, portalContextMatches, portalOperatingContextSchema, portalScopeHref, portalViewAllowed, type PortalOperatingContext } from './operating-context'
+import { APPLICANT_CONTEXT, appointedIssuerProducts, hasFundOperatingProducts, portalContextKey, portalContextMatches, portalOperatingContextSchema, portalScopeHref, portalViewAllowed, standardTestIssuerProductAvailable, testOfferingReviewAvailable, type PortalOperatingContext } from './operating-context'
 import type { OfferingAccess } from './offering-access'
 
 const organisation = '33333333-3333-4333-8333-333333333333'
@@ -123,6 +123,79 @@ function appointment(change: Partial<PortalProductServiceAppointment> = {}): Por
     approval_receipt_id: 'receipt', applied_at: null, applied_by_user_id: null, revoked_at: null, revoke_reason: null,
     effective: false, next_owner: 'SUPER_ADMIN', can_review: false, can_apply: true, can_revoke: false, ...change }
 }
+
+describe('current STANDARD TEST product handoffs (presentation only)', () => {
+  function current(role: 'IssuerFundManager' | 'ComplianceOfficer' | 'SuperAdmin') {
+    const value = packageSnapshot(role)
+    value.offering_access!.session_mode = 'STANDARD'
+    value.products = [{ ...packageProduct, allowed_actions: [role === 'IssuerFundManager' ? 'review_offering_issuer' : 'review_product'],
+      offering_package: { id: otherOrganisation, package_number: 1, origin: 'SUBMITTED', terms_hash: packageProduct.terms_hash,
+        document_hashes: { memorandum: 'b'.repeat(64), risks: 'c'.repeat(64), subscription_terms: 'd'.repeat(64) },
+        submitted_at: '2026-10-01T00:00:00Z', issuer_status: 'PENDING', compliance_status: 'PENDING',
+        technical_readiness_status: 'NOT_VERIFIED', can_review_issuer: true, can_review_compliance: true } }]
+    value.product_appointments = [appointment({ product_id: caseId, product_organisation_id: packageOrganisation,
+      appointee_user_id: packageActor, requested_by_user_id: packageActor, reviewed_by_user_id: packageActor,
+      approval_receipt_id: organisation, role: role === 'SuperAdmin' ? 'IssuerFundManager' : role,
+      status: role === 'SuperAdmin' ? 'APPROVED' : 'APPLIED', can_apply: role === 'SuperAdmin',
+      effective: role !== 'SuperAdmin', next_owner: role === 'SuperAdmin' ? 'SUPER_ADMIN' : 'NONE' })]
+    return value
+  }
+  it.each(['IssuerFundManager', 'ComplianceOfficer'] as const)('presents the server-permitted same-operator %s review only in TEST', role => {
+    const value = current(role), context = value.offering_access!.operating_context
+    const action = role === 'IssuerFundManager' ? 'review_offering_issuer' : 'review_product'
+    expect(testOfferingReviewAvailable(value, context, 'TESTNET', value.products[0], action)).toBe(true)
+    expect(testOfferingReviewAvailable(value, context, 'MAINNET', value.products[0], action)).toBe(false)
+    expect(testOfferingReviewAvailable(value, context, undefined, value.products[0], action)).toBe(false)
+  })
+  it.each(['marker', 'actor', 'context', 'flag', 'action', 'appointment', 'expiry', 'terms', 'package', 'session'])(
+    'keeps same-operator review closed when %s changes', failure => {
+      const value = current('IssuerFundManager'), context = value.offering_access!.operating_context
+      if (failure === 'marker') delete value.offering_access
+      if (failure === 'actor') value.offering_access!.actor_id = otherOrganisation
+      if (failure === 'context') value.operating_context = { ...context, organisationId: otherOrganisation }
+      if (failure === 'flag') value.products[0].offering_package!.can_review_issuer = false
+      if (failure === 'action') value.products[0].allowed_actions = []
+      if (failure === 'appointment') value.product_appointments![0].effective = false
+      if (failure === 'expiry') value.product_appointments![0].requested_until = '2020-01-01T00:00:00Z'
+      if (failure === 'terms') value.product_appointments![0].terms_hash_at_request = 'f'.repeat(64)
+      if (failure === 'package') value.products[0].offering_package!.origin = 'LEGACY_PRODUCT_SNAPSHOT'
+      if (failure === 'session') value.offering_access!.session_mode = 'TEST_PASSWORD'
+      expect(testOfferingReviewAvailable(value, context, 'TESTNET', value.products[0], 'review_offering_issuer')).toBe(false)
+    })
+  it('uses the actual applied issuer appointment for STANDARD list/detail, never create', () => {
+    const value = current('IssuerFundManager'), context = value.offering_access!.operating_context
+    value.organisations = []; value.base_records_available = false
+    expect(standardTestIssuerProductAvailable(value, context, 'TESTNET', value.products[0])).toBe(true)
+    expect(portalViewAllowed('/portal/products', context, value, undefined, 'TESTNET')).toBe(true)
+    expect(portalViewAllowed('/portal/products/detail', context, value, caseId, 'TESTNET')).toBe(true)
+    expect(portalViewAllowed('/portal/products/new', context, value, undefined, 'TESTNET')).toBe(false)
+    expect(portalViewAllowed('/portal/products/detail', context, value, otherOrganisation, 'TESTNET')).toBe(false)
+    expect(standardTestIssuerProductAvailable(value, context, 'MAINNET', value.products[0])).toBe(false)
+    value.product_appointments![0].effective = false
+    expect(portalViewAllowed('/portal/products/detail', context, value, caseId, 'TESTNET')).toBe(false)
+  })
+  it('opens only the exact approved product-appointment apply handoff for the recorded TEST operator', () => {
+    const value = current('SuperAdmin'), context = value.offering_access!.operating_context
+    expect(portalViewAllowed('/portal/compliance/detail', context, value, caseId, 'TESTNET')).toBe(true)
+    expect(portalViewAllowed('/portal/compliance/detail', context, value, caseId, 'MAINNET')).toBe(false)
+    expect(portalViewAllowed('/portal/compliance/detail', context, value, caseId)).toBe(false)
+    expect(portalViewAllowed('/portal/compliance', context, value, undefined, 'TESTNET')).toBe(false)
+    expect(portalViewAllowed('/portal/compliance/detail', context, value, otherOrganisation, 'TESTNET')).toBe(false)
+    value.product_appointments![0].can_apply = false
+    expect(portalViewAllowed('/portal/compliance/detail', context, value, caseId, 'TESTNET')).toBe(false)
+  })
+  it.each(['expiry', 'terms', 'reviewer', 'scope', 'receipt', 'action'])(
+    'denies a stale or incorrectly bound same-operator apply handoff: %s', failure => {
+      const value = current('SuperAdmin'), context = value.offering_access!.operating_context, item = value.product_appointments![0]
+      if (failure === 'expiry') item.requested_until = '2020-01-01T00:00:00Z'
+      if (failure === 'terms') item.terms_hash_at_request = 'f'.repeat(64)
+      if (failure === 'reviewer') item.reviewed_by_user_id = otherOrganisation
+      if (failure === 'scope') item.reviewer_scope_organisation_id = otherOrganisation
+      if (failure === 'receipt') item.approval_receipt_id = null
+      if (failure === 'action') value.offering_access!.allowed_commands = []
+      expect(portalViewAllowed('/portal/compliance/detail', context, value, caseId, 'TESTNET')).toBe(false)
+    })
+})
 
 describe('normal sandbox package route boundaries', () => {
   it('keeps manager create/list/detail bound to the active native organisation', () => {

@@ -558,6 +558,7 @@ describe('existing product workspace next-step navigation', () => {
     item.terms = prepareCommonEnvelopeUpgrade(item.terms as FundTermsV2, productOrganisation, issuerOrganisation, receiptId)
     const value = snapshot('OfferingManager', [item])
     delete value.stage2_access
+    value.base_records_available = false
     value.offering_access!.session_mode = 'STANDARD'
     value.offering_access!.allowed_commands = ['request_product_service_appointment']
     value.organisations[0].authority_source = 'TEST_ROLE_PLAY'
@@ -575,6 +576,23 @@ describe('existing product workspace next-step navigation', () => {
     expect(screen.queryByRole('button', { name: 'Submit immutable offering package' })).toBeNull()
     expect(screen.queryByRole('link', { name: 'Create a product' })).toBeNull()
     expect(fetchCommand).not.toHaveBeenCalled()
+  })
+
+  it('shows the same submitted package tabs to the genuinely appointed STANDARD issuer with limited base records', () => {
+    const item = product('FUND', { status: 'IN_REVIEW', offering_package: packageRecord({ can_review_issuer: true }), allowed_actions: ['review_offering_issuer'] })
+    const applied = appointment('IssuerFundManager', { appointee_user_id: manager, requested_by_user_id: manager,
+      reviewed_by_user_id: manager, reviewer_scope_organisation_id: issuerOrganisation,
+      status: 'APPLIED', effective: true, approval_receipt_id: receiptId, next_owner: 'NONE' })
+    const value = snapshot('IssuerFundManager', [item], [applied], manager)
+    delete value.stage2_access; value.offering_access!.session_mode = 'STANDARD'
+    value.base_records_available = false; value.organisations = []
+    mount(withFundProgress(value), '/portal/products/detail', productId)
+    expect(screen.getByRole('navigation', { name: 'Product workspace sections' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Record issuer decision' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Edit details' })).toBeNull()
+    expect(screen.queryByRole('link', { name: 'Create a product' })).toBeNull()
+    expect(fetchCommand).not.toHaveBeenCalled()
+    expect(fetchOfferingReads).not.toHaveBeenCalled()
   })
 
   it.each(['FUND', 'REAL_ESTATE'] as const)('focuses the %s details handoff without losing an unsaved edit or enabling submission', kind => {
@@ -757,6 +775,46 @@ describe('connected v3 issuer execution in existing dashboards', () => {
         manifest_hash: hash, signature_status: 'EVIDENCE_RETAINED', approval_allowed: true } })
     return { ...item, terms, status: 'IN_REVIEW', offering_package: pkg, allowed_actions: ['review_product', 'review_offering_issuer'] }
   }
+
+  it.each(['IssuerFundManager', 'ComplianceOfficer'] as const)('shows the genuine same-operator TEST %s form only with current backend review and appointment flags', role => {
+    const item = signatureProduct('FUND'), actualOperator = manager
+    const applied = appointment(role, { appointee_user_id: actualOperator, requested_by_user_id: actualOperator,
+      reviewed_by_user_id: actualOperator, reviewer_scope_organisation_id: context(role).organisationId,
+      status: 'APPLIED', effective: true, approval_receipt_id: receiptId, next_owner: 'NONE' })
+    const value = snapshot(role, [item], [applied], actualOperator)
+    delete value.stage2_access; value.offering_access!.session_mode = 'STANDARD'
+    const Review = role === 'IssuerFundManager' ? IssuerOfferingReview : ProductReview
+    const label = role === 'IssuerFundManager' ? 'Record issuer decision' : 'Record Compliance decision'
+    const renderReview = (environment: 'TESTNET' | 'MAINNET') => <PortalCommandProvider snapshot={value} operatingContext={value.operating_context} environment={environment}>
+      <Review product={item} snapshot={value} onSaved={vi.fn()} />
+    </PortalCommandProvider>
+    const page = render(renderReview('TESTNET'))
+    expect(screen.getByRole('button', { name: label })).toBeTruthy()
+    expect(screen.getByText(/Independent human approval is not proved/)).toBeTruthy()
+    page.rerender(renderReview('MAINNET'))
+    expect(screen.queryByRole('button', { name: label })).toBeNull()
+    page.rerender(renderReview('TESTNET'))
+    value.product_appointments![0].effective = false
+    page.rerender(renderReview('TESTNET'))
+    expect(screen.queryByRole('button', { name: label })).toBeNull()
+    expect(fetchCommand).not.toHaveBeenCalled()
+  })
+
+  it('keeps the current signature requirement while presenting an authorised same-operator TEST reviewer', () => {
+    const item = signatureProduct('FUND')
+    item.offering_package!.document_evidence = { ...item.offering_package!.document_evidence!, signature_status: 'NOT_ADMITTED', approval_allowed: false }
+    const value = snapshot('IssuerFundManager', [item], [appointment('IssuerFundManager', { appointee_user_id: manager,
+      requested_by_user_id: manager, reviewed_by_user_id: manager, reviewer_scope_organisation_id: issuerOrganisation,
+      status: 'APPLIED', effective: true, approval_receipt_id: receiptId, next_owner: 'NONE' })], manager)
+    delete value.stage2_access; value.offering_access!.session_mode = 'STANDARD'
+    render(<PortalCommandProvider snapshot={value} operatingContext={value.operating_context} environment="TESTNET">
+      <IssuerOfferingReview product={item} snapshot={value} onSaved={vi.fn()} />
+    </PortalCommandProvider>)
+    expect(screen.getByText('Current signature evidence required')).toBeTruthy()
+    expect((screen.getByLabelText('Issuer decision') as HTMLSelectElement).value).toBe('CHANGES_REQUIRED')
+    expect((screen.getByRole('option', { name: 'Approve this exact package' }) as HTMLOptionElement).disabled).toBe(true)
+    expect(fetchCommand).not.toHaveBeenCalled()
+  })
 
   it.each(['FUND', 'REAL_ESTATE'] as const)('mounts actual %s signature reads in manager, appointed issuer and Compliance screens', async kind => {
     for (const role of ['OfferingManager', 'IssuerFundManager', 'ComplianceOfficer'] as const) {

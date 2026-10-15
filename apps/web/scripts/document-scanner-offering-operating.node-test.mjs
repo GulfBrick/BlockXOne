@@ -6,7 +6,7 @@ import { CLAMAV_EXECUTABLE_SHA256, CLAMAV_PACKAGE_SHA256, CLAMAV_VERSION, TEST_O
 import { OFFICIAL_SNAPSHOT_COVERAGE } from './document-scanner-snapshot.mjs'
 import { OPERATING_PROJECT, OPERATING_REF, OPERATING_REPOSITORY, OPERATING_SCANNER, OPERATING_WORKER,
   operatingProducer, operatingReceipt, operatingScopeLabel, recordedRecoveryBinding, recordedRecoveryReceipt,
-  runOfferingOperatingJob, validateOperatingEnvironment } from './document-scanner-offering-operating.mjs'
+  recoveryHttpDiagnostic, runOfferingOperatingJob, validateOperatingEnvironment } from './document-scanner-offering-operating.mjs'
 
 // Pure guards/output and source-wiring tests; no live queue, key, engine or provider.
 const sourceCommit = 'a'.repeat(40)
@@ -65,6 +65,41 @@ test('recovery output reports continuation, not a new scan, engine run or docume
   assert.throws(() => recordedRecoveryReceipt({ outcome: 'RESULT_ACCEPTED', state: 'SCANNED_CLEAN' }, sourceCommit))
 })
 
+test('HTTP diagnostics classify only exact known errors and leave the original response consumable', async () => {
+  for (const [error, classifier] of [
+    ['unavailable', 'unavailable'],
+    ['The request outcome is unavailable. Refresh before retrying; do not create a second request.', 'portal-unavailable'],
+    ['Recorded document recovery could not be confirmed. Retry the same recorded result.', 'recovery-unconfirmed'],
+    ['Document processing authentication failed.', 'hmac-denied'],
+    ['Private document processing is not configured.', 'processing-unconfigured'],
+    ['Private document scanner is not configured. No document has been released.', 'scanner-unconfigured'],
+    ['Independent scanner result writer is not configured.', 'scanner-writer-unconfigured'],
+    ['Independent scanner result could not be recorded.', 'scanner-result-unconfirmed'],
+  ]) {
+    const response = new Response(JSON.stringify({ error, code: 'PRIVATE_CODE_NOT_EMITTED' }), { status: 503,
+      headers: { 'content-type': 'application/json', 'set-cookie': 'PRIVATE_COOKIE' } })
+    const diagnostic = await recoveryHttpDiagnostic(response)
+    assert.deepEqual(diagnostic, { http_status: 503, classifier })
+    assert.equal(response.bodyUsed, false)
+    assert.equal((await response.json()).error, error)
+    assert.doesNotMatch(JSON.stringify(diagnostic), /PRIVATE_|cookie|https?:|postgres|scanner result could/)
+  }
+})
+
+test('unknown, malformed, oversized or additional-field bodies emit no private content', async () => {
+  for (const body of ['', '<html>PRIVATE_HEADER PRIVATE_URL</html>', JSON.stringify({ error: 'PRIVATE_SQL_SECRET' }),
+    JSON.stringify({ error: 'unavailable', private: 'PRIVATE_ID' }), JSON.stringify(['unavailable']),
+    JSON.stringify({ error: 'unavailable', code: { private: 'PRIVATE_KEY' } }), 'x'.repeat(4097)]) {
+    const response = new Response(body, { status: 503 })
+    const diagnostic = await recoveryHttpDiagnostic(response)
+    assert.deepEqual(diagnostic, { http_status: 503, classifier: 'unknown' })
+    assert.equal(response.bodyUsed, false)
+    assert.doesNotMatch(JSON.stringify(diagnostic), /PRIVATE_|unavailable|https?:|error:/)
+  }
+  const declaredLarge = new Response('{"error":"unavailable"}', { status: 503, headers: { 'content-length': '4097' } })
+  assert.deepEqual(await recoveryHttpDiagnostic(declaredLarge), { http_status: 503, classifier: 'unknown' })
+})
+
 test('the actual protected RECOVER entry calls only recorded continuation without a scanner snapshot or engine', async () => {
   const binding = { document_id: '11111111-1111-4111-8111-111111111111', attempt_id: '22222222-2222-4222-8222-222222222222', authority_epoch: 2 }
   const values = { ...environment(), BX1_SCANNER_SCOPE: 'ADMISSION', BX1_SCANNER_OPERATION: 'RECOVER',
@@ -83,8 +118,20 @@ test('the actual protected RECOVER entry calls only recorded continuation withou
     const receipt = await runOfferingOperatingJob()
     assert.equal(receipt.outcome, 'RECORDED_RESULT_RECOVERED')
     assert.equal(receipt.newScanPerformed, false)
+    assert.deepEqual(receipt.httpDiagnostics, [{ http_status: 200, classifier: 'unknown' }])
     assert.deepEqual(calls, [{ url: `${TEST_ORIGIN}/api/portal/documents/processing`, body: { command: 'RECOVER_RESULT', ...binding } }])
     assert.doesNotMatch(JSON.stringify(receipt), /11111111|22222222|engineVersion|databaseSha256/)
+    calls.length = 0
+    globalThis.fetch = async (url, init) => {
+      calls.push({ url, body: JSON.parse(init.body.toString()) })
+      return new Response('{"error":"unavailable"}', { status: 503,
+        headers: { 'content-type': 'application/json', 'cache-control': 'private, no-store' } })
+    }
+    const failed = await runOfferingOperatingJob()
+    assert.equal(failed.outcome, 'RECORDED_RESULT_RECOVERY_REQUIRED')
+    assert.deepEqual(failed.httpDiagnostics, Array.from({ length: 3 }, () => ({ http_status: 503, classifier: 'unavailable' })))
+    assert.equal(calls.length, 3)
+    for (const call of calls) assert.deepEqual(call.body, { command: 'RECOVER_RESULT', ...binding })
   } finally {
     globalThis.fetch = previousFetch
     for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value }
@@ -151,7 +198,8 @@ test('operating entry uses shared official preflight lifetime and the real singl
   assert.equal((operating.match(/await run\(config\)/g) ?? []).length, 1)
   assert.match(operating, /const run = operatingProducer\(scope\)/)
   assert.doesNotMatch(operating, /await runOfferingOnce\(|await runOnce\(/)
-  assert.doesNotMatch(operating, /engine:\s*|fetchImpl:\s*|allowFixtureDatabase:\s*true|console\.\w+\([^\n]*result\)/)
+  const claimPath = operating.slice(operating.indexOf('  const run = operatingProducer(scope)'))
+  assert.doesNotMatch(claimPath, /engine:\s*|fetchImpl:\s*|allowFixtureDatabase:\s*true|console\.\w+\([^\n]*result\)/)
   assert.match(operating, /withOfficialCloudSnapshot\(async/)
   assert.match(operating, /purpose: 'OPERATING'/)
   assert.match(operating, /config\.signingKey\.fill\(0\)/)

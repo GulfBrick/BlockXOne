@@ -6,9 +6,9 @@ import type { PortalCommand, PortalProduct, PortalSnapshot, PortalSubscription }
 import { formatFundingUnits, type FundingRoute, type FundingObligation, type FundingReference, type FundingJournal, type FundingReversal } from '@/lib/portal/funding-contracts'
 import { buildFundingClaimMessage, type FundingClaim } from '@/lib/portal/funding-claim'
 import { fundPaymentReceiptResponseSchema, type FundPaymentReceiptPrefill } from '@/lib/portal/fund-payment-receipt-contracts'
-import { portalContextKey, portalContextMatches, portalScopeHref, type PortalOperatingContext } from '@/lib/portal/operating-context'
+import { portalContextKey, portalContextMatches, portalScopeHref, testFundFinanceActionAvailable, type PortalOperatingContext } from '@/lib/portal/operating-context'
 import { discoverMetaMask, type MetaMaskProvider } from '@/components/workspace/metamask-wallet-link'
-import { CommandFeedback, usePortalActorId, usePortalCommand, usePortalOperatingContext } from './portal-client'
+import { CommandFeedback, usePortalActorId, usePortalCommand, usePortalEnvironment, usePortalOperatingContext, usePortalSnapshot } from './portal-client'
 import { DetailList, EmptyState, Field, Notice, Panel, StatusBadge, money } from './portal-primitives'
 import styles from './portal.module.css'
 
@@ -160,6 +160,7 @@ function FundingRouteForm({ products, onSaved }: Saved & { products: PortalProdu
 
 function FundingRouteCard({ route, onSaved }: Saved & { route: FundingRoute }) {
   const context = usePortalOperatingContext(), actor = usePortalActorId()
+  const sameOperatorReview = testFundFinanceActionAvailable(usePortalSnapshot(), context, usePortalEnvironment(), 'ROUTE', route.id, 'approve_funding_route')
   const role = context.mode === 'ROLE' ? context.role : undefined
   return <Panel title="Pinned funding route" description={`Route ${route.id} · revision ${route.revision}`} action={<StatusBadge status={route.status} />}>
     {!fundingRouteUsable(route) ? <Notice title="Do not send funds">This route is not currently approved, verified and unexpired. Historical receiving details below are evidence, not an instruction to pay.</Notice> : null}
@@ -167,7 +168,8 @@ function FundingRouteCard({ route, onSaved }: Saved & { route: FundingRoute }) {
     <details className={styles.sectionGap}><summary className={styles.textLink}>Authority and reviewed-code evidence</summary><p className={styles.copy}>{route.authority_reference}</p><p className={styles.copy}>{route.code_review_reference}</p><p className={styles.muted}>Proposer: {route.proposed_by} · Approver: {route.approved_by ?? 'Not approved'}</p></details>
     <div className={`${styles.stack} ${styles.sectionGap}`}>
       {permitted(route, 'verify_funding_route') ? <VerifyFundingButton kind="ROUTE" id={route.id} onSaved={onSaved} /> : null}
-      {role === 'FinancialController' && route.proposed_by !== actor && permitted(route, 'approve_funding_route') ? <FundingAction label="Approve this reviewed route" commandName="approve_funding_route" payload={{ route_id: route.id, expected_revision: route.revision }} onSaved={onSaved} /> : null}
+      {role === 'FinancialController' && (route.proposed_by !== actor || sameOperatorReview) && permitted(route, 'approve_funding_route') ? <FundingAction label="Approve this reviewed route" commandName="approve_funding_route" payload={{ route_id: route.id, expected_revision: route.revision }} onSaved={onSaved} /> : null}
+      {route.proposed_by === actor && sameOperatorReview ? <p className={styles.muted}>TEST role-play: this operator proposed the route in another capacity. Independent human approval is not proved.</p> : null}
       {['TreasuryOperator', 'FinancialController'].includes(role ?? '') && permitted(route, 'revoke_funding_route') ? <ReasonedFundingAction label="Revoke route with reason" commandName="revoke_funding_route" payload={{ route_id: route.id, expected_revision: route.revision }} onSaved={onSaved} /> : null}
     </div>
   </Panel>
@@ -279,6 +281,7 @@ function FundingClaimForm({ obligation, route, onSaved, fundSubscriptionId }: Sa
 
 function FundingReferenceCard({ reference, obligation, onSaved }: Saved & { reference: FundingReference; obligation: FundingObligation }) {
   const context = usePortalOperatingContext(), actor = usePortalActorId()
+  const sameOperatorReview = testFundFinanceActionAvailable(usePortalSnapshot(), context, usePortalEnvironment(), 'REFERENCE', reference.id, 'reconcile_funding')
   const role = context.mode === 'ROLE' ? context.role : undefined
   const payload = { reference_id: reference.id, expected_revision: reference.revision, expected_obligation_revision: obligation.revision }
   return <Panel title="Transfer evidence" description={`Reference ${reference.id} · revision ${reference.revision}`} action={<StatusBadge status={reference.status} />}>
@@ -288,7 +291,8 @@ function FundingReferenceCard({ reference, obligation, onSaved }: Saved & { refe
     <div className={`${styles.stack} ${styles.sectionGap}`}>
       {permitted(reference, 'verify_funding_reference') ? <VerifyFundingButton kind="REFERENCE" id={reference.id} onSaved={onSaved} /> : null}
       {role === 'TreasuryOperator' && permitted(reference, 'propose_funding_acceptance') ? <FundingAction label="Propose acceptance of verified evidence" commandName="propose_funding_acceptance" payload={payload} onSaved={onSaved} /> : null}
-      {role === 'FinancialController' && reference.acceptance_proposed_by !== actor && permitted(reference, 'reconcile_funding') ? <FundingAction label="Reconcile evidence and post balanced journal" commandName="reconcile_funding" payload={{ ...payload, evidence_set_hash: obligation.evidence_set_hash }} onSaved={onSaved} /> : null}
+      {role === 'FinancialController' && (reference.acceptance_proposed_by !== actor || sameOperatorReview) && permitted(reference, 'reconcile_funding') ? <FundingAction label="Reconcile evidence and post balanced journal" commandName="reconcile_funding" payload={{ ...payload, evidence_set_hash: obligation.evidence_set_hash }} onSaved={onSaved} /> : null}
+      {reference.acceptance_proposed_by === actor && sameOperatorReview ? <p className={styles.muted}>TEST role-play: this operator proposed acceptance in another capacity. Actual verified receipt and balanced posting are still required.</p> : null}
       {role === 'TreasuryOperator' && permitted(reference, 'propose_funding_exception') ? <ReasonedFundingAction label="Propose evidence exception" commandName="propose_funding_exception" payload={payload} onSaved={onSaved} exception /> : null}
       {role === 'FinancialController' && permitted(reference, 'resolve_funding_exception') ? <FundingAction label="Independently resolve proposed exception" commandName="resolve_funding_exception" payload={payload} onSaved={onSaved} /> : null}
     </div>
@@ -297,13 +301,14 @@ function FundingReferenceCard({ reference, obligation, onSaved }: Saved & { refe
 
 function FundingJournalCard({ journal, obligation, reversals, onSaved }: Saved & { journal: FundingJournal; obligation: FundingObligation; reversals: FundingReversal[] }) {
   const context = usePortalOperatingContext(), actor = usePortalActorId()
+  const snapshot = usePortalSnapshot(), environment = usePortalEnvironment()
   const role = context.mode === 'ROLE' ? context.role : undefined
   return <Panel title={journal.kind === 'REVERSAL' ? 'Posted accounting reversal' : 'Posted test funding journal'} description={`Journal ${journal.id} · ${timestamp(journal.created_at)}`}>
     <p className={styles.muted}>Exact token units for {journal.token_address}. Accounting is not token issuance, bank cash or legal ownership.</p>
     <div className={styles.tableWrap}><table className={styles.table}><thead><tr><th scope="col">Account</th><th scope="col">Side</th><th scope="col">Token amount</th></tr></thead><tbody>{journal.lines.map((line, index) => <tr key={index}><td>{line.account === 'TEST_SETTLEMENT_TOKEN_ASSET' ? 'Test settlement-token asset' : 'Test customer-funding liability'}</td><td>{line.side}</td><td>{fundingTokenAmount(line.amount_base_units, journal.token_decimals)}</td></tr>)}</tbody></table></div>
     {journal.original_journal_id ? <p className={styles.muted}>Original journal: {journal.original_journal_id}. This reversal does not send an on-chain refund.</p> : null}
     {role === 'TreasuryOperator' && permitted(journal, 'propose_funding_reversal') ? <ReasonedFundingAction label="Propose accounting reversal" commandName="propose_funding_reversal" payload={{ journal_id: journal.id, expected_obligation_revision: obligation.revision }} onSaved={onSaved} /> : null}
-    {reversals.map(reversal => <div key={reversal.id} className={styles.sectionGap}><StatusBadge status={reversal.status} /><p className={styles.copy}>{reversal.reason}</p><p className={styles.muted}>Reversal {reversal.id} · proposer {reversal.proposed_by}. Accounting reversal is not a refund.</p>{role === 'FinancialController' && reversal.proposed_by !== actor && permitted(reversal, 'approve_funding_reversal') ? <FundingAction label="Approve opposite-line accounting reversal" commandName="approve_funding_reversal" payload={{ reversal_id: reversal.id, expected_obligation_revision: obligation.revision }} onSaved={onSaved} /> : null}</div>)}
+    {reversals.map(reversal => <div key={reversal.id} className={styles.sectionGap}><StatusBadge status={reversal.status} /><p className={styles.copy}>{reversal.reason}</p><p className={styles.muted}>Reversal {reversal.id} · proposer {reversal.proposed_by}. Accounting reversal is not a refund.</p>{role === 'FinancialController' && (reversal.proposed_by !== actor || testFundFinanceActionAvailable(snapshot, context, environment, 'REVERSAL', reversal.id, 'approve_funding_reversal')) && permitted(reversal, 'approve_funding_reversal') ? <FundingAction label="Approve opposite-line accounting reversal" commandName="approve_funding_reversal" payload={{ reversal_id: reversal.id, expected_obligation_revision: obligation.revision }} onSaved={onSaved} /> : null}</div>)}
   </Panel>
 }
 

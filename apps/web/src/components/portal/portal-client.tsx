@@ -28,6 +28,8 @@ export function PortalCommandProvider({ snapshot, children, operatingContext = A
 }
 export function usePortalOperatingContext() { return useContext(PortalCommandContext).operatingContext }
 export function usePortalActorId() { return useContext(PortalCommandContext).actorId }
+export function usePortalEnvironment() { return useContext(PortalCommandContext).environment }
+export function usePortalSnapshot() { return useContext(PortalCommandContext).snapshot }
 function commandAllowed(context: ContextType<typeof PortalCommandContext>, command: string) {
   if (context.invalidAdmission) return false
   if (isFundLifecycleCommand(command)) {
