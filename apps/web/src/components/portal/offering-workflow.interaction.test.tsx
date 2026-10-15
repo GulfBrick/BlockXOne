@@ -2,7 +2,7 @@
 
 import React from 'react'
 import { webcrypto } from 'node:crypto'
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { portalCommandSchema, type FundTermsV2, type RealEstateTermsV2, type PortalCommand, type PortalOfferingPackage, type PortalProduct, type PortalProductServiceAppointment, type PortalSnapshot, type ProductTerms } from '@/lib/portal/contracts'
 import { prepareCommonEnvelopeUpgrade } from '@/lib/portal/product-common-envelope'
@@ -383,6 +383,87 @@ describe('normal TEST mounted offering package handoffs', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Retry the original saved request' }))
     await saved(); expect(lastRequest.key).toBe(original.key); expect(lastRequest.payload).toEqual(original.payload)
     expect(sessionStorage.length).toBe(0)
+  })
+})
+
+describe('saved appointment case handoff', () => {
+  const requested = () => appointment('IssuerFundManager', { can_review: true, appointee_user_id: manager, requested_by_user_id: manager })
+  function reviewer(cases = [requested()]) {
+    const value = snapshot('ComplianceOfficer', [product()], cases, manager)
+    value.offering_access!.session_mode = 'STANDARD'; value.stage2_access!.session_mode = 'STANDARD'
+    return value
+  }
+  function recordReview() {
+    checkLabels([/proposed person and role/, /referenced appointment evidence/, /product, organisation and expiry/])
+    fireEvent.change(screen.getByLabelText('Decision'), { target: { value: 'APPROVED' } })
+    fireEvent.change(screen.getByLabelText(/^Reasoned decision/), { target: { value: 'Synthetic current appointment reviewed within this exact TEST capacity.' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Record review' }))
+  }
+  it('shows a confirmed saved handoff when the current reader no longer returns the reviewed case, without keeping stale case controls', async () => {
+    nextResult = reviewer([])
+    mount(reviewer(), '/portal/compliance/detail', issuerAppointmentId)
+    recordReview(); await saved()
+    expect(screen.getByText('Appointment change saved')).toBeTruthy()
+    expect(screen.queryByText('Record unavailable')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Record review' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Apply product appointment' })).toBeNull()
+    expect(screen.queryByText('Appointment evidence reference')).toBeNull()
+    expect(screen.getByRole('link', { name: 'Return to Compliance work queue' }).getAttribute('href')).toBe(`/portal/compliance?organisation=${reviewOrganisation}&role=ComplianceOfficer`)
+    expect(screen.getByText(/Approved appointments require Super Admin application/)).toBeTruthy()
+  })
+  it('keeps an initially missing case unavailable rather than inventing a saved handoff', () => {
+    mount(reviewer([]), '/portal/compliance/detail', issuerAppointmentId)
+    expect(screen.getByText('Record unavailable')).toBeTruthy()
+    expect(screen.queryByText('Appointment change saved')).toBeNull()
+  })
+  it('continues rendering a current retained case after a confirmed save instead of replacing it with a historical notice', async () => {
+    nextResult = reviewer([appointment('IssuerFundManager', { ...requested(), status: 'APPROVED', revision: 2, can_review: false,
+      reviewed_by_user_id: manager, reviewed_at: past(), approval_receipt_id: receiptId, next_owner: 'SUPER_ADMIN' })])
+    mount(reviewer(), '/portal/compliance/detail', issuerAppointmentId)
+    recordReview(); await saved()
+    expect(screen.getByText('Appointment evidence reference')).toBeTruthy()
+    expect(screen.queryByText('Appointment change saved')).toBeNull()
+  })
+  it('does not show a saved handoff for an interrupted request', async () => {
+    failTransport = true
+    mount(reviewer(), '/portal/compliance/detail', issuerAppointmentId)
+    recordReview()
+    await screen.findByRole('button', { name: 'Retry the original saved request' })
+    expect(screen.queryByText('Appointment change saved')).toBeNull()
+    expect(sessionStorage.length).toBe(1)
+  })
+  it('does not show a saved handoff for a foreign actor response', async () => {
+    const foreign = reviewer([]); foreign.actor.id = issuer
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ snapshot: foreign }), { headers: { 'content-type': 'application/json' } })))
+    mount(reviewer(), '/portal/compliance/detail', issuerAppointmentId)
+    recordReview()
+    await screen.findByRole('button', { name: 'Retry the original saved request' })
+    expect(screen.queryByText('Appointment change saved')).toBeNull()
+    expect(sessionStorage.length).toBe(1)
+  })
+  it.each(['actor', 'environment', 'context', 'case'] as const)('does not borrow a late saved handoff after a %s change', async change => {
+    let finish: ((response: Response) => void) | undefined
+    let sent: { key: string; command: string } | undefined
+    vi.stubGlobal('fetch', vi.fn((_url: string, init?: RequestInit) => {
+      sent = JSON.parse(String(init?.body)); return new Promise<Response>(resolve => { finish = resolve })
+    }))
+    const value = reviewer(), page = mount(value, '/portal/compliance/detail', issuerAppointmentId)
+    recordReview(); await waitFor(() => expect(sent).toBeDefined())
+    const next = reviewer([])
+    if (change === 'actor') {
+      next.actor.id = productReviewer; next.offering_access!.actor_id = productReviewer; next.stage2_access!.actor_id = productReviewer
+    }
+    if (change === 'context') {
+      const changed = { mode: 'ROLE' as const, organisationId: managerOrganisation, role: 'ComplianceOfficer' as const }
+      next.operating_context = changed; next.offering_access!.operating_context = changed; next.stage2_access!.operating_context = changed
+    }
+    const nextRelease = change === 'environment' ? { ...release, environment: 'MAINNET' as const } : release
+    page.rerender(<PortalScreen data={{ user: { id: next.actor.id, email: next.actor.email }, snapshot: next }}
+      view="/portal/compliance/detail" id={change === 'case' ? complianceAppointmentId : issuerAppointmentId}
+      operatingContext={next.operating_context} release={nextRelease} />)
+    await act(async () => finish!(new Response(JSON.stringify({ snapshot: { ...reviewer([]), requests: [sent!] } }), { headers: { 'content-type': 'application/json' } })))
+    await waitFor(() => expect(screen.queryByText('Appointment change saved')).toBeNull())
+    expect(sessionStorage.length).toBe(1)
   })
 })
 

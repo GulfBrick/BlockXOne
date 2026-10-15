@@ -3,6 +3,7 @@ import { BX1_ROLES } from '../supabase/contracts'
 import type { PortalInvestingRepresentativeMandate, PortalOrganisationMandate, PortalProduct, PortalProductServiceAppointment, PortalSnapshot } from './contracts'
 import { APPLICANT_CONTEXT, appointedIssuerProducts, hasFundOperatingProducts, portalContextKey, portalContextMatches, portalOperatingContextSchema, portalScopeHref, portalViewAllowed, standardTestIssuerProductAvailable, testOfferingReviewAvailable, type PortalOperatingContext } from './operating-context'
 import type { OfferingAccess } from './offering-access'
+import { fundStageKeys, validatedFundLifecycle } from './fund-lifecycle-contracts'
 
 const organisation = '33333333-3333-4333-8333-333333333333'
 const otherOrganisation = '44444444-4444-4444-8444-444444444444'
@@ -193,6 +194,81 @@ describe('current STANDARD TEST product handoffs (presentation only)', () => {
       if (failure === 'scope') item.reviewer_scope_organisation_id = otherOrganisation
       if (failure === 'receipt') item.approval_receipt_id = null
       if (failure === 'action') value.offering_access!.allowed_commands = []
+      expect(portalViewAllowed('/portal/compliance/detail', context, value, caseId, 'TESTNET')).toBe(false)
+    })
+  function adminWithoutCustomerRecords() {
+    const value = current('SuperAdmin'), context = value.offering_access!.operating_context
+    const existing = value.products[0]
+    value.products = []; value.organisations = []
+    value.fund_lifecycle = { schema_version: 1, projection_revision: 1, actor_id: value.actor.id, environment: 'TESTNET',
+      operating_context: context, observed_at: '2026-10-15T16:00:00Z', availability: 'AVAILABLE', reason_code: null,
+      products: [{ product_id: existing.id, organisation_id: existing.organisation_id, native_organisation_id: context.organisationId,
+        product_revision: existing.revision, offering_revision_id: existing.offering_package!.id, class_id: null,
+        product_name: existing.terms.name, terms_hash: existing.terms_hash, configuration_hash: null, availability: 'DEPENDENCY_NOT_ADMITTED',
+        stages: fundStageKeys.map(key => ({ key, label: key, state: 'NOT_STARTED' as const, description: 'Synthetic route metadata only.', reason_code: null,
+          owner_role: 'SuperAdmin' as const, evidence_ids: [] })), next_action: null, operations: [], orders: [], holdings: [], actions: [] }] }
+    return value
+  }
+  it('opens the exact server-permitted TEST apply detail without manufacturing omitted customer product records', () => {
+    const value = adminWithoutCustomerRecords(), context = value.offering_access!.operating_context
+    expect(validatedFundLifecycle(value.fund_lifecycle, value.actor.id, context, 'TESTNET')).not.toBeNull()
+    expect(portalViewAllowed('/portal/compliance/detail', context, value, caseId, 'TESTNET')).toBe(true)
+    expect(value.products).toEqual([]); expect(value.organisations).toEqual([])
+    expect(portalViewAllowed('/portal/compliance/detail', context, value, caseId, 'MAINNET')).toBe(false)
+    expect(portalViewAllowed('/portal/compliance/detail', context, value, caseId)).toBe(false)
+    expect(portalViewAllowed('/portal/compliance', context, value, undefined, 'TESTNET')).toBe(false)
+    expect(portalViewAllowed('/portal/compliance/detail', context, value, otherOrganisation, 'TESTNET')).toBe(false)
+    value.base_records_available = false
+    expect(portalViewAllowed('/portal/compliance/detail', context, value, caseId, 'TESTNET')).toBe(false)
+  })
+  it('retains the recorded own APPLIED result without customer product records or a second apply action', () => {
+    const value = adminWithoutCustomerRecords(), context = value.offering_access!.operating_context
+    Object.assign(value.product_appointments![0], { status: 'APPLIED', revision: 3, can_apply: false, effective: true,
+      next_owner: 'NONE', applied_at: '2020-01-01T00:00:00Z', applied_by_user_id: value.actor.id })
+    expect(portalViewAllowed('/portal/compliance/detail', context, value, caseId, 'TESTNET')).toBe(true)
+    expect(value.product_appointments![0].can_apply).toBe(false)
+    expect(value.products).toEqual([]); expect(value.organisations).toEqual([])
+    expect(portalViewAllowed('/portal/compliance/detail', context, value, caseId, 'MAINNET')).toBe(false)
+    expect(portalViewAllowed('/portal/compliance', context, value, undefined, 'TESTNET')).toBe(false)
+  })
+  it.each(['missing time', 'invalid time', 'future time', 'foreign actor', 'apply flag', 'missing receipt', 'invalid receipt'] as const)(
+    'denies a product-free APPLIED result with invalid recorded proof: %s', failure => {
+      const value = adminWithoutCustomerRecords(), context = value.offering_access!.operating_context, item = value.product_appointments![0]
+      Object.assign(item, { status: 'APPLIED', revision: 3, can_apply: false, effective: true, next_owner: 'NONE',
+        applied_at: '2020-01-01T00:00:00Z', applied_by_user_id: value.actor.id })
+      if (failure === 'missing time') item.applied_at = null
+      if (failure === 'invalid time') item.applied_at = 'not-a-date'
+      if (failure === 'future time') item.applied_at = future
+      if (failure === 'foreign actor') item.applied_by_user_id = otherOrganisation
+      if (failure === 'apply flag') item.can_apply = true
+      if (failure === 'missing receipt') item.approval_receipt_id = null
+      if (failure === 'invalid receipt') item.approval_receipt_id = 'not-a-receipt'
+      expect(portalViewAllowed('/portal/compliance/detail', context, value, caseId, 'TESTNET')).toBe(false)
+    })
+  it.each(['missing lifecycle', 'actor', 'context', 'environment', 'unavailable', 'product', 'duplicate', 'organisation', 'native organisation',
+    'offering', 'terms', 'revision', 'marker', 'password', 'action', 'apply flag', 'receipt', 'expiry', 'requester'] as const)(
+    'denies an incorrectly bound product-free TEST apply handoff: %s', failure => {
+      const value = adminWithoutCustomerRecords(), context = value.offering_access!.operating_context
+      const lifecycle = value.fund_lifecycle!, fund = lifecycle.products[0], item = value.product_appointments![0]
+      if (failure === 'missing lifecycle') delete value.fund_lifecycle
+      if (failure === 'actor') lifecycle.actor_id = otherOrganisation
+      if (failure === 'context') lifecycle.operating_context = { ...context, organisationId: otherOrganisation }
+      if (failure === 'environment') lifecycle.environment = 'MAINNET'
+      if (failure === 'unavailable') lifecycle.availability = 'UNAVAILABLE'
+      if (failure === 'product') fund.product_id = otherOrganisation
+      if (failure === 'duplicate') lifecycle.products.push({ ...fund })
+      if (failure === 'organisation') fund.organisation_id = otherOrganisation
+      if (failure === 'native organisation') fund.native_organisation_id = otherOrganisation
+      if (failure === 'offering') fund.offering_revision_id = null
+      if (failure === 'terms') fund.terms_hash = 'f'.repeat(64)
+      if (failure === 'revision') fund.product_revision = 0
+      if (failure === 'marker') delete value.offering_access
+      if (failure === 'password') value.offering_access!.session_mode = 'TEST_PASSWORD'
+      if (failure === 'action') value.offering_access!.allowed_commands = []
+      if (failure === 'apply flag') item.can_apply = false
+      if (failure === 'receipt') item.approval_receipt_id = null
+      if (failure === 'expiry') item.requested_until = '2020-01-01T00:00:00Z'
+      if (failure === 'requester') item.requested_by_user_id = otherOrganisation
       expect(portalViewAllowed('/portal/compliance/detail', context, value, caseId, 'TESTNET')).toBe(false)
     })
 })

@@ -82,12 +82,31 @@ export function standardTestIssuerProductAvailable(snapshot: PortalSnapshot, con
 function testProductAppointmentApplyAvailable(snapshot: PortalSnapshot, context: PortalOperatingContext,
   environment: PlatformEnvironment | undefined, appointment: PortalProductServiceAppointment): boolean {
   const product = standardTestOfferingProduct(snapshot, context, environment, appointment.product_id)
-  return Boolean(product && context.mode === 'ROLE' && context.role === 'SuperAdmin'
+  // The scoped Super Admin reader intentionally omits customer products and
+  // organisations. Reuse its already server-validated lifecycle metadata, never
+  // manufacture a Product or import the circular lifecycle/context validator.
+  const lifecycle = snapshot.fund_lifecycle
+  const matches = environment === 'TESTNET' && lifecycle?.schema_version === 1 && lifecycle.environment === environment
+    && lifecycle.actor_id === snapshot.actor.id && lifecycle.availability === 'AVAILABLE'
+    && portalContextMatches(lifecycle.operating_context, context) && Array.isArray(lifecycle.products)
+    ? lifecycle.products.filter(item => item.product_id === appointment.product_id) : []
+  const fund = matches.length === 1 ? matches[0] : undefined
+  const lifecycleHandoff = !snapshot.products.length && !snapshot.organisations.length && fund
+    && context.mode === 'ROLE' && fund.native_organisation_id === context.organisationId
+    && fund.organisation_id === appointment.product_organisation_id
+    && z.string().uuid().safeParse(fund.offering_revision_id).success
+    && /^[0-9a-f]{64}$/.test(fund.terms_hash) && fund.terms_hash === appointment.terms_hash_at_request
+    && Number.isInteger(fund.product_revision) && Number.isInteger(appointment.product_revision_at_request)
+    && appointment.product_revision_at_request > 0 && fund.product_revision >= appointment.product_revision_at_request
+  return Boolean(environment === 'TESTNET' && context.mode === 'ROLE' && context.role === 'SuperAdmin'
+    && portalContextMatches(snapshot.operating_context, context)
+    && validatedOfferingAccess(snapshot, context, environment)?.session_mode === 'STANDARD'
     && validatedOfferingAccess(snapshot, context, environment)?.allowed_commands.includes('apply_product_service_appointment')
-    && product.created_by === snapshot.actor.id && appointment.appointee_user_id === snapshot.actor.id
+    && (product && product.created_by === snapshot.actor.id && appointment.terms_hash_at_request === product.terms_hash || lifecycleHandoff)
+    && appointment.appointee_user_id === snapshot.actor.id
     && appointment.requested_by_user_id === snapshot.actor.id && appointment.reviewed_by_user_id === snapshot.actor.id
     && appointment.reviewer_scope_organisation_id === context.organisationId
-    && appointment.terms_hash_at_request === product.terms_hash && z.string().uuid().safeParse(appointment.approval_receipt_id).success
+    && z.string().uuid().safeParse(appointment.approval_receipt_id).success
     && (appointment.status === 'APPROVED' && appointment.can_apply === true
       || appointment.status === 'APPLIED' && appointment.can_apply === false && appointment.applied_by_user_id === snapshot.actor.id))
 }

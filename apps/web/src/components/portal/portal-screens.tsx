@@ -384,6 +384,11 @@ export function PortalScreen(props: PortalScreenProps) {
 function OperatingPortalScreen({ data, view, id, operatingContext, release, scope, scopes }: PortalScreenProps) {
   const [snapshot, setSnapshot] = useState(data.snapshot)
   const [refreshMessage, setRefreshMessage] = useState('')
+  const [appointmentHandoff, setAppointmentHandoff] = useState<{ id: string; actorId: string; environment: PlatformEnvironment; context: string } | null>(null)
+  const appointmentHandoffRegion = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    if (appointmentHandoff && !snapshot.product_appointments?.some(item => item.id === appointmentHandoff.id)) appointmentHandoffRegion.current?.focus()
+  }, [appointmentHandoff, snapshot.product_appointments])
   const [signerSetupOpen, setSignerSetupOpen] = useState(false), [signerSetupMounted, setSignerSetupMounted] = useState(false)
   const signerSetupRegion = useRef<HTMLDivElement | null>(null)
   useEffect(() => { if (signerSetupOpen) signerSetupRegion.current?.focus() }, [signerSetupOpen])
@@ -499,6 +504,16 @@ function OperatingPortalScreen({ data, view, id, operatingContext, release, scop
     return <div className={styles.stack}>{productStats()}{role === 'IssuerFundManager' ? <Panel title="Packages awaiting your issuer decision" description="Only server-authorised packages appear; preparing a product does not grant the right to approve it.">{issuerCases.length ? <ul>{issuerCases.map(product => <li key={product.id}><Link href={href('/portal/products/detail', product.id)} className={styles.textLink}>{product.terms.name} · package {product.offering_package?.package_number}</Link></li>)}</ul> : <p className={styles.muted}>No package is currently assigned to this issuer context for a decision. An issuer appointment is separate from a manager relationship.</p>}</Panel> : null}<ProductRegister products={managedProducts} canCreate={createOrganisations.length > 0} operatingContext={operatingContext} />{passwordWorkflow ? <Notice title="Package preparation and review">This connected workflow prepares and reviews the exact offering package. An approved package is still unopened; actual e-signature evidence and verified technical readiness remain separate requirements before payment or issuance.</Notice> : orderOrganisations.length ? <SubscriptionOrders subscriptions={incomingSubscriptions} products={managedProducts} incoming onSaved={setSnapshot} operatingContext={operatingContext} funding={snapshot.funding} /> : <Notice title="Order access unavailable">Your current mandate does not provide an incoming-order view. This is not an empty order book or a zero balance.</Notice>}</div>
   }
   function content() {
+    if (view === '/portal/compliance/detail' && id && appointmentHandoff?.id === id
+      && appointmentHandoff.actorId === data.user.id && snapshot.actor.id === data.user.id
+      && appointmentHandoff.environment === release?.environment && appointmentHandoff.context === portalContextKey(context)
+      && portalContextMatches(snapshot.operating_context, context) && !selectedProductAppointment) return <div ref={appointmentHandoffRegion} role="status" aria-live="polite" tabIndex={-1}><Notice title="Appointment change saved">
+      <p>Your change was saved. This case is no longer shown in your current role. Return to your work queue for your next task.</p>
+      {role === 'ComplianceOfficer' ? <p>Approved appointments require Super Admin application before they become effective.</p> : null}
+      <Link href={href(role === 'ComplianceOfficer' ? '/portal/compliance' : '/portal')} className={styles.buttonSecondary}>
+        {role === 'ComplianceOfficer' ? 'Return to Compliance work queue' : 'Return to Super Admin dashboard'}
+      </Link>
+    </Notice></div>
     if (fundLifecycle?.availability === 'AVAILABLE') {
       const fund = fundLifecycle.products.find(item => item.product_id === id)
       const orderFund = fundLifecycle.products.find(item => item.orders.some(order => order.subscription_id === id))
@@ -583,7 +598,13 @@ function OperatingPortalScreen({ data, view, id, operatingContext, release, scop
     if (view === '/portal/compliance/detail') {
       if (selectedEntityMandate) return <EntityInvestingMandateDecision key={`${selectedEntityMandate.id}-${selectedEntityMandate.revision}`} mandate={selectedEntityMandate} snapshot={snapshot} operatingContext={operatingContext ?? APPLICANT_CONTEXT} onSaved={setSnapshot} />
       if (selectedMandate) return <RepresentativeMandateDecision key={`${selectedMandate.id}-${selectedMandate.revision}`} mandate={selectedMandate} snapshot={snapshot} operatingContext={operatingContext ?? APPLICANT_CONTEXT} onSaved={setSnapshot} />
-      if (selectedProductAppointment && (role === 'ComplianceOfficer' || role === 'SuperAdmin')) return <ProductAppointmentDecision key={`${selectedProductAppointment.id}-${selectedProductAppointment.revision}`} appointment={selectedProductAppointment} snapshot={snapshot} onSaved={setSnapshot} />
+      if (selectedProductAppointment && (role === 'ComplianceOfficer' || role === 'SuperAdmin')) return <ProductAppointmentDecision key={`${selectedProductAppointment.id}-${selectedProductAppointment.revision}`} appointment={selectedProductAppointment} snapshot={snapshot} onSaved={value => {
+        if (!release || value.actor.id !== data.user.id || !portalContextMatches(value.operating_context, context)) return
+        // This callback runs only after the command client confirms its result.
+        // Remember the handoff, not the old case or an inferred decision status.
+        setAppointmentHandoff({ id: selectedProductAppointment.id, actorId: data.user.id, environment: release.environment, context: portalContextKey(context) })
+        setSnapshot(value)
+      }} />
       if (!canReview) return unavailable()
       return selectedApplication ? <div className={styles.stack}><ApplicationReview key={`${selectedApplication.id}-${selectedApplication.revision}`} application={selectedApplication} snapshot={reviewSnapshot} onSaved={setSnapshot} environment={release?.environment} />{!passwordWorkflow && selectedApplication.status === 'APPROVED' ? <CustomerMonitoringDecision key={`${selectedApplication.id}:${snapshot.customer_monitoring?.find(item => item.application_id === selectedApplication.id)?.case_revision ?? 'unavailable'}`} application={selectedApplication} snapshot={reviewSnapshot} operatingContext={operatingContext} onSaved={setSnapshot} /> : null}</div> : selectedEligibility ? <ProductEligibilityReview key={`${selectedEligibility.id}-${selectedEligibility.revision}`} eligibility={selectedEligibility} product={snapshot.products.find(product => product.id === selectedEligibility.product_id)} snapshot={reviewSnapshot} onSaved={setSnapshot} /> : selected ? <div className={styles.stack}><ProductReview key={`${selected.id}-${selected.revision}`} product={selected} snapshot={reviewSnapshot} onSaved={setSnapshot} /><OfferingFilePanel product={selected} context={operatingContext} actorId={snapshot.actor.id} /><OfferingSignatures product={selected} context={operatingContext} actorId={snapshot.actor.id} appointments={snapshot.product_appointments} /></div> : unavailable()
     }
