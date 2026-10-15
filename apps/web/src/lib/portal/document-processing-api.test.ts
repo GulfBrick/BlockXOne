@@ -80,7 +80,8 @@ describe('processing POST using the actual command module and mocked external bo
     expectPrivate(response)
     expect(boundary.download).toHaveBeenCalledTimes(2)
     expect(boundary.query.mock.calls.some(([sql]) => /claim_|fail_/i.test(sql))).toBe(false)
-    for (const headers of [{ origin }, { 'x-bx1-scanner-signature': `sha256=${'0'.repeat(64)}` }]) {
+    const deniedHeaders: Record<string, string>[] = [{ origin }, { 'x-bx1-scanner-signature': `sha256=${'0'.repeat(64)}` }]
+    for (const headers of deniedHeaders) {
       boundary.query.mockClear()
       const denied = await POST(serviceRequest(recovery, headers))
       expect(denied.status).toBe(403); expectPrivate(denied)

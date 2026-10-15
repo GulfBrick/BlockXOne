@@ -50,8 +50,8 @@ describe('existing-workspace sandbox connection controls', () => {
     await screen.findByText('Sumsub sandbox authentication confirmed.')
     expect(fetcher).toHaveBeenCalledExactlyOnceWith('/api/portal/kyc/readiness', expect.objectContaining({ method: 'GET', credentials: 'same-origin',
       cache: 'no-store', redirect: 'error', headers: { 'x-bx1-expected-actor': actor }, signal: expect.any(AbortSignal) }))
-    expect(screen.getByText(/Individual verification:/).textContent).toContain('Configured level confirmed')
-    expect(screen.getByText(/Company verification:/).textContent).toContain('Not enabled')
+    expect(screen.getByText(/Individual verification:/).closest('p')?.textContent).toContain('Configured level confirmed')
+    expect(screen.getByText(/Company verification:/).closest('p')?.textContent).toContain('Not enabled')
     expect(screen.getByText('A connection check does not verify an applicant or approve an application.')).toBeTruthy()
     expect(document.body.textContent).not.toContain('private-level-name')
     expect(document.body.textContent).not.toContain('delivery_proved')

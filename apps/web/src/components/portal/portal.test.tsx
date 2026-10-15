@@ -715,7 +715,8 @@ describe('operational landings and one subscription hand-off', () => {
     expect(productManagementOrganisations(value, APPLICANT_CONTEXT)).toEqual([])
   })
   function roleplayManagerSnapshot(): PortalSnapshot {
-    const value = snapshot(), context = operating('OfferingManager')
+    const value = snapshot()
+    const context = { mode: 'ROLE', organisationId: nativeOrganisation, role: 'OfferingManager' } satisfies PortalOperatingContext
     value.operating_context = context
     value.offering_access = { version: 1, environment: 'TESTNET', actor_id: actor, operating_context: context,
       session_mode: 'STANDARD', allowed_commands: ['request_product_service_appointment'] }
