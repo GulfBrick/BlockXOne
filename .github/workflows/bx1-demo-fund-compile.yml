@@ -820,6 +820,7 @@ jobs:
             'src/lib/portal/fund-roleplay-appointment-commit-schema.test.ts',
             'src/lib/portal/fund-roleplay-appointment-source-schema.test.ts',
             'src/lib/portal/fund-roleplay-review-locks-schema.test.ts',
+            'src/lib/portal/fund-roleplay-projection-context-schema.test.ts',
             'src/lib/portal/appointment-commit.test.ts',
             'src/lib/portal/api.test.ts',
             'src/lib/portal/synthetic-compliance-api.test.ts',
