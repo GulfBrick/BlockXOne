@@ -1,13 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { NextRequest } from 'next/server'
 vi.mock('server-only', () => ({}))
-const mocks = vi.hoisted(() => ({ create: vi.fn(), read: vi.fn(), rpc: vi.fn() }))
+const mocks = vi.hoisted(() => ({ create: vi.fn(), read: vi.fn(), rpc: vi.fn(), lifecycle: vi.fn() }))
 vi.mock('@/lib/supabase/server', async original => ({ ...await original<object>(), createRequestSupabaseClient: mocks.create }))
 vi.mock('./server', async original => ({ ...await original<object>(), readPortal: mocks.read }))
+vi.mock('./fund-lifecycle-server', async original => ({ ...await original<object>(), readFundLifecycle: mocks.lifecycle }))
 import { POST } from '@/app/api/portal/command/route'
 import { readPortalBody } from './http'
 import { PortalError } from './server'
 import { APPLICANT_CONTEXT } from './operating-context'
+import type { PortalCommand } from './contracts'
+import type { CookieAdapter } from '@/lib/supabase/server'
 
 const origin = 'https://block-x-one-portal-test.vercel.app'
 const actor = 'd22789ee-7f73-4acf-a414-3de0b62ea801'
@@ -17,6 +20,8 @@ const snapshot = { actor: { id: actor, email: 'test@example.test', display_name:
 const command = { command: 'cancel_subscription', key: '113800c3-cf6e-437e-abdf-a3b09a03fcff', payload: { subscription_id: actor } }
 const instruction = { ...command, operating_context: operatingContext }
 const forgedHeaders: Record<string, string>[] = [{ origin: 'https://evil.test' }, { host: 'evil.test' }]
+const lifecycle = { schema_version: 1, projection_revision: 1, actor_id: actor, environment: 'TESTNET', operating_context: operatingContext,
+  observed_at: '2026-10-15T12:00:00Z', availability: 'UNAVAILABLE', reason_code: 'LIFECYCLE_NOT_INSTALLED', products: [] }
 function request(body: unknown = instruction, headers: Record<string, string> = {}) { return new NextRequest(`${origin}/api/portal/command`, { method: 'POST', headers: { origin, host: new URL(origin).host, 'content-type': 'application/json', 'x-bx1-expected-actor': actor, ...headers }, body: JSON.stringify(body) }) }
 beforeEach(() => {
   vi.resetAllMocks()
@@ -24,6 +29,9 @@ beforeEach(() => {
   mocks.create.mockReturnValue({ rpc: mocks.rpc })
   mocks.read.mockResolvedValue({ user: { id: actor, email: snapshot.actor.email }, snapshot })
   mocks.rpc.mockReturnValue({ abortSignal: vi.fn().mockResolvedValue({ data: snapshot, error: null }) })
+  // This suite isolates command authority from the separate display reader.
+  // Its explicit UNAVAILABLE result never invents fund readiness or holdings.
+  mocks.lifecycle.mockImplementation(async (_client, userId, context) => ({ ...lifecycle, actor_id: userId, operating_context: context }))
 })
 afterEach(() => vi.unstubAllEnvs())
 
@@ -39,7 +47,7 @@ describe('package-only TEST password command boundary', () => {
     const response = await POST(request(submit))
     expect(response.status).toBe(200)
     expect(mocks.rpc).toHaveBeenCalledWith('bx1_portal_command_scoped', { command: 'submit_product', request_key: command.key, payload: submit.payload, operating_context: manager })
-    expect(await response.json()).toEqual({ snapshot: marked })
+    expect(await response.json()).toEqual({ snapshot: { ...marked, fund_lifecycle: { ...lifecycle, operating_context: manager }, requests: [] } })
   })
   it.each([
     { command: 'publish_product', payload: { product_id: actor, expected_revision: 1 } },
@@ -75,7 +83,7 @@ describe('scoped portal command endpoint', () => {
   it('forwards the exact key, payload and operating context to scoped read and command only', async () => {
     const response = await POST(request())
     expect(response.status).toBe(200)
-    expect(await response.json()).toEqual({ snapshot })
+    expect(await response.json()).toEqual({ snapshot: { ...snapshot, fund_lifecycle: lifecycle, requests: [] } })
     expect(mocks.read).toHaveBeenCalledWith(expect.objectContaining({ rpc: mocks.rpc }), operatingContext)
     expect(mocks.rpc).toHaveBeenCalledTimes(1)
     expect(mocks.rpc).toHaveBeenCalledWith('bx1_portal_command_scoped', { command: command.command, request_key: command.key, payload: command.payload, operating_context: operatingContext })
@@ -161,5 +169,133 @@ describe('scoped portal command endpoint', () => {
   })
   it('limits actual bytes despite a small claimed length', async () => {
     await expect(readPortalBody(request({ padding: 'x'.repeat(100) }, { 'content-length': '1' }), 20)).rejects.toMatchObject({ status: 413 })
+  })
+})
+
+describe('committed TEST appointment response is separate from its fresh read', () => {
+  const context = { mode: 'ROLE' as const, organisationId: organisation, role: 'OfferingManager' as const }
+  const product = '77777777-7777-4777-8777-777777777777'
+  const appointment = '88888888-8888-4888-8888-888888888888'
+  const other = '99999999-9999-4999-8999-999999999999'
+  const save: PortalCommand = { command: 'request_product_service_appointment', key: command.key, payload: {
+    product_id: product, role: 'IssuerFundManager', appointee_user_id: actor, native_membership_id: other,
+    expected_product_revision: 2, evidence_reference: 'Synthetic guarded appointment authority evidence.', requested_until: '2026-12-01T12:00:00Z',
+  } }
+  const scoped = { ...snapshot, operating_context: context }
+  const refreshed = { ...scoped, requests: [{ key: save.key, command: save.command }] }
+  const committed = { kind: 'TEST_FUND_APPOINTMENT_COMMIT', version: 1, environment: 'TESTNET', execution_mode: 'TEST_ROLE_PLAY',
+    independence_proven: false, actor_id: actor, session_id: other, operating_context: context, policy_id: other, authority_epoch: 2,
+    product_id: product, offering_revision_id: other, appointment_id: appointment, appointment_revision: 1,
+    request: save, recorded_at: '2026-10-15T12:00:00Z' }
+  function prepare(data: unknown = committed) {
+    mocks.read.mockResolvedValueOnce({ user: { id: actor, email: snapshot.actor.email }, snapshot: scoped })
+      .mockResolvedValue({ user: { id: actor, email: snapshot.actor.email }, snapshot: refreshed })
+    mocks.rpc.mockReturnValue({ abortSignal: vi.fn().mockResolvedValue({ data, error: null }) })
+  }
+  function send() { return POST(request({ ...save, operating_context: context })) }
+
+  it('returns the matched receipt and only the separate validated current read after the writer has committed', async () => {
+    prepare()
+    const response = await send()
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ snapshot: refreshed, committed })
+    expect(mocks.rpc).toHaveBeenCalledExactlyOnceWith('bx1_portal_command_scoped', {
+      command: save.command, request_key: save.key, payload: save.payload, operating_context: context,
+    })
+    expect(mocks.read).toHaveBeenCalledTimes(2)
+    expect(mocks.rpc.mock.invocationCallOrder[0]).toBeLessThan(mocks.read.mock.invocationCallOrder[1])
+    expect(mocks.lifecycle).not.toHaveBeenCalled()
+    expect(response.headers.get('cache-control')).toContain('private')
+    expect(response.headers.get('cache-control')).toContain('no-store')
+  })
+
+  it.each([401, 403, 503])('returns ACK-only private202, not a rollback error, when the separate read fails with %s', async status => {
+    prepare()
+    mocks.read.mockReset().mockResolvedValueOnce({ user: { id: actor, email: snapshot.actor.email }, snapshot: scoped })
+      .mockRejectedValueOnce(new PortalError('Private saved-read failure details.', status))
+    const response = await send()
+    expect(response.status).toBe(202)
+    expect(await response.json()).toEqual({ committed, refresh_required: true })
+    expect(response.headers.get('cache-control')).toContain('private')
+    expect(response.headers.get('cache-control')).toContain('no-store')
+    expect(response.headers.get('referrer-policy')).toBe('no-referrer')
+    expect(mocks.rpc).toHaveBeenCalledOnce()
+    expect(mocks.read).toHaveBeenCalledTimes(2)
+  })
+
+  it.each([
+    { user: { id: other, email: 'other@example.test' }, snapshot: { ...refreshed, actor: { ...snapshot.actor, id: other } } },
+    { user: { id: actor, email: snapshot.actor.email }, snapshot: { ...refreshed, operating_context: APPLICANT_CONTEXT } },
+    { user: { id: actor, email: snapshot.actor.email }, snapshot: null },
+  ])('never returns a foreign, absent or different-context snapshot after known commit %#', async next => {
+    prepare()
+    mocks.read.mockReset().mockResolvedValueOnce({ user: { id: actor, email: snapshot.actor.email }, snapshot: scoped }).mockResolvedValueOnce(next)
+    const response = await send()
+    expect(response.status).toBe(202)
+    expect(await response.json()).toEqual({ committed, refresh_required: true })
+    expect(mocks.rpc).toHaveBeenCalledOnce()
+  })
+
+  it('preserves existing package continuity checks and reports their failure as refresh-required after commit', async () => {
+    prepare()
+    const before = { ...scoped, offering_access: { version: 1, environment: 'TESTNET', actor_id: actor,
+      operating_context: context, session_mode: 'STANDARD', allowed_commands: [save.command] } }
+    mocks.read.mockReset().mockResolvedValueOnce({ user: { id: actor, email: snapshot.actor.email }, snapshot: before })
+      .mockResolvedValueOnce({ user: { id: actor, email: snapshot.actor.email }, snapshot: refreshed })
+    const response = await send()
+    expect(response.status).toBe(202)
+    expect(await response.json()).toEqual({ committed, refresh_required: true })
+  })
+
+  it('preserves refreshed HttpOnly cookies on an ACK-only202 without leaking the read failure', async () => {
+    prepare()
+    mocks.create.mockImplementation((adapter: CookieAdapter) => {
+      mocks.rpc.mockReturnValue({ abortSignal: vi.fn(async () => {
+        adapter.setAll([{ name: 'fixture-appointment-session', value: 'nonsecret', options: { httpOnly: true, secure: true, sameSite: 'lax', path: '/' } }], {})
+        return { data: committed, error: null }
+      }) })
+      return { rpc: mocks.rpc }
+    })
+    mocks.read.mockReset().mockResolvedValueOnce({ user: { id: actor, email: snapshot.actor.email }, snapshot: scoped })
+      .mockRejectedValueOnce(new Error('Private database and session detail.'))
+    const response = await send()
+    expect(response.status).toBe(202)
+    expect(response.cookies.get('fixture-appointment-session')?.value).toBe('nonsecret')
+    expect(response.headers.get('set-cookie')).toContain('HttpOnly')
+    expect(response.headers.get('set-cookie')).toContain('Secure')
+    expect(await response.json()).toEqual({ committed, refresh_required: true })
+  })
+
+  it.each([
+    { kind: 'OTHER_COMMIT' }, { version: 2 }, { extra: true }, { actor_id: other },
+    { operating_context: { ...context, organisationId: other } }, { environment: 'MAINNET' }, { product_id: other },
+    { request: { ...save, key: other } }, { request: { ...save, payload: { ...save.payload, native_membership_id: product } } },
+    { request: { ...save, payload: { ...save.payload, extra: true } } },
+  ])('never claims commitment or performs a fresh read for a mismatched native ACK %#', async change => {
+    prepare({ ...committed, ...change })
+    const response = await send()
+    expect(response.status).toBe(503)
+    const body = await response.json()
+    expect(body).not.toHaveProperty('committed')
+    expect(body).not.toHaveProperty('snapshot')
+    expect(mocks.read).toHaveBeenCalledOnce()
+    expect(mocks.rpc).toHaveBeenCalledOnce()
+  })
+
+  it('does not accept the ACK for a different but valid portal command', async () => {
+    prepare()
+    const response = await POST(request({ ...command, operating_context: context }))
+    expect(response.status).toBe(503)
+    expect(await response.json()).not.toHaveProperty('committed')
+    expect(mocks.read).toHaveBeenCalledOnce()
+  })
+
+  it('does not claim a TEST commit when the shared runtime binding cannot be validated', async () => {
+    prepare()
+    vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'https://oqkevkjbkpugjotihtda.supabase.co')
+    const response = await send()
+    expect(response.status).toBe(503)
+    expect(await response.json()).not.toHaveProperty('committed')
+    expect(mocks.read).toHaveBeenCalledOnce()
   })
 })

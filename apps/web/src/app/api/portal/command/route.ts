@@ -1,14 +1,29 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { hasCanonicalOrigin, privateResponse, responseCookieAdapter } from '@/lib/supabase/http'
 import { createRequestSupabaseClient } from '@/lib/supabase/server'
-import { portalCommandSchema } from '@/lib/portal/contracts'
+import { portalCommandSchema, type PortalSnapshot } from '@/lib/portal/contracts'
 import { isPortalSnapshot, PortalError, readPortal, requirePortalEnvironment } from '@/lib/portal/server'
 import { portalFailure, readPortalBody } from '@/lib/portal/http'
-import { portalContextMatches, portalOperatingContextSchema } from '@/lib/portal/operating-context'
+import { portalContextMatches, portalOperatingContextSchema, type PortalOperatingContext } from '@/lib/portal/operating-context'
 import { hasStage2CommandAccess, validatedStage2Access } from '@/lib/portal/stage2-access'
 import { hasOfferingCommandAccess, isTestPasswordWorkflow, validatedOfferingAccess } from '@/lib/portal/offering-access'
 import { hasEvaluationCommandAccess, sameEvaluationGrant, validatedEvaluationAccess } from '@/lib/portal/evaluation-access'
 import { executeFundCommand, FundLifecycleError, isFundCommand, readFundLifecycle, unavailableFundLifecycle } from '@/lib/portal/fund-lifecycle-server'
+import { platformRelease } from '@/lib/platform-release'
+import { appointmentCommitSchema, matchesAppointmentCommit } from '@/lib/portal/appointment-commit'
+
+function requireSavedSnapshot(value: unknown, actorId: string, context: PortalOperatingContext, before: PortalSnapshot): asserts value is PortalSnapshot {
+  if (!isPortalSnapshot(value, actorId) || !portalContextMatches(value.operating_context, context)) throw new PortalError('The saved result could not be read. Refresh before retrying.', 503)
+  const priorAccess = validatedStage2Access(before, context)
+  const savedAccess = validatedStage2Access(value, context)
+  if (priorAccess && (!savedAccess || savedAccess.environment !== priorAccess.environment || savedAccess.session_mode !== priorAccess.session_mode)) throw new PortalError('The saved admission context could not be read. Refresh before retrying.', 503)
+  const priorOffering = validatedOfferingAccess(before, context)
+  const savedOffering = validatedOfferingAccess(value, context)
+  if (priorOffering && (!savedOffering || savedOffering.environment !== priorOffering.environment || savedOffering.session_mode !== priorOffering.session_mode)) throw new PortalError('The saved package context could not be read. Refresh before retrying.', 503)
+  const priorEvaluation = validatedEvaluationAccess(before, context)
+  const savedEvaluation = validatedEvaluationAccess(value, context)
+  if (priorEvaluation && (!savedEvaluation || !sameEvaluationGrant(priorEvaluation, savedEvaluation))) throw new PortalError('The saved TEST workspace result could not be verified. Refresh before retrying.', 503)
+}
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -53,16 +68,24 @@ export async function POST(request: NextRequest) {
       if (['22023', '23514', '23505', '40001', 'P0001'].includes(error.code)) throw new PortalError('The saved state or review requirements changed. Refresh and check the current requirements before retrying.', 409)
       throw new PortalError('The request outcome is uncertain. Refresh to check whether it saved; retry only with the same request key.', 503)
     }
-    if (!isPortalSnapshot(data, user.id) || !portalContextMatches(data.operating_context, context.data)) throw new PortalError('The saved result could not be read. Refresh before retrying.', 503)
-    const priorAccess = validatedStage2Access(before, context.data)
-    const savedAccess = validatedStage2Access(data, context.data)
-    if (priorAccess && (!savedAccess || savedAccess.environment !== priorAccess.environment || savedAccess.session_mode !== priorAccess.session_mode)) throw new PortalError('The saved admission context could not be read. Refresh before retrying.', 503)
-    const priorOffering = validatedOfferingAccess(before, context.data)
-    const savedOffering = validatedOfferingAccess(data, context.data)
-    if (priorOffering && (!savedOffering || savedOffering.environment !== priorOffering.environment || savedOffering.session_mode !== priorOffering.session_mode)) throw new PortalError('The saved package context could not be read. Refresh before retrying.', 503)
-    const priorEvaluation = validatedEvaluationAccess(before, context.data)
-    const savedEvaluation = validatedEvaluationAccess(data, context.data)
-    if (priorEvaluation && (!savedEvaluation || !sameEvaluationGrant(priorEvaluation, savedEvaluation))) throw new PortalError('The saved TEST workspace result could not be verified. Refresh before retrying.', 503)
+    if (data && typeof data === 'object' && 'kind' in data && data.kind === 'TEST_FUND_APPOINTMENT_COMMIT') {
+      if (!matchesAppointmentCommit(data, { actorId: user.id, context: context.data, request: command.data,
+        environment: platformRelease(process.env)?.environment })) throw new PortalError('The saved appointment receipt could not be verified. Refresh before retrying.', 503)
+      const committed = appointmentCommitSchema.parse(data)
+      try {
+        // This is a separate RPC after the guarded writer returned a durable
+        // receipt. A failed refresh cannot roll back that committed appointment.
+        const refreshed = await readPortal(client, context.data)
+        if (refreshed.user.id !== user.id) throw new PortalError('The signed-in account changed after saving.', 403)
+        requireSavedSnapshot(refreshed.snapshot, user.id, context.data, before)
+        return jar.finish(privateResponse(NextResponse.json({ snapshot: refreshed.snapshot, committed })))
+      } catch {
+        // No prior or fabricated snapshot is returned as current state. The
+        // same operation key must be retained until its real receipt is read.
+        return jar.finish(privateResponse(NextResponse.json({ committed, refresh_required: true }, { status: 202 })))
+      }
+    }
+    requireSavedSnapshot(data, user.id, context.data, before)
     // The native command has already committed. Failure to enrich its display
     // must not tell a customer that the command itself failed or invite a new key.
     const lifecycle = await readFundLifecycle(client, user.id, context.data)

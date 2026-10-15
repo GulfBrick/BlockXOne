@@ -1,13 +1,15 @@
 'use client'
 
 import { createContext, useContext, useEffect, useRef, useState, type ContextType, type ReactNode } from 'react'
-import { portalCommandSchema, type PortalCommand, type PortalSnapshot } from '@/lib/portal/contracts'
+import { customerMonitoringSnapshotSchema, portalCommandSchema, type PortalCommand, type PortalSnapshot } from '@/lib/portal/contracts'
 import { APPLICANT_CONTEXT, portalContextKey, portalContextMatches, type PortalOperatingContext } from '@/lib/portal/operating-context'
 import type { PlatformEnvironment } from '@/lib/platform-release'
 import { hasStage2CommandAccess, validatedStage2Access, type Stage2Access } from '@/lib/portal/stage2-access'
 import { hasOfferingCommandAccess, isTestPasswordWorkflow, validatedOfferingAccess, type OfferingAccess } from '@/lib/portal/offering-access'
 import { hasEvaluationCommandAccess, sameEvaluationGrant, validatedEvaluationAccess, type EvaluationAccess } from '@/lib/portal/evaluation-access'
 import { fundLifecycleSnapshotSchema, fundOperationSchema, hasFundLifecycleCommand, isFundLifecycleCommand, validatedFundLifecycle, type FundLifecycleOperation } from '@/lib/portal/fund-lifecycle-contracts'
+import { appointmentCommitSchema, matchesAppointmentCommit } from '@/lib/portal/appointment-commit'
+import { fundingSnapshotSchema } from '@/lib/portal/funding-contracts'
 import styles from './portal.module.css'
 
 type Marker = { key: string; command: string; payloadHash: string }
@@ -82,16 +84,48 @@ export function mayDiscardDeniedPortalRequest(definitive: boolean, hadPendingAtt
   return definitive && !hadPendingAttempt
 }
 
+class PortalCommittedRefreshRequiredError extends Error {
+  readonly committed = true
+  readonly definitive = false
+  constructor() { super('Your appointment change was saved. Refresh the saved result before continuing; do not create a replacement request.') }
+}
+function snapshotConfirmsRequest(snapshot: PortalSnapshot, request: PortalCommand): boolean {
+  return Array.isArray(snapshot.requests) && snapshot.requests.some(receipt => receipt?.key === request.key && receipt.command === request.command)
+}
+function completeCommitSnapshot(snapshot: PortalSnapshot, actorId: string, operatingContext: PortalOperatingContext, environment: PlatformEnvironment): boolean {
+  return snapshot.actor?.id === actorId && typeof snapshot.actor.email === 'string' && typeof snapshot.actor.can_review === 'boolean'
+    && portalContextMatches(snapshot.operating_context, operatingContext) && !('rehearsal' in snapshot)
+    && (['applications', 'organisations', 'products', 'subscriptions', 'events'] as const).every(key => Array.isArray(snapshot[key]))
+    && (snapshot.customer_monitoring === undefined || customerMonitoringSnapshotSchema.safeParse(snapshot.customer_monitoring).success)
+    && (snapshot.funding === undefined || fundingSnapshotSchema.safeParse(snapshot.funding).success)
+    && (snapshot.fund_lifecycle === undefined || Boolean(validatedFundLifecycle(snapshot.fund_lifecycle, actorId, operatingContext, environment)))
+    && (snapshot.stage2_access === undefined || Boolean(validatedStage2Access(snapshot, operatingContext, environment)))
+    && (snapshot.offering_access === undefined || Boolean(validatedOfferingAccess(snapshot, operatingContext, environment)))
+    && (snapshot.evaluation_access === undefined || Boolean(validatedEvaluationAccess(snapshot, operatingContext, environment)))
+}
+
 export async function postPortalCommand(command: PortalCommand, operatingContext: PortalOperatingContext = APPLICANT_CONTEXT, expectedActor?: string, expectedStage2Access?: Stage2Access, expectedOfferingAccess?: OfferingAccess, expectedEvaluationAccess?: EvaluationAccess, expectedEnvironment: PlatformEnvironment = 'TESTNET'): Promise<PortalSnapshot> {
   const response = await fetch('/api/portal/command', { method: 'POST', credentials: 'same-origin', cache: 'no-store', redirect: 'error', headers: { 'Content-Type': 'application/json', ...(expectedActor ? { 'x-bx1-expected-actor': expectedActor } : {}) }, body: JSON.stringify({ ...command, operating_context: operatingContext }), signal: AbortSignal.timeout(45000) })
   const contentType = response.headers.get('content-type') ?? ''
   if (!contentType.includes('application/json')) throw new Error('The platform did not confirm the outcome. Retry the saved request, not a new application.')
   const result = await response.json()
+  let committed = false
+  if (result?.committed !== undefined) {
+    const acknowledgement = appointmentCommitSchema.safeParse(result.committed)
+    if (!response.ok || ![200, 202].includes(response.status) || result.error !== undefined
+      || !acknowledgement.success || !matchesAppointmentCommit(acknowledgement.data, {
+        actorId: expectedActor ?? '', context: operatingContext, request: command, environment: expectedEnvironment,
+      })) throw new Error('The platform did not confirm this request in the expected context. Refresh to reconcile the original request.')
+    committed = true
+    if (response.status === 202 || result.refresh_required === true || !result.snapshot) throw new PortalCommittedRefreshRequiredError()
+  }
   if (!response.ok || result.error || !result.snapshot) {
     const error = new Error(typeof result.error === 'string' ? result.error : 'The platform could not confirm this request.') as Error & { definitive?: boolean }
     error.definitive = response.status >= 400 && response.status < 500
     throw error
   }
+  try {
+  if (committed && !completeCommitSnapshot(result.snapshot, expectedActor ?? '', operatingContext, expectedEnvironment)) throw new PortalCommittedRefreshRequiredError()
   if (!portalContextMatches(result.snapshot.operating_context, operatingContext) || (expectedActor && result.snapshot.actor?.id !== expectedActor)) throw new Error('The saved result belongs to an unverified operating context. Refresh to reconcile the original request.')
   if ('rehearsal' in result.snapshot) throw new Error('The saved result is not a normal admission record. Refresh to reconcile the original request.')
   const savedAccess = validatedStage2Access(result.snapshot, operatingContext)
@@ -114,7 +148,14 @@ export async function postPortalCommand(command: PortalCommand, operatingContext
   if (expectedOfferingAccess && (!savedOfferingAccess || savedOfferingAccess.actor_id !== expectedOfferingAccess.actor_id
     || savedOfferingAccess.environment !== expectedOfferingAccess.environment || savedOfferingAccess.session_mode !== expectedOfferingAccess.session_mode
     || !portalContextMatches(savedOfferingAccess.operating_context, expectedOfferingAccess.operating_context))) throw new Error('The saved result changed offering context. Refresh to reconcile the original request.')
+  if (committed && !snapshotConfirmsRequest(result.snapshot, command)) throw new PortalCommittedRefreshRequiredError()
   return result.snapshot as PortalSnapshot
+  } catch (error) {
+    // A genuine command receipt proves the write, not the readback. Never pass
+    // the acknowledgement (or an invalid snapshot) to an application's onSaved.
+    if (committed) throw new PortalCommittedRefreshRequiredError()
+    throw error
+  }
 }
 
 export function usePortalCommand(onSaved: (snapshot: PortalSnapshot) => void) {
@@ -122,19 +163,34 @@ export function usePortalCommand(onSaved: (snapshot: PortalSnapshot) => void) {
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
   const [unknown, setUnknown] = useState(false)
+  const [committedRequest, setCommittedRequest] = useState<{ identity: string; key: string; command: string } | null>(null)
   const lock = useRef(false)
   const savedRequest = useRef<PortalCommand | null>(null)
   const identity = `${context.environment}:${context.actorId}:${portalContextKey(context.operatingContext)}`
   const activeIdentity = useRef<string | null>(identity)
+  const identityGeneration = useRef({ identity, epoch: 0 })
+  if (identityGeneration.current.identity !== identity) identityGeneration.current = { identity, epoch: identityGeneration.current.epoch + 1 }
   activeIdentity.current = identity
-  useEffect(() => { activeIdentity.current = identity; return () => { activeIdentity.current = null } }, [identity])
+  useEffect(() => {
+    activeIdentity.current = identity
+    // Durable markers remain in their original scope. In-memory state and late
+    // responses must not borrow the acknowledgement in another actor/capacity.
+    savedRequest.current = null; lock.current = false; setBusy(false); setUnknown(false); setCommittedRequest(null); setMessage('')
+    return () => { activeIdentity.current = null }
+  }, [identity])
   useEffect(() => {
     if (!context.actorId) return
     try {
+      if (committedRequest?.identity === identity && (context.invalidAdmission || !context.snapshot
+        || !completeCommitSnapshot(context.snapshot, context.actorId, context.operatingContext, context.environment))) return
       const marker = reconcilePortalMarker(sessionStorage, context.actorId, context.requests, context)
+      if (!marker && committedRequest?.identity === identity && savedRequest.current && context.snapshot
+        && snapshotConfirmsRequest(context.snapshot, savedRequest.current)) {
+        savedRequest.current = null; setCommittedRequest(null); setUnknown(false); setMessage('Saved to your hosted workspace.')
+      }
       if (marker && !savedRequest.current) setMessage(`A previous ${marker.command.replaceAll('_', ' ')} request needs reconciliation. Re-enter its original values to retry the same saved key, or refresh saved state.`)
     } catch (error) { setMessage(error instanceof Error ? error.message : 'Request recovery is unavailable.') }
-  }, [context.actorId, context.requests, identity])
+  }, [context.actorId, context.requests, context.snapshot, context.invalidAdmission, committedRequest, identity])
   async function dispatch(request: PortalCommand, executionLease?: FundLifecycleOperation) {
     if (lock.current) return false
     let originalFundReplay = false
@@ -157,7 +213,9 @@ export function usePortalCommand(onSaved: (snapshot: PortalSnapshot) => void) {
     // The returned one-time UNKNOWN lease may be newer than the displayed
     // SIGNING record. It permits recording the already-broadcast hash only;
     // it supplies neither a signature nor an executable transaction.
-    if (!originalFundReplay && !leasedMetadata && !commandAllowed(context, request.command)) {
+    const committedReplay = committedRequest?.identity === identity && committedRequest.key === request.key
+      && committedRequest.command === request.command && savedRequest.current?.key === request.key
+    if (!originalFundReplay && !committedReplay && !leasedMetadata && !commandAllowed(context, request.command)) {
       setMessage('This action is not available in your current workflow capacity. Refresh saved state or contact the responsible BlockXOne owner.')
       return false
     }
@@ -165,7 +223,8 @@ export function usePortalCommand(onSaved: (snapshot: PortalSnapshot) => void) {
     let sent = false
     let hadPendingAttempt = Boolean(savedRequest.current)
     const attemptIdentity = identity
-    const isCurrent = () => activeIdentity.current === attemptIdentity
+    const attemptGeneration = identityGeneration.current.epoch
+    const isCurrent = () => activeIdentity.current === attemptIdentity && identityGeneration.current.epoch === attemptGeneration
     try {
       hadPendingAttempt ||= Boolean(reconcilePortalMarker(sessionStorage, context.actorId, context.requests, context))
       const prepared = await prepareDurablePortalCommand(sessionStorage, context.actorId, request, context.requests, context)
@@ -173,12 +232,21 @@ export function usePortalCommand(onSaved: (snapshot: PortalSnapshot) => void) {
       savedRequest.current = prepared
       sent = true
       const snapshot = await postPortalCommand(prepared, context.operatingContext, context.actorId, context.stage2Access, context.offeringAccess, context.evaluationAccess, context.environment)
-      clearPortalMarker(sessionStorage, context.actorId, prepared, context)
       if (!isCurrent()) return false
-      savedRequest.current = null; setUnknown(false); onSaved(snapshot); setMessage('Saved to your hosted workspace.'); return true
+      if (committedReplay && (!completeCommitSnapshot(snapshot, context.actorId, context.operatingContext, context.environment)
+        || !snapshotConfirmsRequest(snapshot, prepared))) throw new PortalCommittedRefreshRequiredError()
+      clearPortalMarker(sessionStorage, context.actorId, prepared, context)
+      savedRequest.current = null; setUnknown(false); setCommittedRequest(null); onSaved(snapshot); setMessage('Saved to your hosted workspace.'); return true
     } catch (error) {
       const definitive = typeof error === 'object' && error !== null && 'definitive' in error && error.definitive === true
       if (!isCurrent()) return false
+      if (error instanceof PortalCommittedRefreshRequiredError && savedRequest.current) {
+        setCommittedRequest({ identity, key: savedRequest.current.key, command: savedRequest.current.command })
+        setUnknown(false); setMessage(error.message); return false
+      }
+      if (committedReplay) {
+        setUnknown(false); setMessage('Your appointment change was saved, but the updated workspace is still unavailable. Refresh the saved result before continuing.'); return false
+      }
       if (mayDiscardDeniedPortalRequest(definitive, hadPendingAttempt) && savedRequest.current) { clearPortalMarker(sessionStorage, context.actorId, savedRequest.current, context); savedRequest.current = null }
       setUnknown(Boolean(savedRequest.current) && (hadPendingAttempt || (sent && !definitive)))
       setMessage(error instanceof Error ? error.message : 'The platform did not confirm the outcome. Retry the original saved request.')
@@ -197,9 +265,9 @@ export function usePortalCommand(onSaved: (snapshot: PortalSnapshot) => void) {
     if (!parsed.success) { setMessage('The existing transaction hash and leased operation do not match. Refresh without executing again.'); return false }
     return dispatch(parsed.data, lease)
   }
-  return { busy, message, unknown, submit, recordFundTransaction, retry: () => savedRequest.current ? dispatch(savedRequest.current) : Promise.resolve(false) }
+  return { busy, message, unknown, committed: committedRequest?.identity === identity, submit, recordFundTransaction, retry: () => savedRequest.current ? dispatch(savedRequest.current) : Promise.resolve(false) }
 }
 
-export function CommandFeedback({ command }: { command: Pick<ReturnType<typeof usePortalCommand>, 'busy' | 'message' | 'unknown' | 'retry'> }) {
-  return <div className={styles.statusRegion} role="status" aria-live="polite">{command.busy ? 'Saving securely to the hosted platform…' : command.message}{command.unknown ? <div className={styles.sectionGap}><p className={styles.muted}>The result is uncertain. Keep this page open; the original request key is retained so the action is not duplicated.</p><button className={styles.buttonSecondary} disabled={command.busy} type="button" onClick={() => void command.retry()}>Retry the original saved request</button></div> : null}</div>
+export function CommandFeedback({ command }: { command: Pick<ReturnType<typeof usePortalCommand>, 'busy' | 'message' | 'unknown' | 'retry'> & { committed?: boolean } }) {
+  return <div className={styles.statusRegion} role="status" aria-live="polite">{command.busy ? command.committed ? 'Refreshing the saved result…' : 'Saving securely to the hosted platform…' : command.message}{command.committed ? <div className={styles.sectionGap}><p className={styles.muted}>The change is saved. The updated workspace still needs to be confirmed; the original request is retained.</p><button className={styles.buttonSecondary} disabled={command.busy} type="button" onClick={() => void command.retry()}>Refresh saved result</button></div> : command.unknown ? <div className={styles.sectionGap}><p className={styles.muted}>The result is uncertain. Keep this page open; the original request key is retained so the action is not duplicated.</p><button className={styles.buttonSecondary} disabled={command.busy} type="button" onClick={() => void command.retry()}>Retry the original saved request</button></div> : null}</div>
 }

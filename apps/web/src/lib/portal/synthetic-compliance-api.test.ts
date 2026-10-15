@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { NextRequest } from 'next/server'
 vi.mock('server-only', () => ({}))
-const mocks = vi.hoisted(() => ({ create: vi.fn(), normal: vi.fn(), legacy: vi.fn(), rpc: vi.fn() }))
+const mocks = vi.hoisted(() => ({ create: vi.fn(), normal: vi.fn(), legacy: vi.fn(), rpc: vi.fn(), lifecycle: vi.fn() }))
 vi.mock('@/lib/supabase/server', async original => ({ ...await original<object>(), createRequestSupabaseClient: mocks.create }))
 vi.mock('./synthetic-compliance', () => ({ readSyntheticCompliance: mocks.legacy }))
 vi.mock('./server', async original => ({ ...await original<object>(), readPortal: mocks.normal }))
+vi.mock('./fund-lifecycle-server', async original => ({ ...await original<object>(), readFundLifecycle: mocks.lifecycle }))
 import { POST } from '@/app/api/portal/command/route'
 import { PortalError } from './server'
 const actor = '11111111-1111-4111-8111-111111111111'
@@ -22,6 +23,8 @@ beforeEach(() => {
   for (const [key, value] of Object.entries({ BLOCKXONE_AUTH_MODE: 'supabase', NEXT_PUBLIC_BLOCKXONE_AUTH_MODE: 'supabase', BLOCKXONE_TESTNET_FUND_DEMO: 'enabled', SUPABASE_URL: 'https://fegnnnlseuejkrusbbkv.supabase.co', VERCEL_ENV: 'preview', BLOCKXONE_APP_ORIGIN: 'https://testnet.bx1.co.za' })) vi.stubEnv(key, value)
   mocks.create.mockReturnValue({ rpc: mocks.rpc }); mocks.normal.mockResolvedValue({ user: { id: actor, email: 'reviewer@example.invalid' }, snapshot: snapshot() })
   mocks.rpc.mockReturnValue({ abortSignal: vi.fn().mockResolvedValue({ data: snapshot(), error: null }) })
+  mocks.lifecycle.mockResolvedValue({ schema_version: 1, projection_revision: 1, actor_id: actor, environment: 'TESTNET',
+    operating_context: context, observed_at: '2026-10-15T12:00:00Z', availability: 'UNAVAILABLE', reason_code: 'LIFECYCLE_NOT_INSTALLED', products: [] })
 })
 afterEach(() => vi.unstubAllEnvs())
 describe('normal admission command replaces the legacy rehearsal route', () => {
