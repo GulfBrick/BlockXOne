@@ -802,7 +802,7 @@ describe('connected v3 issuer execution in existing dashboards', () => {
 
   it('keeps the current signature requirement while presenting an authorised same-operator TEST reviewer', () => {
     const item = signatureProduct('FUND')
-    item.offering_package!.document_evidence = { ...item.offering_package!.document_evidence!, signature_status: 'NOT_ADMITTED', approval_allowed: false }
+    item.offering_package!.document_evidence = { ...item.offering_package!.document_evidence!, version: 2, signature_status: 'NOT_ADMITTED', approval_allowed: false }
     const value = snapshot('IssuerFundManager', [item], [appointment('IssuerFundManager', { appointee_user_id: manager,
       requested_by_user_id: manager, reviewed_by_user_id: manager, reviewer_scope_organisation_id: issuerOrganisation,
       status: 'APPLIED', effective: true, approval_receipt_id: receiptId, next_owner: 'NONE' })], manager)
