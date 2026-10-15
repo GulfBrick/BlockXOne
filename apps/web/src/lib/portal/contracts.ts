@@ -6,6 +6,7 @@ import fundV2LegacyCrossrefs from './fund-v2-legacy-crossrefs.json'
 import type { Stage2Access } from './stage2-access'
 import type { OfferingAccess } from './offering-access'
 import type { EvaluationAccess } from './evaluation-access'
+import type { FundRoleplayAdmission, FundRoleplayApplicationReview } from './fund-roleplay-admission'
 import { offeringDocumentEvidenceSchema, type OfferingDocumentEvidence } from './offering-files'
 import { commonEnvelopeUuidSchema, productCommonEnvelopeSchema, productDeploymentConfigurationSchema, strictProductText, validateCommonEnvelopeReferences, type ProductCommonEnvelope, type ProductDeploymentConfiguration } from './product-common-envelope'
 
@@ -62,6 +63,7 @@ export type PortalApplication = {
   reviewer_id: string | null; review_notes: string | null; organisation_id: string | null;
   review_checks: Record<string, boolean>; provider_mode: 'MANUAL_TEST_REVIEW'; approved_until: string | null;
   admission_purpose?: AdmissionPurpose; can_create_entity_account?: boolean;
+  test_roleplay_review?: FundRoleplayApplicationReview; test_roleplay_admission?: FundRoleplayAdmission;
 }
 export type PortalCapability = 'create_product' | 'save_product' | 'submit_product' | 'reopen_offering_review' | 'begin_offering_amendment' | 'publish_product' | 'read_orders' | 'review_product' | 'review_offering_issuer'
   | 'propose_funding_route' | 'approve_funding_route' | 'revoke_funding_route' | 'open_funding_obligation' | 'propose_funding_acceptance' | 'reconcile_funding'

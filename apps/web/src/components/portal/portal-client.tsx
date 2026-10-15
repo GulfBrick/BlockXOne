@@ -11,6 +11,7 @@ import { fundLifecycleSnapshotSchema, fundOperationSchema, hasFundLifecycleComma
 import { matchesAppointmentCommit } from '@/lib/portal/appointment-commit'
 import { matchesFundPublicationCommit } from '@/lib/portal/fund-publication-commit'
 import { fundingSnapshotSchema } from '@/lib/portal/funding-contracts'
+import { fundRoleplayAdmissionProjectionValid } from '@/lib/portal/fund-roleplay-admission'
 import styles from './portal.module.css'
 
 type Marker = { key: string; command: string; payloadHash: string }
@@ -25,6 +26,7 @@ export function PortalCommandProvider({ snapshot, children, operatingContext = A
   const offeringAccess = validatedOfferingAccess(snapshot, operatingContext, environment)
   const evaluationAccess = validatedEvaluationAccess(snapshot, operatingContext, environment)
   const invalidAdmission = 'rehearsal' in snapshot || snapshot.stage2_access !== undefined && !stage2Access
+    || !fundRoleplayAdmissionProjectionValid(snapshot, environment)
     || snapshot.offering_access !== undefined && !offeringAccess
     || snapshot.evaluation_access !== undefined && !evaluationAccess
   return <PortalCommandContext.Provider value={{ actorId: snapshot.actor.id, requests: snapshot.requests ?? [], snapshot, operatingContext, environment, stage2Access: stage2Access ?? undefined, offeringAccess: offeringAccess ?? undefined, evaluationAccess: evaluationAccess ?? undefined, invalidAdmission }}>{children}</PortalCommandContext.Provider>
@@ -97,6 +99,7 @@ function completeCommitSnapshot(snapshot: PortalSnapshot, actorId: string, opera
   return snapshot.actor?.id === actorId && typeof snapshot.actor.email === 'string' && typeof snapshot.actor.can_review === 'boolean'
     && portalContextMatches(snapshot.operating_context, operatingContext) && !('rehearsal' in snapshot)
     && (['applications', 'organisations', 'products', 'subscriptions', 'events'] as const).every(key => Array.isArray(snapshot[key]))
+    && fundRoleplayAdmissionProjectionValid(snapshot, environment)
     && (snapshot.customer_monitoring === undefined || customerMonitoringSnapshotSchema.safeParse(snapshot.customer_monitoring).success)
     && (snapshot.funding === undefined || fundingSnapshotSchema.safeParse(snapshot.funding).success)
     && (snapshot.fund_lifecycle === undefined || Boolean(validatedFundLifecycle(snapshot.fund_lifecycle, actorId, operatingContext, environment)))
@@ -129,6 +132,7 @@ export async function postPortalCommand(command: PortalCommand, operatingContext
   if (committed && !completeCommitSnapshot(result.snapshot, expectedActor ?? '', operatingContext, expectedEnvironment)) throw new PortalCommittedRefreshRequiredError(command.command)
   if (!portalContextMatches(result.snapshot.operating_context, operatingContext) || (expectedActor && result.snapshot.actor?.id !== expectedActor)) throw new Error('The saved result belongs to an unverified operating context. Refresh to reconcile the original request.')
   if ('rehearsal' in result.snapshot) throw new Error('The saved result is not a normal admission record. Refresh to reconcile the original request.')
+  if (!fundRoleplayAdmissionProjectionValid(result.snapshot, expectedEnvironment)) throw new Error('The saved TEST admission context could not be verified. Refresh to reconcile the original request.')
   const savedAccess = validatedStage2Access(result.snapshot, operatingContext)
   const savedOfferingAccess = validatedOfferingAccess(result.snapshot, operatingContext)
   const savedEvaluation = validatedEvaluationAccess(result.snapshot, operatingContext)

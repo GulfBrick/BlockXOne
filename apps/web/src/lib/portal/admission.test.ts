@@ -60,6 +60,39 @@ beforeEach(() => {
 })
 afterEach(() => vi.unstubAllEnvs())
 
+describe('strict case-specific TEST role-play application projection', () => {
+  const context = { mode: 'ROLE' as const, organisationId: organisation, role: 'ComplianceOfficer' as const }
+  function ownCase() {
+    return { ...snapshot, actor: { ...snapshot.actor, can_review: true }, operating_context: context,
+      stage2_access: { version: 1, environment: 'TESTNET', session_mode: 'STANDARD', actor_id: user.id, operating_context: context,
+        allowed_commands: ['review_application'] }, applications: [{ id: organisation, user_id: user.id, persona: 'INVESTOR',
+        status: 'SUBMITTED', revision: 2, details: { investor_type: 'INDIVIDUAL', test_data_acknowledged: true },
+        provider_mode: 'MANUAL_TEST_REVIEW', admission_purpose: 'INVESTOR_ADMISSION',
+        test_roleplay_review: { version: 1, environment: 'TESTNET', execution_mode: 'TEST_ROLE_PLAY', independence_proven: false,
+          actor_id: user.id, operating_context: context, policy_id: organisation, authority_epoch: 2, product_id: organisation,
+          offering_revision_id: organisation, application_id: organisation, application_revision: 2,
+          command: 'review_application', can_review: true, valid_until: '2099-01-01T00:00:00Z' } }] }
+  }
+  it('accepts the exact case-bound native TEST projection without generating provider or person facts', () => {
+    const value = ownCase()
+    expect(isPortalSnapshot(value, user.id)).toBe(true)
+    expect(value.applications[0]).not.toHaveProperty('provider_result')
+    expect(value.applications[0].test_roleplay_review.independence_proven).toBe(false)
+  })
+  it.each(['actor', 'context', 'revision', 'independence', 'role', 'extra', 'password'] as const)(
+    'denies malformed role-play %s before it becomes a saved portal snapshot', failure => {
+      const value = ownCase(), marker = value.applications[0].test_roleplay_review
+      if (failure === 'actor') marker.actor_id = organisation
+      if (failure === 'context') marker.operating_context = { ...context, organisationId: user.id }
+      if (failure === 'revision') marker.application_revision = 1
+      if (failure === 'independence') marker.independence_proven = true
+      if (failure === 'role') Object.assign(marker.operating_context, { role: 'SuperAdmin' })
+      if (failure === 'extra') Object.assign(marker, { trusted_person: true })
+      if (failure === 'password') value.stage2_access.session_mode = 'TEST_PASSWORD'
+      expect(isPortalSnapshot(value, user.id)).toBe(false)
+    })
+})
+
 describe('bounded package read boundary and pre-cutover compatibility', () => {
   const manager = { mode: 'ROLE' as const, organisationId: organisation, role: 'OfferingManager' as const }
   const access = { version: 1, environment: 'TESTNET', actor_id: user.id, operating_context: manager, session_mode: 'TEST_PASSWORD', allowed_commands: ['submit_product'] }

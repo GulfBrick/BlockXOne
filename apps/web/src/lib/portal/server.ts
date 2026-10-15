@@ -13,6 +13,7 @@ import { validatedOfferingAccess } from './offering-access'
 import { validatedEvaluationAccess } from './evaluation-access'
 import { platformRelease } from '@/lib/platform-release'
 import { testOrdinaryEntryMfaPaused } from '@/lib/supabase/test-ordinary-entry'
+import { fundRoleplayAdmissionProjectionValid } from './fund-roleplay-admission'
 
 export class PortalError extends Error {
   constructor(message: string, public readonly status = 409) { super(message) }
@@ -82,6 +83,7 @@ export function isPortalSnapshot(value: unknown, userId: string): value is Porta
   const v = value as Partial<PortalSnapshot>
   return !('rehearsal' in v) && v.actor?.id === userId && typeof v.actor.email === 'string' && typeof v.actor.can_review === 'boolean'
     && ['applications', 'organisations', 'products', 'subscriptions', 'events'].every(key => Array.isArray((v as Record<string, unknown>)[key]))
+    && fundRoleplayAdmissionProjectionValid(v as PortalSnapshot, platformRelease(process.env)?.environment)
     && (v.customer_monitoring === undefined || customerMonitoringSnapshotSchema.safeParse(v.customer_monitoring).success)
     && (v.funding === undefined || fundingSnapshotSchema.safeParse(v.funding).success)
     && (v.stage2_access === undefined || validatedStage2Access(v as PortalSnapshot) !== null)

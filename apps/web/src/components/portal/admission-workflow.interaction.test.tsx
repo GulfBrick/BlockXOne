@@ -66,6 +66,7 @@ vi.mock('./customer-monitoring', async importOriginal => {
   } }
 })
 import { PortalScreen } from './portal-screens'
+import { postPortalCommand } from './portal-client'
 
 const reviewer = '11111111-1111-4111-8111-111111111111'
 const applicant = '22222222-2222-4222-8222-222222222222'
@@ -144,6 +145,83 @@ beforeEach(() => {
   }))
 })
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); sessionStorage.clear() })
+
+describe('native case-specific TEST role-play admission', () => {
+  function ownCase(): PortalSnapshot {
+    const value = normalSnapshot(); value.stage2_access!.session_mode = 'STANDARD'
+    const application = value.applications[0]; application.user_id = reviewer
+    application.test_roleplay_review = { version: 1, environment: 'TESTNET', execution_mode: 'TEST_ROLE_PLAY', independence_proven: false,
+      actor_id: reviewer, operating_context: { mode: 'ROLE', organisationId, role: 'ComplianceOfficer' },
+      policy_id: requestKey, authority_epoch: 2, product_id: accountId, offering_revision_id: eventId,
+      application_id: applicationId, application_revision: 2, command: 'review_application', can_review: true,
+      valid_until: '2099-01-01T00:00:00Z' }
+    return value
+  }
+  function recordedDecision(): PortalSnapshot {
+    const value = ownCase(), application = value.applications[0]
+    delete application.test_roleplay_review
+    application.status = 'APPROVED'; application.revision = 3; application.reviewer_id = reviewer
+    application.reviewed_at = '2026-10-15T12:00:00Z'; application.review_notes = 'Synthetic fund-only admission reviewed in a recorded TEST role-play capacity.'
+    application.approved_until = '2099-01-01T00:00:00Z'
+    application.test_roleplay_admission = { version: 1, environment: 'TESTNET', execution_mode: 'TEST_ROLE_PLAY', independence_proven: false,
+      policy_id: requestKey, authority_epoch: 2, product_id: accountId, offering_revision_id: eventId, application_id: applicationId,
+      submitted_revision: 2, decision_revision: 3, decision: 'APPROVED', reviewer_id: reviewer,
+      reviewed_at: application.reviewed_at, valid_until: '2020-01-01T00:00:00Z' }
+    return value
+  }
+  it('exposes only the exact native-marked own case, keeps evidence checks, and sends the existing review command', async () => {
+    const value = ownCase(); proof.result = recordedDecision()
+    render(reviewScreen(value))
+    expect(screen.getByText('TEST role-play admission')).toBeTruthy()
+    expect(screen.getByText(/not independent human approval, verified provider clearance or production customer admission/)).toBeTruthy()
+    expect((screen.getByRole('button', { name: 'Record review decision' }) as HTMLButtonElement).disabled).toBe(true)
+    for (const checkbox of screen.getAllByRole('checkbox')) fireEvent.click(checkbox)
+    const notes = 'Synthetic fund-only admission reviewed in a recorded TEST role-play capacity.'
+    fireEvent.change(screen.getByLabelText(/^Review rationale/), { target: { value: notes } })
+    fireEvent.click(screen.getByRole('button', { name: 'Record review decision' }))
+    await waitFor(() => expect(screen.getByText('Revision 3')).toBeTruthy())
+    expect(proof.submit).toHaveBeenCalledExactlyOnceWith('review_application', { application_id: applicationId,
+      expected_revision: 2, decision: 'APPROVED', notes, checks: { identity: true, ownership: true, screening: true, suitability: true } })
+    expect(screen.queryByRole('button', { name: 'Record review decision' })).toBeNull()
+    expect(screen.getByText('TEST role-play admission')).toBeTruthy()
+    expect(screen.getByText('This TEST role-play decision is recorded. No new decision is available for this revision.')).toBeTruthy()
+    expect(screen.queryByText(/A separate authorised reviewer must act/)).toBeNull()
+    expect(screen.queryByText(/verified provider clearance granted/i)).toBeNull()
+  })
+  it('labels the own-case queue and retains expired decision provenance as history, not new authority', () => {
+    const page = render(reviewScreen(ownCase(), { view: '/portal/compliance', id: undefined }))
+    expect(screen.getByRole('link', { name: 'Review TEST role-play case' })).toBeTruthy()
+    expect(screen.getByText('TEST role-play · not independent approval')).toBeTruthy()
+    expect(screen.queryByText('Another reviewer required')).toBeNull()
+    page.rerender(reviewScreen(recordedDecision(), { view: '/portal/compliance', id: undefined }))
+    expect(screen.getByRole('link', { name: 'Inspect saved decision' })).toBeTruthy()
+    expect(screen.getByText('TEST role-play · not independent approval')).toBeTruthy()
+    expect(screen.queryByRole('link', { name: 'Review TEST role-play case' })).toBeNull()
+  })
+  it.each(['ordinary self', 'MAIN', 'marker actor', 'marker context', 'marker revision', 'expired', 'password'] as const)(
+    'does not expose own-application approval for %s', failure => {
+      const value = ownCase(), marker = value.applications[0].test_roleplay_review!
+      const change: Partial<React.ComponentProps<typeof PortalScreen>> = {}
+      if (failure === 'ordinary self') delete value.applications[0].test_roleplay_review
+      if (failure === 'MAIN') change.release = { ...release, environment: 'MAINNET' }
+      if (failure === 'marker actor') marker.actor_id = applicant
+      if (failure === 'marker context') marker.operating_context.organisationId = applicant
+      if (failure === 'marker revision') marker.application_revision = 1
+      if (failure === 'expired') marker.valid_until = '2020-01-01T00:00:00Z'
+      if (failure === 'password') value.stage2_access!.session_mode = 'TEST_PASSWORD'
+      render(reviewScreen(value, change))
+      expect(screen.queryByRole('button', { name: 'Record review decision' })).toBeNull()
+      expect(proof.submit).not.toHaveBeenCalled()
+    })
+  it('rejects a foreign optional admission capability in command readback instead of forwarding it to onSaved', async () => {
+    const value = ownCase(); value.applications[0].test_roleplay_review!.actor_id = applicant
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ snapshot: value }), { headers: { 'content-type': 'application/json' } })))
+    const request = portalCommandSchema.parse({ command: 'review_application', key: requestKey,
+      payload: { application_id: applicationId, expected_revision: 2, decision: 'CHANGES_REQUIRED',
+        notes: 'Clarify the fictional source-of-funds evidence.', checks: { identity: false, ownership: false, screening: false, suitability: false } } })
+    await expect(postPortalCommand(request, reviewContext, reviewer)).rejects.toThrow('The saved TEST admission context could not be verified.')
+  })
+})
 
 describe('mounted normal customer-admission workflow', () => {
   it.each(decisions)('records %s through the existing command and preserves normal evidence/history on refresh', async decision => {
