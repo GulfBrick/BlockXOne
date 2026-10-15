@@ -173,6 +173,98 @@ describe('scoped portal command endpoint', () => {
   })
 })
 
+describe.each([
+  { action: 'review_offering_issuer', role: 'IssuerFundManager', kind: 'ISSUER', checks: { issuer_authority: true, terms: true, rights: true } },
+  { action: 'review_product', role: 'ComplianceOfficer', kind: 'COMPLIANCE', checks: { issuer: true, terms: true, disclosures: true, eligibility: true } },
+] as const)('committed TEST $kind decision is separate from its fresh read', item => {
+  const context = { mode: 'ROLE' as const, organisationId: organisation, role: item.role }
+  const product = '77777777-7777-4777-8777-777777777777', other = '99999999-9999-4999-8999-999999999999'
+  const offering = '88888888-8888-4888-8888-888888888888', hash = 'a'.repeat(64)
+  const save = { command: item.action, key: command.key, payload: { product_id: product, offering_revision_id: offering,
+    expected_revision: 3, terms_hash: hash, common_envelope_hash: hash, deployment_configuration_hash: hash,
+    decision: 'APPROVED', notes: 'Fictional reviewed offering package rationale.', checks: item.checks } }
+  const scoped = { ...snapshot, operating_context: context }
+  const refreshed = { ...scoped, requests: [{ key: save.key, command: save.command }] }
+  const committed = { kind: 'TEST_FUND_OFFERING_DECISION_COMMIT', version: 1, environment: 'TESTNET', execution_mode: 'TEST_ROLE_PLAY',
+    independence_proven: false, actor_id: actor, session_id: other, operating_context: context, policy_id: other, authority_epoch: 2,
+    product_id: product, offering_revision_id: offering, decision_id: other, decision_kind: item.kind, request: save,
+    recorded_at: '2026-10-15T22:00:00Z' }
+  function prepare(data: unknown = committed) {
+    mocks.read.mockResolvedValueOnce({ user: { id: actor, email: snapshot.actor.email }, snapshot: scoped })
+      .mockResolvedValue({ user: { id: actor, email: snapshot.actor.email }, snapshot: refreshed })
+    mocks.rpc.mockReturnValue({ abortSignal: vi.fn().mockResolvedValue({ data, error: null }) })
+  }
+  function send() { return POST(request({ ...save, operating_context: context })) }
+  it('performs one canonical write then returns only its separately validated saved snapshot', async () => {
+    prepare()
+    const response = await send()
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ snapshot: refreshed, committed })
+    expect(mocks.rpc).toHaveBeenCalledExactlyOnceWith('bx1_portal_command_scoped', {
+      command: save.command, request_key: save.key, payload: save.payload, operating_context: context,
+    })
+    expect(mocks.read).toHaveBeenCalledTimes(2)
+    expect(mocks.rpc.mock.invocationCallOrder[0]).toBeLessThan(mocks.read.mock.invocationCallOrder[1])
+    expect(mocks.lifecycle).not.toHaveBeenCalled()
+  })
+  it.each([401, 403, 503])('returns private ACK-only202 when post-commit read fails with %s', async status => {
+    prepare()
+    mocks.read.mockReset().mockResolvedValueOnce({ user: { id: actor, email: snapshot.actor.email }, snapshot: scoped })
+      .mockRejectedValueOnce(new PortalError('Private decision read failure.', status))
+    const response = await send()
+    expect(response.status).toBe(202)
+    expect(await response.json()).toEqual({ committed, refresh_required: true })
+    expect(response.headers.get('cache-control')).toContain('private')
+    expect(response.headers.get('cache-control')).toContain('no-store')
+    expect(response.headers.get('referrer-policy')).toBe('no-referrer')
+    expect(mocks.rpc).toHaveBeenCalledOnce()
+  })
+  it.each(['actor', 'context', 'missing', 'package continuity'] as const)('does not substitute a %s saved projection', async failure => {
+    prepare()
+    const before = { ...scoped, ...(failure === 'package continuity' ? { offering_access: { version: 1, environment: 'TESTNET',
+      actor_id: actor, operating_context: context, session_mode: 'STANDARD', allowed_commands: [save.command] } } : {}) }
+    const next = failure === 'missing' ? null : failure === 'actor' ? { ...refreshed, actor: { ...snapshot.actor, id: other } }
+      : failure === 'context' ? { ...refreshed, operating_context: APPLICANT_CONTEXT } : refreshed
+    mocks.read.mockReset().mockResolvedValueOnce({ user: { id: actor, email: snapshot.actor.email }, snapshot: before })
+      .mockResolvedValueOnce({ user: { id: actor, email: snapshot.actor.email }, snapshot: next })
+    const response = await send()
+    expect(response.status).toBe(202)
+    expect(await response.json()).toEqual({ committed, refresh_required: true })
+  })
+  it.each([
+    { actor_id: other }, { operating_context: { ...context, organisationId: other } },
+    { operating_context: { ...context, role: 'SuperAdmin' } }, { environment: 'MAINNET' }, { session_id: null },
+    { product_id: other }, { offering_revision_id: other }, { decision_id: null }, { independence_proven: true },
+    { decision_kind: item.kind === 'ISSUER' ? 'COMPLIANCE' : 'ISSUER' }, { product_revision: 4 }, { extra: true },
+    { request: { ...save, key: other } }, { request: { ...save, payload: { ...save.payload, expected_revision: 4 } } },
+    { request: { ...save, payload: { ...save.payload, terms_hash: 'b'.repeat(64) } } },
+  ])('does not claim a saved decision for a mismatched native ACK %#', async change => {
+    prepare({ ...committed, ...change })
+    const response = await send()
+    expect(response.status).toBe(503)
+    const result = await response.json()
+    expect(result).not.toHaveProperty('committed'); expect(result).not.toHaveProperty('snapshot')
+    expect(mocks.read).toHaveBeenCalledOnce()
+  })
+  it('rejects a decision ACK for another command or invalid runtime binding', async () => {
+    prepare()
+    expect((await POST(request({ ...command, operating_context: context }))).status).toBe(503)
+    expect(mocks.read).toHaveBeenCalledOnce()
+    mocks.read.mockReset(); prepare()
+    vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'https://oqkevkjbkpugjotihtda.supabase.co')
+    const response = await send()
+    expect(response.status).toBe(503)
+    expect(await response.json()).not.toHaveProperty('committed')
+    expect(mocks.read).toHaveBeenCalledOnce()
+  })
+  it('keeps the pre-write scoped authority read mandatory', async () => {
+    prepare()
+    mocks.read.mockReset().mockRejectedValue(new PortalError('Authority changed.', 403))
+    expect((await send()).status).toBe(403)
+    expect(mocks.rpc).not.toHaveBeenCalled()
+  })
+})
+
 describe('committed TEST publication response is separate from its fresh read', () => {
   const context = { mode: 'ROLE' as const, organisationId: organisation, role: 'OfferingManager' as const }
   const product = '77777777-7777-4777-8777-777777777777', other = '99999999-9999-4999-8999-999999999999'

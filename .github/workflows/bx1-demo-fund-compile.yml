@@ -829,8 +829,10 @@ jobs:
           ] : process.env.BX1_FOCUSED_UI_MODE === 'publication-view-focused' ? [
             'src/lib/portal/fund-roleplay-publication-commit-schema.test.ts',
             'src/lib/portal/fund-publication-commit.test.ts',
+            'src/lib/portal/offering-decision-commit.test.ts',
             'src/lib/portal/api.test.ts',
             'src/components/portal/portal-publication-commit.test.tsx',
+            'src/components/portal/portal-offering-decision-commit.test.tsx',
             'src/components/portal/portal-appointment-commit.test.tsx',
             'src/lib/portal/offering-signature-roleplay-view-schema.test.ts',
           ] : process.env.BX1_FOCUSED_UI_MODE === 'appointment-commit-focused' ? [
