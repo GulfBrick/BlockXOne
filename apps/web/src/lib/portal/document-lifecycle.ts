@@ -241,13 +241,13 @@ async function continueAcceptedScannerResult(message: z.infer<typeof scannerMess
   if (!['SCANNED_CLEAN', 'PROMOTED'].includes(recorded.state)) {
     throw new DocumentLifecycleError('A clean scanner verdict has not been recorded.', 409)
   }
-  const uploaded = await client.storage.from(finalBucket).upload(item.storage_path, bytes, {
+  // The upload response describes an attempt, not document authority. An
+  // earlier attempt may already have delivered the exact immutable object.
+  // Its verified bytes and canonical promotion below decide the saved result.
+  await client.storage.from(finalBucket).upload(item.storage_path, bytes, {
     contentType: item.mime_type, cacheControl: '0', upsert: false, metadata: { sha256: item.sha256 },
   })
   await verifiedDownload(client, finalBucket, item.storage_path, item)
-  if (uploaded.error && !/already exists|duplicate/i.test(uploaded.error.message)) {
-    throw new DocumentLifecycleError('The scanned document could not be promoted.')
-  }
   if (recheck) await recheck()
   const promoted = await scannerQuery<{ id: string; actor_id: string; storage_path: string;
     sha256: string; validation_state: string }>(

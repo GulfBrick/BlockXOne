@@ -68,6 +68,32 @@ describe('recorded document result continuation, external boundaries mocked', ()
     expect(boundary.download).toHaveBeenCalledTimes(4)
     expect(boundary.query.mock.calls.filter(([sql]) => sql.includes('promote_scanned_document'))).toHaveLength(2)
   })
+  it.each(['document_scan_required', 'arbitrary resolved upload failure'])(
+    'uses exact existing final bytes and canonical promotion rather than the upload error text: %s', async message => {
+      boundary.upload.mockResolvedValue({ error: { statusCode: '400', message } })
+      expect(await recoverRecordedDocumentResult(binding, 'synthetic_worker')).toEqual({ id: document, state: 'SCANNED_CLEAN' })
+      expect(boundary.download).toHaveBeenCalledTimes(2)
+      expect(boundary.query.mock.calls.filter(([sql]) => sql.includes('read_document_processing_recorded_result'))).toHaveLength(3)
+      expect(boundary.query).toHaveBeenLastCalledWith('select bx1_private.promote_scanned_document($1) as result', [document])
+    })
+  it.each(['missing', 'wrong-size', 'wrong-hash'])(
+    'cannot promote after an upload error when the final object is %s', async failure => {
+      boundary.upload.mockResolvedValue({ error: { message: 'document_scan_required' } })
+      boundary.download.mockResolvedValueOnce({ data: new Blob([bytes]), error: null })
+        .mockResolvedValueOnce(failure === 'missing' ? { data: null, error: { message: 'not found' } }
+          : { data: new Blob([failure === 'wrong-size' ? bytes.subarray(1) : Buffer.alloc(bytes.length, 1)]), error: null })
+      await expect(recoverRecordedDocumentResult(binding, 'synthetic_worker')).rejects.toThrow()
+      expect(boundary.query.mock.calls.some(([sql]) => sql.includes('promote_scanned_document'))).toBe(false)
+    })
+  it('still fails when native promotion rejects the original event or object authority', async () => {
+    boundary.upload.mockResolvedValue({ error: { message: 'document_scan_required' } })
+    boundary.query.mockImplementation(async (sql: string) => {
+      if (sql.includes('promote_scanned_document')) throw { code: '42501', message: 'private native authority detail' }
+      return { rows: [{ result: sql.includes('read_document_processing_recorded_result') ? saved : item }] }
+    })
+    await expect(recoverRecordedDocumentResult(binding, 'synthetic_worker')).rejects.toThrow('Independent scanner result could not be recorded.')
+    expect(boundary.query.mock.calls.filter(([sql]) => sql.includes('promote_scanned_document'))).toHaveLength(1)
+  })
   it.each([null, { ...saved, document_id: actor }, { ...saved, attempt_id: actor }, { ...saved, authority_epoch: 3 },
     { ...saved, scanner_id: 'other_scanner' }, { ...saved, worker_id: 'other_worker' }, { ...saved, reference: `bx1-scan:${actor}` },
     { ...saved, scan_event_id: 0 }, { ...saved, scan_event_id: Number.MAX_SAFE_INTEGER + 1 }, { ...saved, verdict: 'UNKNOWN' },
