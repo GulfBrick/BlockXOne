@@ -320,6 +320,8 @@ describe('MFA accessible markup', () => {
   it('offers opt-in without seed, automatic action or removal controls', () => {
     const html = renderToStaticMarkup(<MfaForm view={empty} continuation="security" />)
     expect(html).toContain('Set up authenticator')
+    expect(html).toContain('Use your authenticator when BlockXOne requests a code.')
+    expect(html).not.toContain('future sign-ins require your authenticator code')
     expect(html).not.toContain(setup.secret)
     expect(html).not.toContain('data:image')
     expect(html).not.toMatch(/unenroll|Remove factor|Delete factor/)
@@ -358,6 +360,9 @@ describe('MFA accessible markup', () => {
   })
   it('offers a separate-device backup without promising lost-all recovery or factor deletion', () => {
     const html = renderToStaticMarkup(<MfaForm view={verified} continuation="security" />)
+    expect(html).toContain('Your sign-in is already verified.')
+    expect(html).toContain('only when a protected action or backup setup asks you to verify again')
+    expect(html).toContain('Verify a new code')
     expect(html).toContain('Add backup authenticator')
     expect(html).toContain('different device')
     expect(html).toContain('Losing every verified factor still requires controlled support recovery')

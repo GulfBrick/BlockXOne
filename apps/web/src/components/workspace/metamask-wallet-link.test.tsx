@@ -80,7 +80,8 @@ describe('MetaMask ownership controller', () => {
     expect(f.post).not.toHaveBeenCalled()
     await f.controller.verify()
     expect(f.request.mock.calls.map(([input]) => input.method)).toEqual([
-      'eth_requestAccounts', 'eth_chainId', 'eth_accounts', 'eth_chainId',
+      'eth_requestAccounts', 'eth_accounts', 'eth_chainId', 'eth_accounts', 'eth_chainId',
+      'eth_accounts', 'eth_chainId',
       'personal_sign', 'eth_accounts', 'eth_chainId',
     ])
     const sign = f.request.mock.calls.find(([input]) => input.method === 'personal_sign')![0]
@@ -92,6 +93,88 @@ describe('MetaMask ownership controller', () => {
     expect(f.controller.getState().message).not.toContain('Ownership verified')
     f.controller.acceptReload([wallet])
     expect(f.controller.getState().phase).toBe('connected')
+  })
+
+  it.each(['accountsChanged', 'chainChanged'])('converges on the initial permission response after %s without signing', async (event) => {
+    const f = fixture(); const permission = deferred<unknown>()
+    f.request.mockReturnValueOnce(permission.promise)
+    const connection = f.controller.connect()
+    f.emit(event)
+    expect(f.controller.getState()).toMatchObject({ phase: 'connecting', address: null })
+    permission.resolve([address]); await connection
+    expect(f.controller.getState()).toMatchObject({ phase: 'connected', address, chainId: 80002 })
+    expect(f.post).not.toHaveBeenCalled()
+    expect(f.refresh).not.toHaveBeenCalled()
+    expect(f.request.mock.calls.map(([input]) => input.method)).toEqual([
+      'eth_requestAccounts', 'eth_accounts', 'eth_chainId', 'eth_accounts', 'eth_chainId',
+    ])
+  })
+
+  it('reads the current account and network again when initial connection events arrive during a snapshot', async () => {
+    const f = fixture(); const nextAddress = '0x2222222222222222222222222222222222222222'
+    const normal = f.request.getMockImplementation()!; let changed = false
+    f.request.mockImplementation(async (input) => {
+      if (input.method === 'eth_chainId' && !changed) {
+        changed = true; f.setAccounts([nextAddress]); f.setChain('0x1')
+        f.emit('accountsChanged'); f.emit('chainChanged')
+      }
+      return normal(input)
+    })
+    await f.controller.connect()
+    expect(f.controller.getState()).toMatchObject({ phase: 'connected', address: nextAddress, chainId: 1 })
+    expect(f.controller.getState().message).toContain('80002')
+    expect(f.post).not.toHaveBeenCalled()
+    expect(f.request.mock.calls.every(([input]) => ['eth_requestAccounts', 'eth_accounts', 'eth_chainId'].includes(input.method))).toBe(true)
+  })
+
+  it('does not accept inconsistent connection reads even without provider events', async () => {
+    const f = fixture(); const nextAddress = '0x2222222222222222222222222222222222222222'
+    const normal = f.request.getMockImplementation()!; let accountReads = 0
+    f.request.mockImplementation(async (input) => {
+      if (input.method === 'eth_accounts' && ++accountReads === 2) f.setAccounts([nextAddress])
+      return normal(input)
+    })
+    await f.controller.connect()
+    expect(f.controller.getState()).toMatchObject({ phase: 'connected', address: nextAddress, chainId: 80002 })
+    expect(f.states.some((state) => state.phase === 'connected' && state.address === address)).toBe(false)
+    expect(f.post).not.toHaveBeenCalled()
+  })
+
+  it('bounds connection convergence when the wallet keeps changing', async () => {
+    const f = fixture(); const normal = f.request.getMockImplementation()!
+    f.request.mockImplementation(async (input) => {
+      if (input.method === 'eth_chainId') f.emit('chainChanged')
+      return normal(input)
+    })
+    await f.controller.connect()
+    expect(f.controller.getState()).toMatchObject({ phase: 'idle', address: null, chainId: null })
+    expect(f.request).toHaveBeenCalledTimes(7)
+    expect(f.post).not.toHaveBeenCalled()
+    expect(f.refresh).not.toHaveBeenCalled()
+  })
+
+  it('still invalidates initial connection on disconnect, even after an account event', async () => {
+    const f = fixture(); const permission = deferred<unknown>()
+    f.request.mockReturnValueOnce(permission.promise)
+    const connection = f.controller.connect()
+    f.emit('accountsChanged'); f.emit('disconnect')
+    permission.resolve([address]); await connection
+    expect(f.controller.getState()).toMatchObject({ phase: 'idle', address: null, chainId: null })
+    expect(f.request).toHaveBeenCalledTimes(1)
+    expect(f.post).not.toHaveBeenCalled()
+  })
+
+  it.each(['organisation', 'provider'])('discards the old initial connection after switching %s away and back', async (kind) => {
+    const f = fixture(); const permission = deferred<unknown>()
+    f.request.mockReturnValueOnce(permission.promise)
+    const connection = f.controller.connect(); f.emit('accountsChanged')
+    if (kind === 'organisation') f.controller.select(f.provider, '44444444-4444-4444-8444-444444444444')
+    else f.controller.select({ ...f.provider, request: vi.fn() }, org)
+    f.controller.select(f.provider, org)
+    permission.resolve([address]); await connection
+    expect(f.controller.getState()).toMatchObject({ phase: 'idle', address: null, chainId: null })
+    expect(f.request).toHaveBeenCalledTimes(1)
+    expect(f.post).not.toHaveBeenCalled()
   })
 
   it('requires a MetaMask provider and explicit organisation', async () => {
@@ -109,6 +192,108 @@ describe('MetaMask ownership controller', () => {
     expect(f.controller.getState().message).toContain('80002')
     expect(f.post).not.toHaveBeenCalled()
     expect(f.request.mock.calls.some(([input]) => input.method.includes('switch') || input.method.includes('send'))).toBe(false)
+  })
+
+  it('requests only an explicit Amoy switch and requires a fresh connection afterward', async () => {
+    const f = fixture(); const normal = f.request.getMockImplementation()!
+    f.request.mockImplementation(async (input) => input.method === 'wallet_switchEthereumChain' ? null : normal(input))
+    await f.controller.switchNetwork()
+    expect(f.request).not.toHaveBeenCalled()
+    await f.controller.connect(); await f.controller.switchNetwork()
+    expect(f.request.mock.calls.some(([input]) => input.method === 'wallet_switchEthereumChain')).toBe(false)
+    f.setChain('0x1'); await f.controller.connect()
+    expect(f.controller.getState().message).toContain('Switch to Polygon Amoy below')
+    await f.controller.switchNetwork(); await f.controller.verify()
+    expect(f.request.mock.calls.filter(([input]) => input.method === 'wallet_switchEthereumChain').map(([input]) => input.params))
+      .toEqual([[{ chainId: '0x13882' }]])
+    expect(f.controller.getState()).toMatchObject({ phase: 'idle', address: null, chainId: null })
+    expect(f.controller.getState().message).toContain('Connect MetaMask again')
+    expect(f.post).not.toHaveBeenCalled()
+    expect(f.refresh).not.toHaveBeenCalled()
+    expect(f.request.mock.calls.every(([input]) => ['eth_requestAccounts', 'eth_accounts', 'eth_chainId', 'wallet_switchEthereumChain'].includes(input.method))).toBe(true)
+  })
+
+  it('requires reconnect after the expected network event instead of treating it as ownership', async () => {
+    const f = fixture(); f.setChain('0x1'); await f.controller.connect()
+    const normal = f.request.getMockImplementation()!
+    f.request.mockImplementation(async (input) => {
+      if (input.method === 'wallet_switchEthereumChain') {
+        f.setChain('0x13882'); f.emit('chainChanged'); return null
+      }
+      return normal(input)
+    })
+    await f.controller.switchNetwork(); await f.controller.verify()
+    expect(f.controller.getState()).toMatchObject({ phase: 'idle', address: null, chainId: null })
+    expect(f.controller.getState().message).toContain('Connect again to check')
+    expect(f.post).not.toHaveBeenCalled()
+    await f.controller.connect()
+    expect(f.controller.getState()).toMatchObject({ phase: 'connected', address, chainId: 80002 })
+    expect(f.post).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    { code: 4001, expected: 'Network change cancelled' },
+    { code: 4902, expected: 'Add the existing Polygon Amoy network in MetaMask' },
+    { code: -32000, expected: 'MetaMask could not change the network' },
+  ])('handles switch error $code without adding a chain or exposing provider details', async ({ code, expected }) => {
+    const f = fixture(); f.setChain('0x1'); await f.controller.connect()
+    const normal = f.request.getMockImplementation()!
+    f.request.mockImplementation(async (input) => {
+      if (input.method === 'wallet_switchEthereumChain') throw { code, message: 'private provider detail' }
+      return normal(input)
+    })
+    await f.controller.switchNetwork()
+    expect(f.controller.getState()).toMatchObject({ phase: 'connected', address, chainId: 1 })
+    expect(f.controller.getState().message).toContain(expected)
+    expect(JSON.stringify(f.states)).not.toContain('private provider detail')
+    expect(f.request.mock.calls.some(([input]) => ['wallet_addEthereumChain', 'eth_sendTransaction', 'personal_sign'].includes(input.method))).toBe(false)
+    expect(f.post).not.toHaveBeenCalled()
+  })
+
+  it('rechecks account and chain before asking MetaMask to switch', async () => {
+    const f = fixture(); f.setChain('0x1'); await f.controller.connect()
+    f.setAccounts(['0x2222222222222222222222222222222222222222'])
+    await f.controller.switchNetwork()
+    expect(f.controller.getState()).toMatchObject({ phase: 'idle', address: null, chainId: null })
+    expect(f.request.mock.calls.some(([input]) => input.method === 'wallet_switchEthereumChain')).toBe(false)
+    expect(f.post).not.toHaveBeenCalled()
+  })
+
+  it.each(['accountsChanged', 'disconnect', 'organisation', 'provider'])('discards a late switch result after %s', async (change) => {
+    const f = fixture(); f.setChain('0x1'); await f.controller.connect()
+    const normal = f.request.getMockImplementation()!; const started = deferred<void>(); const result = deferred<unknown>()
+    f.request.mockImplementation(async (input) => {
+      if (input.method === 'wallet_switchEthereumChain') { started.resolve(); return result.promise }
+      return normal(input)
+    })
+    const switching = f.controller.switchNetwork(); await started.promise
+    if (change === 'organisation') f.controller.select(f.provider, '44444444-4444-4444-8444-444444444444')
+    else if (change === 'provider') f.controller.select({ ...f.provider, request: vi.fn() }, org)
+    else f.emit(change)
+    const count = f.states.length; result.resolve(null); await switching
+    expect(f.states).toHaveLength(count)
+    expect(f.controller.getState()).toMatchObject({ phase: 'idle', address: null, chainId: null })
+    expect(f.post).not.toHaveBeenCalled()
+    expect(f.refresh).not.toHaveBeenCalled()
+  })
+
+  it('locks duplicate actions and removes a pending switch on unmount', async () => {
+    const f = fixture(); f.setChain('0x1'); await f.controller.connect()
+    const normal = f.request.getMockImplementation()!; const started = deferred<void>(); const result = deferred<unknown>()
+    f.request.mockImplementation(async (input) => {
+      if (input.method === 'wallet_switchEthereumChain') { started.resolve(); return result.promise }
+      return normal(input)
+    })
+    const switching = f.controller.switchNetwork(); await started.promise
+    const calls = f.request.mock.calls.length
+    await f.controller.switchNetwork(); await f.controller.connect(); await f.controller.verify()
+    expect(f.request).toHaveBeenCalledTimes(calls)
+    expect(f.request.mock.calls.filter(([input]) => input.method === 'wallet_switchEthereumChain')).toHaveLength(1)
+    f.controller.dispose(); const count = f.states.length
+    result.resolve(null); await switching
+    expect(f.states).toHaveLength(count)
+    expect([...f.listeners.values()].every((set) => set.size === 0)).toBe(true)
+    expect(f.post).not.toHaveBeenCalled()
   })
 
   it('handles locked wallets and rejection without raw provider errors', async () => {
@@ -223,7 +408,7 @@ describe('MetaMask ownership controller', () => {
   it('unmount removes all listeners and invalidates late connection results', async () => {
     const f = fixture(); const late = deferred<unknown>()
     f.request.mockReturnValueOnce(late.promise)
-    const connection = f.controller.connect(); f.controller.dispose()
+    const connection = f.controller.connect(); f.emit('accountsChanged'); f.controller.dispose()
     const count = f.states.length; late.resolve([address]); await connection
     expect(f.states).toHaveLength(count)
     expect([...f.listeners.values()].every((set) => set.size === 0)).toBe(true)
@@ -265,6 +450,7 @@ describe('wallet workspace markup', () => {
     expect(html).toContain('Wallet linking is being configured')
     expect(html).toContain('Ownership verification only. No payment, gas fee or token approval.')
     expect(html).not.toContain('Verify wallet ownership')
+    expect(html).not.toContain('Switch to Polygon Amoy')
   })
   it('uses shared portal tokens and dark-on-cyan button text without altering ownership controls', () => {
     const html = renderToStaticMarkup(<MetaMaskWalletLink organisations={organisations} wallets={[wallet]} configured appearance="portal" />)
@@ -277,6 +463,7 @@ describe('wallet workspace markup', () => {
     expect(html).not.toMatch(/(?:text|bg|border|ring)-\[#[a-f0-9]+\]/i)
     expect(html).toContain('Saved ownership proof')
     expect(html).toContain('Connect MetaMask'); expect(html).toContain('Verify wallet ownership')
+    expect(html).not.toContain('Switch to Polygon Amoy')
     expect(html).toContain('Wallet ownership does not approve transactions or grant financial access')
   })
   it('renders persisted pending ownership with full wrapped address, tenant, timestamp and network', () => {

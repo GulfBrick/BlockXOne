@@ -359,7 +359,10 @@ begin
     if pg_catalog.jsonb_typeof(method) is distinct from 'object'
       or not(method ?& array['method','timestamp']) or method-array['method','timestamp']<>'{}'::jsonb
       or pg_catalog.jsonb_typeof(method->'method') is distinct from 'string'
-      or method->>'method' not in ('password','totp','mfa/totp')
+      or (method->>'method' not in ('password','totp','mfa/totp')
+        and not (p_aal='aal2' and method->>'method'='otp'
+          and exists(select 1 from pg_catalog.jsonb_array_elements(a->'amr') amr_proof(entry)
+            where amr_proof.entry->>'method' in ('totp','mfa/totp'))))
       or pg_catalog.jsonb_typeof(method->'timestamp') is distinct from 'number'
       or coalesce(method->>'timestamp','') !~ '^[1-9][0-9]{0,11}$'
       or (method->>'timestamp')::numeric>at then

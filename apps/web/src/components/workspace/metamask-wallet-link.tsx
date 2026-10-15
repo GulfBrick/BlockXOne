@@ -11,7 +11,7 @@ export type MetaMaskProvider = {
 }
 type MetaMaskChoice = { id: string; provider: MetaMaskProvider }
 export type WalletLinkState = {
-  phase: 'idle' | 'connecting' | 'connected' | 'challenging' | 'signing' | 'submitting' | 'refreshing' | 'error'
+  phase: 'idle' | 'connecting' | 'connected' | 'switching' | 'challenging' | 'signing' | 'submitting' | 'refreshing' | 'error'
   address: string | null
   chainId: number | null
   message: string
@@ -22,7 +22,7 @@ type WalletPost = (path: string, body: URLSearchParams, signal: AbortSignal) => 
 const initialState: WalletLinkState = { phase: 'idle', address: null, chainId: null, message: '', mustReload: false }
 const addressPattern = /^0x[0-9a-f]{40}$/i
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
-const busyPhases = new Set(['connecting', 'challenging', 'signing', 'submitting', 'refreshing'])
+const busyPhases = new Set(['connecting', 'switching', 'challenging', 'signing', 'submitting', 'refreshing'])
 const errorCopy: Record<WalletErrorCode, string> = {
   invalid_request: 'Wallet verification could not start. Reconnect MetaMask and try again.',
   unauthorised: 'Your session or organisation access has changed. Reload the workspace and sign in again if needed.',
@@ -94,6 +94,7 @@ export function createWalletLinkController(deps: { post: WalletPost; refresh: ()
   let provider: MetaMaskProvider | null = null
   let organisationId = ''
   let generation = 0
+  let connectionChanges = 0
   let abort: AbortController | null = null
   let disposed = false
   let expectedWallet: LinkedWallet | null = null
@@ -108,8 +109,20 @@ export function createWalletLinkController(deps: { post: WalletPost; refresh: ()
     update({ phase: 'idle', address: null, chainId: null, mustReload: unknown,
       message: unknown ? 'Wallet changed while verification was being saved. Reload the workspace to check its status.' : 'Wallet account or network changed. Connect MetaMask again.' })
   }
-  const events = ['accountsChanged', 'chainChanged', 'disconnect']
-  const detach = () => { if (provider) for (const event of events) { try { provider.removeListener(event, invalidate) } catch { /* A failed provider cannot prevent attempt invalidation. */ } } }
+  const walletChanged = () => {
+    // Permission approval can announce the first account while requestAccounts is
+    // still pending. Only connection may converge from that event; every later
+    // ownership action retains the original invalidation/unknown-result guard.
+    if (state.phase === 'connecting') { connectionChanges += 1; return }
+    invalidate()
+  }
+  const chainChanged = () => {
+    const switching = state.phase === 'switching'
+    walletChanged()
+    if (switching) update({ message: 'Network changed in MetaMask. Connect again to check your account and network.' })
+  }
+  const events = [['accountsChanged', walletChanged], ['chainChanged', chainChanged], ['disconnect', invalidate]] as const
+  const detach = () => { if (provider) for (const [event, listener] of events) { try { provider.removeListener(event, listener) } catch { /* A failed provider cannot prevent attempt invalidation. */ } } }
   const begin = (phase: WalletLinkState['phase'], message: string) => {
     generation += 1; abort?.abort(); abort = new AbortController()
     update({ phase, message }); return { id: generation, signal: abort.signal }
@@ -133,7 +146,7 @@ export function createWalletLinkController(deps: { post: WalletPost; refresh: ()
       if (disposed || (provider === next && organisationId === org)) return
       detach(); invalidate(); provider = next; organisationId = org; expectedWallet = null
       if (provider) {
-        try { for (const event of events) provider.on(event, invalidate) }
+        try { for (const [event, listener] of events) provider.on(event, listener) }
         catch { detach(); provider = null; update({ phase: 'error', message: 'MetaMask could not be monitored safely. Reload the wallet and try again.' }); return }
       }
       update({ message: state.mustReload ? state.message : '' })
@@ -144,16 +157,58 @@ export function createWalletLinkController(deps: { post: WalletPost; refresh: ()
       const selected = provider
       const attempt = begin('connecting', 'Open MetaMask to connect your account…')
       try {
-        const address = firstAccount(await selected.request({ method: 'eth_requestAccounts' }))
+        const permittedAddress = firstAccount(await selected.request({ method: 'eth_requestAccounts' }))
         if (!current(attempt)) return
-        if (!address) { update({ phase: 'error', message: 'Unlock MetaMask and select an account, then connect again.' }); return }
-        const chainId = chainNumber(await selected.request({ method: 'eth_chainId' }))
-        if (!current(attempt)) return
-        if (!chainId) { update({ phase: 'error', message: 'MetaMask returned an unsupported network. Check the wallet and reconnect.' }); return }
-        update({ phase: 'connected', address, chainId, message: chainId === WALLET_CHAIN_ID
-          ? 'Connected. Review your account and network, then verify wallet ownership.'
-          : 'Switch to Polygon Amoy testnet (80002) in MetaMask, then reconnect. No automatic network change will be requested.' })
+        if (!permittedAddress) { update({ phase: 'error', message: 'Unlock MetaMask and select an account, then connect again.' }); return }
+        // Do not trust the permission response as the final selected account.
+        // Read a stable pair again, with a finite bound if MetaMask keeps changing.
+        for (let read = 0; read < 3; read += 1) {
+          const changes = connectionChanges
+          const address = firstAccount(await selected.request({ method: 'eth_accounts' }))
+          if (!current(attempt)) return
+          const chainId = chainNumber(await selected.request({ method: 'eth_chainId' }))
+          if (!current(attempt)) return
+          if (changes !== connectionChanges) continue
+          const confirmedAddress = firstAccount(await selected.request({ method: 'eth_accounts' }))
+          if (!current(attempt)) return
+          const confirmedChain = chainNumber(await selected.request({ method: 'eth_chainId' }))
+          if (!current(attempt)) return
+          if (changes !== connectionChanges || address !== confirmedAddress || chainId !== confirmedChain) continue
+          if (!address) { update({ phase: 'error', message: 'Unlock MetaMask and select an account, then connect again.' }); return }
+          if (!chainId) { update({ phase: 'error', message: 'MetaMask returned an unsupported network. Check the wallet and reconnect.' }); return }
+          update({ phase: 'connected', address, chainId, message: chainId === WALLET_CHAIN_ID
+            ? 'Connected. Review your account and network, then verify wallet ownership.'
+            : 'Select Switch to Polygon Amoy below and confirm the network change in MetaMask. Then connect again. Required chain ID: 80002.' })
+          return
+        }
+        invalidate()
       } catch (error) { if (current(attempt)) reject(error) }
+    },
+    async switchNetwork() {
+      if (disposed || busyPhases.has(state.phase) || state.mustReload || state.phase !== 'connected'
+        || !provider || !organisationId || !state.address || !state.chainId || state.chainId === WALLET_CHAIN_ID) return
+      const selected = provider; const address = state.address; const chainId = state.chainId
+      const attempt = begin('switching', 'Confirm the Polygon Amoy network change in MetaMask. This is not a transaction or signature.')
+      try {
+        const currentAddress = firstAccount(await selected.request({ method: 'eth_accounts' }))
+        if (!current(attempt)) return
+        const currentChain = chainNumber(await selected.request({ method: 'eth_chainId' }))
+        if (!current(attempt)) return
+        if (currentAddress !== address || currentChain !== chainId) { invalidate(); return }
+        await selected.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: '0x13882' }] })
+        if (!current(attempt)) return
+        // A successful prompt is not a new connection or ownership proof. Even
+        // providers that omit chainChanged require an explicit fresh connection.
+        invalidate()
+        update({ message: 'Network request completed. Connect MetaMask again to check your account and network.' })
+      } catch (error) {
+        if (!current(attempt)) return
+        update({ phase: 'connected', message: record(error) && error.code === 4001
+          ? 'Network change cancelled in MetaMask. No transaction or ownership verification was requested.'
+          : record(error) && error.code === 4902
+            ? 'Polygon Amoy is not added to this wallet. Add the existing Polygon Amoy network in MetaMask, then reconnect. BlockXOne has not added a network automatically.'
+            : 'MetaMask could not change the network. Check the wallet and reconnect. No transaction or ownership verification was requested.' })
+      }
     },
     async verify() {
       if (disposed || busyPhases.has(state.phase) || state.mustReload) return
@@ -279,6 +334,7 @@ export function MetaMaskWalletLink({ organisations, wallets, configured, readUna
       {state.address ? <div className={`mt-4 min-w-0 space-y-2 text-base ${muted}`}><p>Connected account: <span className={`block break-all font-mono ${ink}`}>{state.address}</span></p><p>Current network: {state.chainId === WALLET_CHAIN_ID ? WALLET_CHAIN_NAME : 'Unsupported network'} · Chain ID {state.chainId}</p></div> : null}
       <div className="mt-6 flex flex-wrap gap-3">
         <Button type="button" variant="outline" className={outlineClass} disabled={busy || state.mustReload || !selectedId || !organisationId} onClick={() => void controller.current?.connect()}>Connect MetaMask</Button>
+        {state.address && state.chainId !== WALLET_CHAIN_ID && ['connected', 'switching'].includes(state.phase) ? <Button type="button" variant="outline" className={outlineClass} disabled={busy || state.mustReload || !selectedId || !organisationId} onClick={() => void controller.current?.switchNetwork()}>{state.phase === 'switching' ? 'Switching network...' : 'Switch to Polygon Amoy'}</Button> : null}
         <Button type="button" className={primaryClass} disabled={busy || state.mustReload || !state.address || state.chainId !== WALLET_CHAIN_ID} onClick={() => void controller.current?.verify()}>Verify wallet ownership</Button>
         {state.mustReload || state.phase === 'refreshing' ? <Button type="button" variant="outline" className={outlineClass} onClick={() => {
           if (state.mustReload || !refresh.current) window.location.reload()
