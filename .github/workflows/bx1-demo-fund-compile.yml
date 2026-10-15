@@ -6,7 +6,7 @@ on:
       mode:
         description: Cloud acceptance, empty-form browser proof, or focused UI and password-recovery checks
         type: choice
-        options: [acceptance, registration-browser-proof, fund-dashboard-focused, theme-focused, auth-recovery-focused, connected-session-focused, document-read-recovery-focused, fund-signer-entry-focused, connected-fund-providers-focused, official-scanner-focused, offering-signatures-api-focused, offering-scanner-operating, offering-scanner-source-focused, provider-diagnostics-focused, document-result-recovery-focused, wallet-context-focused, appointment-commit-focused, publication-view-focused, investor-admission-roleplay-focused]
+        options: [acceptance, registration-browser-proof, fund-dashboard-focused, theme-focused, auth-recovery-focused, connected-session-focused, document-read-recovery-focused, fund-signer-entry-focused, connected-fund-providers-focused, official-scanner-focused, offering-signatures-api-focused, offering-scanner-operating, offering-scanner-source-focused, provider-diagnostics-focused, document-result-recovery-focused, wallet-context-focused, appointment-commit-focused, publication-view-focused, investor-admission-roleplay-focused, appointment-projection-cost-focused]
         default: acceptance
       scanner_scope:
         description: Queue for one protected manual scanner invocation only
@@ -772,7 +772,7 @@ jobs:
 
   fund-dashboard-focused:
     name: Focused dashboard, theme or password-recovery acceptance
-    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.mode == 'fund-dashboard-focused' || inputs.mode == 'theme-focused' || inputs.mode == 'auth-recovery-focused' || inputs.mode == 'connected-session-focused' || inputs.mode == 'document-read-recovery-focused' || inputs.mode == 'fund-signer-entry-focused' || inputs.mode == 'connected-fund-providers-focused' || inputs.mode == 'offering-signatures-api-focused' || inputs.mode == 'provider-diagnostics-focused' || inputs.mode == 'document-result-recovery-focused' || inputs.mode == 'wallet-context-focused' || inputs.mode == 'appointment-commit-focused' || inputs.mode == 'publication-view-focused' || inputs.mode == 'investor-admission-roleplay-focused') && github.ref == 'refs/heads/codex/stage2-sandbox-completion-20261011' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.mode == 'fund-dashboard-focused' || inputs.mode == 'theme-focused' || inputs.mode == 'auth-recovery-focused' || inputs.mode == 'connected-session-focused' || inputs.mode == 'document-read-recovery-focused' || inputs.mode == 'fund-signer-entry-focused' || inputs.mode == 'connected-fund-providers-focused' || inputs.mode == 'offering-signatures-api-focused' || inputs.mode == 'provider-diagnostics-focused' || inputs.mode == 'document-result-recovery-focused' || inputs.mode == 'wallet-context-focused' || inputs.mode == 'appointment-commit-focused' || inputs.mode == 'publication-view-focused' || inputs.mode == 'investor-admission-roleplay-focused' || inputs.mode == 'appointment-projection-cost-focused') && github.ref == 'refs/heads/codex/stage2-sandbox-completion-20261011' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -816,7 +816,9 @@ jobs:
           node --input-type=module <<'NODE'
           import { spawn } from 'node:child_process'
           import { runHermeticVitest } from './scripts/run-hermetic-tests.mjs'
-          const files = process.env.BX1_FOCUSED_UI_MODE === 'investor-admission-roleplay-focused' ? [
+          const files = process.env.BX1_FOCUSED_UI_MODE === 'appointment-projection-cost-focused' ? [
+            'src/lib/portal/fund-appointment-projection-cost-schema.test.ts',
+          ] : process.env.BX1_FOCUSED_UI_MODE === 'investor-admission-roleplay-focused' ? [
             'src/lib/portal/fund-roleplay-investor-admission-schema.test.ts',
             'src/lib/portal/fund-roleplay-admission.test.ts',
             'src/lib/portal/admission.test.ts',
