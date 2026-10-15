@@ -60,7 +60,8 @@ describe('package-only TEST password command boundary', () => {
     expect(mocks.rpc).not.toHaveBeenCalled()
   })
   it.each([{ actor_id: organisation }, { environment: 'MAINNET' }, { operating_context: { ...manager, organisationId: actor } },
-    { session_mode: 'STANDARD' }, { allowed_commands: ['review_product'] }])('rejects invalid package read projections before mutation %#', async change => {
+    // STANDARD is an existing valid native mode, not a malformed projection.
+    { session_mode: 'UNVERIFIED' }, { allowed_commands: ['review_product'] }])('rejects invalid package read projections before mutation %#', async change => {
     before({ ...marked, offering_access: { ...access, ...change } }); saved()
     expect((await POST(request(submit))).status).toBe(503)
     expect(mocks.rpc).not.toHaveBeenCalled()
