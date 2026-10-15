@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { NextRequest } from 'next/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 vi.mock('server-only', () => ({}))
-const mocks = vi.hoisted(() => ({ query: vi.fn(), user: vi.fn(), session: vi.fn(), rpc: vi.fn(), scoped: vi.fn(),
+const mocks = vi.hoisted(() => ({ query: vi.fn(), user: vi.fn(), session: vi.fn(), rpc: vi.fn(), scoped: vi.fn(), lifecycle: vi.fn(),
   client: vi.fn(), storage: vi.fn(), download: vi.fn(), fetch: vi.fn(), after: vi.fn() }))
 vi.mock('next/server', async original => ({ ...await original<object>(), after: mocks.after }))
 vi.mock('pg', async original => ({ ...await original<object>(), Pool: class {
@@ -43,6 +43,12 @@ function snapshot(): OfferingSignatureSnapshot {
     revision_id: revision, expected_revision: 3, purpose: 'ISSUER_PACKAGE_EXECUTION', admitted: true,
     authorisations: [], operations: [], allowed_commands: [], blocker: null }
 }
+function fundLifecycle() {
+  // A separate, scoped reader response: no fund, transaction or ownership proof is invented.
+  return { schema_version: 1, projection_revision: 1, actor_id: actor, environment: 'TESTNET',
+    operating_context: context, observed_at: '2026-10-15T12:00:00Z', availability: 'UNAVAILABLE',
+    reason_code: 'FUND_AUTHORITY_NOT_CURRENT', products: [] }
+}
 function evidence(): OfferingSignatureSnapshot {
   return { ...snapshot(), authorisations: [{ id: product, signer_id: actor, signer_person_id: actor, appointment_id: product,
     state: 'REVOKED', valid_from: '2026-01-01T00:00:00Z', valid_until: '2027-01-01T00:00:00Z', source_reference: 'Synthetic historical purpose evidence.' }],
@@ -72,7 +78,12 @@ beforeEach(() => {
   mocks.session.mockResolvedValue(authSession())
   mocks.scoped.mockResolvedValue({ data: { actor: { id: actor, email: user.email, can_review: false },
     operating_context: context, applications: [], organisations: [], products: [], subscriptions: [], events: [] }, error: null })
-  mocks.rpc.mockReturnValue({ abortSignal: mocks.scoped })
+  mocks.lifecycle.mockResolvedValue({ data: fundLifecycle(), error: null })
+  mocks.rpc.mockImplementation((name: string) => {
+    if (name === 'bx1_portal_read_scoped') return { abortSignal: mocks.scoped }
+    if (name === 'bx1_portal_fund_lifecycle_read_scoped') return { abortSignal: mocks.lifecycle }
+    throw new Error('Unexpected synthetic RPC boundary')
+  })
   mocks.client.mockReturnValue({ auth: { getUser: mocks.user, getSession: mocks.session }, rpc: mocks.rpc })
   mocks.storage.mockReturnValue({ storage: { from: () => ({ download: mocks.download }) } })
   mocks.download.mockResolvedValue({ data: new Blob([pdf], { type: 'application/pdf' }), error: null })
@@ -87,10 +98,20 @@ describe('signature actor API using real application guards and synthetic extern
     expect(await response.json()).toEqual(snapshot())
     expect(response.headers.get('cache-control')).toContain('no-store')
     expect(mocks.rpc).toHaveBeenCalledWith('bx1_portal_read_scoped', { operating_context: context })
+    expect(mocks.rpc).toHaveBeenCalledWith('bx1_portal_fund_lifecycle_read_scoped', { operating_context: context })
     expect(mocks.query.mock.calls[0][1].slice(0, 5)).toEqual([actor, sessionId, 'aal1', JSON.stringify(context), revision])
     expect(mocks.fetch).not.toHaveBeenCalled()
     expect(mocks.after).not.toHaveBeenCalled()
   })
+  it.each([{ actor_id: product }, { environment: 'MAINNET' }, { operating_context: { ...context, role: 'ComplianceOfficer' } }])(
+    'retains the real fund reader scope guard before any signature receipt access (%j)', async mismatch => {
+      mocks.lifecycle.mockResolvedValueOnce({ data: { ...fundLifecycle(), ...mismatch }, error: null })
+      const response = await GET(get())
+      expect(response.status).toBe(503)
+      expect(await response.json()).toEqual({ error: 'Fund progress could not be verified for this account and workspace.' })
+      expect(mocks.query).not.toHaveBeenCalled()
+      expect(mocks.after).not.toHaveBeenCalled()
+    })
   it.each(['&revision_id=duplicate', '&mode=applicant', '&path=arbitrary', `&expected_actor=${actor}`, `&id=${key}`, '&download=0'])(
     'rejects ambiguous or unsolicited query data %s before database access', async extra => {
       expect((await GET(get(extra))).status).toBe(400)
