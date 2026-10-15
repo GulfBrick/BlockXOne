@@ -20,6 +20,7 @@ const nextKey = '99999999-9999-4999-8999-999999999999'
 const context: Extract<PortalOperatingContext, { mode: 'ROLE' }> = { mode: 'ROLE', organisationId: organisation, role: 'OfferingManager' }
 const instruction: PortalCommand = { command: 'publish_product', key, payload: { product_id: product, expected_revision: 3 } }
 function acknowledgement(request: PortalCommand = instruction): FundPublicationCommit {
+  if (request.command !== 'publish_product') throw new Error('The publication fixture requires a publish_product request.')
   return { kind: 'TEST_FUND_PUBLICATION_COMMIT', version: 1, environment: 'TESTNET', execution_mode: 'TEST_ROLE_PLAY', independence_proven: false,
     actor_id: actor, session_id: session, operating_context: { mode: 'ROLE', organisationId: organisation, role: 'OfferingManager' },
     policy_id: policy, authority_epoch: 2, product_id: product, offering_revision_id: offering, product_revision: 4,
