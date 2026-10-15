@@ -226,7 +226,7 @@ begin
   select * into r from bx1_portal.offering_revisions where id=p.current_offering_revision_id;
   select * into s from bx1_portal.fund_setups where product_id=p.id and offering_revision_id=r.id;
   if s.id is not null then
-    select * into next_step from bx1_portal.fund_setup_steps where setup_id=s.id and state<>'FINAL' order by ordinal limit 1;
+    select candidate_step.* into next_step from bx1_portal.fund_setup_steps candidate_step where candidate_step.setup_id=s.id and candidate_step.state<>'FINAL' order by candidate_step.ordinal limit 1;
     if s.safe_state<>'VERIFIED' and next_step.step_key is distinct from 'safe_creation' then next_step:=null;end if;
     select coalesce(pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object('id',t.id,'step_key',t.step_key,'ordinal',t.ordinal,'kind',t.kind,
       'revision',t.revision,'state',t.state,'actor_id',t.actor_id,'sender',t.sender,'nonce',t.nonce::text,
@@ -237,7 +237,7 @@ begin
       from bx1_portal.fund_setup_steps t where t.setup_id=s.id and t.kind='CREATE' and t.state='FINAL';
     state:=case when s.revoked_at is not null then 'REVOKED' when s.expires_at<=pg_catalog.clock_timestamp() then 'EXPIRED' when s.recovery_hold then 'RECOVERY_REQUIRED'
       when bx1_portal.fund_setup_current(s.id,s.operating_context) is not true then 'STALE' when s.safe_state<>'VERIFIED' then 'AWAITING_SAFE'
-      when next_step.id is null then 'COMPLETE_NOT_ADMITTED' when exists(select 1 from bx1_portal.fund_setup_steps where setup_id=s.id and state<>'NOT_STARTED') then 'IN_PROGRESS' else 'READY' end;
+      when next_step.id is null then 'COMPLETE_NOT_ADMITTED' when exists(select 1 from bx1_portal.fund_setup_steps progress_step where progress_step.setup_id=s.id and progress_step.state<>'NOT_STARTED') then 'IN_PROGRESS' else 'READY' end;
     record:=pg_catalog.jsonb_build_object('id',s.id,'revision',s.revision,'actor_id',s.actor_id,'operating_context',s.operating_context,
       'state',state,'recovery_hold',s.recovery_hold,'recovery_reason',s.recovery_reason,'recovery_observation_id',s.recovery_observation_id,
       'expires_at',s.expires_at,'safe_address',s.safe_address,'safe_state',s.safe_state,'safe_owners',s.safe_owners,
