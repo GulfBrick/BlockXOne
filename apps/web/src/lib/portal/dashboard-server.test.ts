@@ -100,6 +100,55 @@ describe('normal paused TEST package dashboard', () => {
     expect(result.kind).toBe('role'); expect(result.portal).toEqual(standard)
     expect(mocks.entry).toHaveBeenCalledOnce(); expect(mocks.current).toHaveBeenCalledOnce()
   })
+  function standardRoleplayManager() {
+    const { selected, portal } = setup('OfferingManager')
+    mocks.sufficient.mockReturnValue(true)
+    const productOrganisation = '55555555-5555-4555-8555-555555555555'
+    const standard = { ...portal, snapshot: { ...portal.snapshot,
+      offering_access: { ...portal.snapshot.offering_access, session_mode: 'STANDARD', allowed_commands: ['request_product_service_appointment'] },
+      organisations: [{ id: productOrganisation, name: 'Saved TEST fund organisation', status: 'ACTIVE',
+        native_organisation_id: organisation, roles: ['OfferingManager'], authority_source: 'TEST_ROLE_PLAY' }],
+      products: [{ id: '66666666-6666-4666-8666-666666666666', organisation_id: productOrganisation,
+        created_by: actor.id, terms_hash: 'a'.repeat(64), status: 'IN_REVIEW',
+        offering_package: { id: '77777777-7777-4777-8777-777777777777', terms_hash: 'a'.repeat(64) } }],
+    } }
+    mocks.portal.mockResolvedValue(standard)
+    return { selected, standard }
+  }
+  it('opens the genuine STANDARD role-play manager package without inventing customer-admission access', async () => {
+    const { selected, standard } = standardRoleplayManager()
+    expect(standard.snapshot).not.toHaveProperty('stage2_access')
+    const result = await loadRoleDashboard({ organisation, role: 'OfferingManager' })
+    expect(result.kind).toBe('role'); expect(result.portal).toEqual(standard)
+    expect(mocks.portal).toHaveBeenCalledExactlyOnceWith(mocks.client, selected)
+    expect(mocks.current).toHaveBeenCalledOnce()
+    expect(mocks.workspace).not.toHaveBeenCalled()
+  })
+  it.each(['marker', 'actor', 'context', 'native-organisation', 'organisation-source', 'product-organisation', 'creator', 'terms', 'mfa', 'session'])(
+    'does not admit an invalid STANDARD manager package binding: %s', async changed => {
+      const { standard } = standardRoleplayManager()
+      if (changed === 'marker') standard.snapshot.offering_access.allowed_commands = ['publish_product']
+      if (changed === 'actor') standard.snapshot.offering_access.actor_id = otherOrganisation
+      if (changed === 'context') standard.snapshot.offering_access.operating_context = { ...standard.snapshot.offering_access.operating_context, organisationId: otherOrganisation }
+      if (changed === 'native-organisation') standard.snapshot.organisations[0].native_organisation_id = otherOrganisation
+      if (changed === 'organisation-source') standard.snapshot.organisations[0].authority_source = 'TEST_EVALUATION'
+      if (changed === 'product-organisation') standard.snapshot.products[0].organisation_id = otherOrganisation
+      if (changed === 'creator') standard.snapshot.products[0].created_by = otherOrganisation
+      if (changed === 'terms') standard.snapshot.products[0].offering_package.terms_hash = 'b'.repeat(64)
+      if (changed === 'mfa') mocks.sufficient.mockReturnValue(false)
+      if (changed === 'session') mocks.current.mockResolvedValue(false)
+      await expect(loadRoleDashboard({ organisation, role: 'OfferingManager' })).rejects.toMatchObject({ status: 403 })
+    })
+  it('does not extend the STANDARD package-only exception to another role', async () => {
+    const { standard } = standardRoleplayManager()
+    const issuerContext = { mode: 'ROLE' as const, organisationId: organisation, role: 'IssuerFundManager' as const }
+    const issuerPortal = { ...standard, snapshot: { ...standard.snapshot, operating_context: issuerContext,
+      offering_access: { ...standard.snapshot.offering_access, operating_context: issuerContext, allowed_commands: ['review_offering_issuer'] } } }
+    mocks.entry.mockResolvedValue({ ...ordinaryFor('IssuerFundManager').entry,
+      contexts: [{ context_key: organisation, organisation_id: organisation, name: 'Own organisation', roles: ['IssuerFundManager'] }] })
+    mocks.portal.mockResolvedValue(issuerPortal)
+    await expect(loadRoleDashboard({ organisation, role: 'IssuerFundManager' })).rejects.toMatchObject({ status: 403 })
+  })
 })
 
 describe('fresh dashboard authority and environment admission', () => {

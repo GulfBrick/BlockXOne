@@ -813,6 +813,7 @@ jobs:
             'src/lib/supabase/middleware.test.ts',
             'src/app/api/portal/kyc/readiness/route.test.ts',
             'src/app/api/portal/offering-signatures/provider-status/route.test.ts',
+            'src/lib/portal/dashboard-server.test.ts',
           ] : process.env.BX1_FOCUSED_UI_MODE === 'offering-signatures-api-focused' ? [
             'src/lib/portal/offering-signatures-api.test.ts',
             'src/components/portal/product-service-appointments.test.tsx',

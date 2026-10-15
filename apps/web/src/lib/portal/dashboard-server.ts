@@ -74,7 +74,18 @@ export async function loadRoleDashboard(query: DashboardQuery) {
       return ordinaryPackageEntry()
     }
     const access = validatedStage2Access(portal.snapshot, operatingContext, release.environment)
-    if (portal.user.id !== user.id || (packageScope ? !offering : !access)
+    // The product-bound TEST reader deliberately returns offering_access, not
+    // customer-admission authority. Its guarded RPC rechecks the current policy,
+    // epoch and product; do not require an invented Stage 2 marker to display it.
+    const standardManagerPackage = release.environment === 'TESTNET' && scope?.role === 'OfferingManager'
+      && hasRequiredMfa(context) && offering?.session_mode === 'STANDARD'
+      && portal.snapshot.organisations.some(organisation => organisation.authority_source === 'TEST_ROLE_PLAY'
+        && organisation.status === 'ACTIVE' && organisation.native_organisation_id === scope.organisationId
+        && organisation.roles.includes('OfferingManager') && portal.snapshot.products.some(product =>
+          product.organisation_id === organisation.id && product.created_by === user.id
+          && product.offering_package?.terms_hash === product.terms_hash))
+    if (portal.user.id !== user.id || ((packageScope || standardManagerPackage) ? !offering : !access)
+      || offering?.session_mode === 'STANDARD' && !hasRequiredMfa(context)
       || portal.snapshot.stage2_access !== undefined && !access || !await isMfaContextCurrent(client, context)) throw new PortalError('Complete sign-in again.', 403)
     if (applicant) return { kind: 'applicant' as const, entry, chooseContext, portal, release, operatingContext, scopes }
     if (!scope) throw new PortalError('No active role assignment is available.', 403)
