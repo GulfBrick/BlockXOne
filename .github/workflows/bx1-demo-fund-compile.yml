@@ -826,6 +826,7 @@ jobs:
             'src/components/portal/funding-workflows.test.tsx',
             'src/lib/portal/fund-roleplay-investor-continuation-schema.test.ts',
             'src/lib/portal/fund-roleplay-admission-commit-schema.test.ts',
+            'src/lib/portal/offering-document-evidence-projection-read-schema.test.ts',
             'src/lib/portal/admission-commit.test.ts',
             'src/lib/portal/api.test.ts',
             'src/lib/portal/documents-api.test.ts',
