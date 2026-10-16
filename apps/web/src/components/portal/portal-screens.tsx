@@ -155,6 +155,13 @@ function ProductCard({ product, operatingContext }: { product: PortalProduct; op
   </article>
 }
 
+function fundLaunchProgress(fund: FundProductLifecycle): string {
+  if (fund.stages.find(stage => stage.key === 'APPROVAL')?.state !== 'COMPLETE') return 'Launch reviews are still in progress. This fund is not open for investment.'
+  if (fund.stages.find(stage => stage.key === 'DEPLOYMENT')?.state !== 'COMPLETE') return 'Blockchain setup is still in progress. This fund is not open for investment.'
+  if (fund.stages.find(stage => stage.key === 'OPENING')?.state !== 'COMPLETE') return 'The fund is being prepared for opening. It cannot accept an investment yet.'
+  return 'Current investment terms are not available in this workspace. No investment or payment can be made here.'
+}
+
 function ProductRegister({ products, canCreate, operatingContext }: { products: PortalProduct[]; canCreate: boolean; operatingContext?: PortalOperatingContext }) {
   return <Panel title="Product register" description="Fund and real-estate products share one workflow; submitted packages keep separate immutable references." action={canCreate ? <Link href={portalScopeHref('/portal/products/new', operatingContext)} className={styles.button}><Plus aria-hidden="true" />Create a product</Link> : undefined} flush>
     {products.length ? <div className={styles.tableWrap}><table className={styles.table}><thead><tr><th scope="col">Product</th><th scope="col">Template</th><th scope="col">Package</th><th scope="col">Status</th><th scope="col">Workspace</th></tr></thead>
@@ -482,8 +489,13 @@ function OperatingPortalScreen({ data, view, id, operatingContext, release, scop
   const orderOrganisations = passwordWorkflow ? [] : organisations.filter(org => permits(org, 'read_orders', operatingContext))
   const incomingSubscriptions = snapshot.subscriptions.filter(item => orderOrganisations.some(org => org.id === item.organisation_id) && managedProducts.some(product => product.id === item.product_id))
   const published = snapshot.products.filter(isOfferingSubscribable)
+  const preparingFunds = release?.environment === 'TESTNET' && context.mode === 'ROLE' && context.role === 'Investor'
+    && snapshot.actor.id === data.user.id && portalContextMatches(snapshot.operating_context, context) && fundLifecycle?.availability === 'AVAILABLE'
+    ? fundLifecycle.products.filter((item, _index, rows) => !published.some(product => product.id === item.product_id)
+      && rows.filter(other => other.product_id === item.product_id).length === 1) : []
   const detailProducts = view === '/portal/products/detail' ? managedProducts : view === '/portal/opportunities/detail' ? published : canReview ? snapshot.products : []
   const selected = id ? detailProducts.find(product => product.id === id) : undefined
+  const selectedProgress = view === '/portal/opportunities/detail' && !selected ? preparingFunds.find(item => item.product_id === id) : undefined
   const selectedApplication = id && canReview ? snapshot.applications.find(application => application.id === id) : undefined
   const matchingEligibility = id && canReview && !passwordWorkflow ? [...(Array.isArray(snapshot.product_eligibility) ? snapshot.product_eligibility : []), ...(validatedEntityProductEligibility(snapshot) ?? [])].filter(item => item.id === id
     && snapshot.products.some(product => product.id === item.product_id && product.organisation_id === item.organisation_id)) : []
@@ -494,7 +506,7 @@ function OperatingPortalScreen({ data, view, id, operatingContext, release, scop
   const reviewSnapshot = canReview ? snapshot : { ...snapshot, actor: { ...snapshot.actor, can_review: false } }
   const config = PAGE[view]
   const roleTitle = evaluation ? role === 'OfferingManager' ? 'Your TEST fund and property drafts.' : 'Your TEST investor workspace.' : role === 'Investor' ? 'Your investments and orders.' : passwordOffering && role === 'OfferingManager' ? 'Your products and offering packages.' : passwordOffering && role === 'IssuerFundManager' ? 'Your appointed offering packages.' : role === 'OfferingManager' || role === 'IssuerFundManager' ? 'Your products and incoming orders.' : role === 'ComplianceOfficer' ? 'Your compliance work queue.' : role === 'SuperAdmin' ? 'Your platform administration queue.' : role === 'TreasuryOperator' ? 'Your funding operations.' : role === 'FinancialController' ? 'Your independent reconciliation queue.' : undefined
-  const title = selected && ['/portal/products/detail', '/portal/opportunities/detail'].includes(view) ? selected.terms.name : selectedApplication && view === '/portal/compliance/detail' ? selectedApplication.details.full_name : selectedEligibility && view === '/portal/compliance/detail' ? `Eligibility: ${selectedEligibility.product_name ?? snapshot.products.find(product => product.id === selectedEligibility.product_id)?.terms.name ?? 'offering'}` : selectedEntityMandate && view === '/portal/compliance/detail' ? `Entity mandate: ${selectedEntityMandate.entity_name}` : selectedMandate && view === '/portal/compliance/detail' ? `Representative appointment: ${selectedMandate.organisation_name}` : selectedProductAppointment && view === '/portal/compliance/detail' ? 'Product service appointment' : view === '/portal' && roleTitle ? roleTitle : config.title
+  const title = selectedProgress ? selectedProgress.product_name : selected && ['/portal/products/detail', '/portal/opportunities/detail'].includes(view) ? selected.terms.name : selectedApplication && view === '/portal/compliance/detail' ? selectedApplication.details.full_name : selectedEligibility && view === '/portal/compliance/detail' ? `Eligibility: ${selectedEligibility.product_name ?? snapshot.products.find(product => product.id === selectedEligibility.product_id)?.terms.name ?? 'offering'}` : selectedEntityMandate && view === '/portal/compliance/detail' ? `Entity mandate: ${selectedEntityMandate.entity_name}` : selectedMandate && view === '/portal/compliance/detail' ? `Representative appointment: ${selectedMandate.organisation_name}` : selectedProductAppointment && view === '/portal/compliance/detail' ? 'Product service appointment' : view === '/portal' && roleTitle ? roleTitle : config.title
   const href = (path: PortalPath, recordId?: string) => portalScopeHref(path, operatingContext, recordId)
   const parentPath: PortalPath = config.active === 'products' ? '/portal/products' : config.active === 'compliance' ? '/portal/compliance' : config.active === 'portfolio' ? '/portal/portfolio' : config.active === 'onboarding' ? '/portal/onboarding' : '/portal/opportunities'
   const breadcrumbs = view === '/portal' ? [] : view === '/portal/orders/detail' ? [{ label: 'My operating workspace', href: href('/portal') }, { label: 'Subscription funding' }] : [{ label: config.active === 'products' ? 'Products & offerings' : config.active === 'compliance' ? 'Compliance' : config.active === 'opportunities' ? 'Opportunities' : config.active === 'portfolio' ? 'My orders' : 'My onboarding', href: view.includes('/detail') || view.endsWith('/new') ? href(parentPath) : undefined }, ...(view.includes('/detail') ? [{ label: selected?.terms.name || selectedApplication?.details.full_name || (selectedEntityMandate ? 'Entity investing mandate' : selectedMandate ? 'Representative appointment' : selectedEligibility ? 'Product eligibility case' : selectedProductAppointment ? 'Product service appointment' : 'Details') }] : view.endsWith('/new') ? [{ label: 'New product' }] : [])]
@@ -510,6 +522,12 @@ function OperatingPortalScreen({ data, view, id, operatingContext, release, scop
       : [...totals.entries()].map(([currency, total]) => money(total.toString(), currency)).join(' · ')
     return <div className={styles.statGrid}><Statistic label="Subscription instructions" value={ownSubscriptions.length} hint="Your saved investment orders" /><Statistic label="Awaiting funding" value={pending.length} hint="Reserved, not issued" /><Statistic label="Requested subscription amount" value={amount} hint="Pending instructions only; different assets are shown separately" /></div>
   }
+  function preparingFundList() {
+    return preparingFunds.length ? <Panel title="Funds preparing to open" description="These are scoped progress records, not offers you can buy."><ul>{preparingFunds.map(item => <li key={item.product_id}>
+      <strong>{item.product_name}</strong><p>Preparing to open. {fundLaunchProgress(item)}</p>
+      <Link href={href('/portal/opportunities/detail', item.product_id)} className={styles.textLink}>View fund progress</Link>
+    </li>)}</ul></Panel> : null
+  }
   function investorWork() {
     if (passwordAdmission) return <InvestmentAccountPanel snapshot={snapshot} onSaved={setSnapshot} operatingContext={operatingContext} />
     return entityOnly
@@ -522,7 +540,7 @@ function OperatingPortalScreen({ data, view, id, operatingContext, release, scop
         {view !== '/portal' || currentInvestorApplication(snapshot) || snapshot.accounts?.some(account => account.holder_user_id === snapshot.actor.id)
           ? <InvestmentAccountPanel snapshot={snapshot} onSaved={setSnapshot} operatingContext={operatingContext} /> : null}
         <Opportunities products={published} snapshot={snapshot} operatingContext={operatingContext} />
-        {fundLifecycle?.availability === 'AVAILABLE' && fundLifecycle.products.some(item => !published.some(product => product.id === item.product_id)) ? <Panel title="Funds preparing to open" description="These are scoped progress records, not offers you can buy."><ul>{fundLifecycle.products.filter(item => !published.some(product => product.id === item.product_id)).map(item => <li key={item.product_id}><strong>{item.product_name}</strong><p>Not open for investment. The issuer and its appointed operators must finish the fund opening requirements. No payment is available.</p></li>)}</ul></Panel> : null}
+        {preparingFundList()}
         {!fundLifecycle || fundLifecycle.availability !== 'AVAILABLE' ? <Notice title="Fund payment and holdings status unavailable">The current fund records could not be verified. This is not an empty portfolio or confirmation that no investment exists.</Notice> : null}
         {view !== '/portal' || ownSubscriptions.length > 0 ? <SubscriptionOrders subscriptions={ownSubscriptions} products={snapshot.products} incoming={false} onSaved={setSnapshot} operatingContext={operatingContext} funding={snapshot.funding} /> : null}
       </div>
@@ -636,7 +654,11 @@ function OperatingPortalScreen({ data, view, id, operatingContext, release, scop
       if (!canReview) return unavailable()
       return selectedApplication ? <div className={styles.stack}><ApplicationReview key={`${selectedApplication.id}-${selectedApplication.revision}`} application={selectedApplication} snapshot={reviewSnapshot} onSaved={setSnapshot} environment={release?.environment} />{!passwordWorkflow && selectedApplication.status === 'APPROVED' ? <CustomerMonitoringDecision key={`${selectedApplication.id}:${snapshot.customer_monitoring?.find(item => item.application_id === selectedApplication.id)?.case_revision ?? 'unavailable'}`} application={selectedApplication} snapshot={reviewSnapshot} operatingContext={operatingContext} onSaved={setSnapshot} /> : null}</div> : selectedEligibility ? <ProductEligibilityReview key={`${selectedEligibility.id}-${selectedEligibility.revision}`} eligibility={selectedEligibility} product={snapshot.products.find(product => product.id === selectedEligibility.product_id)} snapshot={reviewSnapshot} onSaved={setSnapshot} /> : selected ? <div className={styles.stack}><ProductReview key={`${selected.id}-${selected.revision}`} product={selected} snapshot={reviewSnapshot} onSaved={setSnapshot} /><OfferingFilePanel product={selected} context={operatingContext} actorId={snapshot.actor.id} /><OfferingSignatures product={selected} context={operatingContext} actorId={snapshot.actor.id} appointments={snapshot.product_appointments} /></div> : unavailable()
     }
-    if (view === '/portal/opportunities') return canInvest ? <div className={styles.stack}>{entityOnly ? <Notice title="Entity eligibility is separate">Review published terms and request a separate entity eligibility decision only with current admission, account and effective representative mandate. Entity subscriptions remain unavailable. Inspect account and appointment records in <Link href={href('/portal/portfolio')} className={styles.textLink}>your investment workspace</Link>.</Notice> : null}<Opportunities products={published} snapshot={snapshot} operatingContext={operatingContext} /></div> : unavailable()
+    if (view === '/portal/opportunities') return canInvest ? <div className={styles.stack}>{entityOnly ? <Notice title="Entity eligibility is separate">Review published terms and request a separate entity eligibility decision only with current admission, account and effective representative mandate. Entity subscriptions remain unavailable. Inspect account and appointment records in <Link href={href('/portal/portfolio')} className={styles.textLink}>your investment workspace</Link>.</Notice> : null}<Opportunities products={published} snapshot={snapshot} operatingContext={operatingContext} />{preparingFundList()}</div> : unavailable()
+    if (view === '/portal/opportunities/detail' && !selected && selectedProgress && canInvest) return <div className={styles.stack}>
+      <Notice title="Preparing to open"><p>{fundLaunchProgress(selectedProgress)}</p><p>This progress view does not contain unpublished investment terms or payment instructions. You can choose an amount and accept the terms here only after the fund is open and available to your account.</p></Notice>
+      <div className={styles.actions}><Link href={href('/portal/opportunities')} className={styles.buttonSecondary}>Back to investment opportunities</Link><Link href={href('/portal/portfolio')} className={styles.textLink}>View my orders and holdings</Link></div>
+    </div>
     if (view === '/portal/opportunities/detail') {
       if (!canInvest || !selected || !isOfferingSubscribable(selected)) return unavailable()
       const fund = fundLifecycle?.products.find(item => item.product_id === selected.id)

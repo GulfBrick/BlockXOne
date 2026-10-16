@@ -140,12 +140,72 @@ describe('one existing investor workspace', () => {
     expect(screen.getByRole('heading', { name: 'Funds preparing to open' })).toBeTruthy()
     expect(screen.queryByText('Your fund handoffs')).toBeNull()
     expect(screen.queryByText('Request fund deployment')).toBeNull()
-    expect(screen.queryByRole('link', { name: 'View fund progress' })).toBeNull()
+    expect(screen.getByRole('link', { name: 'View fund progress' }).getAttribute('href')).toBe(portalScopeHref('/portal/opportunities/detail', context, productId))
     expect(screen.queryByRole('button', { name: /reserve|buy|transfer.*MetaMask/i })).toBeNull()
     expect(screen.getByRole('link', { name: 'Browse investment opportunities' }).getAttribute('href')).toBe(portalScopeHref('/portal/opportunities', context))
     expect(screen.getByRole('link', { name: 'View my orders and holdings' }).getAttribute('href')).toBe(portalScopeHref('/portal/portfolio', context))
     expect(screen.getByText('No pending amount')).toBeTruthy()
     expect(screen.queryByText('R0.00 test')).toBeNull()
+    expect(fetcher).not.toHaveBeenCalled(); expect(wallet.request).not.toHaveBeenCalled()
+  })
+  it('keeps the same dependency-not-admitted fund discoverable from home and opportunities to a private progress-only detail', () => {
+    const value = snapshot(true, false), progress = fund()
+    value.products = []
+    progress.availability = 'DEPENDENCY_NOT_ADMITTED'
+    progress.stages.find(stage => stage.key === 'APPROVAL')!.state = 'COMPLETE'
+    progress.stages[0] = { ...progress.stages[0], label: 'PRIVATE OPERATOR STAGE', description: 'PRIVATE GOVERNANCE CONFIGURATION', evidence_ids: [id(70)] }
+    progress.actions = [{ ...progress.next_action!, label: 'PRIVATE OPERATOR ACTION', can_execute: true }]
+    value.fund_lifecycle = lifecycle(progress)
+    let page = mountPage(value)
+    const target = portalScopeHref('/portal/opportunities/detail', context, productId)
+    expect(screen.getByRole('link', { name: 'View fund progress' }).getAttribute('href')).toBe(target)
+    page.unmount(); page = mountPage(value, '/portal/opportunities')
+    expect(screen.getByRole('link', { name: 'View fund progress' }).getAttribute('href')).toBe(target)
+    expect(screen.getByText(progress.product_name)).toBeTruthy()
+    page.unmount(); page = mountPage(value, '/portal/opportunities/detail', productId)
+    expect(screen.getByRole('heading', { name: progress.product_name, level: 1 })).toBeTruthy()
+    expect(screen.getByText('Preparing to open')).toBeTruthy()
+    expect(screen.getByText('Blockchain setup is still in progress. This fund is not open for investment.')).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'Back to investment opportunities' }).getAttribute('href')).toBe(portalScopeHref('/portal/opportunities', context))
+    expect(screen.getByRole('link', { name: 'View my orders and holdings' }).getAttribute('href')).toBe(portalScopeHref('/portal/portfolio', context))
+    for (const hidden of ['PRIVATE OPERATOR STAGE', 'PRIVATE GOVERNANCE CONFIGURATION', 'PRIVATE OPERATOR ACTION', id(70), digest, packageId]) expect(page.container.textContent).not.toContain(hidden)
+    expect(screen.queryByRole('heading', { name: 'Offering terms' })).toBeNull()
+    expect(screen.queryByRole('heading', { name: 'Choose your investment' })).toBeNull()
+    expect(screen.queryByRole('button', { name: /buy|reserve|pay|deploy|approve/i })).toBeNull()
+    expect(fetcher).not.toHaveBeenCalled(); expect(wallet.request).not.toHaveBeenCalled()
+  })
+  it('never exposes accidentally supplied unpublished terms or disclosures through the progress route', () => {
+    const value = snapshot(true, false)
+    value.products[0].terms.summary = 'PRIVATE UNPUBLISHED SUMMARY'
+    value.products[0].terms.documents.memorandum = 'PRIVATE UNPUBLISHED MEMORANDUM'
+    const page = mountPage(value, '/portal/opportunities/detail', productId)
+    expect(screen.getByText('Preparing to open')).toBeTruthy()
+    expect(page.container.textContent).not.toContain('PRIVATE UNPUBLISHED')
+    expect(screen.queryByRole('heading', { name: 'Offering documents' })).toBeNull()
+    expect(screen.queryByLabelText(/^Whole units/)).toBeNull()
+    expect(screen.queryByRole('button', { name: /buy|reserve|pay/i })).toBeNull()
+    expect(fetcher).not.toHaveBeenCalled(); expect(wallet.request).not.toHaveBeenCalled()
+  })
+  it.each(['missing', 'unavailable', 'actor', 'environment', 'context', 'role', 'applicant', 'unknown fund', 'duplicate fund'] as const)('does not create a fund preview from %s lifecycle data', failure => {
+    const value = snapshot(true, false)
+    value.products = []
+    if (failure === 'missing') delete value.fund_lifecycle
+    else if (failure === 'unavailable') value.fund_lifecycle!.availability = 'UNAVAILABLE'
+    else if (failure === 'actor') value.fund_lifecycle!.actor_id = other
+    else if (failure === 'environment') value.fund_lifecycle!.environment = 'MAINNET'
+    else if (failure === 'context') value.fund_lifecycle!.operating_context = { ...context, organisationId: other }
+    else if (failure === 'role') {
+      const otherRole: PortalOperatingContext = { mode: 'ROLE', organisationId: nativeOrganisation, role: 'ComplianceOfficer' }
+      value.operating_context = otherRole; value.fund_lifecycle!.operating_context = otherRole
+    } else if (failure === 'applicant') {
+      value.operating_context = { mode: 'APPLICANT' }; value.fund_lifecycle!.operating_context = { mode: 'APPLICANT' }
+    } else if (failure === 'unknown fund') value.fund_lifecycle!.products[0].product_id = other
+    else value.fund_lifecycle!.products.push({ ...value.fund_lifecycle!.products[0] })
+    mountPage(value, '/portal/opportunities/detail', productId)
+    expect(screen.queryByText('Preparing to open')).toBeNull()
+    expect(screen.queryByRole('link', { name: 'View fund progress' })).toBeNull()
+    expect(screen.queryByRole('heading', { name: 'Choose your investment' })).toBeNull()
+    expect(screen.queryByRole('button', { name: /buy|reserve|pay/i })).toBeNull()
     expect(fetcher).not.toHaveBeenCalled(); expect(wallet.request).not.toHaveBeenCalled()
   })
   it.each(['current approval', 'saved account', 'saved order', 'foreign account'] as const)('keeps only relevant home panels for %s', state => {
