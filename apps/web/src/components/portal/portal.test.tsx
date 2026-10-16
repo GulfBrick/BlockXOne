@@ -367,7 +367,7 @@ describe('portal navigation and source-driven surfaces', () => {
   it.each(['/portal', '/portal/portfolio'] as const)('describes reservation amounts as requested subscriptions, not financial obligations on %s', view => {
     const value = snapshot(); value.operating_context = operating('Investor'); value.products = [product()]; value.subscriptions = [order()]
     const html = renderToStaticMarkup(<PortalScreen data={data(value)} view={view} operatingContext={operating('Investor')} />)
-    expect(html).toContain('Requested subscription amount'); expect(html).toContain('Awaiting-funding instructions only')
+    expect(html).toContain('Requested subscription amount'); expect(html).toContain('Pending instructions only; different assets are shown separately')
     expect(html).not.toContain('Unfunded test obligations'); expect(html).not.toContain('subscription instructions and funding obligations')
     if (view === '/portal/portfolio') {
       expect(html).toContain('These are subscription instructions with reserved units.')
@@ -391,8 +391,11 @@ describe('onboarding and subscription boundaries', () => {
   it('binds eligible subscription review to the displayed revision and explicit document/risk acceptance', () => {
     const value = snapshot(); value.applications = [application()]; value.accounts = [account()]; value.product_eligibility = [eligibility()]
     const html = renderToStaticMarkup(<SubscriptionForm product={product()} snapshot={value} onSaved={vi.fn()} />)
-    expect(html).toContain('Package 1'); expect(html).toContain(offeringRevisionId); expect(html).toContain('displayed terms fingerprint'); expect(html).toContain('risk disclosures')
-    expect(html).toContain('Accept terms and reserve units'); expect(html).toContain('disabled=""'); expect(html).toContain('It does not move cash or issue tokens')
+    expect(html).toContain('Terms you are accepting'); expect(html).toContain('Package 1')
+    expect(html).toContain('I have read and accept the memorandum and subscription text in package 1. This is not an e-signature.'); expect(html).toContain('risk disclosures')
+    expect(html.match(/<input\b[^>]*type="checkbox"[^>]*required=""/g)).toHaveLength(2)
+    expect(html).toContain('Accept terms and reserve units'); expect(html).toContain('disabled=""'); expect(html).toContain('This step reserves units; it does not send tokens.')
+    expect(html).toContain('this fictional test subscription is not funded, issued ownership or a real investment')
   })
   it('does not allow an authorised reviewer to approve their own application', () => {
     const value = snapshot(); value.actor.can_review = true
@@ -686,9 +689,9 @@ describe('operational landings and one subscription hand-off', () => {
     expect(detail).toContain('Order access unavailable')
     expect(detail).not.toContain('Open approved offering</button>')
   })
-  it.each(['FUND', 'REAL_ESTATE'] as const)('preserves the %s product and same order across investor and issuer views', kind => {
+  it.each(['FUND', 'REAL_ESTATE'] as const)('preserves the %s product, same order and exact ZAR_TEST amount across investor and issuer views', kind => {
     const item = product({ terms: { ...fictionalProductTerms(kind), name: `Shared ${kind} offering` } })
-    const instruction = order({ product_name: item.terms.name, amount_minor: '900719925474099301' })
+    const instruction = order({ product_name: item.terms.name, amount_minor: '900719925474099301', currency: 'ZAR_TEST' })
     const investor = snapshot(); investor.operating_context = operating('Investor'); investor.products = [item]; investor.subscriptions = [instruction]
     const issuer = snapshot(); issuer.operating_context = operating('IssuerFundManager'); issuer.organisations = [operatorOrganisation('IssuerFundManager')]; issuer.products = [item]; issuer.subscriptions = [{ ...instruction, investor_id: other }]
     const investorHtml = renderToStaticMarkup(<PortalScreen data={data(investor)} view="/portal/portfolio" operatingContext={operating('Investor')} />)
@@ -697,6 +700,19 @@ describe('operational landings and one subscription hand-off', () => {
       expect(html).toContain(item.terms.name); expect(html).toContain(instruction.id); expect(html).toContain(instruction.investment_account_id)
       expect(html).toContain(instruction.terms_hash); expect(html).toContain('R9,007,199,254,740,993.01 test')
       expect(html).toContain('Awaiting funding')
+    }
+  })
+  it('does not infer rand for the same undenominated order in investor and issuer views', () => {
+    const item = product()
+    const instruction = order({ amount_minor: '900719925474099301', currency: undefined })
+    const investor = snapshot(); investor.operating_context = operating('Investor'); investor.products = [item]; investor.subscriptions = [instruction]
+    const issuer = snapshot(); issuer.operating_context = operating('IssuerFundManager'); issuer.organisations = [operatorOrganisation('IssuerFundManager')]; issuer.products = [item]; issuer.subscriptions = [{ ...instruction, investor_id: other }]
+    const investorHtml = renderToStaticMarkup(<PortalScreen data={data(investor)} view="/portal/portfolio" operatingContext={operating('Investor')} />)
+    const issuerHtml = renderToStaticMarkup(<PortalScreen data={data(issuer)} view="/portal/products/detail" id={productId} operatingContext={operating('IssuerFundManager')} />)
+    expect(investorHtml).toContain('Currency unavailable; inspect each order')
+    for (const html of [investorHtml, issuerHtml]) {
+      expect(html).toContain(instruction.id); expect(html).toContain(instruction.terms_hash); expect(html).toContain('Currency not recorded')
+      expect(html).not.toContain('R9,007,199,254,740,993.01 test')
     }
   })
   it('excludes another native organisation even when the actor has the same role there', () => {
