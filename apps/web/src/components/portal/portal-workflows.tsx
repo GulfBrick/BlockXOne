@@ -1,18 +1,18 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import type { PlatformEnvironment } from '@/lib/platform-release'
 import { applicationDetailsSchema, investingProposalDocumentLookupSchema, isFundTermsTyped, isRealEstateTermsTyped, isFundTermsV3, isRealEstateTermsV3, isOfferingSubscribable, offeringDocumentApprovalBlocked, isWealthManagerDetailsV2, productTermsSchema, subscriptionQuote, validatedEntityProductEligibility, type LegacyApplicationDetails, type PortalApplication, type PortalEntityInvestmentAccount, type PortalEntityProductEligibility, type PortalInvestmentAccount, type PortalInvestingRepresentativeMandate, type PortalProduct, type PortalProductEligibility, type PortalSnapshot } from '@/lib/portal/contracts'
 import { offeringDocumentEvidenceSchema } from '@/lib/portal/offering-files'
 import { reviewCommonEnvelopeBindings } from '@/lib/portal/product-common-envelope'
 import { ImmutableCommonEnvelopeSummary } from './product-common-envelope'
-import { portalContextKey, portalScopeHref, testOfferingReviewAvailable, type PortalOperatingContext } from '@/lib/portal/operating-context'
+import { portalContextKey, portalContextMatches, portalScopeHref, testOfferingReviewAvailable, type PortalOperatingContext } from '@/lib/portal/operating-context'
 import { hasStage2CommandAccess, validatedStage2Access } from '@/lib/portal/stage2-access'
 import { isTestPasswordWorkflow } from '@/lib/portal/offering-access'
 import { validatedFundRoleplayEligibility } from '@/lib/portal/fund-roleplay-eligibility'
 import { validatedFundRoleplayAdmission, validatedFundRoleplayApplicationReview } from '@/lib/portal/fund-roleplay-admission'
-import { CommandFeedback, usePortalCommand, usePortalCommandAllowed, usePortalEnvironment, usePortalOperatingContext } from './portal-client'
+import { CommandFeedback, usePortalActorId, usePortalCommand, usePortalCommandAllowed, usePortalEnvironment, usePortalOperatingContext } from './portal-client'
 import { ApplicationDetailsSummary, ApplicationDocumentHistory, PrivateDocument } from './onboarding-form'
 import { ProviderEvidenceReview } from './kyc-verification'
 import { DetailList, EmptyState, Field, Notice, Panel, StatusBadge, dateLabel, money } from './portal-primitives'
@@ -586,7 +586,7 @@ export function ApplicationReview({ application, snapshot, onSaved, environment 
   if ('rehearsal' in snapshot || snapshot.stage2_access !== undefined && !validatedStage2Access(snapshot, snapshot.operating_context, environment)) return <Notice title="Saved admission state unavailable" tone="warning">Refresh this case through the normal application workspace before continuing. Its saved history has not changed.</Notice>
   return <div className={styles.wideGrid}><div className={styles.stack}>
     <Panel title={manager ? 'Customer organisation and representative' : 'Investor applicant information'} action={<StatusBadge status={application.status} />}><DetailList rows={[{ label: 'Application reference', value: application.id }, { label: 'Review purpose', value: manager ? application.admission_purpose === 'LEGACY_REHEARSAL' ? 'Historical rehearsal relationship' : 'Customer organisation admission' : 'Investor admission' }, { label: 'Submitted', value: dateLabel(application.submitted_at) }, { label: 'Version', value: `Revision ${application.revision}` }, { label: 'Decision policy', value: application.provider_mode === 'MANUAL_TEST_REVIEW' ? 'Manual TEST admission decision' : 'Review policy not assigned' }]} /><div className={styles.sectionGap}><ApplicationDetailsSummary persona={application.persona} details={application.details} /></div></Panel>
-    <Panel title="Private supporting evidence" description="Each download rechecks the current caller’s access. Uploaded evidence and its processing result remain separate.">{application.details.documents?.length ? application.details.documents.map(document => <PrivateDocument key={document.id} document={document} />) : <p className={styles.muted}>No evidence attached.</p>}</Panel>
+    <Panel title="Private supporting evidence" description="Each download rechecks the current caller’s access. Uploaded evidence and its processing result remain separate.">{application.details.documents?.length ? application.details.documents.map(document => <PrivateDocument key={document.id} document={document} history={application.status === 'SUBMITTED' ? { applicationId: application.id, revision: application.revision } : undefined} />) : <p className={styles.muted}>No evidence attached.</p>}</Panel>
     <ProviderEvidenceReview key={`${environment ?? 'UNAVAILABLE'}:${application.id}:${application.revision}`} applicationId={application.id} revision={application.revision} environment={environment} manualTestReview={environment === 'TESTNET' && application.provider_mode === 'MANUAL_TEST_REVIEW'} />
     <ApplicationDocumentHistory key={application.id} applicationId={application.id} />
   </div><div className={styles.stack}>
@@ -764,7 +764,52 @@ export function SubscriptionForm({ product, snapshot, onSaved, operatingContext 
   const [units, setUnits] = useState(product.terms.minimum_units)
   const [accountId, setAccountId] = useState('')
   const [acceptedDocuments, setAcceptedDocuments] = useState(false), [acceptedRisks, setAcceptedRisks] = useState(false)
-  const command = usePortalCommand(onSaved)
+  const actorId = usePortalActorId(), activeContext = usePortalOperatingContext(), environment = usePortalEnvironment()
+  const context = operatingContext ?? activeContext
+  const identity = `${environment}:${actorId}:${portalContextKey(activeContext)}:${product.id}:${product.offering_package?.id ?? ''}:${product.terms_hash}`
+  const generation = useRef({ identity, epoch: 0, active: true })
+  if (generation.current.identity !== identity) generation.current = { identity, epoch: generation.current.epoch + 1, active: true }
+  const latest = useRef({ revision: product.revision, actorId: snapshot.actor.id, context })
+  latest.current = { revision: product.revision, actorId: snapshot.actor.id, context }
+  type ReservationAttempt = { identity: string; epoch: number; actorId: string; context: PortalOperatingContext; productId: string;
+    organisationId: string; revision: number; packageId: string; termsHash: string; accountId: string; units: string;
+    amount: string; currency: string; priorIds: Set<string>; priorRequests: Set<string> }
+  const submission = useRef<ReservationAttempt | null>(null)
+  const [savedOrder, setSavedOrder] = useState<{ identity: string; epoch: number; id: string | null } | null>(null)
+  useEffect(() => {
+    generation.current.active = true
+    return () => { generation.current.active = false; generation.current.epoch++ }
+  }, [])
+  useEffect(() => { submission.current = null; setSavedOrder(null); setAcceptedDocuments(false); setAcceptedRisks(false) }, [identity])
+  const command = usePortalCommand(next => {
+    const original = submission.current
+    if (!original || !generation.current.active || generation.current.identity !== original.identity || generation.current.epoch !== original.epoch
+      || latest.current.actorId !== original.actorId
+      || !portalContextMatches(latest.current.context, original.context) || next.actor.id !== original.actorId
+      || !portalContextMatches(next.operating_context, original.context)) return
+    if (latest.current.revision !== original.revision) {
+      // The command client already confirmed this save and reconciled its
+      // durable key. Keep newer page data, but never reopen a replacement form.
+      setSavedOrder({ identity: original.identity, epoch: original.epoch, id: null })
+      submission.current = null
+      return
+    }
+    const products = next.products.filter(item => item.id === original.productId && item.organisation_id === original.organisationId
+      && item.terms_hash === original.termsHash && item.offering_package?.id === original.packageId
+      && item.offering_package.terms_hash === original.termsHash && item.revision >= original.revision)
+    const receipts = (next.requests ?? []).filter(item => item.command === 'subscribe' && !original.priorRequests.has(item.key))
+    const matches = next.subscriptions.filter(item => !original.priorIds.has(item.id) && item.investor_id === original.actorId
+      && item.product_id === original.productId && item.organisation_id === original.organisationId && item.product_revision === original.revision
+      && item.investment_account_id === original.accountId && item.offering_revision_id === original.packageId && item.terms_hash === original.termsHash
+      && item.units === original.units && item.amount_minor === original.amount && item.currency === original.currency && item.status === 'AWAITING_FUNDING')
+    // Only the existing command client's confirmed readback can offer this
+    // navigation. It is not a new receipt, request key or payment authority.
+    setSavedOrder({ identity: original.identity, epoch: original.epoch,
+      id: products.length === 1 && receipts.length === 1 && matches.length === 1
+        && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(matches[0].id) ? matches[0].id : null })
+    submission.current = null
+    onSaved(next)
+  })
   const approval = currentInvestorApplicationOfType(snapshot, 'INDIVIDUAL')
   const accounts = activeIndividualAccounts(snapshot)
   const approvedAccounts = accounts.filter(account => currentProductEligibility(snapshot, product, account))
@@ -773,22 +818,36 @@ export function SubscriptionForm({ product, snapshot, onSaved, operatingContext 
   const eligible = Boolean(approval && product.terms.eligible_countries.includes(approval.details.country) && product.terms.eligible_investor_types.includes(approval.details.investor_type))
   const pkg = isOfferingSubscribable(product) ? product.offering_package : null
   const quote = subscriptionQuote(product, units)
-  return <Panel title="Subscribe to this offering" description="Acceptance reserves units. It does not move cash or issue tokens.">
+  const outcome = savedOrder?.identity === identity && savedOrder.epoch === generation.current.epoch ? savedOrder : null
+  return <Panel title="Choose your investment" description="Choose whole units and review the exact amount before accepting the terms. This step reserves units; it does not send tokens.">
     <CommandFeedback command={command} />
-    {!pkg ? <Notice title="Offering is not open" tone="warning">A current immutable package, separate issuer and Compliance decisions, and independently verified technical readiness are required before a subscription instruction can be accepted.</Notice>
+    {outcome ? <Notice title={outcome.id ? 'Your reservation is saved' : 'Check your saved orders'}>
+      {outcome.id ? <><p>Continue with this exact order to follow its approved payment instructions and issued units. No payment has been sent.</p><Link href={portalScopeHref('/portal/orders/detail', context, outcome.id)} className={styles.button}>Continue with this order</Link></>
+        : <p>The response did not identify one confirmed new order. Check your existing orders before taking another action; do not reserve the same investment again.</p>}
+    </Notice> : !pkg ? <Notice title="Offering is not open" tone="warning">A current immutable package, separate issuer and Compliance decisions, and independently verified technical readiness are required before a subscription instruction can be accepted.</Notice>
       : !approval ? <Notice title="Approved investor onboarding required" tone="warning">Complete your investor application and obtain a current independent test approval before subscribing.<p><Link href={portalScopeHref('/portal/onboarding', operatingContext)} className={styles.textLink}>Go to my onboarding</Link></p></Notice>
       : !eligible ? <Notice title="Eligibility does not match this offering" tone="warning">Your approved country or investor classification is outside this product’s published rules. No subscription can be submitted.</Notice>
         : !accounts.length ? <div className={styles.stack}><Notice title="An active individual investment account is required">The subscription must identify the approved account that will hold the investment. Another person’s account or an entity relationship cannot be substituted.</Notice><InvestmentAccountPanel snapshot={snapshot} onSaved={onSaved} operatingContext={operatingContext} /></div>
           : !Array.isArray(snapshot.product_eligibility) ? <Notice title="Product eligibility records are unavailable" tone="warning">Refresh saved state before subscribing. An unavailable case list cannot be treated as approval.</Notice>
-            : !selectedAccount ? <Notice title="Product eligibility review required" tone="warning">An appointed reviewer must approve this account for the current published offering revision. Use the product eligibility section above to submit or update your request.</Notice>
-              : <form className={styles.form} onSubmit={event => { event.preventDefault(); if (!selectedAccount || !currentProductEligibility(snapshot, product, selectedAccount) || !pkg) return; void command.submit('subscribe', { product_id: product.id, offering_revision_id: pkg.id, investment_account_id: selectedAccount.id, expected_revision: product.revision, terms_hash: pkg.terms_hash, units, accepted_documents: acceptedDocuments, accepted_risks: acceptedRisks }) }}>
+            : !selectedAccount ? <Notice title="Product eligibility review required" tone="warning">An appointed reviewer must approve this account for the current published offering revision. Use the product eligibility section below to submit or update your request.</Notice>
+              : <form className={styles.form} onSubmit={event => {
+                event.preventDefault()
+                if (!selectedAccount || !currentProductEligibility(snapshot, product, selectedAccount) || !pkg || !('amount_minor' in quote)
+                  || !acceptedDocuments || !acceptedRisks || snapshot.actor.id !== actorId || !portalContextMatches(activeContext, context)) return
+                submission.current = { identity, epoch: generation.current.epoch, actorId, context, productId: product.id,
+                  organisationId: product.organisation_id, revision: product.revision, packageId: pkg.id, termsHash: pkg.terms_hash,
+                  accountId: selectedAccount.id, units, amount: quote.amount_minor, currency: product.terms.currency,
+                  priorIds: new Set(snapshot.subscriptions.map(item => item.id)), priorRequests: new Set((snapshot.requests ?? []).map(item => item.key)) }
+                void command.submit('subscribe', { product_id: product.id, offering_revision_id: pkg.id, investment_account_id: selectedAccount.id,
+                  expected_revision: product.revision, terms_hash: pkg.terms_hash, units, accepted_documents: acceptedDocuments, accepted_risks: acceptedRisks })
+              }}>
             <fieldset className={styles.fieldset} disabled={command.busy || command.unknown || !pkg}>
               <legend>Subscription instruction</legend>
               <Field label="Investing account" hint="An individual account with current approval for this offering."><select required value={selectedAccountId} onChange={event => setAccountId(event.target.value)}>{approvedAccounts.map(account => <option key={account.id} value={account.id}>Individual · {account.id}</option>)}</select></Field>
               <Field label="Whole units" hint={`Minimum ${product.terms.minimum_units} units · ${money(product.terms.unit_price_minor, product.terms.currency)} per unit`}><input inputMode="numeric" required pattern="[1-9][0-9]*" value={units} onChange={event => setUnits(event.target.value)} /></Field>
-              <DetailList rows={[{ label: 'Subscription value', value: 'amount_minor' in quote ? money(quote.amount_minor, product.terms.currency) : 'Enter a valid quantity' }, { label: 'Settlement', value: product.terms.currency === 'TST' ? 'Valueless synthetic TST only' : 'Synthetic ZAR_TEST only' }, { label: 'Accepted package', value: `Package ${pkg.package_number}` }, { label: 'Immutable package reference', value: <span className={styles.mono}>{pkg.id}</span> }]} />
+              <DetailList rows={[{ label: 'Your investment amount', value: 'amount_minor' in quote ? money(quote.amount_minor, product.terms.currency) : 'Enter a valid quantity' }, { label: 'Payment asset', value: product.terms.currency === 'TST' ? 'Valueless test TST only' : 'Synthetic ZAR_TEST only' }, { label: 'Terms you are accepting', value: `Package ${pkg.package_number}` }]} />
               {'error' in quote ? <p className={styles.fieldError}>{quote.error}</p> : null}
-              <label className={styles.check}><input type="checkbox" checked={acceptedDocuments} onChange={event => setAcceptedDocuments(event.target.checked)} required /><span>I have read and accept the memorandum and subscription text in package {pkg.package_number} with the displayed terms fingerprint. This is not an e-signature.</span></label>
+              <label className={styles.check}><input type="checkbox" checked={acceptedDocuments} onChange={event => setAcceptedDocuments(event.target.checked)} required /><span>I have read and accept the memorandum and subscription text in package {pkg.package_number}. This is not an e-signature.</span></label>
               <label className={styles.check}><input type="checkbox" checked={acceptedRisks} onChange={event => setAcceptedRisks(event.target.checked)} required /><span>I have read the risk disclosures. I understand this fictional test subscription is not funded, issued ownership or a real investment.</span></label>
               <button type="submit" className={styles.button} disabled={!acceptedDocuments || !acceptedRisks || 'error' in quote}>Accept terms and reserve units</button>
             </fieldset>

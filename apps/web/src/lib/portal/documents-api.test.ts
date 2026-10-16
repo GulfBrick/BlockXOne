@@ -2,9 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createHash } from 'node:crypto'
 import { NextRequest } from 'next/server'
 vi.mock('server-only', () => ({}))
-const mocks = vi.hoisted(() => ({ read: vi.fn(), create: vi.fn() }))
+const mocks = vi.hoisted(() => ({ read: vi.fn(), create: vi.fn(), verified: vi.fn() }))
 const receipts = vi.hoisted(() => ({ config: vi.fn(), id: vi.fn(), register: vi.fn() }))
-vi.mock('@/lib/supabase/server', async original => ({ ...await original<object>(), createRequestSupabaseClient: mocks.create }))
+vi.mock('@/lib/supabase/server', async original => ({ ...await original<object>(), createRequestSupabaseClient: mocks.create, readVerifiedUser: mocks.verified }))
 vi.mock('./server', async original => ({ ...await original<object>(), readPortal: mocks.read }))
 vi.mock('./document-receipts', async original => ({ ...await original<object>(), documentReceiptDatabaseConfig: receipts.config, documentReceiptId: receipts.id, registerDocumentReceipt: receipts.register }))
 import { GET, POST } from '@/app/api/portal/documents/route'
@@ -20,6 +20,7 @@ beforeEach(() => {
   for (const [key, value] of Object.entries({ NODE_ENV: 'production', VERCEL_ENV: 'preview', BLOCKXONE_TESTNET_FUND_DEMO: 'enabled', BLOCKXONE_AUTH_MODE: 'supabase', NEXT_PUBLIC_BLOCKXONE_AUTH_MODE: 'supabase', BLOCKXONE_APP_ORIGIN: origin, SUPABASE_URL: 'https://fegnnnlseuejkrusbbkv.supabase.co' })) vi.stubEnv(key, value)
   mocks.create.mockReturnValue({})
   mocks.read.mockResolvedValue({ user: { id: actor }, snapshot })
+  mocks.verified.mockResolvedValue({ id: actor, email: 'synthetic@example.invalid', email_confirmed_at: '2026-09-22T09:00:00Z', is_anonymous: false })
   receipts.id.mockReturnValue(id)
 })
 afterEach(() => vi.unstubAllEnvs())
@@ -147,16 +148,17 @@ describe('private evidence context continuity', () => {
     expect(JSON.stringify(body)).not.toContain('storage_path')
     expect(response.headers.get('cache-control')).toContain('no-store')
   })
-  it('denies foreign history before a backend lookup and rejects ambiguous history parameters', async () => {
-    const rpc = vi.fn()
+  it('delegates foreign history to its guarded native lookup and rejects ambiguous history parameters first', async () => {
+    const rpc = vi.fn().mockReturnValue({ abortSignal: vi.fn().mockResolvedValue({ data: null, error: { code: '42501' } }) })
     mocks.create.mockReturnValue({ rpc })
     mocks.read.mockResolvedValue({ user: { id: actor }, snapshot: { ...snapshot, applications: [] } })
     expect((await GET(new NextRequest(`${origin}/api/portal/documents?application_id=${applicationId}&history=1&mode=applicant`))).status).toBe(404)
-    expect(rpc).not.toHaveBeenCalled()
+    expect(rpc).toHaveBeenCalledExactlyOnceWith('bx1_application_document_versions', { application_id: applicationId, operating_context: { mode: 'APPLICANT' } })
+    expect(mocks.read).not.toHaveBeenCalled()
     for (const query of [`application_id=${applicationId}&history=1&id=${id}`, `application_id=${applicationId}&revision=2&id=${id}&history=1`, `application_id=${applicationId}&history=1&download=1`, `application_id=${applicationId}&revision=2&id=${id}&id=${id}`]) {
       expect((await GET(new NextRequest(`${origin}/api/portal/documents?${query}&mode=applicant`))).status).toBe(400)
     }
-    expect(rpc).not.toHaveBeenCalled()
+    expect(rpc).toHaveBeenCalledTimes(1)
   })
   it('resolves exact historic bytes only through a caller-bound lookup and same-origin download', async () => {
     const bytes = Buffer.from('%PDF-1.4\nfictional earlier evidence')
@@ -177,6 +179,58 @@ describe('private evidence context continuity', () => {
     expect(Buffer.from(await result.arrayBuffer())).toEqual(bytes)
     expect(rpc).toHaveBeenCalledWith('bx1_application_document_lookup', { application_id: applicationId, revision: 2, document_id: id, operating_context: { mode: 'APPLICANT' } })
     expect(download).toHaveBeenCalledWith(`${actor}/${id}`)
+    expect(mocks.read).not.toHaveBeenCalled()
+    expect(rpc).toHaveBeenCalledTimes(3)
+    expect(mocks.verified).toHaveBeenCalledTimes(3)
+    expect(result.headers.get('content-type')).toBe('application/octet-stream')
+    expect(result.headers.get('content-disposition')).toContain('attachment;')
+    expect(result.headers.get('content-security-policy')).toContain('sandbox')
+    expect(result.headers.get('x-content-type-options')).toBe('nosniff')
+    expect(result.headers.get('cache-control')).toContain('no-store')
+  })
+  it.each([null, { id: actor, email: 'synthetic@example.invalid', is_anonymous: false },
+    { id: actor, email: 'synthetic@example.invalid', email_confirmed_at: '2026-09-22T09:00:00Z', is_anonymous: true }])('requires verified non-anonymous identity before versioned access: %j', async user => {
+    const rpc = vi.fn(), download = vi.fn()
+    mocks.create.mockReturnValue({ rpc, storage: { from: () => ({ download }) } })
+    mocks.verified.mockResolvedValue(user)
+    for (const query of [`application_id=${applicationId}&history=1`, `application_id=${applicationId}&revision=2&id=${id}&download=1`]) {
+      expect((await GET(new NextRequest(`${origin}/api/portal/documents?${query}&mode=applicant`))).status).toBe(401)
+    }
+    expect(mocks.read).not.toHaveBeenCalled()
+    expect(rpc).not.toHaveBeenCalled()
+    expect(download).not.toHaveBeenCalled()
+  })
+  it('reads exact historical evidence without a full dashboard and rechecks authority after Storage', async () => {
+    const bytes = Buffer.from('%PDF-1.4\nfictional scoped evidence')
+    const manifest = { application_id: applicationId, revision: 2, id, kind: 'IDENTITY', title: 'Earlier evidence',
+      storage_path: `${actor}/${id}`, claimed_sha256: createHash('sha256').update(bytes).digest('hex'), size: bytes.length, mime_type: 'application/pdf' }
+    const rpc = vi.fn().mockReturnValueOnce({ abortSignal: vi.fn().mockResolvedValue({ data: manifest, error: null }) })
+      .mockReturnValueOnce({ abortSignal: vi.fn().mockResolvedValue({ data: null, error: { code: '42501' } }) })
+    const download = vi.fn().mockResolvedValue({ error: null, data: new Blob([bytes]) })
+    mocks.create.mockReturnValue({ rpc, storage: { from: () => ({ download }) } })
+    mocks.read.mockRejectedValue(new Error('Dashboard unavailable'))
+    const response = await GET(new NextRequest(`${origin}/api/portal/documents?application_id=${applicationId}&revision=2&id=${id}&organisation=${organisationId}&role=ComplianceOfficer&download=1`))
+    expect(response.status).toBe(404)
+    expect(download).toHaveBeenCalledOnce()
+    expect(rpc).toHaveBeenCalledTimes(2)
+    expect(rpc).toHaveBeenNthCalledWith(2, 'bx1_application_document_lookup', { application_id: applicationId, revision: 2, document_id: id,
+      operating_context: { mode: 'ROLE', organisationId, role: 'ComplianceOfficer' } })
+    expect(mocks.read).not.toHaveBeenCalled()
+    expect(await response.text()).not.toContain('fictional scoped evidence')
+  })
+  it.each(['actor', 'manifest'])('withholds historical bytes if the %s changes during download', async changed => {
+    const bytes = Buffer.from('%PDF-1.4\nfictional unchanged bytes')
+    const manifest = { application_id: applicationId, revision: 2, id, kind: 'IDENTITY', title: 'Earlier evidence',
+      storage_path: `${actor}/${id}`, claimed_sha256: createHash('sha256').update(bytes).digest('hex'), size: bytes.length, mime_type: 'application/pdf' }
+    const rpc = vi.fn().mockReturnValueOnce({ abortSignal: vi.fn().mockResolvedValue({ data: manifest, error: null }) })
+      .mockReturnValueOnce({ abortSignal: vi.fn().mockResolvedValue({ data: changed === 'manifest' ? { ...manifest, storage_path: `${organisationId}/${id}` } : manifest, error: null }) })
+    mocks.create.mockReturnValue({ rpc, storage: { from: () => ({ download: vi.fn().mockResolvedValue({ error: null, data: new Blob([bytes]) }) }) } })
+    mocks.verified.mockResolvedValueOnce({ id: actor, email: 'synthetic@example.invalid', email_confirmed_at: '2026-09-22T09:00:00Z', is_anonymous: false })
+      .mockResolvedValueOnce({ id: changed === 'actor' ? organisationId : actor, email: 'synthetic@example.invalid', email_confirmed_at: '2026-09-22T09:00:00Z', is_anonymous: false })
+    const response = await GET(new NextRequest(`${origin}/api/portal/documents?application_id=${applicationId}&revision=2&id=${id}&mode=applicant&download=1`))
+    expect(response.status).toBe(403)
+    expect(await response.text()).not.toContain('fictional unchanged bytes')
+    expect(mocks.read).not.toHaveBeenCalled()
   })
   it('does not read Storage after a historic authority denial or mismatched lookup', async () => {
     const download = vi.fn()

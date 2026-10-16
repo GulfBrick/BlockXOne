@@ -775,13 +775,16 @@ describe('subscription reservation orders handoff', () => {
     return { item, value, onSaved }
   }
 
-  it('links a confirmed reservation to scoped subscription orders without guessing an order or promising funding', async () => {
+  it('keeps an ambiguous confirmed reservation on the generic orders route without guessing or submitting again', async () => {
     const { item, value, onSaved } = investorFixture()
     fireEvent.click(screen.getByRole('button', { name: 'Accept terms and reserve units' }))
     await saved()
     recorded('subscribe', { product_id: productId, offering_revision_id: firstPackageId, investment_account_id: thirdPackageId, units: item.terms.minimum_units })
     expect(onSaved).toHaveBeenCalledTimes(1)
     expect(screen.getByRole('link', { name: 'View my subscription orders' }).getAttribute('href')).toBe(portalScopeHref('/portal/portfolio', value.operating_context))
+    expect(screen.getByText('Check your saved orders')).toBeTruthy()
+    expect(screen.queryByRole('link', { name: 'Continue with this order' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Accept terms and reserve units' })).toBeNull()
     expect(screen.getByText(/Approved funding instructions may still be pending/)).toBeTruthy()
     expect(screen.getByText(/Only verified settlement and confirmed issuance can create a holding/)).toBeTruthy()
   })
@@ -805,6 +808,7 @@ describe('subscription reservation orders handoff', () => {
     expect(onSaved).toHaveBeenCalledTimes(1)
     expect(screen.queryByRole('button', { name: 'Retry the original saved request' })).toBeNull()
     expect(screen.getByRole('link', { name: 'View my subscription orders' }).getAttribute('href')).toBe(portalScopeHref('/portal/portfolio', value.operating_context))
+    expect(screen.queryByRole('link', { name: 'Continue with this order' })).toBeNull()
   })
 })
 

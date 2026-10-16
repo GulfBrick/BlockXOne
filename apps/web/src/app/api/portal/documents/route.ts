@@ -1,10 +1,10 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { NextRequest, NextResponse } from 'next/server'
-import { applicationDocumentLookupSchema, applicationDocumentVersionsSchema, evidenceSchema, investingProposalDocumentLookupSchema } from '@/lib/portal/contracts'
+import { applicationDocumentLookupSchema, applicationDocumentVersionsSchema, evidenceSchema, investingProposalDocumentLookupSchema, type PortalSnapshot } from '@/lib/portal/contracts'
 import { PortalError, readPortal, requirePortalEnvironment } from '@/lib/portal/server'
 import { portalFailure, readPortalBody } from '@/lib/portal/http'
 import { hasCanonicalOrigin, privateResponse, responseCookieAdapter } from '@/lib/supabase/http'
-import { createRequestSupabaseClient } from '@/lib/supabase/server'
+import { createRequestSupabaseClient, readVerifiedUser } from '@/lib/supabase/server'
 import { portalOperatingContextSchema, portalScopeHref } from '@/lib/portal/operating-context'
 import { validatedStage2Access } from '@/lib/portal/stage2-access'
 import { documentReceiptDatabaseConfig, documentReceiptId, registerDocumentReceipt, verifiedDocumentReceiptSession } from '@/lib/portal/document-receipts'
@@ -188,9 +188,16 @@ export async function GET(request: NextRequest) {
     const context = portalOperatingContextSchema.safeParse(params.get('mode') === 'applicant' && !params.has('organisation') && !params.has('role') ? { mode: 'APPLICANT' } : !params.has('mode') ? { mode: 'ROLE', organisationId: params.get('organisation'), role: params.get('role') } : null)
     if (!context.success) throw new PortalError('Invalid operating context.', 403)
     const client = createRequestSupabaseClient(jar.adapter)
-    const { snapshot } = await readPortal(client, context.data)
-    const visibleApplication = history || historicalDocument ? snapshot.applications.find(application => application.id === applicationId) : undefined
-    if ((history || historicalDocument) && !visibleApplication) throw new PortalError('Document unavailable for this session.', 404)
+    // Immutable evidence has its own exact caller/context-bound native reader.
+    // Reading every dashboard first can time out before the document lookup.
+    // Current drafts and representative proposals still need their full scope.
+    const versioned = history || historicalDocument
+    const verifiedUser = versioned ? await readVerifiedUser(client) : null
+    if (versioned && (!verifiedUser?.email || !verifiedUser.email_confirmed_at || verifiedUser.is_anonymous)) {
+      throw new PortalError('Sign in with your verified email to continue.', 401)
+    }
+    let snapshot: PortalSnapshot | undefined
+    if (!versioned) ({ snapshot } = await readPortal(client, context.data))
     if (history) {
       const { data, error } = await client.rpc('bx1_application_document_versions', { application_id: applicationId, operating_context: context.data }).abortSignal(AbortSignal.timeout(12000))
       if (error?.code === '42501' || error?.code === 'P0002') throw new PortalError('Document unavailable for this session.', 404)
@@ -202,9 +209,19 @@ export async function GET(request: NextRequest) {
     const revision = historicalDocument ? Number(revisionText) : undefined
     let document: { id: string; storage_path: string; sha256: string; size: number; mime_type: string } | undefined
     let proposalLookup: ReturnType<typeof investingProposalDocumentLookupSchema.parse> | undefined
+    const readHistoricalDocument = async () => {
+      const { data, error } = await client.rpc('bx1_application_document_lookup', { application_id: applicationId, revision, document_id: id, operating_context: context.data }).abortSignal(AbortSignal.timeout(12000))
+      if (error?.code === '42501' || error?.code === 'P0002') throw new PortalError('Document unavailable for this session.', 404)
+      if (error) throw new PortalError('The saved document is temporarily unavailable.', 503)
+      const lookup = applicationDocumentLookupSchema.safeParse(data)
+      if (!lookup.success || lookup.data.application_id !== applicationId || lookup.data.revision !== revision || lookup.data.id !== id) throw new PortalError('Document lookup could not be verified.', 503)
+      // The native reader independently binds the path to the application owner
+      // and checks exact Storage owner/size/MIME, before and after its lookup.
+      return { id, storage_path: lookup.data.storage_path, sha256: lookup.data.claimed_sha256, size: lookup.data.size, mime_type: lookup.data.mime_type }
+    }
     if (proposalDocument) {
-      const mandate = snapshot.investing_representative_mandates?.find(item => item.id === mandateId)
-      if (context.data.mode !== 'APPLICANT' || !mandate || mandate.representative_user_id !== snapshot.actor.id
+      const mandate = snapshot?.investing_representative_mandates?.find(item => item.id === mandateId)
+      if (context.data.mode !== 'APPLICANT' || !snapshot || !mandate || mandate.representative_user_id !== snapshot.actor.id
         || mandate.applicant_user_id === snapshot.actor.id || mandate.appointment_document_id !== id || !mandate.proposal_hash) {
         throw new PortalError('Document unavailable for this session.', 404)
       }
@@ -222,21 +239,15 @@ export async function GET(request: NextRequest) {
       proposalLookup = lookup.data
       document = lookup.data.document
     } else if (historicalDocument) {
-      const { data, error } = await client.rpc('bx1_application_document_lookup', { application_id: applicationId, revision, document_id: id, operating_context: context.data }).abortSignal(AbortSignal.timeout(12000))
-      if (error?.code === '42501' || error?.code === 'P0002') throw new PortalError('Document unavailable for this session.', 404)
-      if (error) throw new PortalError('The saved document is temporarily unavailable.', 503)
-      const lookup = applicationDocumentLookupSchema.safeParse(data)
-      if (!lookup.success || lookup.data.application_id !== applicationId || lookup.data.revision !== revision || lookup.data.id !== id) throw new PortalError('Document lookup could not be verified.', 503)
-      document = { id, storage_path: lookup.data.storage_path, sha256: lookup.data.claimed_sha256, size: lookup.data.size, mime_type: lookup.data.mime_type }
+      document = await readHistoricalDocument()
     } else {
-      const current = snapshot.applications.flatMap(application => application.details.documents ?? []).find(item => item.id === id)
+      const current = snapshot?.applications.flatMap(application => application.details.documents ?? []).find(item => item.id === id)
       const checked = evidenceSchema.safeParse(current)
       if (checked.success) document = checked.data
     }
     if (!document
       || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(document.storage_path)
-      || !document.storage_path.endsWith(`/${document.id}`)
-      || (historicalDocument && document.storage_path.split('/')[0] !== visibleApplication?.user_id)) throw new PortalError('Document unavailable for this session.', 404)
+      || !document.storage_path.endsWith(`/${document.id}`)) throw new PortalError('Document unavailable for this session.', 404)
     if (!params.has('download')) {
       const target = proposalDocument ? `/api/portal/documents?mandate_id=${mandateId}&id=${id}&download=1`
         : historicalDocument ? `/api/portal/documents?application_id=${applicationId}&revision=${revision}&id=${id}&download=1` : `/api/portal/documents?id=${id}&download=1`
@@ -246,6 +257,16 @@ export async function GET(request: NextRequest) {
     if (downloaded.error || !downloaded.data || downloaded.data.size !== document.size || downloaded.data.size > maxFile) throw new PortalError('The saved document could not be verified.', 409)
     const bytes = new Uint8Array(await downloaded.data.arrayBuffer())
     if (createHash('sha256').update(bytes).digest('hex') !== document.sha256 || detectedType(bytes) !== document.mime_type) throw new PortalError('Document integrity verification failed.', 409)
+    if (historicalDocument) {
+      // A slow Storage download must not outlive a revoked review assignment or
+      // return a different immutable manifest under the same requested version.
+      const current = await readHistoricalDocument()
+      const currentUser = await readVerifiedUser(client)
+      if (JSON.stringify(current) !== JSON.stringify(document) || !currentUser?.email || !currentUser.email_confirmed_at
+        || currentUser.is_anonymous || currentUser.id !== verifiedUser?.id) {
+        throw new PortalError('Document access changed. Open it again from your application.', 403)
+      }
+    }
     const ext = document.mime_type === 'application/pdf' ? 'pdf' : document.mime_type === 'image/png' ? 'png' : 'jpg'
     return jar.finish(privateResponse(new NextResponse(Buffer.from(bytes), { headers: { 'Content-Type': 'application/octet-stream', 'Content-Disposition': `attachment; filename="bx1-evidence-${id}.${ext}"`, 'Content-Security-Policy': "default-src 'none'; sandbox", 'X-Content-Type-Options': 'nosniff' } })))
   } catch (error) { return jar.finish(portalFailure(error)) }
