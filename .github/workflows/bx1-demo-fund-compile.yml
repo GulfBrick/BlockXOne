@@ -196,7 +196,7 @@ permissions:
 jobs:
   document-scanner-engine:
     name: Real scanner engine and bounded producer
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.mode == 'acceptance' || inputs.mode == 'connected-fund-providers-focused' || inputs.mode == 'official-scanner-focused' }}
+    if: ${{ (github.event_name != 'workflow_dispatch' && !((github.event_name == 'push' && github.repository == 'GulfBrick/BlockXOne' && github.ref == 'refs/heads/codex/investor-journey-20261016') || (github.event_name == 'pull_request' && github.repository == 'GulfBrick/BlockXOne' && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'codex/investor-journey-20261016' && github.base_ref == 'codex/stage2-sandbox-completion-20261011'))) || inputs.mode == 'acceptance' || inputs.mode == 'connected-fund-providers-focused' || inputs.mode == 'official-scanner-focused' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -244,7 +244,7 @@ jobs:
         run: node apps/web/scripts/document-scanner-official-proof.mjs
   offering-scanner-source-focused:
     name: Focused offering worker source acceptance
-    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.mode == 'offering-scanner-source-focused' || inputs.mode == 'offering-signatures-api-focused' || inputs.mode == 'investor-journey-focused') && github.repository == 'GulfBrick/BlockXOne' && (github.ref == 'refs/heads/codex/stage2-sandbox-completion-20261011' || (inputs.mode == 'investor-journey-focused' && github.ref == 'refs/heads/codex/investor-journey-20261016')) }}
+    if: ${{ (github.event_name == 'push' && github.repository == 'GulfBrick/BlockXOne' && github.ref == 'refs/heads/codex/investor-journey-20261016') || (github.event_name == 'pull_request' && github.repository == 'GulfBrick/BlockXOne' && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'codex/investor-journey-20261016' && github.base_ref == 'codex/stage2-sandbox-completion-20261011') || (github.event_name == 'workflow_dispatch' && (inputs.mode == 'offering-scanner-source-focused' || inputs.mode == 'offering-signatures-api-focused' || inputs.mode == 'investor-journey-focused') && github.repository == 'GulfBrick/BlockXOne' && (github.ref == 'refs/heads/codex/stage2-sandbox-completion-20261011' || (inputs.mode == 'investor-journey-focused' && github.ref == 'refs/heads/codex/investor-journey-20261016'))) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -328,7 +328,7 @@ jobs:
           BX1_SCANNER_RECOVERY_BINDING: ${{ inputs.scanner_operation == 'RECOVER' && secrets.BX1_SCANNER_RECOVERY_BINDING || '' }}
         run: node apps/web/scripts/document-scanner-offering-operating.mjs
   compile-and-build:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.mode == 'acceptance' }}
+    if: ${{ (github.event_name != 'workflow_dispatch' && !((github.event_name == 'push' && github.repository == 'GulfBrick/BlockXOne' && github.ref == 'refs/heads/codex/investor-journey-20261016') || (github.event_name == 'pull_request' && github.repository == 'GulfBrick/BlockXOne' && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'codex/investor-journey-20261016' && github.base_ref == 'codex/stage2-sandbox-completion-20261011'))) || inputs.mode == 'acceptance' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     strategy:
@@ -485,7 +485,7 @@ jobs:
           "$RUNNER_TEMP/bx1-deno/node_modules/.bin/deno" check --config deno.json index.ts
 
   staff-invitation-sql-acceptance:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.mode == 'acceptance' }}
+    if: ${{ (github.event_name != 'workflow_dispatch' && !((github.event_name == 'push' && github.repository == 'GulfBrick/BlockXOne' && github.ref == 'refs/heads/codex/investor-journey-20261016') || (github.event_name == 'pull_request' && github.repository == 'GulfBrick/BlockXOne' && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'codex/investor-journey-20261016' && github.base_ref == 'codex/stage2-sandbox-completion-20261011'))) || inputs.mode == 'acceptance' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     services:
@@ -529,7 +529,7 @@ jobs:
         run: node scripts/test-supabase-staff-invitations.mjs
 
   funding-sql-acceptance:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.mode == 'acceptance' }}
+    if: ${{ (github.event_name != 'workflow_dispatch' && !((github.event_name == 'push' && github.repository == 'GulfBrick/BlockXOne' && github.ref == 'refs/heads/codex/investor-journey-20261016') || (github.event_name == 'pull_request' && github.repository == 'GulfBrick/BlockXOne' && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'codex/investor-journey-20261016' && github.base_ref == 'codex/stage2-sandbox-completion-20261011'))) || inputs.mode == 'acceptance' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 8
     services:
@@ -583,7 +583,7 @@ jobs:
         run: node apps/web/scripts/test-portal-funding.mjs
 
   entry-sql-acceptance:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.mode == 'acceptance' }}
+    if: ${{ (github.event_name != 'workflow_dispatch' && !((github.event_name == 'push' && github.repository == 'GulfBrick/BlockXOne' && github.ref == 'refs/heads/codex/investor-journey-20261016') || (github.event_name == 'pull_request' && github.repository == 'GulfBrick/BlockXOne' && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'codex/investor-journey-20261016' && github.base_ref == 'codex/stage2-sandbox-completion-20261011'))) || inputs.mode == 'acceptance' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     services:
@@ -623,7 +623,7 @@ jobs:
         run: node apps/web/scripts/test-entry.mjs
 
   application-admission-sql-acceptance:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.mode == 'acceptance' }}
+    if: ${{ (github.event_name != 'workflow_dispatch' && !((github.event_name == 'push' && github.repository == 'GulfBrick/BlockXOne' && github.ref == 'refs/heads/codex/investor-journey-20261016') || (github.event_name == 'pull_request' && github.repository == 'GulfBrick/BlockXOne' && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'codex/investor-journey-20261016' && github.base_ref == 'codex/stage2-sandbox-completion-20261011'))) || inputs.mode == 'acceptance' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     services:
@@ -663,7 +663,7 @@ jobs:
         run: node apps/web/scripts/test-application-admission.mjs
 
   entry-mainnet-sql-acceptance:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.mode == 'acceptance' }}
+    if: ${{ (github.event_name != 'workflow_dispatch' && !((github.event_name == 'push' && github.repository == 'GulfBrick/BlockXOne' && github.ref == 'refs/heads/codex/investor-journey-20261016') || (github.event_name == 'pull_request' && github.repository == 'GulfBrick/BlockXOne' && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'codex/investor-journey-20261016' && github.base_ref == 'codex/stage2-sandbox-completion-20261011'))) || inputs.mode == 'acceptance' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     services:
@@ -711,7 +711,7 @@ jobs:
         run: node apps/web/scripts/test-entry-mainnet.mjs
 
   amoy-provider-readiness:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.mode == 'acceptance' }}
+    if: ${{ (github.event_name != 'workflow_dispatch' && !((github.event_name == 'push' && github.repository == 'GulfBrick/BlockXOne' && github.ref == 'refs/heads/codex/investor-journey-20261016') || (github.event_name == 'pull_request' && github.repository == 'GulfBrick/BlockXOne' && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'codex/investor-journey-20261016' && github.base_ref == 'codex/stage2-sandbox-completion-20261011'))) || inputs.mode == 'acceptance' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 3
     steps:
@@ -772,7 +772,7 @@ jobs:
 
   fund-dashboard-focused:
     name: Focused dashboard, theme or password-recovery acceptance
-    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.mode == 'fund-dashboard-focused' || inputs.mode == 'theme-focused' || inputs.mode == 'auth-recovery-focused' || inputs.mode == 'connected-session-focused' || inputs.mode == 'document-read-recovery-focused' || inputs.mode == 'fund-signer-entry-focused' || inputs.mode == 'connected-fund-providers-focused' || inputs.mode == 'offering-signatures-api-focused' || inputs.mode == 'provider-diagnostics-focused' || inputs.mode == 'document-result-recovery-focused' || inputs.mode == 'wallet-context-focused' || inputs.mode == 'appointment-commit-focused' || inputs.mode == 'publication-view-focused' || inputs.mode == 'investor-admission-roleplay-focused' || inputs.mode == 'appointment-projection-cost-focused' || inputs.mode == 'investor-journey-focused') && (github.ref == 'refs/heads/codex/stage2-sandbox-completion-20261011' || (inputs.mode == 'investor-journey-focused' && github.ref == 'refs/heads/codex/investor-journey-20261016')) }}
+    if: ${{ (github.event_name == 'pull_request' && github.repository == 'GulfBrick/BlockXOne' && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'codex/investor-journey-20261016' && github.base_ref == 'codex/stage2-sandbox-completion-20261011') || (github.event_name == 'workflow_dispatch' && (inputs.mode == 'fund-dashboard-focused' || inputs.mode == 'theme-focused' || inputs.mode == 'auth-recovery-focused' || inputs.mode == 'connected-session-focused' || inputs.mode == 'document-read-recovery-focused' || inputs.mode == 'fund-signer-entry-focused' || inputs.mode == 'connected-fund-providers-focused' || inputs.mode == 'offering-signatures-api-focused' || inputs.mode == 'provider-diagnostics-focused' || inputs.mode == 'document-result-recovery-focused' || inputs.mode == 'wallet-context-focused' || inputs.mode == 'appointment-commit-focused' || inputs.mode == 'publication-view-focused' || inputs.mode == 'investor-admission-roleplay-focused' || inputs.mode == 'appointment-projection-cost-focused' || inputs.mode == 'investor-journey-focused') && (github.ref == 'refs/heads/codex/stage2-sandbox-completion-20261011' || (inputs.mode == 'investor-journey-focused' && github.ref == 'refs/heads/codex/investor-journey-20261016'))) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -810,7 +810,7 @@ jobs:
         shell: bash
         working-directory: apps/web
         env:
-          BX1_FOCUSED_UI_MODE: ${{ inputs.mode }}
+          BX1_FOCUSED_UI_MODE: ${{ github.event_name == 'pull_request' && 'investor-journey-focused' || inputs.mode }}
         run: |
           set -euo pipefail
           node --input-type=module <<'NODE'
@@ -994,7 +994,7 @@ jobs:
         run: node --test apps/web/scripts/document-scanner-runner.node-test.mjs apps/web/scripts/document-scanner-offering-operating.node-test.mjs
 
       - name: Typecheck the same reviewed source before requesting its release build
-        if: ${{ (inputs.mode == 'fund-dashboard-focused' || inputs.mode == 'auth-recovery-focused' || inputs.mode == 'connected-session-focused' || inputs.mode == 'document-read-recovery-focused' || inputs.mode == 'fund-signer-entry-focused' || inputs.mode == 'connected-fund-providers-focused' || inputs.mode == 'offering-signatures-api-focused' || inputs.mode == 'provider-diagnostics-focused' || inputs.mode == 'document-result-recovery-focused' || inputs.mode == 'wallet-context-focused' || inputs.mode == 'appointment-commit-focused' || inputs.mode == 'publication-view-focused' || inputs.mode == 'investor-admission-roleplay-focused' || inputs.mode == 'investor-journey-focused') && !cancelled() }}
+        if: ${{ (github.event_name == 'pull_request' || inputs.mode == 'fund-dashboard-focused' || inputs.mode == 'auth-recovery-focused' || inputs.mode == 'connected-session-focused' || inputs.mode == 'document-read-recovery-focused' || inputs.mode == 'fund-signer-entry-focused' || inputs.mode == 'connected-fund-providers-focused' || inputs.mode == 'offering-signatures-api-focused' || inputs.mode == 'provider-diagnostics-focused' || inputs.mode == 'document-result-recovery-focused' || inputs.mode == 'wallet-context-focused' || inputs.mode == 'appointment-commit-focused' || inputs.mode == 'publication-view-focused' || inputs.mode == 'investor-admission-roleplay-focused' || inputs.mode == 'investor-journey-focused') && !cancelled() }}
         shell: bash
         working-directory: apps/web
         run: npx tsc --noEmit --incremental false
