@@ -3,7 +3,7 @@
 import React from 'react'
 import { webcrypto } from 'node:crypto'
 import { Interface } from 'ethers'
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { PlatformRelease } from '@/lib/platform-release'
 import type { PortalApplication, PortalPath, PortalProduct, PortalSnapshot, PortalSubscription } from '@/lib/portal/contracts'
@@ -130,17 +130,20 @@ describe('one existing investor workspace', () => {
     if (status === 'SUBMITTED') expect((screen.getByRole('checkbox', { name: 'Identity evidence reviewed' }) as HTMLInputElement).checked).toBe(false)
     else expect(screen.queryByRole('checkbox', { name: 'Identity evidence reviewed' })).toBeNull()
   })
-  it('separates pending admission and no open offerings without deployment controls or a broken pre-opening link', () => {
+  it('puts the preparing fund card before home statistics while keeping pending admission separate', () => {
     mountPage(snapshot(false, false))
     expect(screen.getByRole('heading', { name: 'Your investing workspace' })).toBeTruthy()
     expect(screen.getByText('Your investor application is under review')).toBeTruthy()
-    expect(screen.getByText('No offerings are open for investment yet').tagName).toBe('STRONG')
+    expect(screen.queryByText('No offerings are open for investment yet')).toBeNull()
     expect(screen.queryByRole('heading', { name: 'Your investment account' })).toBeNull()
     expect(screen.queryByRole('heading', { name: 'Your subscription orders' })).toBeNull()
-    expect(screen.getByRole('heading', { name: 'Funds preparing to open' })).toBeTruthy()
+    const card = screen.getByRole('heading', { name: product().terms.name, level: 2 }).closest('article')!
+    expect(within(card).getByText('Preparing to open')).toBeTruthy()
+    expect(card.compareDocumentPosition(screen.getByText('Subscription instructions')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(card.compareDocumentPosition(screen.getByRole('heading', { name: 'Your investing workspace' })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(screen.queryByText('Your fund handoffs')).toBeNull()
     expect(screen.queryByText('Request fund deployment')).toBeNull()
-    expect(screen.getByRole('link', { name: 'View fund progress' }).getAttribute('href')).toBe(portalScopeHref('/portal/opportunities/detail', context, productId))
+    expect(within(card).getByRole('link', { name: 'View fund' }).getAttribute('href')).toBe(portalScopeHref('/portal/opportunities/detail', context, productId))
     expect(screen.queryByRole('button', { name: /reserve|buy|transfer.*MetaMask/i })).toBeNull()
     expect(screen.getByRole('link', { name: 'Browse investment opportunities' }).getAttribute('href')).toBe(portalScopeHref('/portal/opportunities', context))
     expect(screen.getByRole('link', { name: 'View my orders and holdings' }).getAttribute('href')).toBe(portalScopeHref('/portal/portfolio', context))
@@ -158,12 +161,16 @@ describe('one existing investor workspace', () => {
     value.fund_lifecycle = lifecycle(progress)
     let page = mountPage(value)
     const target = portalScopeHref('/portal/opportunities/detail', context, productId)
-    expect(screen.getByRole('link', { name: 'View fund progress' }).getAttribute('href')).toBe(target)
+    expect(screen.getByRole('link', { name: 'View fund' }).getAttribute('href')).toBe(target)
     page.unmount(); page = mountPage(value, '/portal/opportunities')
-    expect(screen.getByRole('link', { name: 'View fund progress' }).getAttribute('href')).toBe(target)
-    expect(screen.getByText(progress.product_name)).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'View fund' }).getAttribute('href')).toBe(target)
+    expect(screen.getByRole('heading', { name: progress.product_name, level: 2 }).closest('article')).toBeTruthy()
+    expect(screen.queryByText('No offerings are open for investment yet')).toBeNull()
+    for (const hidden of ['PRIVATE OPERATOR STAGE', 'PRIVATE GOVERNANCE CONFIGURATION', 'PRIVATE OPERATOR ACTION', id(70), digest, packageId]) expect(page.container.textContent).not.toContain(hidden)
     page.unmount(); page = mountPage(value, '/portal/opportunities/detail', productId)
     expect(screen.getByRole('heading', { name: progress.product_name, level: 1 })).toBeTruthy()
+    expect(screen.getByText('Track this fund’s launch status. It is not open for investment yet.')).toBeTruthy()
+    expect(screen.queryByText('Review the mandate, unit economics, eligibility rules and exact offering documents.')).toBeNull()
     expect(screen.getByText('Preparing to open')).toBeTruthy()
     expect(screen.getByText('Blockchain setup is still in progress. This fund is not open for investment.')).toBeTruthy()
     expect(screen.getByRole('link', { name: 'Back to investment opportunities' }).getAttribute('href')).toBe(portalScopeHref('/portal/opportunities', context))
@@ -178,7 +185,12 @@ describe('one existing investor workspace', () => {
     const value = snapshot(true, false)
     value.products[0].terms.summary = 'PRIVATE UNPUBLISHED SUMMARY'
     value.products[0].terms.documents.memorandum = 'PRIVATE UNPUBLISHED MEMORANDUM'
-    const page = mountPage(value, '/portal/opportunities/detail', productId)
+    let page = mountPage(value, '/portal/opportunities')
+    const card = screen.getByRole('heading', { name: product().terms.name, level: 2 }).closest('article')!
+    expect(within(card).queryByText('Unit price')).toBeNull()
+    expect(within(card).queryByText('Minimum investment')).toBeNull()
+    expect(page.container.textContent).not.toContain('PRIVATE UNPUBLISHED')
+    page.unmount(); page = mountPage(value, '/portal/opportunities/detail', productId)
     expect(screen.getByText('Preparing to open')).toBeTruthy()
     expect(page.container.textContent).not.toContain('PRIVATE UNPUBLISHED')
     expect(screen.queryByRole('heading', { name: 'Offering documents' })).toBeNull()
@@ -201,11 +213,44 @@ describe('one existing investor workspace', () => {
       value.operating_context = { mode: 'APPLICANT' }; value.fund_lifecycle!.operating_context = { mode: 'APPLICANT' }
     } else if (failure === 'unknown fund') value.fund_lifecycle!.products[0].product_id = other
     else value.fund_lifecycle!.products.push({ ...value.fund_lifecycle!.products[0] })
-    mountPage(value, '/portal/opportunities/detail', productId)
+    let page = mountPage(value, '/portal/opportunities/detail', productId)
     expect(screen.queryByText('Preparing to open')).toBeNull()
-    expect(screen.queryByRole('link', { name: 'View fund progress' })).toBeNull()
+    expect(screen.queryByRole('link', { name: 'View fund' })).toBeNull()
     expect(screen.queryByRole('heading', { name: 'Choose your investment' })).toBeNull()
     expect(screen.queryByRole('button', { name: /buy|reserve|pay/i })).toBeNull()
+    if (failure !== 'unknown fund') {
+      page.unmount(); page = mountPage(value, '/portal/opportunities')
+      expect(screen.queryByRole('link', { name: 'View fund' })).toBeNull()
+      expect(screen.queryByRole('heading', { name: product().terms.name, level: 2 })).toBeNull()
+    }
+    expect(fetcher).not.toHaveBeenCalled(); expect(wallet.request).not.toHaveBeenCalled()
+  })
+  it.each(['/portal', '/portal/opportunities'] as const)('retains the actual empty catalogue on %s', view => {
+    const value = snapshot(); value.products = []; value.fund_lifecycle!.products = []
+    mountPage(value, view)
+    expect(screen.getByText('No offerings are open for investment yet')).toBeTruthy()
+    expect(screen.queryByRole('link', { name: 'View fund' })).toBeNull()
+    expect(screen.queryByRole('link', { name: /View opportunity/ })).toBeNull()
+    expect(screen.queryByText('Preparing to open')).toBeNull()
+    expect(fetcher).not.toHaveBeenCalled(); expect(wallet.request).not.toHaveBeenCalled()
+  })
+  it('shares one catalogue grid between real published and preparing fund cards without inventing pending prices', () => {
+    const value = snapshot(), preparing = fund()
+    preparing.product_id = id(60); preparing.product_name = 'Second fictional preparing fund'; preparing.availability = 'DEPENDENCY_NOT_ADMITTED'
+    value.fund_lifecycle!.products.push(preparing)
+    mountPage(value, '/portal/opportunities')
+    const openCard = screen.getByRole('heading', { name: product().terms.name, level: 2 }).closest('article')!
+    const pendingCard = screen.getByRole('heading', { name: preparing.product_name, level: 2 }).closest('article')!
+    expect(openCard.parentElement).toBe(pendingCard.parentElement)
+    expect(openCard.parentElement?.querySelectorAll('article')).toHaveLength(2)
+    expect(within(openCard).getByRole('link', { name: /View opportunity/ }).getAttribute('href')).toBe(portalScopeHref('/portal/opportunities/detail', context, productId))
+    expect(within(openCard).getByText('Unit price')).toBeTruthy()
+    expect(within(pendingCard).getByRole('link', { name: 'View fund' }).getAttribute('href')).toBe(portalScopeHref('/portal/opportunities/detail', context, preparing.product_id))
+    expect(within(pendingCard).getByText('Preparing to open')).toBeTruthy()
+    expect(within(pendingCard).queryByText('Unit price')).toBeNull()
+    expect(within(pendingCard).queryByText('Minimum investment')).toBeNull()
+    expect(within(pendingCard).queryByRole('button')).toBeNull()
+    expect(screen.queryByText('No offerings are open for investment yet')).toBeNull()
     expect(fetcher).not.toHaveBeenCalled(); expect(wallet.request).not.toHaveBeenCalled()
   })
   it.each(['current approval', 'saved account', 'saved order', 'foreign account'] as const)('keeps only relevant home panels for %s', state => {
@@ -217,6 +262,10 @@ describe('one existing investor workspace', () => {
     mountPage(value)
     expect(Boolean(screen.queryByRole('heading', { name: 'Your investment account' }))).toBe(state === 'current approval' || state === 'saved account')
     expect(Boolean(screen.queryByRole('heading', { name: 'Your subscription orders' }))).toBe(state === 'saved order')
+    if (state === 'current approval' || state === 'saved account') {
+      const card = screen.getByRole('heading', { name: product().terms.name, level: 2 }).closest('article')!
+      expect(card.compareDocumentPosition(screen.getByRole('heading', { name: 'Your investment account' })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    }
     if (state === 'current approval') expect(screen.getByRole('button', { name: 'Open individual investment account' })).toBeTruthy()
     else expect(screen.queryByRole('button', { name: 'Open individual investment account' })).toBeNull()
     if (state === 'saved order') expect(screen.getByRole('link', { name: 'Open funding record' }).getAttribute('href')).toBe(portalScopeHref('/portal/orders/detail', context, orderId))
@@ -236,12 +285,13 @@ describe('one existing investor workspace', () => {
     expect(screen.getByText('Fund payment and holdings status unavailable')).toBeTruthy()
     expect(screen.queryByText('No reconciled holdings are recorded')).toBeNull()
   })
-  it.each(['expired', 'unverified'] as const)('separately explains %s admission and no open offerings', state => {
+  it.each(['expired', 'unverified'] as const)('separately explains %s admission beside a preparing fund', state => {
     const value = snapshot(true, false)
     value.applications[0].approved_until = state === 'expired' ? '2020-01-01T00:00:00Z' : null
     mountPage(value, '/portal/opportunities')
     expect(screen.getByText(state === 'expired' ? 'Your investor approval has expired' : 'Investor approval could not be verified')).toBeTruthy()
-    expect(screen.getByText('No offerings are open for investment yet')).toBeTruthy()
+    expect(screen.getByText('Preparing to open')).toBeTruthy()
+    expect(screen.queryByText('No offerings are open for investment yet')).toBeNull()
     expect(screen.queryByRole('button', { name: /reserve|buy/i })).toBeNull()
   })
   it('does not invent customer account records from a limited lifecycle projection', () => {
@@ -266,6 +316,8 @@ describe('one existing investor workspace', () => {
     const value = snapshot(), page = mountPage(value, '/portal/opportunities')
     expect(screen.getByRole('link', { name: /View opportunity/ }).getAttribute('href')).toBe(portalScopeHref('/portal/opportunities/detail', context, productId))
     page.unmount(); mountPage(value, '/portal/opportunities/detail', productId)
+    expect(screen.getByText('Review the mandate, unit economics, eligibility rules and exact offering documents.')).toBeTruthy()
+    expect(screen.queryByText('Track this fund’s launch status. It is not open for investment yet.')).toBeNull()
     expect(screen.getByRole('heading', { name: 'Choose your investment' })).toBeTruthy()
     expect(screen.queryByText('Fund operating record')).toBeNull()
     expect(screen.queryByRole('heading', { name: 'Contract and issuance evidence' })).toBeNull()
@@ -281,7 +333,8 @@ describe('one existing investor workspace', () => {
     if (missing === 'issuer') pkg.issuer_status = 'PENDING'
     if (missing === 'compliance') pkg.compliance_status = 'PENDING'
     mountPage(value, '/portal/opportunities')
-    expect(screen.getByText('No offerings are open for investment yet')).toBeTruthy()
+    expect(screen.getByText('Preparing to open')).toBeTruthy()
+    expect(screen.queryByText('No offerings are open for investment yet')).toBeNull()
     expect(screen.queryByRole('link', { name: /View opportunity/ })).toBeNull()
   })
   it.each(['account', 'eligibility'] as const)('does not reserve without current %s', missing => {
@@ -408,7 +461,7 @@ describe('same order: approved payment and actual returned holdings', () => {
     expect(screen.getByText(/Payment instructions remain unavailable until/)).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Review the exact TST payment' })).toBeNull()
     expect(screen.getByRole('link', { name: 'Browse open offerings' }).getAttribute('href')).toBe(portalScopeHref('/portal/opportunities', context))
-    expect(screen.queryByRole('link', { name: 'View fund progress' })).toBeNull()
+    expect(screen.queryByRole('link', { name: 'View fund' })).toBeNull()
     expect(wallet.request).not.toHaveBeenCalled()
   })
   it('reviews the exact server-bound amount and requires a separate explicit MetaMask transfer', async () => {

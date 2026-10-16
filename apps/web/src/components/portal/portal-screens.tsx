@@ -162,6 +162,15 @@ function fundLaunchProgress(fund: FundProductLifecycle): string {
   return 'Current investment terms are not available in this workspace. No investment or payment can be made here.'
 }
 
+function PreparingFundCard({ fund, operatingContext }: { fund: FundProductLifecycle; operatingContext?: PortalOperatingContext }) {
+  return <article className={styles.productCard}>
+    <div className={styles.productVisual} data-kind="FUND"><Layers3 aria-hidden="true" /><p>Investment fund</p></div>
+    <div className={styles.productCardBody}><h2>{fund.product_name}</h2><p>{fundLaunchProgress(fund)}</p>
+      <div className={styles.productCardFoot}><span className={styles.badge} data-tone="warning">Preparing to open</span><Link href={portalScopeHref('/portal/opportunities/detail', operatingContext, fund.product_id)} className={styles.button}>View fund</Link></div>
+    </div>
+  </article>
+}
+
 function ProductRegister({ products, canCreate, operatingContext }: { products: PortalProduct[]; canCreate: boolean; operatingContext?: PortalOperatingContext }) {
   return <Panel title="Product register" description="Fund and real-estate products share one workflow; submitted packages keep separate immutable references." action={canCreate ? <Link href={portalScopeHref('/portal/products/new', operatingContext)} className={styles.button}><Plus aria-hidden="true" />Create a product</Link> : undefined} flush>
     {products.length ? <div className={styles.tableWrap}><table className={styles.table}><thead><tr><th scope="col">Product</th><th scope="col">Template</th><th scope="col">Package</th><th scope="col">Status</th><th scope="col">Workspace</th></tr></thead>
@@ -194,20 +203,21 @@ export function SubscriptionOrders({ subscriptions, products, incoming, onSaved,
   </Panel>
 }
 
-function Opportunities({ products, snapshot, operatingContext }: { products: PortalProduct[]; snapshot: PortalSnapshot; operatingContext?: PortalOperatingContext }) {
+function Opportunities({ products, snapshot, operatingContext, preparingFunds = [] }: { products: PortalProduct[]; snapshot: PortalSnapshot; operatingContext?: PortalOperatingContext; preparingFunds?: FundProductLifecycle[] }) {
   const approval = currentInvestorApplication(snapshot)
   const applications = snapshot.applications.filter(item => item.user_id === snapshot.actor.id && item.persona === 'INVESTOR')
   const pending = applications.some(item => item.status === 'SUBMITTED')
   const expired = applications.some(item => item.status === 'APPROVED' && item.approved_until && Date.parse(item.approved_until) <= Date.now())
   const unverified = applications.some(item => item.status === 'APPROVED' && (!item.approved_until || !Number.isFinite(Date.parse(item.approved_until))))
+  const hasCards = products.length > 0 || preparingFunds.length > 0
   return <div className={styles.stack}>
+    {products.length ? <p className={styles.copy}>Choose an offering to review its terms, investment requirements and price. No returns or liquidity are guaranteed.</p> : null}
+    {hasCards ? <div className={styles.productGrid}>{products.map(product => <ProductCard key={product.id} product={product} operatingContext={operatingContext} />)}{preparingFunds.map(fund => <PreparingFundCard key={fund.product_id} fund={fund} operatingContext={operatingContext} />)}</div> : null}
     {!approval ? <Notice title={pending ? 'Your investor application is under review' : expired ? 'Your investor approval has expired' : unverified ? 'Investor approval could not be verified' : 'Complete your investor application'}>
       <p>{pending ? 'You can browse open offerings while your application is reviewed. You cannot reserve units or pay yet.' : expired ? 'Your application needs a current approval before you can open an account or invest.' : unverified ? 'Refresh your saved application before assuming that you can open an account or invest.' : 'An approved application, an active investment account and approval for the selected offering are required before you can invest.'}</p>
       <Link href={portalScopeHref('/portal/onboarding', operatingContext)} className={styles.textLink}>View my investor application</Link>
     </Notice> : null}
-    {products.length ? <p className={styles.copy}>Choose an offering to review its terms, investment requirements and price. No returns or liquidity are guaranteed.</p> : null}
-    {products.length ? <div className={styles.productGrid}>{products.map(product => <ProductCard key={product.id} product={product} operatingContext={operatingContext} />)}</div>
-      : <Notice title="No offerings are open for investment yet"><p>No offering returned for your account currently meets the publication and technical-readiness requirements. This is separate from your investor application. A fund still being prepared cannot accept your investment.</p></Notice>}
+    {!hasCards ? <Notice title="No offerings are open for investment yet"><p>No offering returned for your account currently meets the publication and technical-readiness requirements. This is separate from your investor application. A fund still being prepared cannot accept your investment.</p></Notice> : null}
   </div>
 }
 
@@ -522,25 +532,18 @@ function OperatingPortalScreen({ data, view, id, operatingContext, release, scop
       : [...totals.entries()].map(([currency, total]) => money(total.toString(), currency)).join(' · ')
     return <div className={styles.statGrid}><Statistic label="Subscription instructions" value={ownSubscriptions.length} hint="Your saved investment orders" /><Statistic label="Awaiting funding" value={pending.length} hint="Reserved, not issued" /><Statistic label="Requested subscription amount" value={amount} hint="Pending instructions only; different assets are shown separately" /></div>
   }
-  function preparingFundList() {
-    return preparingFunds.length ? <Panel title="Funds preparing to open" description="These are scoped progress records, not offers you can buy."><ul>{preparingFunds.map(item => <li key={item.product_id}>
-      <strong>{item.product_name}</strong><p>Preparing to open. {fundLaunchProgress(item)}</p>
-      <Link href={href('/portal/opportunities/detail', item.product_id)} className={styles.textLink}>View fund progress</Link>
-    </li>)}</ul></Panel> : null
-  }
   function investorWork() {
     if (passwordAdmission) return <InvestmentAccountPanel snapshot={snapshot} onSaved={setSnapshot} operatingContext={operatingContext} />
     return entityOnly
       ? <div className={styles.stack}><InvestmentAccountPanel snapshot={snapshot} onSaved={setSnapshot} operatingContext={operatingContext} /><Panel title="Entity offering access" description="A legal-holder account and limited representative appointment do not create a product qualification or order."><Notice title="Entity orders are not enabled">Product eligibility has a separate guarded request and independent decision. Entity subscription, settlement and ownership workflows remain unavailable. Existing individual orders, if any, are separate records.</Notice><Link href={href('/portal/opportunities')} className={styles.textLink}>Review published entity offerings and eligibility</Link></Panel></div>
       : <div className={styles.stack}>
+        <Opportunities products={published} snapshot={snapshot} operatingContext={operatingContext} preparingFunds={preparingFunds} />
         <Panel title="Your investing workspace" description="Browse an offering, reserve your investment, then follow its payment and issued units in one saved order.">
           <div className={styles.actions}><Link href={href('/portal/opportunities')} className={styles.button}>Browse investment opportunities</Link><Link href={href('/portal/portfolio')} className={styles.buttonSecondary}>View my orders and holdings</Link></div>
         </Panel>
         {orderStats()}
         {view !== '/portal' || currentInvestorApplication(snapshot) || snapshot.accounts?.some(account => account.holder_user_id === snapshot.actor.id)
           ? <InvestmentAccountPanel snapshot={snapshot} onSaved={setSnapshot} operatingContext={operatingContext} /> : null}
-        <Opportunities products={published} snapshot={snapshot} operatingContext={operatingContext} />
-        {preparingFundList()}
         {!fundLifecycle || fundLifecycle.availability !== 'AVAILABLE' ? <Notice title="Fund payment and holdings status unavailable">The current fund records could not be verified. This is not an empty portfolio or confirmation that no investment exists.</Notice> : null}
         {view !== '/portal' || ownSubscriptions.length > 0 ? <SubscriptionOrders subscriptions={ownSubscriptions} products={snapshot.products} incoming={false} onSaved={setSnapshot} operatingContext={operatingContext} funding={snapshot.funding} /> : null}
       </div>
@@ -654,9 +657,9 @@ function OperatingPortalScreen({ data, view, id, operatingContext, release, scop
       if (!canReview) return unavailable()
       return selectedApplication ? <div className={styles.stack}><ApplicationReview key={`${selectedApplication.id}-${selectedApplication.revision}`} application={selectedApplication} snapshot={reviewSnapshot} onSaved={setSnapshot} environment={release?.environment} />{!passwordWorkflow && selectedApplication.status === 'APPROVED' ? <CustomerMonitoringDecision key={`${selectedApplication.id}:${snapshot.customer_monitoring?.find(item => item.application_id === selectedApplication.id)?.case_revision ?? 'unavailable'}`} application={selectedApplication} snapshot={reviewSnapshot} operatingContext={operatingContext} onSaved={setSnapshot} /> : null}</div> : selectedEligibility ? <ProductEligibilityReview key={`${selectedEligibility.id}-${selectedEligibility.revision}`} eligibility={selectedEligibility} product={snapshot.products.find(product => product.id === selectedEligibility.product_id)} snapshot={reviewSnapshot} onSaved={setSnapshot} /> : selected ? <div className={styles.stack}><ProductReview key={`${selected.id}-${selected.revision}`} product={selected} snapshot={reviewSnapshot} onSaved={setSnapshot} /><OfferingFilePanel product={selected} context={operatingContext} actorId={snapshot.actor.id} /><OfferingSignatures product={selected} context={operatingContext} actorId={snapshot.actor.id} appointments={snapshot.product_appointments} /></div> : unavailable()
     }
-    if (view === '/portal/opportunities') return canInvest ? <div className={styles.stack}>{entityOnly ? <Notice title="Entity eligibility is separate">Review published terms and request a separate entity eligibility decision only with current admission, account and effective representative mandate. Entity subscriptions remain unavailable. Inspect account and appointment records in <Link href={href('/portal/portfolio')} className={styles.textLink}>your investment workspace</Link>.</Notice> : null}<Opportunities products={published} snapshot={snapshot} operatingContext={operatingContext} />{preparingFundList()}</div> : unavailable()
+    if (view === '/portal/opportunities') return canInvest ? <div className={styles.stack}>{entityOnly ? <Notice title="Entity eligibility is separate">Review published terms and request a separate entity eligibility decision only with current admission, account and effective representative mandate. Entity subscriptions remain unavailable. Inspect account and appointment records in <Link href={href('/portal/portfolio')} className={styles.textLink}>your investment workspace</Link>.</Notice> : null}<Opportunities products={published} snapshot={snapshot} operatingContext={operatingContext} preparingFunds={preparingFunds} /></div> : unavailable()
     if (view === '/portal/opportunities/detail' && !selected && selectedProgress && canInvest) return <div className={styles.stack}>
-      <Notice title="Preparing to open"><p>{fundLaunchProgress(selectedProgress)}</p><p>This progress view does not contain unpublished investment terms or payment instructions. You can choose an amount and accept the terms here only after the fund is open and available to your account.</p></Notice>
+      <Notice title="Preparing to open"><p>{fundLaunchProgress(selectedProgress)}</p><p>Once this fund opens, return here to review the published terms and choose an amount. Investing will still require an eligible account.</p></Notice>
       <div className={styles.actions}><Link href={href('/portal/opportunities')} className={styles.buttonSecondary}>Back to investment opportunities</Link><Link href={href('/portal/portfolio')} className={styles.textLink}>View my orders and holdings</Link></div>
     </div>
     if (view === '/portal/opportunities/detail') {
@@ -687,7 +690,7 @@ function OperatingPortalScreen({ data, view, id, operatingContext, release, scop
     return <div className={styles.stack}><section className={styles.hero}><div><p className={styles.eyebrow}>Your BlockXOne relationship</p><h2>{entityOnly ? hasEntityAccountView ? 'View your represented entity account.' : 'Follow your entity admission and appointment.' : hasInvestorCapacity ? currentInvestorApplication(snapshot) ? 'Review opportunities. Track every instruction.' : 'Complete your investor onboarding.' : ownApplications.some(item => item.persona === 'WEALTH_MANAGER') ? 'Continue your customer organisation application.' : 'Choose the capacity you want to apply for.'}</h2><p>Your applicant records and operating assignments are separate. Customer admission does not grant a platform role or permission to create products.</p><Link href={href('/portal/onboarding')} className={styles.button}>Continue onboarding<ArrowRight aria-hidden="true" /></Link></div></section><Panel title="Your onboarding" action={<Link href={href('/portal/onboarding')} className={styles.textLink}>View application</Link>}>{ownApplications.length ? ownApplications.map(application => <div key={application.id}><DetailList rows={[{ label: application.persona === 'INVESTOR' ? 'Investor relationship' : 'Customer organisation relationship', value: <StatusBadge status={application.status} /> }, { label: 'Review expiry', value: dateLabel(application.approved_until) }, ...(application.persona === 'WEALTH_MANAGER' ? [{ label: 'Next owner', value: application.status === 'APPROVED' ? 'BlockXOne mandate reviewer and authorised role administrator' : application.status === 'SUBMITTED' ? 'BlockXOne independent compliance reviewer' : 'Applicant' }] : [])]} /></div>) : <EmptyState title="Introduce yourself" description="Submit your own applicant details and evidence for an independent review." href={href('/portal/onboarding')} action="Start onboarding" />}</Panel>{canInvest ? investorWork() : null}</div>
   }
 
-  return <PortalCommandProvider snapshot={snapshot} operatingContext={operatingContext} environment={release?.environment}><PortalShell user={data.user} organisationName={scope?.organisationName ?? organisations[0]?.name} capabilities={{ ...capabilities, manageFundOperations: fundOperatingProducts }} active={config.active} title={title} description={config.description} eyebrow={config.eyebrow} breadcrumbs={breadcrumbs} release={release} operatingContext={operatingContext} actions={fundLifecycle?.availability === 'AVAILABLE' ? undefined : <a href={href(view, id)} className={styles.buttonSecondary}>Refresh saved state</a>}>
+  return <PortalCommandProvider snapshot={snapshot} operatingContext={operatingContext} environment={release?.environment}><PortalShell user={data.user} organisationName={scope?.organisationName ?? organisations[0]?.name} capabilities={{ ...capabilities, manageFundOperations: fundOperatingProducts }} active={config.active} title={title} description={selectedProgress ? 'Track this fund’s launch status. It is not open for investment yet.' : config.description} eyebrow={config.eyebrow} breadcrumbs={breadcrumbs} release={release} operatingContext={operatingContext} actions={fundLifecycle?.availability === 'AVAILABLE' ? undefined : <a href={href(view, id)} className={styles.buttonSecondary}>Refresh saved state</a>}>
     {evaluation && view === '/portal' ? <Notice title="Your TEST workspace">{role === 'OfferingManager' ? 'Prepare your fund or property and follow its review progress.' : 'Browse published TEST offerings and inspect the portfolio workspace without placing orders.'} This access is separate from your application decision; identity verification, production admission and signing authority are not implied. <Link href="/portal/onboarding?mode=applicant" className={styles.textLink}>View my application status</Link></Notice> : null}
     {operatingContext?.mode !== 'ROLE' && scopes?.length ? <nav aria-label={evaluation ? 'TEST workspace and organisation' : 'Assigned role and organisation'} className={`${styles.scopeSelector} ${styles.sectionGap}`}>
       {scope ? <p>Working as <strong>{getRoleDashboard(scope.role)?.title ?? scope.role}</strong> in <strong>{scope.organisationName}</strong></p> : <p>Working with your <strong>personal and applicant relationships</strong>. An approved product-owner relationship here does not grant a native organisation role.</p>}

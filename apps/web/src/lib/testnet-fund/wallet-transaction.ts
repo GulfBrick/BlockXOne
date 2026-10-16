@@ -128,9 +128,9 @@ export async function prepareAmoyWalletTransaction(
   if (options.retryNonce !== undefined && nonces.latest !== quantity(options.retryNonce, 'saved nonce')) throw new Error('The saved transaction nonce has already changed. Verify the original transaction instead of sending a duplicate. Nothing was sent.')
   const nonce = options.retryNonce === undefined ? nonces.latest : quantity(options.retryNonce, 'saved nonce')
   const priorityFee = max(suggestedTip, MIN_PRIORITY_FEE)
-  // 20% gas-limit margin rounded upwards; dynamic base-fee headroom, with a two-tip floor.
+  // 20% gas-limit margin rounded upwards; double the base fee and retain the full priority fee.
   const gasLimit = (estimatedGas * 120n + 99n) / 100n
-  const maximumFee = max(baseFee * 2n + priorityFee, priorityFee * 2n)
+  const maximumFee = baseFee * 2n + priorityFee
   if (gasLimit > MAX_QUANTITY || maximumFee > MAX_QUANTITY) throw new Error('The wallet returned unsupported gas or fee values. Nothing was sent.')
   const maximumCost = gasLimit * maximumFee
   if (balance < maximumCost) throw new Error(`Insufficient Amoy test POL for the maximum fee: ${units(maximumCost, 18)} POL required; wallet has ${units(balance, 18)} POL. Nothing was sent.`)

@@ -33,16 +33,57 @@ describe('read-only Amoy wallet transaction preparation', () => {
   it('raises the rejected 15 Gwei tip to 30 Gwei and provides capped cost before signing', async () => {
     const provider = fakeProvider()
     const result = await prepareAmoyWalletTransaction(provider, input)
-    expect(result.transaction).toEqual({ ...input, chainId: '0x13882', nonce: '0x0', gas: hex(514_796n), maxPriorityFeePerGas: hex(30_000_000_000n), maxFeePerGas: hex(60_000_000_000n) })
-    expect(result.summary).toEqual({ estimatedGas: '428996', gasLimit: '514796', priorityFeeGwei: '30', maxFeePerGasGwei: '60', maximumCostPol: '0.03088776', balancePol: '0.1' })
+    expect(result.transaction).toEqual({ ...input, chainId: '0x13882', nonce: '0x0', gas: hex(514_796n), maxPriorityFeePerGas: hex(30_000_000_000n), maxFeePerGas: hex(34_000_000_000n) })
+    expect(result.summary).toEqual({ estimatedGas: '428996', gasLimit: '514796', priorityFeeGwei: '30', maxFeePerGasGwei: '34', maximumCostPol: '0.017503064', balancePol: '0.1' })
     expect(result.nonce).toBe('0x0')
     expect(provider.request.mock.calls.some(([args]) => args.method.startsWith('eth_send') || args.method.includes('sign'))).toBe(false)
   })
 
-  it('keeps an above-floor provider tip and doubles a high base fee', async () => {
-    const result = await prepareAmoyWalletTransaction(fakeProvider({ eth_getBlockByNumber: { baseFeePerGas: hex(50_000_000_000n) }, eth_maxPriorityFeePerGas: hex(40_000_000_000n) }), input)
-    expect(result.transaction.maxPriorityFeePerGas).toBe(hex(40_000_000_000n))
-    expect(result.transaction.maxFeePerGas).toBe(hex(140_000_000_000n))
+  it.each([
+    { scenario: 'high base fee', base: 50_000_000_000n, tip: 40_000_000_000n, maximum: 140_000_000_000n },
+    { scenario: 'PublicNode suggested tip', base: 63n, tip: 77_250_000_042n, maximum: 77_250_000_168n },
+    { scenario: 'dRPC suggested tip', base: 63n, tip: 83_999_999_923n, maximum: 84_000_000_049n },
+  ])('honours $scenario without lowering fees to fit an insufficient balance', async ({ base, tip, maximum }) => {
+    const override = { eth_getBlockByNumber: { baseFeePerGas: hex(base) }, eth_maxPriorityFeePerGas: hex(tip), eth_estimateGas: hex(3_162_543n) }
+    const provider = fakeProvider({ ...override, eth_getBalance: hex(1_000_000_000_000_000_000n) })
+    const result = await prepareAmoyWalletTransaction(provider, input)
+    expect(result.transaction.gas).toBe(hex(3_795_052n))
+    expect(result.transaction.maxPriorityFeePerGas).toBe(hex(tip))
+    expect(result.transaction.maxFeePerGas).toBe(hex(maximum))
+    const insufficient = fakeProvider({ ...override, eth_getBalance: hex(3_795_052n * maximum - 1n) })
+    await expect(prepareAmoyWalletTransaction(insufficient, input)).rejects.toThrow('Insufficient Amoy test POL')
+    for (const checked of [provider, insufficient]) {
+      expect(checked.request.mock.calls.some(([args]) => args.method.startsWith('eth_send') || args.method.includes('sign'))).toBe(false)
+    }
+  })
+
+  it('prepares the observed Amoy implementation with the exact fee cap, gas margin and saved nonce', async () => {
+    const provider = fakeProvider({
+      eth_getBlockByNumber: { baseFeePerGas: hex(63n) },
+      eth_maxPriorityFeePerGas: hex(30_000_000_000n),
+      eth_estimateGas: hex(3_162_543n),
+      eth_getBalance: hex(128_836_199_955_556_029n),
+      eth_getTransactionCount: '0x2',
+    })
+    const result = await prepareAmoyWalletTransaction(provider, input, { retryNonce: '0x2' })
+    expect(result.transaction).toEqual({ ...input, chainId: '0x13882', nonce: '0x2', gas: hex(3_795_052n), maxPriorityFeePerGas: hex(30_000_000_000n), maxFeePerGas: hex(30_000_000_126n) })
+    expect(result.summary).toEqual({ estimatedGas: '3162543', gasLimit: '3795052', priorityFeeGwei: '30', maxFeePerGasGwei: '30.000000126', maximumCostPol: '0.113851560478176552', balancePol: '0.128836199955556029' })
+    expect(result.nonce).toBe('0x2')
+    expect(provider.request).toHaveBeenCalledWith({ method: 'eth_estimateGas', params: [input] })
+    expect(provider.request.mock.calls.some(([args]) => args.method.startsWith('eth_send') || args.method.includes('sign'))).toBe(false)
+  })
+
+  it('rejects one wei below the observed exact maximum fee without sending or selecting a new nonce', async () => {
+    const provider = fakeProvider({
+      eth_getBlockByNumber: { baseFeePerGas: hex(63n) },
+      eth_maxPriorityFeePerGas: hex(30_000_000_000n),
+      eth_estimateGas: hex(3_162_543n),
+      eth_getBalance: hex(113_851_560_478_176_551n),
+      eth_getTransactionCount: '0x2',
+    })
+    await expect(prepareAmoyWalletTransaction(provider, input, { retryNonce: '0x2' })).rejects.toThrow('0.113851560478176552 POL required; wallet has 0.113851560478176551 POL')
+    expect(provider.request.mock.calls.filter(([args]) => args.method === 'eth_getTransactionCount').map(([args]) => args.params)).toEqual([[wallet, 'latest'], [wallet, 'pending']])
+    expect(provider.request.mock.calls.some(([args]) => args.method.startsWith('eth_send') || args.method.includes('sign'))).toBe(false)
   })
 
   it('estimates the exact zero-value creation payload with no destination', async () => {
@@ -99,12 +140,12 @@ describe('read-only Amoy wallet transaction preparation', () => {
   })
 
   it('rejects a balance that covers expected gas but not the maximum fee cap', async () => {
-    await expect(prepareAmoyWalletTransaction(fakeProvider({ eth_getBalance: hex(20_000_000_000_000_000n) }), input)).rejects.toThrow('0.03088776 POL required; wallet has 0.02 POL')
+    await expect(prepareAmoyWalletTransaction(fakeProvider({ eth_getBalance: hex(16_000_000_000_000_000n) }), input)).rejects.toThrow('0.017503064 POL required; wallet has 0.016 POL')
   })
 
   it('accepts the exact maximum-cost balance without floating-point rounding', async () => {
-    await expect(prepareAmoyWalletTransaction(fakeProvider({ eth_getBalance: hex(514_796n * 60_000_000_000n) }), input)).resolves.toHaveProperty('nonce', '0x0')
-    await expect(prepareAmoyWalletTransaction(fakeProvider({ eth_getBalance: hex(514_796n * 60_000_000_000n - 1n) }), input)).rejects.toThrow('Insufficient Amoy test POL')
+    await expect(prepareAmoyWalletTransaction(fakeProvider({ eth_getBalance: hex(514_796n * 34_000_000_000n) }), input)).resolves.toHaveProperty('nonce', '0x0')
+    await expect(prepareAmoyWalletTransaction(fakeProvider({ eth_getBalance: hex(514_796n * 34_000_000_000n - 1n) }), input)).rejects.toThrow('Insufficient Amoy test POL')
   })
 
   it.each(['0x1', '0x89'])('rejects chain %s before reading fees or estimating', async chain => {
