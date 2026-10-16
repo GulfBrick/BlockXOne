@@ -11,6 +11,7 @@ import { fundLifecycleSnapshotSchema, fundOperationSchema, hasFundLifecycleComma
 import { matchesAppointmentCommit } from '@/lib/portal/appointment-commit'
 import { matchesFundPublicationCommit } from '@/lib/portal/fund-publication-commit'
 import { matchesOfferingDecisionCommit } from '@/lib/portal/offering-decision-commit'
+import { admissionCommitSnapshotMatches, matchesAdmissionCommit } from '@/lib/portal/admission-commit'
 import { fundingSnapshotSchema } from '@/lib/portal/funding-contracts'
 import { fundRoleplayAdmissionProjectionValid } from '@/lib/portal/fund-roleplay-admission'
 import styles from './portal.module.css'
@@ -21,6 +22,9 @@ type MarkerScope = { operatingContext: PortalOperatingContext; environment: Plat
 const markerKey = (actorId: string, scope?: MarkerScope) => scope
   ? `bx1-portal:${scope.environment}:${actorId}:${portalContextKey(scope.operatingContext)}:pending-request`
   : `bx1-portal:fegnnnlseuejkrusbbkv:${actorId}:pending-request`
+// Shared by mounted command hooks in this tab only. Never store an ACK, private
+// payload or authority here; a held result still needs its explicit saved read.
+const heldAdmissionRequests = new Map<string, Pick<Marker, 'key' | 'command'>>()
 const PortalCommandContext = createContext<{ actorId: string; requests: { key: string; command: string }[]; snapshot?: PortalSnapshot; stage2Access?: Stage2Access; offeringAccess?: OfferingAccess; evaluationAccess?: EvaluationAccess; invalidAdmission?: boolean } & MarkerScope>({ actorId: '', requests: [], operatingContext: APPLICANT_CONTEXT, environment: 'TESTNET' })
 export function PortalCommandProvider({ snapshot, children, operatingContext = APPLICANT_CONTEXT, environment = 'TESTNET' }: { snapshot: PortalSnapshot; children: ReactNode; operatingContext?: PortalOperatingContext; environment?: PlatformEnvironment }) {
   const stage2Access = validatedStage2Access(snapshot, operatingContext, environment)
@@ -62,8 +66,11 @@ function readMarker(raw: string | null): Marker | null {
 }
 export function reconcilePortalMarker(storage: MarkerStorage, actorId: string, requests: { key: string; command: string }[], scope?: MarkerScope): Marker | null {
   if (scope && storage.getItem(markerKey(actorId))) throw new Error('A request from the previous platform version needs reconciliation. Contact the operator with its request reference before starting another action.')
-  const marker = readMarker(storage.getItem(markerKey(actorId, scope)))
-  if (marker && requests.some(request => request.key === marker.key && request.command === marker.command)) { storage.removeItem(markerKey(actorId, scope)); return null }
+  const storageKey = markerKey(actorId, scope), marker = readMarker(storage.getItem(storageKey))
+  const held = heldAdmissionRequests.get(storageKey)
+  if (held && (!marker || marker.key !== held.key || marker.command !== held.command)) heldAdmissionRequests.delete(storageKey)
+  else if (held && marker) return marker
+  if (marker && requests.some(request => request.key === marker.key && request.command === marker.command)) { storage.removeItem(storageKey); return null }
   return marker
 }
 export async function prepareDurablePortalCommand(storage: MarkerStorage, actorId: string, request: PortalCommand, requests: { key: string; command: string }[], scope?: MarkerScope): Promise<PortalCommand> {
@@ -80,8 +87,10 @@ export async function prepareDurablePortalCommand(storage: MarkerStorage, actorI
   return prepared
 }
 export function clearPortalMarker(storage: MarkerStorage, actorId: string, request: PortalCommand, scope?: MarkerScope) {
-  const marker = readMarker(storage.getItem(markerKey(actorId, scope)))
-  if (marker?.key === request.key && marker.command === request.command) storage.removeItem(markerKey(actorId, scope))
+  const storageKey = markerKey(actorId, scope), marker = readMarker(storage.getItem(storageKey))
+  if (marker?.key === request.key && marker.command === request.command) storage.removeItem(storageKey)
+  const held = heldAdmissionRequests.get(storageKey)
+  if (held?.key === request.key && held.command === request.command) heldAdmissionRequests.delete(storageKey)
 }
 /** A denial of a retry cannot prove that its earlier uncertain attempt failed. */
 export function mayDiscardDeniedPortalRequest(definitive: boolean, hadPendingAttempt: boolean): boolean {
@@ -90,7 +99,9 @@ export function mayDiscardDeniedPortalRequest(definitive: boolean, hadPendingAtt
 
 function savedCommandSubject(command?: PortalCommand['command']) {
   return command === 'publish_product' ? 'Your publication request'
-    : command === 'review_offering_issuer' || command === 'review_product' ? 'Your offering decision' : 'Your appointment change'
+    : command === 'review_offering_issuer' || command === 'review_product' ? 'Your offering decision'
+    : command === 'review_application' ? 'Your application decision'
+    : command === 'create_investment_account' ? 'Your investment account' : 'Your appointment change'
 }
 class PortalCommittedRefreshRequiredError extends Error {
   readonly committed = true
@@ -119,14 +130,16 @@ export async function postPortalCommand(command: PortalCommand, operatingContext
   if (!contentType.includes('application/json')) throw new Error('The platform did not confirm the outcome. Retry the saved request, not a new application.')
   const result = await response.json()
   let committed = false
+  let admissionCommit = false
   if (result?.committed !== undefined) {
     const expected = { actorId: expectedActor ?? '', context: operatingContext, request: command, environment: expectedEnvironment }
     if (!response.ok || ![200, 202].includes(response.status) || result.error !== undefined
       || !(matchesAppointmentCommit(result.committed, expected) || matchesFundPublicationCommit(result.committed, expected)
-        || matchesOfferingDecisionCommit(result.committed, expected))) {
+        || matchesOfferingDecisionCommit(result.committed, expected) || matchesAdmissionCommit(result.committed, expected))) {
       throw new Error('The platform did not confirm this request in the expected context. Refresh to reconcile the original request.')
     }
     committed = true
+    admissionCommit = matchesAdmissionCommit(result.committed, expected)
     if (response.status === 202 || result.refresh_required === true || !result.snapshot) throw new PortalCommittedRefreshRequiredError(command.command)
   }
   if (!response.ok || result.error || !result.snapshot) {
@@ -136,6 +149,7 @@ export async function postPortalCommand(command: PortalCommand, operatingContext
   }
   try {
   if (committed && !completeCommitSnapshot(result.snapshot, expectedActor ?? '', operatingContext, expectedEnvironment)) throw new PortalCommittedRefreshRequiredError(command.command)
+  if (admissionCommit && !admissionCommitSnapshotMatches(result.snapshot, result.committed)) throw new PortalCommittedRefreshRequiredError(command.command)
   if (!portalContextMatches(result.snapshot.operating_context, operatingContext) || (expectedActor && result.snapshot.actor?.id !== expectedActor)) throw new Error('The saved result belongs to an unverified operating context. Refresh to reconcile the original request.')
   if ('rehearsal' in result.snapshot) throw new Error('The saved result is not a normal admission record. Refresh to reconcile the original request.')
   if (!fundRoleplayAdmissionProjectionValid(result.snapshot, expectedEnvironment)) throw new Error('The saved TEST admission context could not be verified. Refresh to reconcile the original request.')
@@ -252,6 +266,9 @@ export function usePortalCommand(onSaved: (snapshot: PortalSnapshot) => void) {
       const definitive = typeof error === 'object' && error !== null && 'definitive' in error && error.definitive === true
       if (!isCurrent()) return false
       if (error instanceof PortalCommittedRefreshRequiredError && savedRequest.current) {
+        if (context.environment === 'TESTNET' && ['review_application', 'create_investment_account'].includes(savedRequest.current.command)) {
+          heldAdmissionRequests.set(markerKey(context.actorId, context), { key: savedRequest.current.key, command: savedRequest.current.command })
+        }
         setCommittedRequest({ identity, key: savedRequest.current.key, command: savedRequest.current.command })
         setUnknown(false); setMessage(error.message); return false
       }

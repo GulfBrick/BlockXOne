@@ -134,15 +134,40 @@ describe('one existing investor workspace', () => {
     mountPage(snapshot(false, false))
     expect(screen.getByRole('heading', { name: 'Your investing workspace' })).toBeTruthy()
     expect(screen.getByText('Your investor application is under review')).toBeTruthy()
-    expect(screen.getByText('No offerings are open for investment yet')).toBeTruthy()
+    expect(screen.getByText('No offerings are open for investment yet').tagName).toBe('STRONG')
+    expect(screen.queryByRole('heading', { name: 'Your investment account' })).toBeNull()
+    expect(screen.queryByRole('heading', { name: 'Your subscription orders' })).toBeNull()
     expect(screen.getByRole('heading', { name: 'Funds preparing to open' })).toBeTruthy()
     expect(screen.queryByText('Your fund handoffs')).toBeNull()
     expect(screen.queryByText('Request fund deployment')).toBeNull()
     expect(screen.queryByRole('link', { name: 'View fund progress' })).toBeNull()
     expect(screen.queryByRole('button', { name: /reserve|buy|transfer.*MetaMask/i })).toBeNull()
     expect(screen.getByRole('link', { name: 'Browse investment opportunities' }).getAttribute('href')).toBe(portalScopeHref('/portal/opportunities', context))
+    expect(screen.getByRole('link', { name: 'View my orders and holdings' }).getAttribute('href')).toBe(portalScopeHref('/portal/portfolio', context))
     expect(screen.getByText('No pending amount')).toBeTruthy()
     expect(screen.queryByText('R0.00 test')).toBeNull()
+    expect(fetcher).not.toHaveBeenCalled(); expect(wallet.request).not.toHaveBeenCalled()
+  })
+  it.each(['current approval', 'saved account', 'saved order', 'foreign account'] as const)('keeps only relevant home panels for %s', state => {
+    const value = snapshot(false, false)
+    if (state === 'current approval') value.applications = [application()]
+    if (state === 'saved account' || state === 'foreign account') value.accounts = [{ id: accountId, holder_user_id: state === 'saved account' ? actor : other,
+      application_id: applicationId, kind: 'INDIVIDUAL', status: 'ACTIVE', created_at: recorded }]
+    if (state === 'saved order') value.subscriptions = [order()]
+    mountPage(value)
+    expect(Boolean(screen.queryByRole('heading', { name: 'Your investment account' }))).toBe(state === 'current approval' || state === 'saved account')
+    expect(Boolean(screen.queryByRole('heading', { name: 'Your subscription orders' }))).toBe(state === 'saved order')
+    if (state === 'current approval') expect(screen.getByRole('button', { name: 'Open individual investment account' })).toBeTruthy()
+    else expect(screen.queryByRole('button', { name: 'Open individual investment account' })).toBeNull()
+    if (state === 'saved order') expect(screen.getByRole('link', { name: 'Open funding record' }).getAttribute('href')).toBe(portalScopeHref('/portal/orders/detail', context, orderId))
+    expect(fetcher).not.toHaveBeenCalled(); expect(wallet.request).not.toHaveBeenCalled()
+  })
+  it('retains the account and empty-order explanations on the separate portfolio page', () => {
+    mountPage(snapshot(false, false), '/portal/portfolio')
+    expect(screen.getByRole('heading', { name: 'Your investment account' })).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'Your subscription orders' })).toBeTruthy()
+    expect(screen.getByText('No subscription orders yet')).toBeTruthy()
+    expect(screen.getByText('Reservations are not holdings')).toBeTruthy()
     expect(fetcher).not.toHaveBeenCalled(); expect(wallet.request).not.toHaveBeenCalled()
   })
   it('shows unavailable fund records as unavailable rather than an empty portfolio', () => {

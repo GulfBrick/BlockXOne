@@ -200,7 +200,7 @@ function Opportunities({ products, snapshot, operatingContext }: { products: Por
     </Notice> : null}
     {products.length ? <p className={styles.copy}>Choose an offering to review its terms, investment requirements and price. No returns or liquidity are guaranteed.</p> : null}
     {products.length ? <div className={styles.productGrid}>{products.map(product => <ProductCard key={product.id} product={product} operatingContext={operatingContext} />)}</div>
-      : <Panel title="Investment opportunities"><EmptyState title="No offerings are open for investment yet" description="No offering returned for your account currently meets the publication and technical-readiness requirements. This is separate from your investor application. A fund still being prepared cannot accept your investment." /></Panel>}
+      : <Notice title="No offerings are open for investment yet"><p>No offering returned for your account currently meets the publication and technical-readiness requirements. This is separate from your investor application. A fund still being prepared cannot accept your investment.</p></Notice>}
   </div>
 }
 
@@ -519,11 +519,12 @@ function OperatingPortalScreen({ data, view, id, operatingContext, release, scop
           <div className={styles.actions}><Link href={href('/portal/opportunities')} className={styles.button}>Browse investment opportunities</Link><Link href={href('/portal/portfolio')} className={styles.buttonSecondary}>View my orders and holdings</Link></div>
         </Panel>
         {orderStats()}
-        <InvestmentAccountPanel snapshot={snapshot} onSaved={setSnapshot} operatingContext={operatingContext} />
+        {view !== '/portal' || currentInvestorApplication(snapshot) || snapshot.accounts?.some(account => account.holder_user_id === snapshot.actor.id)
+          ? <InvestmentAccountPanel snapshot={snapshot} onSaved={setSnapshot} operatingContext={operatingContext} /> : null}
         <Opportunities products={published} snapshot={snapshot} operatingContext={operatingContext} />
         {fundLifecycle?.availability === 'AVAILABLE' && fundLifecycle.products.some(item => !published.some(product => product.id === item.product_id)) ? <Panel title="Funds preparing to open" description="These are scoped progress records, not offers you can buy."><ul>{fundLifecycle.products.filter(item => !published.some(product => product.id === item.product_id)).map(item => <li key={item.product_id}><strong>{item.product_name}</strong><p>Not open for investment. The issuer and its appointed operators must finish the fund opening requirements. No payment is available.</p></li>)}</ul></Panel> : null}
         {!fundLifecycle || fundLifecycle.availability !== 'AVAILABLE' ? <Notice title="Fund payment and holdings status unavailable">The current fund records could not be verified. This is not an empty portfolio or confirmation that no investment exists.</Notice> : null}
-        <SubscriptionOrders subscriptions={ownSubscriptions} products={snapshot.products} incoming={false} onSaved={setSnapshot} operatingContext={operatingContext} funding={snapshot.funding} />
+        {view !== '/portal' || ownSubscriptions.length > 0 ? <SubscriptionOrders subscriptions={ownSubscriptions} products={snapshot.products} incoming={false} onSaved={setSnapshot} operatingContext={operatingContext} funding={snapshot.funding} /> : null}
       </div>
   }
   function productWork() {

@@ -13,6 +13,7 @@ import { platformRelease } from '@/lib/platform-release'
 import { appointmentCommitSchema, matchesAppointmentCommit } from '@/lib/portal/appointment-commit'
 import { fundPublicationCommitSchema, matchesFundPublicationCommit } from '@/lib/portal/fund-publication-commit'
 import { offeringDecisionCommitSchema, matchesOfferingDecisionCommit } from '@/lib/portal/offering-decision-commit'
+import { admissionCommitSnapshotMatches, admissionOrAccountCommitSchema, matchesAdmissionCommit } from '@/lib/portal/admission-commit'
 
 function requireSavedSnapshot(value: unknown, actorId: string, context: PortalOperatingContext, before: PortalSnapshot): asserts value is PortalSnapshot {
   if (!isPortalSnapshot(value, actorId) || !portalContextMatches(value.operating_context, context)) throw new PortalError('The saved result could not be read. Refresh before retrying.', 503)
@@ -72,16 +73,19 @@ export async function POST(request: NextRequest) {
     }
     if (data && typeof data === 'object' && 'kind' in data
       && (data.kind === 'TEST_FUND_APPOINTMENT_COMMIT' || data.kind === 'TEST_FUND_PUBLICATION_COMMIT'
-        || data.kind === 'TEST_FUND_OFFERING_DECISION_COMMIT')) {
+        || data.kind === 'TEST_FUND_OFFERING_DECISION_COMMIT' || data.kind === 'TEST_FUND_ADMISSION_COMMIT'
+        || data.kind === 'TEST_FUND_ACCOUNT_COMMIT')) {
       const expected = { actorId: user.id, context: context.data, request: command.data, environment: platformRelease(process.env)?.environment }
       const publication = data.kind === 'TEST_FUND_PUBLICATION_COMMIT'
       const decision = data.kind === 'TEST_FUND_OFFERING_DECISION_COMMIT'
-      if (!(decision ? matchesOfferingDecisionCommit(data, expected) : publication ? matchesFundPublicationCommit(data, expected) : matchesAppointmentCommit(data, expected))) {
-        throw new PortalError(decision ? 'The saved offering decision receipt could not be verified. Refresh before retrying.'
+      const admission = data.kind === 'TEST_FUND_ADMISSION_COMMIT' || data.kind === 'TEST_FUND_ACCOUNT_COMMIT'
+      if (!(admission ? matchesAdmissionCommit(data, expected) : decision ? matchesOfferingDecisionCommit(data, expected) : publication ? matchesFundPublicationCommit(data, expected) : matchesAppointmentCommit(data, expected))) {
+        throw new PortalError(admission ? 'The saved application or account receipt could not be verified. Refresh before retrying.'
+          : decision ? 'The saved offering decision receipt could not be verified. Refresh before retrying.'
           : publication ? 'The saved publication receipt could not be verified. Refresh before retrying.'
           : 'The saved appointment receipt could not be verified. Refresh before retrying.', 503)
       }
-      const committed = decision ? offeringDecisionCommitSchema.parse(data)
+      const committed = admission ? admissionOrAccountCommitSchema.parse(data) : decision ? offeringDecisionCommitSchema.parse(data)
         : publication ? fundPublicationCommitSchema.parse(data) : appointmentCommitSchema.parse(data)
       try {
         // This is a separate RPC after the guarded writer returned a durable
@@ -89,6 +93,9 @@ export async function POST(request: NextRequest) {
         const refreshed = await readPortal(client, context.data)
         if (refreshed.user.id !== user.id) throw new PortalError('The signed-in account changed after saving.', 403)
         requireSavedSnapshot(refreshed.snapshot, user.id, context.data, before)
+        if (admission && !admissionCommitSnapshotMatches(refreshed.snapshot, committed)) {
+          throw new PortalError('The original application or account result is not yet confirmed in the saved state.', 503)
+        }
         return jar.finish(privateResponse(NextResponse.json({ snapshot: refreshed.snapshot, committed })))
       } catch {
         // No prior or fabricated snapshot is returned as current state. The

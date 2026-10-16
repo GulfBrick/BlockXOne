@@ -9,7 +9,7 @@ import { POST } from '@/app/api/portal/command/route'
 import { readPortalBody } from './http'
 import { PortalError } from './server'
 import { APPLICANT_CONTEXT } from './operating-context'
-import type { PortalCommand } from './contracts'
+import { portalCommandSchema, type PortalCommand } from './contracts'
 import type { CookieAdapter } from '@/lib/supabase/server'
 
 const origin = 'https://block-x-one-portal-test.vercel.app'
@@ -170,6 +170,153 @@ describe('scoped portal command endpoint', () => {
   })
   it('limits actual bytes despite a small claimed length', async () => {
     await expect(readPortalBody(request({ padding: 'x'.repeat(100) }, { 'content-length': '1' }), 20)).rejects.toMatchObject({ status: 413 })
+  })
+})
+
+describe.each(['review', 'applicant account', 'investor account'] as const)('committed TEST %s result uses a separate confirmed read', mode => {
+  const context = mode === 'applicant account' ? APPLICANT_CONTEXT
+    : { mode: 'ROLE' as const, organisationId: organisation, role: mode === 'review' ? 'ComplianceOfficer' as const : 'Investor' as const }
+  const application = '77777777-7777-4777-8777-777777777777', other = '99999999-9999-4999-8999-999999999999'
+  const save = portalCommandSchema.parse(mode === 'review'
+    ? { command: 'review_application', key: command.key, payload: { application_id: application, expected_revision: 2,
+      decision: 'APPROVED', notes: 'Fictional manual TEST investor evidence reviewed.',
+      checks: { identity: true, ownership: true, screening: true, suitability: true } } }
+    : { command: 'create_investment_account', key: command.key, payload: { application_id: application } })
+  const scoped = { ...snapshot, operating_context: context }
+  const common = { version: 1, environment: 'TESTNET', execution_mode: 'TEST_ROLE_PLAY', independence_proven: false,
+    actor_id: actor, session_id: other, operating_context: context, policy_id: other, authority_epoch: 2,
+    product_id: other, offering_revision_id: other, application_id: application, event_id: other,
+    request: save, recorded_at: '2026-10-16T13:30:00Z' }
+  const committed = mode === 'review'
+    ? { ...common, kind: 'TEST_FUND_ADMISSION_COMMIT', decision_id: other, submitted_revision: 2, decision_revision: 3, decision: 'APPROVED' }
+    : { ...common, kind: 'TEST_FUND_ACCOUNT_COMMIT', account_id: other, application_revision: 3, admission_decision_id: other }
+  const reviewedAt = mode === 'review' ? common.recorded_at : '2026-10-16T13:00:00Z'
+  const refreshed = { ...scoped, requests: [{ key: save.key, command: save.command }],
+    applications: [{ id: application, user_id: actor, persona: 'INVESTOR', status: 'APPROVED', revision: 3,
+      details: { full_name: 'Fictional investor', country: 'ZA', investor_type: 'INDIVIDUAL', company_name: '', registration_reference: '',
+        source_of_funds: 'Fictional TEST funds only.', beneficial_owners: '', experience: 'Synthetic experience.', documents: [], test_data_acknowledged: true },
+      submitted_at: '2026-10-16T12:00:00Z', reviewed_at: reviewedAt, reviewer_id: actor,
+      review_notes: save.command === 'review_application' ? save.payload.notes : 'Fictional prior manual review rationale.',
+      organisation_id: null, review_checks: { identity: true, ownership: true, screening: true, suitability: true },
+      provider_mode: 'MANUAL_TEST_REVIEW', approved_until: '2099-01-01T00:00:00Z', admission_purpose: 'INVESTOR_ADMISSION',
+      test_roleplay_admission: { version: 1, environment: 'TESTNET', execution_mode: 'TEST_ROLE_PLAY', independence_proven: false,
+        policy_id: other, authority_epoch: 2, product_id: other, offering_revision_id: other, application_id: application,
+        submitted_revision: 2, decision_revision: 3, decision: 'APPROVED', reviewer_id: actor, reviewed_at: reviewedAt, valid_until: '2099-01-01T00:00:00Z' } }],
+    accounts: mode === 'review' ? [] : [{ id: other, holder_user_id: actor, application_id: application,
+      kind: 'INDIVIDUAL', status: 'ACTIVE', created_at: '2026-10-16T13:30:01Z' }],
+    events: [{ id: other, subject_id: mode === 'review' ? application : other, kind: save.command, actor_id: actor,
+      created_at: mode === 'review' ? '2026-10-16T13:29:59Z' : common.recorded_at, summary: 'Synthetic original event.' }] }
+  function prepare(data: unknown = committed) {
+    mocks.read.mockResolvedValueOnce({ user: { id: actor, email: snapshot.actor.email }, snapshot: scoped })
+      .mockResolvedValue({ user: { id: actor, email: snapshot.actor.email }, snapshot: refreshed })
+    mocks.rpc.mockReturnValue({ abortSignal: vi.fn().mockResolvedValue({ data, error: null }) })
+  }
+  function send() { return POST(request({ ...save, operating_context: context })) }
+  it('uses the unchanged canonical writer then separately reads its original receipt', async () => {
+    prepare()
+    const response = await send()
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ snapshot: refreshed, committed })
+    expect(mocks.rpc).toHaveBeenCalledExactlyOnceWith('bx1_portal_command_scoped', {
+      command: save.command, request_key: save.key, payload: save.payload, operating_context: context,
+    })
+    expect(mocks.read).toHaveBeenCalledTimes(2)
+    expect(mocks.rpc.mock.invocationCallOrder[0]).toBeLessThan(mocks.read.mock.invocationCallOrder[1])
+    expect(mocks.lifecycle).not.toHaveBeenCalled()
+  })
+  it.each([401, 403, 503])('returns private ACK-only202 if the separate read fails with %s', async status => {
+    prepare()
+    mocks.read.mockReset().mockResolvedValueOnce({ user: { id: actor, email: snapshot.actor.email }, snapshot: scoped })
+      .mockRejectedValueOnce(new PortalError('Private saved-read diagnostics.', status))
+    const response = await send()
+    expect(response.status).toBe(202)
+    expect(await response.json()).toEqual({ committed, refresh_required: true })
+    expect(response.headers.get('cache-control')).toContain('private')
+    expect(response.headers.get('cache-control')).toContain('no-store')
+    expect(response.headers.get('referrer-policy')).toBe('no-referrer')
+    expect(mocks.rpc).toHaveBeenCalledOnce()
+  })
+  it.each(['actor', 'context', 'missing', 'missing receipt', 'wrong key', 'wrong command', 'admission continuity'] as const)(
+    'does not report a %s readback as complete saved state', async failure => {
+      prepare()
+      const before = { ...scoped, ...(failure === 'admission continuity' ? { stage2_access: { version: 1, environment: 'TESTNET',
+        actor_id: actor, operating_context: context, session_mode: 'STANDARD', allowed_commands: [] } } : {}) }
+      const next = failure === 'missing' ? null : failure === 'actor' ? { ...refreshed, actor: { ...snapshot.actor, id: other } }
+        : failure === 'context' ? { ...refreshed, operating_context: { mode: 'ROLE', organisationId: other, role: 'Investor' } }
+          : failure === 'missing receipt' ? { ...refreshed, requests: [] }
+            : failure === 'wrong key' ? { ...refreshed, requests: [{ key: other, command: save.command }] }
+              : failure === 'wrong command' ? { ...refreshed, requests: [{ key: save.key, command: 'cancel_subscription' }] } : refreshed
+      mocks.read.mockReset().mockResolvedValueOnce({ user: { id: actor, email: snapshot.actor.email }, snapshot: before })
+        .mockResolvedValueOnce({ user: { id: actor, email: snapshot.actor.email }, snapshot: next })
+      const response = await send()
+      expect(response.status).toBe(202)
+      expect(await response.json()).toEqual({ committed, refresh_required: true })
+    })
+  it.each((['missing application', 'duplicate application', 'foreign application', 'later revision', 'wrong policy', 'wrong decision',
+    'missing event', 'foreign event', 'duplicate event', 'missing account', 'foreign account', 'duplicate account'] as const)
+    .filter(failure => mode !== 'review' || !['missing account', 'foreign account', 'duplicate account'].includes(failure)))(
+    'returns known-commit202 rather than a complete %s result', async failure => {
+      prepare()
+      const next = structuredClone(refreshed)
+      if (failure === 'missing application') next.applications = []
+      if (failure === 'duplicate application') next.applications.push({ ...next.applications[0] })
+      if (failure === 'foreign application') next.applications[0].user_id = other
+      if (failure === 'later revision') next.applications[0].revision = 4
+      if (failure === 'wrong policy') next.applications[0].test_roleplay_admission.policy_id = actor
+      if (failure === 'wrong decision') next.applications[0].status = 'REJECTED'
+      if (failure === 'missing event') next.events = []
+      if (failure === 'foreign event') next.events[0].actor_id = other
+      if (failure === 'duplicate event') next.events.push({ ...next.events[0] })
+      if (failure === 'missing account') next.accounts = []
+      if (failure === 'foreign account') next.accounts[0].holder_user_id = other
+      if (failure === 'duplicate account') next.accounts.push({ ...next.accounts[0] })
+      mocks.read.mockReset().mockResolvedValueOnce({ user: { id: actor, email: snapshot.actor.email }, snapshot: scoped })
+        .mockResolvedValueOnce({ user: { id: actor, email: snapshot.actor.email }, snapshot: next })
+      const response = await send()
+      expect(response.status).toBe(202)
+      expect(await response.json()).toEqual({ committed, refresh_required: true })
+    })
+  it.each([
+    { actor_id: other }, { event_id: null }, { session_id: null }, { environment: 'MAINNET' }, { application_id: other },
+    { operating_context: { mode: 'ROLE', organisationId: organisation, role: 'SuperAdmin' } },
+    { independence_proven: true }, { snapshot: {} }, { extra: true },
+    { request: { ...save, key: other } }, { request: { ...save, payload: { ...save.payload, application_id: other } } },
+  ])('rejects mismatched or broadened native ACK %# without claiming commit', async change => {
+    prepare({ ...committed, ...change })
+    const response = await send()
+    expect(response.status).toBe(503)
+    const result = await response.json()
+    expect(result).not.toHaveProperty('committed'); expect(result).not.toHaveProperty('snapshot')
+    expect(mocks.read).toHaveBeenCalledOnce()
+  })
+  it('preserves refreshed HttpOnly cookies without exposing post-commit failure details', async () => {
+    prepare()
+    mocks.create.mockImplementation((adapter: CookieAdapter) => {
+      mocks.rpc.mockReturnValue({ abortSignal: vi.fn(async () => {
+        adapter.setAll([{ name: 'fixture-admission-session', value: 'nonsecret', options: { httpOnly: true, secure: true, sameSite: 'lax', path: '/' } }], {})
+        return { data: committed, error: null }
+      }) })
+      return { rpc: mocks.rpc }
+    })
+    mocks.read.mockReset().mockResolvedValueOnce({ user: { id: actor, email: snapshot.actor.email }, snapshot: scoped })
+      .mockRejectedValueOnce(new Error('Private database detail.'))
+    const response = await send()
+    expect(response.status).toBe(202)
+    expect(response.cookies.get('fixture-admission-session')?.value).toBe('nonsecret')
+    expect(response.headers.get('set-cookie')).toContain('HttpOnly')
+    expect(await response.json()).toEqual({ committed, refresh_required: true })
+  })
+  it('retains the mandatory pre-write read and refuses a MAIN or mismatched runtime', async () => {
+    prepare()
+    mocks.read.mockReset().mockRejectedValue(new PortalError('Current access denied.', 403))
+    expect((await send()).status).toBe(403)
+    expect(mocks.rpc).not.toHaveBeenCalled()
+    mocks.read.mockReset(); prepare()
+    vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'https://oqkevkjbkpugjotihtda.supabase.co')
+    const response = await send()
+    expect(response.status).toBe(503)
+    expect(await response.json()).not.toHaveProperty('committed')
+    expect(mocks.read).toHaveBeenCalledOnce()
   })
 })
 
