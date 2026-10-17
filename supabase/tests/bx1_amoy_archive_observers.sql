@@ -53,7 +53,7 @@ begin
       if strpos(installed,recipient_member)=0 or strpos(installed,recipient_pair)=0 then raise exception 'archive_proof_recipient_predicate_missing';end if;
       recipient_member:=replace(recipient_member,'item->>''url''','entry.url');
       recipient_pair:=split_part(split_part(recipient_pair,'if ',2),' then',1);
-      recipient_pair:=replace(recipient_pair,'urls','$1::text[]');
+      recipient_pair:=replace(recipient_pair,'urls','($1::text[])');
     end if;
   end loop;
   if cut_count<>8 or funding_predicate is null or admission_predicate is null or recipient_pair is null then

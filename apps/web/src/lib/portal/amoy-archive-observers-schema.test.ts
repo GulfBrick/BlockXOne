@@ -108,6 +108,8 @@ describe('bounded Amoy archive observer compatibility', () => {
     expect(proof).toContain("funding_predicate:=target_spec#>>'{cuts,0,to}'")
     expect(proof).toContain("admission_predicate:=substring(installed from start_at)")
     expect(proof).toContain("recipient_pair:=split_part(split_part(recipient_pair,'if ',2),' then',1)")
+    expect(proof).toContain("recipient_pair:=replace(recipient_pair,'urls','($1::text[])')")
+    expect(proof).not.toContain("recipient_pair:=replace(recipient_pair,'urls','$1::text[]')")
     expect(proof).toContain('case_count<>19')
     const executable = proof.slice(proof.indexOf('\nbegin\n'))
     expect(executable).not.toMatch(/set_config\s*\(|set\s+(?:local\s+)?role|insert\s+into|update\s+bx1_|delete\s+from|create\s+(?:function|table)/i)
