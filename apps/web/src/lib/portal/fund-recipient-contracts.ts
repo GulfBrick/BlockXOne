@@ -8,7 +8,12 @@ const instant = z.string().datetime({ offset: true })
 const quantity = z.string().regex(/^(0|[1-9][0-9]{0,77})$/)
 const signature = z.string().regex(/^0x[0-9a-f]{130}$/)
 export const fundRecipientPhaseSchema = z.enum(['CREATE_IDENTITY', 'ADD_CLAIM', 'REGISTER_IDENTITY', 'REVOKE_CLAIM'])
-const provider = z.object({ url: z.enum(['https://polygon-amoy.drpc.org', 'https://polygon-amoy-bor-rpc.publicnode.com', 'https://polygon-amoy.gateway.tenderly.co']),
+const observerPairs = [
+  ['https://polygon-amoy.drpc.org', 'https://polygon-amoy-bor-rpc.publicnode.com'],
+  ['https://polygon-amoy.drpc.org', 'https://polygon-amoy.gateway.tenderly.co'],
+  ['https://80002.rpc.thirdweb.com', 'https://polygon-amoy.gateway.tenderly.co'],
+] as const
+const provider = z.object({ url: z.enum(['https://polygon-amoy.drpc.org', 'https://polygon-amoy-bor-rpc.publicnode.com', 'https://polygon-amoy.gateway.tenderly.co', 'https://80002.rpc.thirdweb.com']),
   finalized_block_number: quantity, finalized_block_hash: hash }).strict()
 const observed = z.object({ block: z.object({ number: quantity, hash, timestamp: instant }).strict(),
   providers: z.tuple([provider, provider]) }).strict()
@@ -30,8 +35,8 @@ export const fundRecipientIntentSchema = z.object({
   if (isSafe !== (value.execution_mode === 'SAFE_TRANSACTION') || isSafe !== (value.safe_transaction !== null)
     || isSafe !== (value.safe_transaction_hash !== null) || (value.phase === 'CREATE_IDENTITY') !== (value.to === null)
     || value.safe_threshold > value.safe_owners.length || new Set(value.safe_owners).size !== value.safe_owners.length
-    || value.snapshot.providers[0].url === value.snapshot.providers[1].url
-    || !value.snapshot.providers.some(provider => provider.url === 'https://polygon-amoy.drpc.org')) {
+    || !observerPairs.some(([first, second]) => (value.snapshot.providers[0].url === first && value.snapshot.providers[1].url === second)
+      || (value.snapshot.providers[0].url === second && value.snapshot.providers[1].url === first))) {
     context.addIssue({ code: z.ZodIssueCode.custom, message: 'The saved recipient instruction is inconsistent.' })
   }
 })

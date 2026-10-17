@@ -26,6 +26,18 @@ const canonical: Record<number, string> = {
   36708: read('supabase/features/bx1_fund_recipient_operations.sql'),
   36709: read('supabase/features/bx1_fund_recipient_operations.sql'),
 }
+// The historical v1 assertions see only the v1 canonical predicates. Undo ONLY
+// the later v2 compatibility cuts; the v1 installer/proof remain immutable inputs.
+const v2Targets = JSON.parse(tagged(read('supabase/features/bx1_amoy_archive_pair_v2.sql'), 'archive_pair_v2_targets')) as Target[]
+for (const oid of Object.keys(canonical)) {
+  let source = canonical[Number(oid)]
+  for (const target of v2Targets) for (const cut of [...target.cuts].reverse()) {
+    const matches = count(source, cut.to)
+    if (matches > 1) throw new Error('Nonunique v2 canonical inverse: ' + cut.name)
+    if (matches === 1) source = source.replace(cut.to, cut.from)
+  }
+  canonical[Number(oid)] = source
+}
 const d = 'https://polygon-amoy.drpc.org', p = 'https://polygon-amoy-bor-rpc.publicnode.com', t = 'https://polygon-amoy.gateway.tenderly.co'
 
 describe('bounded Amoy archive observer compatibility', () => {

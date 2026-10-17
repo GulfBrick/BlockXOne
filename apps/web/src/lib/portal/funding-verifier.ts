@@ -1,8 +1,8 @@
 import { Interface, keccak256 } from 'ethers'
 import { FUNDING_CHAIN_ID, fundingClaimHash, verifyFundingClaim, type FundingClaim } from './funding-claim'
 
-/** Fixed operator-owned endpoints; no RPC URL is accepted from a request or route. */
-export const FUNDING_RPC_URLS = ['https://polygon-amoy.drpc.org', 'https://polygon-amoy.gateway.tenderly.co'] as const
+/** Fixed TEST service endpoints; upstream-node independence/retention is not asserted. */
+export const FUNDING_RPC_URLS = ['https://80002.rpc.thirdweb.com', 'https://polygon-amoy.gateway.tenderly.co'] as const
 export type FundingVerificationKind = 'ROUTE' | 'REFERENCE'
 export type FundingRouteExpectation = {
   id: string; revision: number; environment: 'TESTNET'; chain_id: 80002;

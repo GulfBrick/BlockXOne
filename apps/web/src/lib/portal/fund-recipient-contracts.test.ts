@@ -59,10 +59,30 @@ describe('canonical recipient public inputs - source boundary only', () => {
     ['https://polygon-amoy-bor-rpc.publicnode.com', 'https://polygon-amoy.drpc.org'],
     ['https://polygon-amoy.drpc.org', 'https://polygon-amoy.gateway.tenderly.co'],
     ['https://polygon-amoy.gateway.tenderly.co', 'https://polygon-amoy.drpc.org'],
+    ['https://80002.rpc.thirdweb.com', 'https://polygon-amoy.gateway.tenderly.co'],
+    ['https://polygon-amoy.gateway.tenderly.co', 'https://80002.rpc.thirdweb.com'],
   ])('retains the exact legacy or archive snapshot in a saved intent: %s / %s', (first, second) => {
     const intent = recipientIntent(first, second), original = JSON.stringify(intent)
     expect(fundRecipientIntentSchema.parse(intent)).toEqual(intent)
     expect(JSON.stringify(intent)).toBe(original)
+  })
+  it.each([
+    ['https://polygon-amoy.drpc.org', 'https://80002.rpc.thirdweb.com'],
+    ['https://80002.rpc.thirdweb.com', 'https://polygon-amoy.drpc.org'],
+    ['https://polygon-amoy-bor-rpc.publicnode.com', 'https://80002.rpc.thirdweb.com'],
+    ['https://80002.rpc.thirdweb.com', 'https://polygon-amoy-bor-rpc.publicnode.com'],
+    ['https://polygon-amoy-bor-rpc.publicnode.com', 'https://polygon-amoy.gateway.tenderly.co'],
+    ['https://polygon-amoy.gateway.tenderly.co', 'https://polygon-amoy-bor-rpc.publicnode.com'],
+  ])('rejects unapproved cross-pairs in either order: %s / %s', (first, second) => {
+    expect(fundRecipientIntentSchema.safeParse(recipientIntent(first, second)).success).toBe(false)
+  })
+  it.each(['https://polygon-amoy.drpc.org', 'https://polygon-amoy-bor-rpc.publicnode.com',
+    'https://polygon-amoy.gateway.tenderly.co', 'https://80002.rpc.thirdweb.com'])('rejects duplicate copies of %s', url => {
+    expect(fundRecipientIntentSchema.safeParse(recipientIntent(url, url)).success).toBe(false)
+  })
+  it.each(['https://name:secret@80002.rpc.thirdweb.com', 'https://80002.rpc.thirdweb.com?apiKey=secret',
+    'https://80002.rpc.thirdweb.com/unapproved', 'https://80002.rpc.thirdweb.com.example'])('rejects nonexact new service labels: %s', url => {
+    expect(fundRecipientIntentSchema.safeParse(recipientIntent(url, 'https://polygon-amoy.gateway.tenderly.co')).success).toBe(false)
   })
   it.each(['without dRPC', 'duplicate', 'missing', 'extra', 'null', 'foreign', 'credentials', 'query', 'extra field'] as const)('does not accept another observer quorum in a saved recipient intent: %s', changed => {
     const intent = recipientIntent('https://polygon-amoy.drpc.org', 'https://polygon-amoy.gateway.tenderly.co')

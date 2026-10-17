@@ -169,14 +169,16 @@ describe('two-provider finalized TEST funding receipt verification', () => {
 })
 
 describe('bounded fixed-origin RPC transport', () => {
-  it('uses the exact ordered archive-capable pair for fresh observations', () => {
-    expect(FUNDING_RPC_URLS).toEqual(['https://polygon-amoy.drpc.org', 'https://polygon-amoy.gateway.tenderly.co'])
+  it('uses only the exact ordered TEST pair without asserting upstream independence or retention', () => {
+    expect(FUNDING_RPC_URLS).toEqual(['https://80002.rpc.thirdweb.com', 'https://polygon-amoy.gateway.tenderly.co'])
   })
   it('never accepts arbitrary provider URLs or sends transaction/signing RPCs', async () => {
     const fetcher = vi.fn()
-    for (const url of ['https://untrusted.example', 'https://polygon-amoy-bor-rpc.publicnode.com',
+    for (const url of ['https://untrusted.example', 'https://polygon-amoy-bor-rpc.publicnode.com', 'https://polygon-amoy.drpc.org',
       'https://name:secret@polygon-amoy.gateway.tenderly.co', 'https://polygon-amoy.gateway.tenderly.co?apiKey=secret',
-      'https://polygon-amoy.gateway.tenderly.co/unapproved', 'https://polygon-amoy.gateway.tenderly.co.example']) {
+      'https://polygon-amoy.gateway.tenderly.co/unapproved', 'https://polygon-amoy.gateway.tenderly.co.example',
+      'https://name:secret@80002.rpc.thirdweb.com', 'https://80002.rpc.thirdweb.com?apiKey=secret',
+      'https://80002.rpc.thirdweb.com/unapproved', 'https://80002.rpc.thirdweb.com.example']) {
       await expect(createFundingRpc(fetcher)(url, 'eth_chainId', [])).rejects.toMatchObject({ code: 'RPC_ENDPOINT_NOT_ALLOWED' })
     }
     await expect(createFundingRpc(fetcher)(FUNDING_RPC_URLS[0], 'eth_sendRawTransaction', ['0x00'])).rejects.toMatchObject({ code: 'RPC_METHOD_NOT_ALLOWED' })

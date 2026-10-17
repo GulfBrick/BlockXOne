@@ -376,13 +376,15 @@ begin
   or result->>'identity_address'='0x'||pg_catalog.repeat('0',40)
   or pg_catalog.jsonb_typeof(result->'providers') is distinct from 'array' or pg_catalog.jsonb_array_length(result->'providers')<>2 then return false;end if;
  for provider in select value from pg_catalog.jsonb_array_elements(result->'providers') loop
-  if pg_catalog.jsonb_typeof(provider->'url') is distinct from 'string' or provider->>'url' not in ('https://polygon-amoy.drpc.org','https://polygon-amoy-bor-rpc.publicnode.com','https://polygon-amoy.gateway.tenderly.co')
+  if pg_catalog.jsonb_typeof(provider->'url') is distinct from 'string' or provider->>'url' not in ('https://polygon-amoy.drpc.org','https://polygon-amoy-bor-rpc.publicnode.com','https://polygon-amoy.gateway.tenderly.co','https://80002.rpc.thirdweb.com')
    or pg_catalog.jsonb_typeof(provider->'finalized_block_number') is distinct from 'string' or (provider->>'finalized_block_number' ~ '^[1-9][0-9]{0,77}$') is not true
    or pg_catalog.jsonb_typeof(provider->'finalized_block_hash') is distinct from 'string' or (provider->>'finalized_block_hash' ~ '^0x[0-9a-f]{64}$') is not true
    or provider->>'finalized_block_hash'='0x'||pg_catalog.repeat('0',64) then return false;end if;
   urls:=pg_catalog.array_append(urls,provider->>'url');
  end loop;
- if urls[1]=urls[2] or ('https://polygon-amoy.drpc.org'=any(urls)) is not true then return false;end if;
+ if urls[1]=urls[2] or (urls @> array['https://polygon-amoy.drpc.org','https://polygon-amoy-bor-rpc.publicnode.com']::text[]
+    or urls @> array['https://polygon-amoy.drpc.org','https://polygon-amoy.gateway.tenderly.co']::text[]
+    or urls @> array['https://80002.rpc.thirdweb.com','https://polygon-amoy.gateway.tenderly.co']::text[]) is not true then return false;end if;
  if result->>'status' in ('FINAL','FAILED') then
   if pg_catalog.jsonb_typeof(result->'block_number') is distinct from 'string' or (result->>'block_number' ~ '^[1-9][0-9]{0,77}$') is not true
    or pg_catalog.jsonb_typeof(result->'block_hash') is distinct from 'string' or (result->>'block_hash' ~ '^0x[0-9a-f]{64}$') is not true or result->>'block_hash'='0x'||pg_catalog.repeat('0',64)
@@ -408,12 +410,14 @@ begin
   or result->'expiry_enforced_on_chain' is distinct from 'false'::jsonb or result->>'status' is null or result->>'status' not in ('UNKNOWN','PENDING','FAILED','FINAL')
   or pg_catalog.jsonb_typeof(result->'providers') is distinct from 'array' or pg_catalog.jsonb_array_length(result->'providers')<>2 then raise exception 'fund_recipient_observation_binding_invalid' using errcode='23514';end if;
  for item in select value from pg_catalog.jsonb_array_elements(result->'providers') loop
-  if pg_catalog.jsonb_typeof(item->'url') is distinct from 'string' or item->>'url' not in ('https://polygon-amoy.drpc.org','https://polygon-amoy-bor-rpc.publicnode.com','https://polygon-amoy.gateway.tenderly.co')
+  if pg_catalog.jsonb_typeof(item->'url') is distinct from 'string' or item->>'url' not in ('https://polygon-amoy.drpc.org','https://polygon-amoy-bor-rpc.publicnode.com','https://polygon-amoy.gateway.tenderly.co','https://80002.rpc.thirdweb.com')
    or pg_catalog.jsonb_typeof(item->'finalized_block_hash') is distinct from 'string' or (item->>'finalized_block_hash' ~ '^0x[0-9a-f]{64}$') is not true
    or pg_catalog.jsonb_typeof(item->'finalized_block_number') is distinct from 'string' or (item->>'finalized_block_number' ~ '^[1-9][0-9]{0,77}$') is not true then raise exception 'fund_recipient_independent_provider_required' using errcode='23514';end if;
   urls:=pg_catalog.array_append(urls,item->>'url');
  end loop;
- if urls[1]=urls[2] or ('https://polygon-amoy.drpc.org'=any(urls)) is not true then raise exception 'fund_recipient_duplicate_provider_denied';end if;
+ if urls[1]=urls[2] or (urls @> array['https://polygon-amoy.drpc.org','https://polygon-amoy-bor-rpc.publicnode.com']::text[]
+    or urls @> array['https://polygon-amoy.drpc.org','https://polygon-amoy.gateway.tenderly.co']::text[]
+    or urls @> array['https://80002.rpc.thirdweb.com','https://polygon-amoy.gateway.tenderly.co']::text[]) is not true then raise exception 'fund_recipient_duplicate_provider_denied';end if;
  if result->>'status' in ('FINAL','FAILED') and (pg_catalog.jsonb_typeof(result->'block_number') is distinct from 'string'
   or (result->>'block_number' ~ '^[1-9][0-9]{0,77}$') is not true or pg_catalog.jsonb_typeof(result->'block_hash') is distinct from 'string'
   or (result->>'block_hash' ~ '^0x[0-9a-f]{64}$') is not true or pg_catalog.jsonb_typeof(result->'block_timestamp') is distinct from 'string'
