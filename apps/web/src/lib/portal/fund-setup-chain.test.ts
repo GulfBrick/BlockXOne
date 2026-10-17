@@ -7,8 +7,8 @@ import factoryArtifact from './fund-setup-artifacts/SafeProxyFactory-1.4.1.json'
 import proxyArtifact from './fund-setup-artifacts/SafeProxy-1.4.1.json'
 import { canonicalFundCreation, canonicalFundRuntime, FUND_SETUP_CATALOG_HASH, fundSetupArtifactNames, getCanonicalFundArtifact, verifyCanonicalFundCatalog } from './fund-setup-artifacts'
 import { buildSetupIntent, FUND_SETUP_STEPS, FUND_SETUP_SAFE_PROXY_RUNTIME, FUND_SETUP_SAFE_PROXY_HASH, FUND_SETUP_SAFE_SINGLETONS,
-  buildSafeCreationIntent, FUND_SETUP_SAFE_FACTORY, FUND_SETUP_SAFE_L2, fundSetupHash, observeSetupSafe, observeSetupStep, predictFundSuite, readSetupNonce, type FundSetupAddresses, type FundSetupConfiguration, type FundSetupIntent } from './fund-setup-chain'
-import { FUNDING_RPC_URLS } from './funding-verifier'
+  buildSafeCreationIntent, FUND_SETUP_SAFE_FACTORY, FUND_SETUP_SAFE_L2, FundSetupChainError, fundSetupHash, observeSetupSafe, observeSetupStep, predictFundSuite, readSetupNonce, type FundSetupAddresses, type FundSetupConfiguration, type FundSetupIntent } from './fund-setup-chain'
+import { createFundingRpc, FUNDING_RPC_URLS, FundingVerificationError } from './funding-verifier'
 import { fundSetupIntentSchema } from './fund-setup-contracts'
 
 const address = (n: number) => `0x${n.toString(16).padStart(40, '0')}`
@@ -318,5 +318,76 @@ describe('actual official Safe 1.4.1 code and structural policy', () => {
     const error = await observeSetupSafe(configuration.safe_address, { rpc: async () => { throw new Error('apikey=private') } }).catch(error => error)
     expect(error).toMatchObject({ code: 'SETUP_OBSERVATION_UNAVAILABLE', status: 503 })
     expect(error.message).not.toContain('apikey')
+  })
+})
+
+describe('closed setup transport diagnostics', () => {
+  it.each([
+    ['HTTP', 429, null, () => Response.json({ error: 'secret upstream message' }, { status: 429 })],
+    ['RPC_ERROR', 200, -32000, () => Response.json({ jsonrpc: '2.0', id: 1, error: { code: -32000, message: 'secret upstream message' } })],
+    ['BODY', 200, null, () => new Response('{secret', { headers: { 'Content-Type': 'application/json' } })],
+  ] as const)('logs only closed %s transport fields and keeps the original unavailable mapping', async (stage, httpStatus, rpcCode, response) => {
+    const logger = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const f = fixture(), transport = createFundingRpc(vi.fn(async () => response()))
+      const primary = async (url: string, method: string, params: unknown[]) => method === 'eth_chainId' ? transport(url, method, params) : f.rpc(url, method, params)
+      await expect(readSetupNonce(sender, { primary, secondary: f.rpc })).rejects.toMatchObject({ code: 'SETUP_OBSERVATION_UNAVAILABLE', status: 503 })
+      expect(logger).toHaveBeenCalledExactlyOnceWith('BX1_SETUP_RPC_FAILURE', { observerIndex: 0, method: 'eth_chainId', stage, httpStatus, rpcCode, requestId: 1 })
+      expect(JSON.stringify(logger.mock.calls)).not.toMatch(/secret|https|private|params|headers/)
+      expect(JSON.stringify(logger.mock.calls)).not.toContain(sender)
+    } finally { logger.mockRestore() }
+  })
+  it('logs a thrown fetch only as FETCH with no raw cause or claimed HTTP/RPC detail', async () => {
+    const logger = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const f = fixture(), transport = createFundingRpc(vi.fn(async () => { throw new Error('https://private.example/?token=secret') }))
+      const secondary = async (url: string, method: string, params: unknown[]) => method === 'eth_chainId' ? transport(url, method, params) : f.rpc(url, method, params)
+      const error = await readSetupNonce(sender, { primary: f.rpc, secondary }).catch(error => error)
+      expect(error).toMatchObject({ code: 'SETUP_OBSERVATION_UNAVAILABLE', status: 503 })
+      expect(logger).toHaveBeenCalledExactlyOnceWith('BX1_SETUP_RPC_FAILURE', { observerIndex: 1, method: 'eth_chainId', stage: 'FETCH', httpStatus: null, rpcCode: null, requestId: 1 })
+      expect(JSON.stringify(logger.mock.calls)).not.toMatch(/secret|private|https|token/)
+      expect(error).not.toHaveProperty('cause')
+    } finally { logger.mockRestore() }
+  })
+  it.each([
+    { stage: 'HTTP', httpStatus: 429, rpcCode: null, requestId: 1, raw: 'secret' },
+    { stage: 'UNKNOWN', httpStatus: 429, rpcCode: null, requestId: 1 },
+    { stage: 'FETCH', httpStatus: 429, rpcCode: null, requestId: 1 },
+    { stage: 'HTTP', httpStatus: 200, rpcCode: -32000, requestId: 1 },
+    { stage: 'RPC_ERROR', httpStatus: 200, rpcCode: -31999, requestId: 1 },
+    { stage: 'HTTP', httpStatus: 600, rpcCode: null, requestId: 1 },
+    { stage: 'HTTP', httpStatus: '429', rpcCode: null, requestId: 1 },
+    { stage: 'HTTP', httpStatus: 429, rpcCode: null, requestId: 0 },
+  ])('rejects malformed diagnostics at the logging boundary %# without changing the error', async diagnostic => {
+    const logger = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const error = new FundingVerificationError('RPC_RESPONSE_UNAVAILABLE')
+      Object.defineProperty(error, 'diagnostic', { value: diagnostic })
+      await expect(readSetupNonce(sender, { rpc: async () => { throw error } })).rejects.toMatchObject({ code: 'SETUP_OBSERVATION_UNAVAILABLE', status: 503 })
+      expect(logger).not.toHaveBeenCalled()
+    } finally { logger.mockRestore() }
+  })
+  it('ignores throwing diagnostic access and logging failures', async () => {
+    const logger = vi.spyOn(console, 'warn').mockImplementation(() => { throw new Error('private logger failure') })
+    try {
+      const malformed = new FundingVerificationError('RPC_RESPONSE_UNAVAILABLE')
+      Object.defineProperty(malformed, 'diagnostic', { get: () => { throw new Error('secret diagnostic getter') } })
+      await expect(readSetupNonce(sender, { rpc: async () => { throw malformed } })).rejects.toMatchObject({ code: 'SETUP_OBSERVATION_UNAVAILABLE', status: 503 })
+      expect(logger).not.toHaveBeenCalled()
+      const genuine = new FundingVerificationError('RPC_RESPONSE_UNAVAILABLE', 503, { stage: 'HTTP', httpStatus: 429, rpcCode: null, requestId: 1 })
+      await expect(readSetupNonce(sender, { rpc: async () => { throw genuine } })).rejects.toMatchObject({ code: 'SETUP_OBSERVATION_UNAVAILABLE', status: 503 })
+      expect(logger).toHaveBeenCalled()
+    } finally { logger.mockRestore() }
+  })
+  it('preserves existing setup errors before inspecting diagnostics and adds nothing on success', async () => {
+    const logger = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const original = new FundSetupChainError('SETUP_FINALITY_UNAVAILABLE', 503)
+      Object.defineProperty(original, 'diagnostic', { get: () => { throw new Error('must not inspect') } })
+      await expect(readSetupNonce(sender, { rpc: async () => { throw original } })).rejects.toBe(original)
+      const f = fixture()
+      expect(await readSetupNonce(sender, { rpc: f.rpc })).toBe('7')
+      expect(logger).not.toHaveBeenCalled()
+    } finally { logger.mockRestore() }
   })
 })
