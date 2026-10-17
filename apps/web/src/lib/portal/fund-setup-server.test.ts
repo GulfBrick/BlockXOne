@@ -9,6 +9,9 @@ vi.mock('./fund-setup-chain', async importOriginal => ({ ...await importOriginal
   buildSetupIntent: mocks.build, buildSafeCreationIntent: mocks.build, readSetupNonce: mocks.nonce, observeSetupStep: mocks.step, observeSetupSafe: mocks.safe }))
 import { prepareFundSetup, readFundSetup, verifyFundSetup } from './fund-setup-server'
 import { FundSetupChainError } from './fund-setup-chain'
+import { FundLifecycleError } from './fund-lifecycle-server'
+import { portalFailure } from './http'
+import { PortalError } from './server'
 
 const hash = '0x' + 'd'.repeat(64)
 const intent = { version: 1 as const, chain_id: 80002 as const, step_key: 'token_implementation' as const, kind: 'CREATE' as const,
@@ -24,6 +27,16 @@ function preparation() {
 function client(value = setupFixture(), error: { code: string } | null = null) {
   const rpc = vi.fn(() => ({ abortSignal: () => Promise.resolve({ data: value, error }) }))
   return { rpc } as unknown as Parameters<typeof readFundSetup>[0]
+}
+function pendingObservation() {
+  const fixture = setupFixture(), step = fixture.setup!.steps[0]
+  Object.assign(step, { state: 'BROADCAST', intent, intent_hash: '9'.repeat(64), transaction_hash: hash })
+  const request = { setup_id: setupId, expected_revision: 1, actor_id: actor, operating_context: context, environment: 'TESTNET', product_id: product,
+    offering_revision_id: id(5), terms_hash: 'a'.repeat(64), configuration_hash: 'b'.repeat(64), setup_configuration_hash: 'c'.repeat(64),
+    expires_at: '2099-01-01T00:00:00Z', kind: 'STEP', safe_address: address(2), step_id: id(10), expected_step_revision: 1,
+    intent, intent_hash: '9'.repeat(64), transaction_hash: hash }
+  mocks.worker.mockImplementation(async (name: string) => name === 'read_fund_setup_observation' ? request : null)
+  return { fixture, request }
 }
 beforeEach(() => {
   mocks.environment = 'TESTNET'; vi.clearAllMocks()
@@ -58,6 +71,38 @@ describe('fund setup authenticated server adapter - synthetic source proof only'
     expect(db.rpc).toHaveBeenLastCalledWith('bx1_portal_fund_setup_read', { product_id: product, operating_context: context })
     expect(mocks.step).not.toHaveBeenCalled()
   })
+  it.each([
+    ['SETUP_EFFECT_MISMATCH', 409],
+    ['SETUP_OBSERVATION_UNAVAILABLE', 503],
+  ] as const)('preserves typed %s diagnostics and status %i through the existing error boundary', async (code, status) => {
+    const { fixture } = pendingObservation()
+    const original = new FundSetupChainError(code, status)
+    mocks.step.mockRejectedValue(original)
+    const caught = await verifyFundSetup(client(fixture), actor,
+      { setup_id: setupId, step_id: id(10), expected_revision: 1, operating_context: context }).catch((error: unknown) => error)
+    expect(caught).toBeInstanceOf(FundLifecycleError)
+    expect(caught).toMatchObject({ code, status, message: `[${code}] ${original.message}` })
+    // fundApiRequest already translates this domain class to PortalError.
+    const failure = caught as FundLifecycleError
+    const response = portalFailure(new PortalError(failure.message, failure.status))
+    expect(response.status).toBe(status)
+    expect(await response.json()).toEqual({ error: `[${code}] ${original.message}` })
+    expect(mocks.worker).not.toHaveBeenCalledWith('record_fund_setup_observation', expect.anything())
+  })
+  it('preserves an unknown observer error identity and leaves its details redacted at the existing boundary', async () => {
+    const { fixture } = pendingObservation()
+    const original = new Error('SYNTHETIC_PROVIDER_SECRET must not be exposed')
+    mocks.step.mockRejectedValue(original)
+    const caught = await verifyFundSetup(client(fixture), actor,
+      { setup_id: setupId, step_id: id(10), expected_revision: 1, operating_context: context }).catch((error: unknown) => error)
+    expect(caught).toBe(original)
+    const response = portalFailure(caught)
+    expect(response.status).toBe(503)
+    const body = await response.json()
+    expect(body).toEqual({ error: 'The request outcome is unavailable. Refresh before retrying; do not create a second request.' })
+    expect(JSON.stringify(body)).not.toContain('SYNTHETIC_PROVIDER_SECRET')
+    expect(mocks.worker).not.toHaveBeenCalledWith('record_fund_setup_observation', expect.anything())
+  })
   it('persists a detected finality break as recovery, not replacement success', async () => {
     const fixture = setupFixture(), step = fixture.setup!.steps[0]
     Object.assign(step, { state: 'FINAL', intent, intent_hash: '9'.repeat(64), transaction_hash: hash })
@@ -67,7 +112,11 @@ describe('fund setup authenticated server adapter - synthetic source proof only'
       intent, intent_hash: '9'.repeat(64), transaction_hash: hash }
     mocks.worker.mockImplementation(async (name: string) => name === 'read_fund_setup_observation' ? request : null)
     mocks.step.mockRejectedValue(new FundSetupChainError('SETUP_REORG_AFTER_WAIT', 503))
-    await verifyFundSetup(client(fixture), actor, { setup_id: setupId, step_id: id(10), expected_revision: 1, operating_context: context })
+    const db = client(fixture)
+    const result = await verifyFundSetup(db, actor, { setup_id: setupId, step_id: id(10), expected_revision: 1, operating_context: context })
     expect(mocks.worker).toHaveBeenCalledWith('record_fund_setup_observation', [request, expect.objectContaining({ status: 'RECOVERY_REQUIRED', reason_code: 'SETUP_REORG_AFTER_WAIT' })])
+    expect(mocks.worker).toHaveBeenCalledTimes(2)
+    expect(db.rpc).toHaveBeenLastCalledWith('bx1_portal_fund_setup_read', { product_id: product, operating_context: context })
+    expect(result).toEqual(fixture)
   })
 })

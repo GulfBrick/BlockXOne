@@ -840,6 +840,7 @@ jobs:
             'src/lib/portal/fund-recipient-chain.test.ts',
             'src/lib/portal/fund-recipient-server.test.ts',
             'src/lib/portal/fund-setup-chain.test.ts',
+            'src/lib/portal/fund-setup-server.test.ts',
             'src/lib/portal/amoy-archive-observers-schema.test.ts',
           ] : process.env.BX1_FOCUSED_UI_MODE === 'appointment-projection-cost-focused' ? [
             'src/lib/portal/fund-appointment-projection-cost-schema.test.ts',

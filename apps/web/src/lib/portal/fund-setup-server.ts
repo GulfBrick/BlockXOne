@@ -112,6 +112,9 @@ export async function verifyFundSetup(client: SupabaseClient, actorId: string, r
         step_key: observation.intent!.step_key, intent_hash: observation.intent_hash, transaction_hash: observation.transaction_hash, reason_code: error.code }])
       return readFundSetup(client, actorId, observation.product_id, request.operating_context)
     }
+    if (error instanceof FundSetupChainError) {
+      throw new FundLifecycleError(error.code, `[${error.code}] ${error.message}`, error.status)
+    }
     throw error
   }
   if (Date.parse(observation.expires_at) <= Date.now()) throw new FundLifecycleError('SETUP_EXPIRED', 'Setup authority expired while waiting for independent chain checks. Retain the original transaction.', 409)
