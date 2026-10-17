@@ -169,9 +169,16 @@ describe('two-provider finalized TEST funding receipt verification', () => {
 })
 
 describe('bounded fixed-origin RPC transport', () => {
+  it('uses the exact ordered archive-capable pair for fresh observations', () => {
+    expect(FUNDING_RPC_URLS).toEqual(['https://polygon-amoy.drpc.org', 'https://polygon-amoy.gateway.tenderly.co'])
+  })
   it('never accepts arbitrary provider URLs or sends transaction/signing RPCs', async () => {
     const fetcher = vi.fn()
-    await expect(createFundingRpc(fetcher)('https://untrusted.example', 'eth_chainId', [])).rejects.toMatchObject({ code: 'RPC_ENDPOINT_NOT_ALLOWED' })
+    for (const url of ['https://untrusted.example', 'https://polygon-amoy-bor-rpc.publicnode.com',
+      'https://name:secret@polygon-amoy.gateway.tenderly.co', 'https://polygon-amoy.gateway.tenderly.co?apiKey=secret',
+      'https://polygon-amoy.gateway.tenderly.co/unapproved', 'https://polygon-amoy.gateway.tenderly.co.example']) {
+      await expect(createFundingRpc(fetcher)(url, 'eth_chainId', [])).rejects.toMatchObject({ code: 'RPC_ENDPOINT_NOT_ALLOWED' })
+    }
     await expect(createFundingRpc(fetcher)(FUNDING_RPC_URLS[0], 'eth_sendRawTransaction', ['0x00'])).rejects.toMatchObject({ code: 'RPC_METHOD_NOT_ALLOWED' })
     expect(fetcher).not.toHaveBeenCalled()
   })
@@ -180,8 +187,11 @@ describe('bounded fixed-origin RPC transport', () => {
       const request = JSON.parse(String(init?.body))
       return Response.json({ jsonrpc: '2.0', id: request.id, result: '0x13882' })
     })
-    expect(await createFundingRpc(fetcher)(FUNDING_RPC_URLS[0], 'eth_chainId', [])).toBe('0x13882')
-    expect(fetcher).toHaveBeenCalledWith(FUNDING_RPC_URLS[0], expect.objectContaining({ method: 'POST', redirect: 'error', cache: 'no-store', signal: expect.any(AbortSignal) }))
+    const rpc = createFundingRpc(fetcher)
+    for (const url of FUNDING_RPC_URLS) {
+      expect(await rpc(url, 'eth_chainId', [])).toBe('0x13882')
+      expect(fetcher).toHaveBeenCalledWith(url, expect.objectContaining({ method: 'POST', redirect: 'error', cache: 'no-store', signal: expect.any(AbortSignal) }))
+    }
   })
   it('permits only exact latest or pending sender-nonce reads on fixed endpoints', async () => {
     const fetcher = vi.fn(async (_url: unknown, init?: RequestInit) => {

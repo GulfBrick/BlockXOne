@@ -234,12 +234,35 @@ describe('authenticated saved-order lookup without local-browser markers', () =>
 })
 
 describe('strict client-safe discovery contract', () => {
+  it.each([
+    ['https://polygon-amoy.drpc.org', 'https://polygon-amoy-bor-rpc.publicnode.com'],
+    ['https://polygon-amoy-bor-rpc.publicnode.com', 'https://polygon-amoy.drpc.org'],
+    ['https://polygon-amoy.drpc.org', 'https://polygon-amoy.gateway.tenderly.co'],
+    ['https://polygon-amoy.gateway.tenderly.co', 'https://polygon-amoy.drpc.org'],
+  ])('retains the exact historical or active evidence pair without relabeling %s / %s', async (first, second) => {
+    const f = fixture(), prefill = await inspectRecordedFundPayment(f.saved, { rpc: f.rpc, now })
+    const providers = [{ ...prefill.providers[0], url: first }, { ...prefill.providers[1], url: second }]
+    const parsed = fundPaymentReceiptPrefillSchema.parse({ ...prefill, providers })
+    expect(parsed.providers).toEqual(providers)
+    expect(JSON.stringify(parsed.providers)).toBe(JSON.stringify(providers))
+  })
+  it.each(['without dRPC', 'extra observer', 'missing observer', 'null observer', 'extra provider field'] as const)('rejects an unapproved evidence group: %s', async changed => {
+    const f = fixture(), prefill = await inspectRecordedFundPayment(f.saved, { rpc: f.rpc, now })
+    let providers: unknown = prefill.providers
+    if (changed === 'without dRPC') providers = [{ ...prefill.providers[0], url: 'https://polygon-amoy-bor-rpc.publicnode.com' }, prefill.providers[1]]
+    else if (changed === 'extra observer') providers = [...prefill.providers, { ...prefill.providers[0], url: 'https://polygon-amoy-bor-rpc.publicnode.com' }]
+    else if (changed === 'missing observer') providers = [prefill.providers[0]]
+    else if (changed === 'null observer') providers = [null, prefill.providers[1]]
+    else providers = [{ ...prefill.providers[0], apiKey: 'not-evidence' }, prefill.providers[1]]
+    expect(fundPaymentReceiptPrefillSchema.safeParse({ ...prefill, providers }).success).toBe(false)
+  })
   it.each([{ transaction_hash: txHash }, { log_index: 4 }, { amount_base_units: '1' }, { payer_address: payer },
     { payment_id: id(1) }, { rpc_url: FUNDING_RPC_URLS[0] }, { verified: true }])('accepts only order identity and context, never caller evidence %#', extra => {
     expect(fundPaymentReceiptRequestSchema.safeParse({ subscription_id: id(2), operating_context: { mode: 'APPLICANT' }, ...extra }).success).toBe(false)
   })
   it.each(['https://name:secret@polygon-amoy.drpc.org', 'https://polygon-amoy.drpc.org?apiKey=secret',
-    'https://polygon-amoy.drpc.org/secret', 'https://unapproved.example'])('never serializes credential-bearing or nonapproved observer endpoint %s', async url => {
+    'https://polygon-amoy.drpc.org/secret', 'https://unapproved.example', 'https://name:secret@polygon-amoy.gateway.tenderly.co',
+    'https://polygon-amoy.gateway.tenderly.co?apiKey=secret'])('never serializes credential-bearing or nonapproved observer endpoint %s', async url => {
     const f = fixture(), prefill = await inspectRecordedFundPayment(f.saved, { rpc: f.rpc, now })
     expect(fundPaymentReceiptPrefillSchema.safeParse({ ...prefill, providers: [{ ...prefill.providers[0], url }, prefill.providers[1]] }).success).toBe(false)
   })

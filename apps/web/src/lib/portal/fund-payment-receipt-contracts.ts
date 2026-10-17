@@ -8,7 +8,7 @@ const uintPattern = /^(0|[1-9][0-9]{0,77})$/
 const uint = z.string().regex(uintPattern).refine(value => uintPattern.test(value) && BigInt(value) < 2n ** 256n)
 // Public evidence identifiers only. RPC transport remains the existing server
 // adapter; credential-bearing or configurable endpoints must not be disclosed.
-const observer = z.enum(['https://polygon-amoy.drpc.org', 'https://polygon-amoy-bor-rpc.publicnode.com'])
+const observer = z.enum(['https://polygon-amoy.drpc.org', 'https://polygon-amoy-bor-rpc.publicnode.com', 'https://polygon-amoy.gateway.tenderly.co'])
 
 /** Only a saved order identity is accepted. No browser receipt, hash or amount. */
 export const fundPaymentReceiptRequestSchema = z.object({
@@ -26,7 +26,9 @@ export const fundPaymentReceiptPrefillSchema = z.object({
   amount_base_units: uint.refine(value => uintPattern.test(value) && BigInt(value) > 0n),
   block_number: uint, block_hash: hash, block_timestamp: z.string().datetime({ offset: true }),
   providers: z.array(z.object({ url: observer, finalized_block_number: uint, finalized_block_hash: hash }).strict()).length(2)
-    .refine(providers => new Set(providers.map(provider => provider.url)).size === 2),
+    // Retain the original evidence pair, not an arbitrary two-of-three quorum.
+    .refine(providers => new Set(providers.map(provider => provider.url)).size === 2
+      && providers.some(provider => provider.url === 'https://polygon-amoy.drpc.org')),
 }).strict()
 export const fundPaymentReceiptResponseSchema = z.object({ prefill: fundPaymentReceiptPrefillSchema }).strict()
 export type FundPaymentReceiptRequest = z.infer<typeof fundPaymentReceiptRequestSchema>

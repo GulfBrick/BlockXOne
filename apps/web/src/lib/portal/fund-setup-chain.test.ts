@@ -167,6 +167,29 @@ describe('dual-observer original setup transaction', () => {
     expect((await observeSetupStep(intent, txHash, { rpc: f.rpc })).status).toBe('FINAL')
     expect(f.rpc).toHaveBeenCalledWith(FUNDING_RPC_URLS[0], 'eth_getStorageAt', [dependencies.trex_authority, '0x4', '0x64'])
   })
+  it('keeps original CTR receipt-block and finalized-head checks on both archive observers', async () => {
+    const intent = buildSetupIntent('ctr_implementation', configuration, dependencies, sender, '7'), f = fixture(intent)
+    const result = await observeSetupStep(intent, txHash, { rpc: f.rpc })
+    expect(result.status).toBe('FINAL')
+    expect(result.transaction_hash).toBe(txHash)
+    expect(result.providers.map(source => source.url)).toEqual(['https://polygon-amoy.drpc.org', 'https://polygon-amoy.gateway.tenderly.co'])
+    expect(intent.checks.length).toBeGreaterThan(0)
+    for (const [index, url] of FUNDING_RPC_URLS.entries()) {
+      expect(f.rpc).toHaveBeenCalledWith(url, 'eth_getCode', [intent.expected_address, '0x64'])
+      expect(f.rpc).toHaveBeenCalledWith(url, 'eth_getCode', [intent.expected_address, index === 0 ? '0x78' : '0x7b'])
+      for (const check of intent.checks) expect(f.rpc).toHaveBeenCalledWith(url, 'eth_call', [{ to: check.address, data: check.data }, '0x64'])
+      expect(f.rpc.mock.calls.filter(([source, method]) => source === url && method === 'eth_getTransactionReceipt')).toHaveLength(2)
+    }
+    expect(f.rpc.mock.calls.some(([url]) => url === 'https://polygon-amoy-bor-rpc.publicnode.com')).toBe(false)
+  })
+  it.each(['eth_getCode', 'eth_call'])('does not fall back to one observer or latest state when archive %s is unavailable', async method => {
+    const intent = buildSetupIntent('ctr_implementation', configuration, dependencies, sender, '7')
+    const f = fixture(intent, (url, requested, params, value) => {
+      if (url === 'https://polygon-amoy.gateway.tenderly.co' && requested === method && params[params.length - 1] === '0x64') throw new Error('Historical state unavailable')
+      return value
+    })
+    await expect(observeSetupStep(intent, txHash, { rpc: f.rpc })).rejects.toMatchObject({ code: 'SETUP_OBSERVATION_UNAVAILABLE', status: 503 })
+  })
   it.each(['eth_getTransactionByHash', 'eth_getTransactionReceipt'])('keeps missing %s unknown/pending without a replacement', async methodToRemove => {
     const f = fixture(undefined, (_url, method, _params, value) => method === methodToRemove ? null : value)
     expect((await observeSetupStep(f.intent, txHash, { rpc: f.rpc })).status).toBe(methodToRemove === 'eth_getTransactionByHash' ? 'UNKNOWN' : 'PENDING')

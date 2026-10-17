@@ -1,9 +1,19 @@
 import { describe, expect, it } from 'vitest'
 import { fundRecipientCommandRequestSchema, fundRecipientFindRequestSchema, fundRecipientPrepareRequestSchema,
-  fundRecipientSubmitClaimRequestSchema, fundRecipientRecordSignatureRequestSchema } from './fund-recipient-contracts'
+  fundRecipientSubmitClaimRequestSchema, fundRecipientRecordSignatureRequestSchema, fundRecipientIntentSchema } from './fund-recipient-contracts'
 
 const id = (n: number) => `10000000-0000-4000-8000-${n.toString().padStart(12, '0')}`
 const address = `0x${'a'.repeat(40)}`, context = { mode: 'APPLICANT' }
+function recipientIntent(first: string, second: string) {
+  const hash = `0x${'ab'.repeat(32)}`, timestamp = '2026-10-17T00:00:00Z'
+  return { version: 1, chain_id: 80002, operation_id: id(2), operation_revision: 1, phase: 'CREATE_IDENTITY',
+    expectation_hash: 'ab'.repeat(32), catalog_hash: 'cd'.repeat(32), sender_address: address, sender_nonce: '1',
+    execution_mode: 'EOA_TRANSACTION', to: null, value: '0', transaction_data: '0x6000', expected_identity_address: address,
+    claim_data: '0x01', claim_data_hash: hash, claim_id: hash, safe_transaction: null, safe_transaction_hash: null,
+    safe_owners: [address, `0x${'b'.repeat(40)}`], safe_threshold: 2, valid_until: timestamp, claim_valid_until: timestamp,
+    expiry_enforced_on_chain: false, snapshot: { block: { number: '100', hash, timestamp }, providers: [first, second].map(url => ({
+      url, finalized_block_number: '120', finalized_block_hash: hash })) } }
+}
 describe('canonical recipient public inputs - source boundary only', () => {
   it('accepts only a saved bound wallet case creation, not eligibility or receipt claims', () => {
     const request = { command: 'CREATE_CASE', request_key: id(1), payload: { delivery_binding_id: id(2) }, operating_context: context }
@@ -43,5 +53,29 @@ describe('canonical recipient public inputs - source boundary only', () => {
     expect(fundRecipientFindRequestSchema.safeParse(request).success).toBe(true)
     expect(fundRecipientFindRequestSchema.safeParse({ ...request, address }).success).toBe(false)
     expect(fundRecipientFindRequestSchema.safeParse({ ...request, actor_id: id(1) }).success).toBe(false)
+  })
+  it.each([
+    ['https://polygon-amoy.drpc.org', 'https://polygon-amoy-bor-rpc.publicnode.com'],
+    ['https://polygon-amoy-bor-rpc.publicnode.com', 'https://polygon-amoy.drpc.org'],
+    ['https://polygon-amoy.drpc.org', 'https://polygon-amoy.gateway.tenderly.co'],
+    ['https://polygon-amoy.gateway.tenderly.co', 'https://polygon-amoy.drpc.org'],
+  ])('retains the exact legacy or archive snapshot in a saved intent: %s / %s', (first, second) => {
+    const intent = recipientIntent(first, second), original = JSON.stringify(intent)
+    expect(fundRecipientIntentSchema.parse(intent)).toEqual(intent)
+    expect(JSON.stringify(intent)).toBe(original)
+  })
+  it.each(['without dRPC', 'duplicate', 'missing', 'extra', 'null', 'foreign', 'credentials', 'query', 'extra field'] as const)('does not accept another observer quorum in a saved recipient intent: %s', changed => {
+    const intent = recipientIntent('https://polygon-amoy.drpc.org', 'https://polygon-amoy.gateway.tenderly.co')
+    const sources = intent.snapshot.providers
+    let providers: unknown = sources
+    if (changed === 'without dRPC') providers = [{ ...sources[0], url: 'https://polygon-amoy-bor-rpc.publicnode.com' }, sources[1]]
+    else if (changed === 'duplicate') providers = [sources[0], sources[0]]
+    else if (changed === 'missing') providers = [sources[0]]
+    else if (changed === 'extra') providers = [...sources, { ...sources[0], url: 'https://polygon-amoy-bor-rpc.publicnode.com' }]
+    else if (changed === 'null') providers = [null, sources[1]]
+    else if (changed === 'extra field') providers = [{ ...sources[0], credential: 'not-evidence' }, sources[1]]
+    else providers = [{ ...sources[0], url: changed === 'credentials' ? 'https://name:secret@polygon-amoy.gateway.tenderly.co'
+      : changed === 'query' ? 'https://polygon-amoy.gateway.tenderly.co?apiKey=secret' : 'https://unapproved.example' }, sources[1]]
+    expect(fundRecipientIntentSchema.safeParse({ ...intent, snapshot: { ...intent.snapshot, providers } }).success).toBe(false)
   })
 })

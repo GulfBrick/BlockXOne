@@ -257,7 +257,8 @@ begin
     or manifest->>'id' is distinct from r.manifest_id::text or manifest#>'{safe,owners}' is distinct from s.safe_owners
     or manifest#>>'{safe,address}' is distinct from s.safe_address or manifest#>>'{safe,threshold}' is distinct from s.safe_threshold::text
     or candidate#>>'{observed,providers,0,url}' is distinct from 'https://polygon-amoy.drpc.org'
-    or candidate#>>'{observed,providers,1,url}' is distinct from 'https://polygon-amoy-bor-rpc.publicnode.com'
+    or (candidate#>>'{observed,providers,1,url}' is distinct from 'https://polygon-amoy-bor-rpc.publicnode.com'
+      and candidate#>>'{observed,providers,1,url}' is distinct from 'https://polygon-amoy.gateway.tenderly.co')
     or jsonb_array_length(candidate#>'{observed,providers}')<>2
     or expiry<=clock_timestamp() or (candidate#>>'{observed,block,timestamp}')::timestamptz>clock_timestamp()+interval '30 seconds'
     or (candidate#>>'{observed,block,timestamp}')::timestamptz<clock_timestamp()-interval '20 minutes' then
