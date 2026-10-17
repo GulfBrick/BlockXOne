@@ -6,7 +6,7 @@ on:
       mode:
         description: Cloud acceptance, empty-form browser proof, or focused UI and password-recovery checks
         type: choice
-        options: [acceptance, registration-browser-proof, fund-dashboard-focused, theme-focused, auth-recovery-focused, connected-session-focused, document-read-recovery-focused, fund-signer-entry-focused, connected-fund-providers-focused, official-scanner-focused, offering-signatures-api-focused, offering-scanner-operating, offering-scanner-source-focused, provider-diagnostics-focused, document-result-recovery-focused, wallet-context-focused, appointment-commit-focused, publication-view-focused, investor-admission-roleplay-focused, appointment-projection-cost-focused, investor-journey-focused, step9-transport-trace]
+        options: [acceptance, registration-browser-proof, fund-dashboard-focused, theme-focused, auth-recovery-focused, connected-session-focused, document-read-recovery-focused, fund-signer-entry-focused, connected-fund-providers-focused, official-scanner-focused, offering-signatures-api-focused, offering-scanner-operating, offering-scanner-source-focused, provider-diagnostics-focused, document-result-recovery-focused, wallet-context-focused, appointment-commit-focused, publication-view-focused, investor-admission-roleplay-focused, appointment-projection-cost-focused, investor-journey-focused, step9-transport-trace, step9-provider-qualification]
         default: acceptance
       scanner_scope:
         description: Queue for one protected manual scanner invocation only
@@ -196,7 +196,7 @@ permissions:
 jobs:
   step9-transport-trace:
     name: Original Step 9 read-only transport trace
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'step9-transport-trace' && github.repository == 'GulfBrick/BlockXOne' && github.ref == 'refs/heads/codex/investor-journey-20261016' && github.run_attempt == 1 }}
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.mode == 'step9-transport-trace' || inputs.mode == 'step9-provider-qualification') && github.repository == 'GulfBrick/BlockXOne' && github.ref == 'refs/heads/codex/investor-journey-20261016' && github.run_attempt == 1 }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -226,7 +226,7 @@ jobs:
           npm ci --ignore-scripts --no-audit --no-fund
       - name: Trace the original transaction through the unchanged read-only transport
         env:
-          BX1_FUND_SETUP_TRANSPORT_TRACE: original-step9-readonly-v1
+          BX1_FUND_SETUP_TRANSPORT_TRACE: ${{ inputs.mode == 'step9-provider-qualification' && 'original-step9-qualification-v2' || 'original-step9-readonly-v1' }}
         run: node apps/web/scripts/probe-fund-setup-transport.mjs
 
   document-scanner-engine:
@@ -875,8 +875,10 @@ jobs:
             'src/lib/portal/fund-recipient-chain.test.ts',
             'src/lib/portal/fund-recipient-server.test.ts',
             'src/lib/portal/fund-setup-chain.test.ts',
+            'src/lib/portal/fund-chain-admission.test.ts',
             'src/lib/portal/fund-setup-server.test.ts',
             'src/lib/portal/amoy-archive-observers-schema.test.ts',
+            'src/lib/portal/amoy-archive-pair-v2-schema.test.ts',
           ] : process.env.BX1_FOCUSED_UI_MODE === 'appointment-projection-cost-focused' ? [
             'src/lib/portal/fund-appointment-projection-cost-schema.test.ts',
           ] : process.env.BX1_FOCUSED_UI_MODE === 'investor-admission-roleplay-focused' ? [

@@ -703,7 +703,8 @@ begin
   if not isfinite((facts->>'block_timestamp')::timestamptz) or (facts->>'block_timestamp')::timestamptz>clock_timestamp()+interval '1 minute' then raise exception 'funding_invalid_block_time' using errcode='22023'; end if;
   select array_agg(x->>'url' order by x->>'url') into source_urls from jsonb_array_elements(facts->'providers') x;
   if (source_urls is distinct from array['https://polygon-amoy-bor-rpc.publicnode.com','https://polygon-amoy.drpc.org']::text[]
-    and source_urls is distinct from array['https://polygon-amoy.drpc.org','https://polygon-amoy.gateway.tenderly.co']::text[]) then raise exception 'funding_invalid_sources' using errcode='22023'; end if;
+    and source_urls is distinct from array['https://polygon-amoy.drpc.org','https://polygon-amoy.gateway.tenderly.co']::text[]
+    and source_urls is distinct from array['https://80002.rpc.thirdweb.com','https://polygon-amoy.gateway.tenderly.co']::text[]) then raise exception 'funding_invalid_sources' using errcode='22023'; end if;
   for source in select value from jsonb_array_elements(facts->'providers') loop
     if coalesce(source->>'finalized_block_number','') !~ '^[0-9]{1,78}$' or coalesce(source->>'finalized_block_hash','') !~ '^0x[0-9a-f]{64}$'
       or (source->>'finalized_block_number')::numeric<observed_block then raise exception 'funding_not_finalized' using errcode='22023'; end if;

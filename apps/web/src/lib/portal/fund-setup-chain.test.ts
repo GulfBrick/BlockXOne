@@ -172,7 +172,7 @@ describe('dual-observer original setup transaction', () => {
     const result = await observeSetupStep(intent, txHash, { rpc: f.rpc })
     expect(result.status).toBe('FINAL')
     expect(result.transaction_hash).toBe(txHash)
-    expect(result.providers.map(source => source.url)).toEqual(['https://polygon-amoy.drpc.org', 'https://polygon-amoy.gateway.tenderly.co'])
+    expect(result.providers.map(source => source.url)).toEqual(['https://80002.rpc.thirdweb.com', 'https://polygon-amoy.gateway.tenderly.co'])
     expect(intent.checks.length).toBeGreaterThan(0)
     for (const [index, url] of FUNDING_RPC_URLS.entries()) {
       expect(f.rpc).toHaveBeenCalledWith(url, 'eth_getCode', [intent.expected_address, '0x64'])
@@ -181,6 +181,51 @@ describe('dual-observer original setup transaction', () => {
       expect(f.rpc.mock.calls.filter(([source, method]) => source === url && method === 'eth_getTransactionReceipt')).toHaveLength(2)
     }
     expect(f.rpc.mock.calls.some(([url]) => url === 'https://polygon-amoy-bor-rpc.publicnode.com')).toBe(false)
+  })
+  it('checks the original IdFactory historical owner and authority on both fixed services without modifying its intent', async () => {
+    // Public original identifiers in a synthetic RPC fixture, not hosted proof.
+    const owner = '0x27d1b26be9c04f4fd81c5cfd3975dae8b0f806fb', authority = '0xb1753d770545e853f0495734632e516717c25887'
+    const originalHash = '0xd1b768d76b45f32df08d1553f5311854bc82a471dac7963ce583b4be4d989c95', height = 50451212n
+    const originalBlockHash = '0x4cd32c8f60510e31f20dc92514eadb1f86d53a1b8073f24468c7285b4f93ff49'
+    const intent = buildSetupIntent('oid_factory', configuration, { ...dependencies, oid_authority: authority }, owner, '10')
+    const saved = structuredClone(intent), runtime = canonicalFundRuntime('IdFactory', { _implementationAuthority: authority })
+    const receipt = { transactionHash: originalHash, blockNumber: hex(height), blockHash: originalBlockHash, transactionIndex: '0x0',
+      from: owner, to: null, contractAddress: intent.expected_address, status: '0x1', logs: [] }
+    const rpc = vi.fn(async (url: string, method: string, params: unknown[]): Promise<unknown> => {
+      if (method === 'eth_chainId') return '0x13882'
+      if (method === 'eth_getBlockByNumber') {
+        const number = params[0] === 'finalized' ? height + (url === FUNDING_RPC_URLS[0] ? 20n : 23n) : BigInt(String(params[0]))
+        return { number: hex(number), hash: number === height ? originalBlockHash : blockHash(number),
+          timestamp: hex(seconds + number - height), transactions: [originalHash] }
+      }
+      if (method === 'eth_getTransactionReceipt') return structuredClone(receipt)
+      if (method === 'eth_getTransactionByHash') return { ...receipt, hash: originalHash, nonce: '0xa', value: '0x0', chainId: '0x13882', input: intent.data }
+      if (method === 'eth_getCode') return runtime
+      if (method === 'eth_call') return intent.checks.find(check => check.data === rec(params[0]).data)?.result ?? '0x'
+      throw new Error('Unexpected synthetic original-factory method')
+    })
+    expect(hex(height)).toBe('0x301d30c')
+    expect(intent.expected_address).toBe('0x11b091c80b8ba5253a32c7c54ef2b1e37a45186e')
+    expect(intent.expected_runtime_hash).toBe('0x86d3b73ec9b8a03f0ef25c72aba7e0b65665e20c3e5ea4c67383d0c9a87e42fb')
+    expect(intent.checks.map(check => check.data)).toEqual(['0x8da5cb5b', '0x2307f882'])
+    expect(intent.checks.map(check => check.result)).toEqual([owner, authority].map(value => AbiCoder.defaultAbiCoder().encode(['address'], [value])))
+    expect((await observeSetupStep(intent, originalHash, { rpc })).status).toBe('FINAL')
+    for (const [index, url] of FUNDING_RPC_URLS.entries()) {
+      expect(rpc).toHaveBeenCalledWith(url, 'eth_getCode', [intent.expected_address, hex(height)])
+      expect(rpc).toHaveBeenCalledWith(url, 'eth_getCode', [intent.expected_address, hex(height + (index === 0 ? 20n : 23n))])
+      for (const check of intent.checks) expect(rpc).toHaveBeenCalledWith(url, 'eth_call', [{ to: intent.expected_address, data: check.data }, hex(height)])
+      expect(rpc.mock.calls.filter(([source, method]) => source === url && method === 'eth_getTransactionReceipt')).toHaveLength(2)
+    }
+    expect(intent).toEqual(saved)
+    expect(rpc.mock.calls.every(([_url, method]) => !/send|sign|broadcast/i.test(method))).toBe(true)
+    for (const unavailable of FUNDING_RPC_URLS) {
+      const failedRpc = vi.fn(async (url: string, method: string, params: unknown[]) => {
+        if (url === unavailable && method === 'eth_call' && rec(params[0]).data === '0x2307f882'
+          && params[1] === hex(height)) throw new Error('Historical state unavailable')
+        return rpc(url, method, params)
+      })
+      await expect(observeSetupStep(intent, originalHash, { rpc: failedRpc })).rejects.toMatchObject({ code: 'SETUP_OBSERVATION_UNAVAILABLE', status: 503 })
+    }
   })
   it.each(['eth_getCode', 'eth_call'])('does not fall back to one observer or latest state when archive %s is unavailable', async method => {
     const intent = buildSetupIntent('ctr_implementation', configuration, dependencies, sender, '7')

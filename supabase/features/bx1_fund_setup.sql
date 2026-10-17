@@ -509,7 +509,7 @@ begin
     if pg_catalog.jsonb_typeof(entry) is distinct from 'object' or entry-array['url','finalized_block_number','finalized_block_hash']<>'{}'
       or not(entry ?& array['url','finalized_block_number','finalized_block_hash'])
       or pg_catalog.jsonb_typeof(entry->'url') is distinct from 'string'
-      or entry->>'url' not in ('https://polygon-amoy.drpc.org','https://polygon-amoy-bor-rpc.publicnode.com','https://polygon-amoy.gateway.tenderly.co')
+      or entry->>'url' not in ('https://polygon-amoy.drpc.org','https://polygon-amoy-bor-rpc.publicnode.com','https://polygon-amoy.gateway.tenderly.co','https://80002.rpc.thirdweb.com')
       or pg_catalog.jsonb_typeof(entry->'finalized_block_number') is distinct from 'string'
       or entry->>'finalized_block_number' !~ '^[1-9][0-9]{0,77}$'
       or pg_catalog.jsonb_typeof(entry->'finalized_block_hash') is distinct from 'string'
@@ -518,7 +518,9 @@ begin
     if result->>'block_number' is not null and (result->>'block_number' !~ '^[1-9][0-9]{0,77}$'
       or (entry->>'finalized_block_number')::numeric<(result->>'block_number')::numeric) then return false;end if;
   end loop;
-  return urls[1]<>urls[2] and ('https://polygon-amoy.drpc.org'=any(urls)) is true;
+  return urls[1]<>urls[2] and (urls @> array['https://polygon-amoy.drpc.org','https://polygon-amoy-bor-rpc.publicnode.com']::text[]
+    or urls @> array['https://polygon-amoy.drpc.org','https://polygon-amoy.gateway.tenderly.co']::text[]
+    or urls @> array['https://80002.rpc.thirdweb.com','https://polygon-amoy.gateway.tenderly.co']::text[]) is true;
 exception when others then return false;
 end $$;
 create function bx1_portal.fund_setup_result_shape(result jsonb,kind text) returns boolean
