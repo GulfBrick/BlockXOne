@@ -1,7 +1,7 @@
 import { Interface, keccak256, Wallet } from 'ethers'
 import { describe, expect, it, vi } from 'vitest'
 import { buildFundingClaimMessage, type FundingClaim } from './funding-claim'
-import { createFundingRpc, FUNDING_RPC_URLS, FundingVerificationError, probeFundingRpcProviders, readBoundedFundingJson, verifyFundingExpectation, type FundingVerificationExpectation } from './funding-verifier'
+import { createFundingRpc, FUNDING_RPC_URLS, FundingVerificationError, probeFundingRpcProviders, readBoundedFundingJson, readFundingRpcDiagnostic, verifyFundingExpectation, type FundingVerificationExpectation } from './funding-verifier'
 
 const signer = new Wallet(`0x${'11'.repeat(32)}`) // Public synthetic key; never used on a network.
 const address = '0x1111111111111111111111111111111111111111'
@@ -222,7 +222,73 @@ describe('bounded fixed-origin RPC transport', () => {
     await expect(readBoundedFundingJson(Response.json({ ok: true }), 64, abort.signal)).rejects.toMatchObject({ code: 'REQUEST_TIMED_OUT' })
   })
   it('redacts network errors instead of exposing credential-bearing diagnostics', async () => {
-    await expect(createFundingRpc(vi.fn(async () => { throw new Error('upstream password=private') }))(FUNDING_RPC_URLS[0], 'eth_chainId', [])).rejects.toMatchObject({ code: 'RPC_RESPONSE_UNAVAILABLE', message: 'RPC_RESPONSE_UNAVAILABLE' })
+    const original = new Error('upstream password=private')
+    const error = await createFundingRpc(vi.fn(async () => { throw original }))(FUNDING_RPC_URLS[0], 'eth_chainId', []).catch(error => error)
+    expect(error).toMatchObject({ code: 'RPC_RESPONSE_UNAVAILABLE', message: 'RPC_RESPONSE_UNAVAILABLE', status: 503,
+      diagnostic: { stage: 'FETCH', httpStatus: null, rpcCode: null, requestId: 1 } })
+    expect(error).not.toHaveProperty('cause')
+    expect(JSON.stringify(error)).not.toContain('private')
+    expect(error.stack).not.toContain('password')
+  })
+  it('classifies HTTP failure without reading or retaining its body', async () => {
+    const response = Response.json({ error: 'secret upstream diagnostic' }, { status: 429 })
+    const reader = vi.spyOn(response.body!, 'getReader')
+    const error = await createFundingRpc(vi.fn(async () => response))(FUNDING_RPC_URLS[0], 'eth_chainId', []).catch(error => error)
+    expect(error).toMatchObject({ code: 'RPC_RESPONSE_UNAVAILABLE', status: 503,
+      diagnostic: { stage: 'HTTP', httpStatus: 429, rpcCode: null, requestId: 1 } })
+    expect(reader).not.toHaveBeenCalled()
+    expect(JSON.stringify(error)).not.toContain('secret')
+  })
+  it('uses the single bounded body parse and preserves malformed-body rejection', async () => {
+    const response = new Response('{secret-malformed', { headers: { 'Content-Type': 'application/json' } })
+    const reader = vi.spyOn(response.body!, 'getReader')
+    const error = await createFundingRpc(vi.fn(async () => response))(FUNDING_RPC_URLS[0], 'eth_chainId', []).catch(error => error)
+    expect(error).toMatchObject({ code: 'INVALID_JSON', status: 400,
+      diagnostic: { stage: 'BODY', httpStatus: 200, rpcCode: null, requestId: 1 } })
+    expect(reader).toHaveBeenCalledTimes(1)
+    expect(JSON.stringify(error)).not.toContain('secret')
+  })
+  it('retains only a standard numeric RPC error code after validating the envelope', async () => {
+    const response = Response.json({ jsonrpc: '2.0', id: 1, error: { code: -32000, message: 'secret upstream diagnostic', data: { url: 'https://private.example' } } })
+    const reader = vi.spyOn(response.body!, 'getReader')
+    const error = await createFundingRpc(vi.fn(async () => response))(FUNDING_RPC_URLS[0], 'eth_call', [{ to: 'private-param' }, '0x1']).catch(error => error)
+    expect(error).toMatchObject({ code: 'RPC_RESULT_UNAVAILABLE', status: 503,
+      diagnostic: { stage: 'RPC_ERROR', httpStatus: 200, rpcCode: -32000, requestId: 1 } })
+    expect(reader).toHaveBeenCalledTimes(1)
+    expect(JSON.stringify(error)).not.toMatch(/secret|private|https/)
+    expect(error).not.toHaveProperty('cause')
+  })
+  it.each([{ jsonrpc: '1.0', id: 1 }, { jsonrpc: '2.0', id: 999 }, { jsonrpc: '2.0', id: '1' }])('checks envelope identity before classifying a supplied RPC error %#', async envelope => {
+    const error = await createFundingRpc(vi.fn(async () => Response.json({ ...envelope, error: { code: -32000, message: 'secret' } })))(FUNDING_RPC_URLS[0], 'eth_chainId', []).catch(error => error)
+    expect(error).toMatchObject({ code: 'RPC_RESULT_UNAVAILABLE', status: 503,
+      diagnostic: { stage: 'ENVELOPE', httpStatus: 200, rpcCode: null, requestId: 1 } })
+  })
+  it.each([null, [], 'secret primitive'])('classifies a parsed non-object as ENVELOPE, not a body-parse failure %#', async value => {
+    const error = await createFundingRpc(vi.fn(async () => Response.json(value)))(FUNDING_RPC_URLS[0], 'eth_chainId', []).catch(error => error)
+    expect(error).toMatchObject({ code: 'MALFORMED_PROVIDER_RESULT', status: 503,
+      diagnostic: { stage: 'ENVELOPE', httpStatus: 200, rpcCode: null, requestId: 1 } })
+    expect(JSON.stringify(error)).not.toContain('secret')
+  })
+  it.each([-32769, -31999, -32000.5, '-32000', null])('does not retain non-standard or malformed RPC code %s', async code => {
+    const error = await createFundingRpc(vi.fn(async () => Response.json({ jsonrpc: '2.0', id: 1, error: { code, message: 'secret' } })))(FUNDING_RPC_URLS[0], 'eth_chainId', []).catch(error => error)
+    expect(error).toMatchObject({ code: 'RPC_RESULT_UNAVAILABLE', status: 503,
+      diagnostic: { stage: 'RPC_ERROR', httpStatus: 200, rpcCode: null, requestId: 1 } })
+  })
+  it('copies closed diagnostics and ignores malformed or throwing diagnostic fields', () => {
+    const input = { stage: 'HTTP' as const, httpStatus: 429, rpcCode: null, requestId: 1 }
+    const error = new FundingVerificationError('RPC_RESPONSE_UNAVAILABLE', 503, input)
+    input.httpStatus = 500
+    expect(error.diagnostic).toEqual({ stage: 'HTTP', httpStatus: 429, rpcCode: null, requestId: 1 })
+    expect(Object.isFrozen(error.diagnostic)).toBe(true)
+    expect(Reflect.set(error.diagnostic!, 'httpStatus', 200)).toBe(false)
+    expect(error.diagnostic?.httpStatus).toBe(429)
+    for (const value of [null, [], { ...input, raw: 'secret' }, { ...input, stage: 'PRIVATE' }, { ...input, httpStatus: 600 },
+      { ...input, httpStatus: '429' }, { ...input, rpcCode: -32000 }, { ...input, stage: 'FETCH' },
+      { ...input, requestId: 0 }, { ...input, requestId: 2_147_483_648 }, { ...input, requestId: 1.5 }]) {
+      expect(readFundingRpcDiagnostic(value)).toBeUndefined()
+    }
+    const throwing = Object.defineProperty({ httpStatus: null, rpcCode: null, requestId: 1 }, 'stage', { enumerable: true, get: () => { throw new Error('secret') } })
+    expect(readFundingRpcDiagnostic(throwing)).toBeUndefined()
   })
   it('does not let the explicit availability probe pass when either provider is unavailable', async () => {
     await expect(probeFundingRpcProviders(vi.fn(async () => { throw new Error('network unavailable') }))).rejects.toMatchObject({ code: 'RPC_RESPONSE_UNAVAILABLE' })

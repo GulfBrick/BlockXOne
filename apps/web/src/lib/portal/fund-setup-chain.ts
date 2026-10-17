@@ -1,7 +1,7 @@
 import 'server-only'
 import { createHash } from 'node:crypto'
 import { AbiCoder, Interface, getCreateAddress, getCreate2Address, keccak256, toUtf8Bytes } from 'ethers'
-import { createFundingRpc, FUNDING_RPC_URLS } from './funding-verifier'
+import { createFundingRpc, FUNDING_RPC_URLS, FundingVerificationError, readFundingRpcDiagnostic } from './funding-verifier'
 import { canonicalFundCreation, canonicalFundRuntime, FUND_SETUP_CATALOG_HASH, getCanonicalFundArtifact, getOfficialSafeArtifact, type FundSetupArtifactName } from './fund-setup-artifacts'
 
 const ZERO = `0x${'0'.repeat(40)}`, SENTINEL = '0x0000000000000000000000000000000000000001'
@@ -143,9 +143,19 @@ export function buildSetupIntent(step_key: FundSetupStepKey, configuration: Fund
   if (!/^[0-9a-f]{64}$/.test(body.configuration_hash)) return fail('SETUP_CONFIGURATION_HASH_INVALID')
   return body
 }
+function logSetupRpcFailure(error: unknown, observerIndex: number, method: string): void {
+  try {
+    if (!(error instanceof FundingVerificationError) || (observerIndex !== 0 && observerIndex !== 1)
+      || !['eth_chainId', 'eth_getBlockByNumber', 'eth_getTransactionReceipt', 'eth_getTransactionByHash', 'eth_getTransactionCount', 'eth_getStorageAt', 'eth_getCode', 'eth_call'].includes(method)) return
+    const diagnostic = readFundingRpcDiagnostic(error.diagnostic)
+    if (!diagnostic) return
+    console.warn('BX1_SETUP_RPC_FAILURE', { observerIndex, method, stage: diagnostic.stage,
+      httpStatus: diagnostic.httpStatus, rpcCode: diagnostic.rpcCode, requestId: diagnostic.requestId })
+  } catch { /* Best-effort diagnostics must never replace the original failure. */ }
+}
 function rpcFor(options: FundSetupObservers, index: number): Rpc { const raw = (index === 0 ? options.primary : options.secondary) ?? options.rpc ?? createFundingRpc()
   return async (url, method, params) => { if (url !== FUNDING_RPC_URLS[index]) return fail('SETUP_OBSERVER_INVALID', 503)
-    try { return await raw(url, method, params) } catch (error) { if (error instanceof FundSetupChainError) throw error; return fail('SETUP_OBSERVATION_UNAVAILABLE', 503) } } }
+    try { return await raw(url, method, params) } catch (error) { if (error instanceof FundSetupChainError) throw error; logSetupRpcFailure(error, index, method); return fail('SETUP_OBSERVATION_UNAVAILABLE', 503) } } }
 function block(value: unknown) { const b = object(value), timestamp = quantity(b.timestamp); if (timestamp > 8640000000000n) return fail('SETUP_BLOCK_INVALID', 503)
   return { number: quantity(b.number), hash: hash(b.hash), timestamp: new Date(Number(timestamp) * 1000).toISOString(), transactions: b.transactions } }
 async function observers(options: FundSetupObservers) { return Promise.all(FUNDING_RPC_URLS.map(async (url, i) => {

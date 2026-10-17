@@ -30,8 +30,32 @@ export type FundingObservation = ObservationBase & (
   | { kind: 'REFERENCE'; status: 'VERIFIED'; transaction_hash: string; transaction_index: number; log_index: number; payer_address: string; amount_base_units: string; claim_hash: string; policy_status?: 'UNAPPLIED'; reason_code?: 'PRE_OBLIGATION' }
   | { kind: 'REFERENCE'; status: 'INVALID'; reason_code: 'RECEIPT_REVERTED'; transaction_hash: string; transaction_index: number; log_index: number; payer_address: string; claim_hash: string }
 )
+export type FundingRpcDiagnostic = Readonly<{
+  stage: 'FETCH' | 'HTTP' | 'BODY' | 'ENVELOPE' | 'RPC_ERROR';
+  httpStatus: number | null; rpcCode: number | null; requestId: number;
+}>
+/** Copy only closed transport fields; malformed diagnostics must not affect verification. */
+export function readFundingRpcDiagnostic(value: unknown): FundingRpcDiagnostic | undefined {
+  try {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+    const item = value as Record<string, unknown>
+    if (Object.keys(item).length !== 4 || !['stage', 'httpStatus', 'rpcCode', 'requestId'].every(key => Object.hasOwn(item, key))) return undefined
+    const { stage, httpStatus, rpcCode, requestId } = item
+    if (stage !== 'FETCH' && stage !== 'HTTP' && stage !== 'BODY' && stage !== 'ENVELOPE' && stage !== 'RPC_ERROR') return undefined
+    if (httpStatus !== null && (typeof httpStatus !== 'number' || !Number.isInteger(httpStatus) || httpStatus < 100 || httpStatus > 599)) return undefined
+    if (rpcCode !== null && (typeof rpcCode !== 'number' || !Number.isInteger(rpcCode) || rpcCode < -32768 || rpcCode > -32000)) return undefined
+    if (typeof requestId !== 'number' || !Number.isSafeInteger(requestId) || requestId < 1 || requestId > 2_147_483_647
+      || (stage === 'FETCH' && httpStatus !== null) || (stage !== 'RPC_ERROR' && rpcCode !== null)) return undefined
+    return Object.freeze({ stage, httpStatus, rpcCode, requestId })
+  } catch { return undefined }
+}
 export class FundingVerificationError extends Error {
-  constructor(public readonly code: string, public readonly status = 503) { super(code) }
+  public readonly diagnostic?: FundingRpcDiagnostic
+  constructor(public readonly code: string, public readonly status = 503, diagnostic?: FundingRpcDiagnostic) {
+    super(code)
+    const checked = readFundingRpcDiagnostic(diagnostic)
+    if (checked) this.diagnostic = checked
+  }
 }
 type Rpc = (url: string, method: string, params: unknown[]) => Promise<unknown>
 type Dependencies = { rpc: Rpc; now?: () => number }
@@ -206,13 +230,32 @@ export function createFundingRpc(fetcher: typeof fetch = fetch, signal?: AbortSi
     const id = ++requestId
     const timeout = AbortSignal.timeout(8_000)
     const bound = signal ? AbortSignal.any([signal, timeout]) : timeout
+    let stage: FundingRpcDiagnostic['stage'] = 'FETCH', httpStatus: number | null = null, rpcCode: number | null = null
     try {
       const response = await fetcher(url, { method: 'POST', redirect: 'error', cache: 'no-store', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id, method, params }), signal: bound })
+      stage = 'HTTP'
+      httpStatus = Number.isInteger(response.status) && response.status >= 100 && response.status <= 599 ? response.status : null
       if (!response.ok || response.redirected || !response.headers.get('content-type')?.toLowerCase().includes('application/json')) reject('RPC_RESPONSE_UNAVAILABLE')
-      const data = record(await readBoundedFundingJson(response, 1_048_576, bound))
-      if (data.jsonrpc !== '2.0' || data.id !== id || 'error' in data || !Object.hasOwn(data, 'result')) reject('RPC_RESULT_UNAVAILABLE')
+      stage = 'BODY'
+      const body = await readBoundedFundingJson(response, 1_048_576, bound)
+      stage = 'ENVELOPE'
+      const data = record(body)
+      if (data.jsonrpc !== '2.0' || data.id !== id) reject('RPC_RESULT_UNAVAILABLE')
+      if ('error' in data) {
+        stage = 'RPC_ERROR'
+        if (data.error && typeof data.error === 'object' && !Array.isArray(data.error)) {
+          const code = (data.error as Record<string, unknown>).code
+          if (typeof code === 'number' && Number.isInteger(code) && code >= -32768 && code <= -32000) rpcCode = code
+        }
+        reject('RPC_RESULT_UNAVAILABLE')
+      }
+      if (!Object.hasOwn(data, 'result')) reject('RPC_RESULT_UNAVAILABLE')
       return data.result
-    } catch (error) { if (error instanceof FundingVerificationError) throw error; return reject('RPC_RESPONSE_UNAVAILABLE') }
+    } catch (error) {
+      const diagnostic = readFundingRpcDiagnostic({ stage, httpStatus, rpcCode, requestId: id })
+      if (error instanceof FundingVerificationError) throw new FundingVerificationError(error.code, error.status, diagnostic)
+      throw new FundingVerificationError('RPC_RESPONSE_UNAVAILABLE', 503, diagnostic)
+    }
   }
 }
 export async function readBoundedFundingJson(source: Pick<Response, 'body' | 'headers'>, maximum: number, signal: AbortSignal): Promise<unknown> {
