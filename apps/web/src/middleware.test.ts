@@ -3,8 +3,595 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { middleware } from './middleware'
 import { updateSupabaseSession } from './lib/supabase/middleware'
+import { SUPABASE_ALLOWED_PATHS } from './lib/auth-mode'
 
 vi.mock('./lib/supabase/middleware', () => ({ updateSupabaseSession: vi.fn() }))
+
+describe('exact connected wallet context middleware boundary', () => {
+  const path = '/api/wallet/context'
+  beforeEach(() => {
+    vi.stubEnv('NODE_ENV', 'production')
+    vi.stubEnv('BLOCKXONE_RELEASE_MODE', '')
+    vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_RELEASE_MODE', '')
+    vi.stubEnv('BLOCKXONE_AUTH_MODE', 'supabase')
+    vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_AUTH_MODE', 'supabase')
+    vi.stubEnv('BLOCKXONE_APP_ORIGIN', 'https://testnet.bx1.co.za')
+    vi.stubEnv('SUPABASE_URL', 'https://fegnnnlseuejkrusbbkv.supabase.co')
+    vi.stubEnv('VERCEL_ENV', 'preview')
+    vi.mocked(updateSupabaseSession).mockReset()
+    vi.mocked(updateSupabaseSession).mockResolvedValue(NextResponse.next())
+  })
+  afterEach(() => vi.unstubAllEnvs())
+
+  it('passes the original form POST and refresh cookies to the unchanged authenticated wallet handler', async () => {
+    const refreshed = NextResponse.next()
+    refreshed.cookies.set('fixture-wallet-refresh', 'nonsecret', { httpOnly: true, secure: true, sameSite: 'lax', path: '/' })
+    vi.mocked(updateSupabaseSession).mockResolvedValueOnce(refreshed)
+    const request = new NextRequest(`https://testnet.bx1.co.za${path}`, { method: 'POST',
+      headers: { host: 'testnet.bx1.co.za', origin: 'https://testnet.bx1.co.za',
+        'content-type': 'application/x-www-form-urlencoded;charset=UTF-8', 'x-bx1-expected-actor': '00000000-0000-4000-8000-000000000001' },
+      body: 'organisationId=00000000-0000-4000-8000-000000000002',
+    })
+    const response = await middleware(request)
+    expect(response).toBe(refreshed)
+    expect(response.headers.get('x-middleware-next')).toBe('1')
+    expect(response.headers.get('location')).toBeNull()
+    expect(response.cookies.get('fixture-wallet-refresh')?.value).toBe('nonsecret')
+    expect(response.headers.get('cache-control')).toBe('private, no-store')
+    expect(response.headers.get('pragma')).toBe('no-cache')
+    expect(response.headers.get('cdn-cache-control')).toBe('no-store')
+    expect(response.headers.get('vercel-cdn-cache-control')).toBe('no-store')
+    expect(response.headers.get('referrer-policy')).toBe('no-referrer')
+    expect(response.headers.get('x-robots-tag')).toBe('noindex, nofollow, noarchive')
+    expect(updateSupabaseSession).toHaveBeenCalledExactlyOnceWith(request)
+    expect(request.bodyUsed).toBe(false)
+    // No wallet context, signing key or ownership proof is manufactured here.
+  })
+
+  it.each([`${path}/`, `${path}/extra`, `${path}-admin`, `${path}.json`, path.toUpperCase(),
+    '/api/wallet/%63ontext', '/api/wallet/unknown',
+  ])('rejects wallet context lookalike %s before session refresh', async value => {
+    const response = await middleware(new NextRequest(`https://testnet.bx1.co.za${value}`, { method: 'POST' }))
+    expect(response.status).toBe(404)
+    expect(response.headers.get('cache-control')).toBe('private, no-store')
+    expect(response.headers.get('set-cookie')).toBeNull()
+    expect(updateSupabaseSession).not.toHaveBeenCalled()
+  })
+
+  it.each([['supabase', ''], ['', 'supabase'], ['Supabase', 'Supabase'], ['', '']])('denies wallet context under auth %s/%s', async (server, browser) => {
+    vi.stubEnv('BLOCKXONE_AUTH_MODE', server)
+    vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_AUTH_MODE', browser)
+    const response = await middleware(new NextRequest(`https://testnet.bx1.co.za${path}`, { method: 'POST' }))
+    expect(response.status).toBe(server === '' && browser === '' ? 404 : 503)
+    expect(response.headers.get('set-cookie')).toBeNull()
+    expect(updateSupabaseSession).not.toHaveBeenCalled()
+  })
+
+  it('preserves denied sessions and privately fails closed on session-refresh failure', async () => {
+    const denied = NextResponse.json({ error: 'unavailable' }, { status: 503 })
+    denied.cookies.set('fixture-wallet-expired', '', { maxAge: 0, httpOnly: true, secure: true, sameSite: 'lax', path: '/' })
+    vi.mocked(updateSupabaseSession).mockResolvedValueOnce(denied)
+    const response = await middleware(new NextRequest(`https://testnet.bx1.co.za${path}`, { method: 'POST' }))
+    expect(response).toBe(denied)
+    expect(response.status).toBe(503)
+    expect(response.headers.get('x-middleware-next')).toBeNull()
+    expect(response.cookies.get('fixture-wallet-expired')?.maxAge).toBe(0)
+    expect(response.headers.get('cache-control')).toBe('private, no-store')
+    vi.mocked(updateSupabaseSession).mockRejectedValueOnce(new Error('synthetic wallet refresh failure'))
+    const failed = await middleware(new NextRequest(`https://testnet.bx1.co.za${path}`, { method: 'POST' }))
+    expect(failed.status).toBe(503)
+    expect(failed.headers.get('cache-control')).toBe('private, no-store')
+    expect(failed.headers.get('set-cookie')).toBeNull()
+    expect(updateSupabaseSession).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('complete exact fund API middleware boundary', () => {
+  const paths = SUPABASE_ALLOWED_PATHS.filter(path => path.startsWith('/api/portal/fund-lifecycle/'))
+
+  beforeEach(() => {
+    vi.stubEnv('NODE_ENV', 'production')
+    vi.stubEnv('BLOCKXONE_RELEASE_MODE', '')
+    vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_RELEASE_MODE', '')
+    vi.stubEnv('BLOCKXONE_AUTH_MODE', 'supabase')
+    vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_AUTH_MODE', 'supabase')
+    vi.stubEnv('BLOCKXONE_APP_ORIGIN', 'https://testnet.bx1.co.za')
+    vi.stubEnv('SUPABASE_URL', 'https://fegnnnlseuejkrusbbkv.supabase.co')
+    vi.stubEnv('VERCEL_ENV', 'preview')
+    vi.mocked(updateSupabaseSession).mockReset()
+    vi.mocked(updateSupabaseSession).mockResolvedValue(NextResponse.next())
+  })
+  afterEach(() => vi.unstubAllEnvs())
+
+  it.each(paths)('passes POST %s to the existing session boundary without consuming its body or refresh cookies', async path => {
+    const refreshed = NextResponse.next()
+    refreshed.cookies.set('fixture-fund-refresh', 'nonsecret', { httpOnly: true, secure: true, sameSite: 'lax', path: '/' })
+    vi.mocked(updateSupabaseSession).mockResolvedValueOnce(refreshed)
+    const request = new NextRequest(`https://testnet.bx1.co.za${path}`, { method: 'POST',
+      headers: { host: 'testnet.bx1.co.za', origin: 'https://testnet.bx1.co.za', 'content-type': 'application/json' },
+      body: '{"fixture":"not-an-authorised-fund-command"}',
+    })
+    const response = await middleware(request)
+    expect(response).toBe(refreshed)
+    expect(response.status).toBe(200)
+    expect(response.headers.get('x-middleware-next')).toBe('1')
+    expect(response.headers.get('location')).toBeNull()
+    expect(response.cookies.get('fixture-fund-refresh')?.value).toBe('nonsecret')
+    expect(response.headers.get('cache-control')).toBe('private, no-store')
+    expect(response.headers.get('pragma')).toBe('no-cache')
+    expect(response.headers.get('cdn-cache-control')).toBe('no-store')
+    expect(response.headers.get('vercel-cdn-cache-control')).toBe('no-store')
+    expect(response.headers.get('referrer-policy')).toBe('no-referrer')
+    expect(response.headers.get('x-robots-tag')).toBe('noindex, nofollow, noarchive')
+    expect(updateSupabaseSession).toHaveBeenCalledExactlyOnceWith(request)
+    expect(request.bodyUsed).toBe(false)
+    // This only reaches the unchanged handler. It cannot create a session,
+    // satisfy MFA, choose an actor or authorise any database or chain action.
+  })
+
+  it.each(paths.flatMap(path => [`${path}/`, `${path}/extra`, `${path}-admin`, `${path}.json`,
+    path.toUpperCase(), path.replace('/fund-lifecycle/', '/%66und-lifecycle/'), `${path}/*`,
+  ]))('rejects URL-safe fund lookalike %s before session refresh', async path => {
+    const response = await middleware(new NextRequest(`https://testnet.bx1.co.za${path}`, { method: 'POST' }))
+    expect(response.status).toBe(404)
+    expect(response.headers.get('cache-control')).toBe('private, no-store')
+    expect(response.headers.get('referrer-policy')).toBe('no-referrer')
+    expect(response.headers.get('set-cookie')).toBeNull()
+    expect(updateSupabaseSession).not.toHaveBeenCalled()
+  })
+
+  it.each(['/api/portal/fund-lifecycle/unknown', '/api/portal/fund-lifecycle/setup/deploy',
+    '/api/portal/fund-lifecycle/recipient/unknown'])('denies unimplemented fund route %s before refresh', async path => {
+    const response = await middleware(new NextRequest(`https://testnet.bx1.co.za${path}`, { method: 'POST' }))
+    expect(response.status).toBe(404)
+    expect(updateSupabaseSession).not.toHaveBeenCalled()
+  })
+
+  it.each(paths)('preserves an unavailable session response instead of dispatching %s', async path => {
+    const denied = NextResponse.json({ error: 'unavailable' }, { status: 503 })
+    denied.cookies.set('fixture-fund-expired', '', { maxAge: 0, httpOnly: true, secure: true, sameSite: 'lax', path: '/' })
+    vi.mocked(updateSupabaseSession).mockResolvedValueOnce(denied)
+    const request = new NextRequest(`https://testnet.bx1.co.za${path}`, { method: 'POST' })
+    const response = await middleware(request)
+    expect(response).toBe(denied)
+    expect(response.status).toBe(503)
+    expect(response.headers.get('x-middleware-next')).toBeNull()
+    expect(response.cookies.get('fixture-fund-expired')?.maxAge).toBe(0)
+    expect(response.headers.get('cache-control')).toBe('private, no-store')
+    expect(updateSupabaseSession).toHaveBeenCalledExactlyOnceWith(request)
+  })
+
+  it.each(paths)('fails closed when %s cannot refresh its session', async path => {
+    vi.mocked(updateSupabaseSession).mockRejectedValueOnce(new Error('synthetic fund refresh failure'))
+    const response = await middleware(new NextRequest(`https://testnet.bx1.co.za${path}`, { method: 'POST' }))
+    expect(response.status).toBe(503)
+    expect(response.headers.get('cache-control')).toBe('private, no-store')
+    expect(response.headers.get('set-cookie')).toBeNull()
+    expect(updateSupabaseSession).toHaveBeenCalledOnce()
+  })
+
+  it.each(paths.flatMap(path => [['supabase', ''], ['', 'supabase'], ['', '']]
+    .map(([server, browser]) => [path, server, browser])))('keeps %s denied under unpaired or legacy auth %s/%s', async (path, server, browser) => {
+    vi.stubEnv('BLOCKXONE_AUTH_MODE', server)
+    vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_AUTH_MODE', browser)
+    const response = await middleware(new NextRequest(`https://testnet.bx1.co.za${path}`, { method: 'POST' }))
+    expect(response.status).toBe(server === '' && browser === '' ? 404 : 503)
+    expect(response.headers.get('set-cookie')).toBeNull()
+    expect(updateSupabaseSession).not.toHaveBeenCalled()
+  })
+})
+
+describe('exact protected provider-readiness middleware boundary', () => {
+  const paths = ['/api/portal/kyc/readiness', '/api/portal/offering-signatures/provider-status'] as const
+
+  beforeEach(() => {
+    vi.stubEnv('NODE_ENV', 'production')
+    vi.stubEnv('BLOCKXONE_RELEASE_MODE', '')
+    vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_RELEASE_MODE', '')
+    vi.stubEnv('BLOCKXONE_AUTH_MODE', 'supabase')
+    vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_AUTH_MODE', 'supabase')
+    vi.stubEnv('BLOCKXONE_APP_ORIGIN', 'https://testnet.bx1.co.za')
+    vi.stubEnv('SUPABASE_URL', 'https://fegnnnlseuejkrusbbkv.supabase.co')
+    vi.stubEnv('VERCEL_ENV', 'preview')
+    vi.mocked(updateSupabaseSession).mockReset()
+    vi.mocked(updateSupabaseSession).mockResolvedValue(NextResponse.next())
+  })
+  afterEach(() => vi.unstubAllEnvs())
+
+  it.each(paths)('passes exact GET %s and its original refreshed cookies to the authenticated handler', async path => {
+    const refreshed = NextResponse.next()
+    refreshed.cookies.set('fixture-readiness-refresh', 'nonsecret', { httpOnly: true, secure: true, sameSite: 'lax', path: '/' })
+    vi.mocked(updateSupabaseSession).mockResolvedValueOnce(refreshed)
+    const request = new NextRequest(`https://testnet.bx1.co.za${path}?product_id=fixture`, { method: 'GET' })
+    const response = await middleware(request)
+    expect(response).toBe(refreshed)
+    expect(response.status).toBe(200)
+    expect(response.headers.get('x-middleware-next')).toBe('1')
+    expect(response.headers.get('location')).toBeNull()
+    expect(response.cookies.get('fixture-readiness-refresh')?.value).toBe('nonsecret')
+    expect(response.headers.get('cache-control')).toBe('private, no-store')
+    expect(response.headers.get('pragma')).toBe('no-cache')
+    expect(response.headers.get('cdn-cache-control')).toBe('no-store')
+    expect(response.headers.get('vercel-cdn-cache-control')).toBe('no-store')
+    expect(response.headers.get('referrer-policy')).toBe('no-referrer')
+    expect(response.headers.get('x-robots-tag')).toBe('noindex, nofollow, noarchive')
+    expect(updateSupabaseSession).toHaveBeenCalledExactlyOnceWith(request)
+    // The handler still owns exact query validation, TEST admission, actor,
+    // product/context, current AAL2 session and sealed provider authentication.
+  })
+
+  it.each(paths.flatMap(path => [
+    `${path}/`, `${path}/extra`, `${path}-admin`, `${path}.json`, path.toUpperCase(),
+    path.replace('/portal/', '/Portal/'), path.replace('/portal/', '/%70ortal/'),
+    path.replace('/portal/', '/portal//'), `/${path}`, `${path}/*`,
+  ]))('rejects URL-safe readiness lookalike %s before session refresh', async path => {
+    const response = await middleware(new NextRequest(`https://testnet.bx1.co.za${path}`))
+    expect(response.status).toBe(404)
+    expect(response.headers.get('cache-control')).toBe('private, no-store')
+    expect(response.headers.get('referrer-policy')).toBe('no-referrer')
+    expect(response.headers.get('set-cookie')).toBeNull()
+    expect(updateSupabaseSession).not.toHaveBeenCalled()
+  })
+
+  it.each(paths.flatMap(path => [
+    ['supabase', ''], ['', 'supabase'], ['Supabase', 'Supabase'], ['', ''],
+  ].map(([server, browser]) => [path, server, browser])))('denies readiness GET %s under mode %s/%s before refresh', async (path, server, browser) => {
+    vi.stubEnv('BLOCKXONE_AUTH_MODE', server)
+    vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_AUTH_MODE', browser)
+    const response = await middleware(new NextRequest(`https://testnet.bx1.co.za${path}`))
+    expect(response.status).toBe(server === '' && browser === '' ? 404 : 503)
+    expect(response.headers.get('set-cookie')).toBeNull()
+    expect(updateSupabaseSession).not.toHaveBeenCalled()
+  })
+
+  it.each(paths)('fails privately when readiness GET %s cannot refresh its session', async path => {
+    vi.mocked(updateSupabaseSession).mockRejectedValueOnce(new Error('synthetic readiness refresh failure'))
+    const response = await middleware(new NextRequest(`https://testnet.bx1.co.za${path}`))
+    expect(response.status).toBe(503)
+    expect(response.headers.get('cache-control')).toBe('private, no-store')
+    expect(response.headers.get('referrer-policy')).toBe('no-referrer')
+    expect(response.headers.get('set-cookie')).toBeNull()
+    expect(updateSupabaseSession).toHaveBeenCalledOnce()
+  })
+})
+
+describe('exact offering-document middleware boundary', () => {
+  const configurations = [
+    ['https://testnet.bx1.co.za', 'https://fegnnnlseuejkrusbbkv.supabase.co', 'preview'],
+    ['https://bx1.co.za', 'https://oqkevkjbkpugjotihtda.supabase.co', 'production'],
+  ] as const
+  const services = ['/api/portal/offering-documents', '/api/portal/offering-documents/processing',
+    '/api/portal/offering-signatures', '/api/portal/offering-signatures/processing'] as const
+  const operations = [
+    ['/api/portal/offering-documents', 'GET'], ['/api/portal/offering-documents', 'POST'],
+    ['/api/portal/offering-documents', 'PUT'], ['/api/portal/offering-documents', 'PATCH'],
+    ['/api/portal/offering-documents/processing', 'POST'],
+    ['/api/portal/offering-signatures', 'GET'], ['/api/portal/offering-signatures', 'POST'],
+    ['/api/portal/offering-signatures/processing', 'POST'],
+  ] as const
+  const modes = [
+    ['supabase', ''], ['', 'supabase'], ['Supabase', 'Supabase'],
+    ['supabase', 'legacy'], ['legacy', 'supabase'], ['invalid', 'supabase'],
+    ['legacy', 'legacy'], ['', ''],
+  ] as const
+  const lookalikes = services.flatMap(path => [
+    `${path}/`, `${path}/extra`, `${path}-admin`, `${path}.json`, path.toUpperCase(),
+    path.replace('/offering', '/Offering'), path.replace('/offering', '/%6fffering'),
+    path.replace('/portal/', '/portal//'), `/${path}`, `${path}/*`,
+  ])
+  function configuration(origin: string, project: string, environment: string) {
+    vi.stubEnv('BLOCKXONE_APP_ORIGIN', origin)
+    vi.stubEnv('SUPABASE_URL', project)
+    vi.stubEnv('VERCEL_ENV', environment)
+  }
+
+  beforeEach(() => {
+    vi.stubEnv('NODE_ENV', 'production')
+    vi.stubEnv('BLOCKXONE_RELEASE_MODE', '')
+    vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_RELEASE_MODE', '')
+    vi.stubEnv('BLOCKXONE_AUTH_MODE', 'supabase')
+    vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_AUTH_MODE', 'supabase')
+    vi.mocked(updateSupabaseSession).mockReset()
+    vi.mocked(updateSupabaseSession).mockResolvedValue(NextResponse.next())
+  })
+  afterEach(() => vi.unstubAllEnvs())
+
+  it.each(configurations.flatMap(([origin, project, environment]) => operations.map(([path, method]) =>
+    [origin, project, environment, path, method])))('preserves refreshed response and unconsumed %s/%s/%s service %s %s', async (origin, project, environment, path, method) => {
+    configuration(origin, project, environment)
+    const refreshed = NextResponse.next()
+    refreshed.cookies.set('fixture-offering-refresh', 'nonsecret', { httpOnly: true, secure: true, sameSite: 'lax', path: '/' })
+    vi.mocked(updateSupabaseSession).mockResolvedValueOnce(refreshed)
+    const request = new NextRequest(`${origin}${path}`, {
+      method, headers: { host: new URL(origin).host, 'content-type': 'application/json' },
+      ...(method === 'GET' ? {} : { body: '{"fixture":"not-an-authorised-command"}' }),
+    })
+    const response = await middleware(request)
+    expect(response).toBe(refreshed)
+    expect(response.status).toBe(200)
+    expect(response.headers.get('x-middleware-next')).toBe('1')
+    expect(response.headers.get('location')).toBeNull()
+    expect(response.cookies.get('fixture-offering-refresh')?.value).toBe('nonsecret')
+    expect(response.headers.get('cache-control')).toBe('private, no-store')
+    expect(response.headers.get('pragma')).toBe('no-cache')
+    expect(response.headers.get('cdn-cache-control')).toBe('no-store')
+    expect(response.headers.get('vercel-cdn-cache-control')).toBe('no-store')
+    expect(response.headers.get('referrer-policy')).toBe('no-referrer')
+    expect(response.headers.get('x-robots-tag')).toBe('noindex, nofollow, noarchive')
+    expect(updateSupabaseSession).toHaveBeenCalledExactlyOnceWith(request)
+    expect(request.bodyUsed).toBe(false)
+    // Middleware only preserves reachability/session cookies. Existing handlers
+    // still enforce actor, scope, current authority, origin, HMAC and live lease.
+  })
+
+  it.each(configurations.flatMap(([origin, project, environment]) => lookalikes.map(path =>
+    [origin, project, environment, path])))('rejects URL-safe alias at %s/%s/%s: %s before refresh', async (origin, project, environment, path) => {
+    configuration(origin, project, environment)
+    const response = await middleware(new NextRequest(`${origin}${path}`))
+    expect(response.status).toBe(404)
+    expect(response.headers.get('cache-control')).toBe('private, no-store')
+    expect(response.headers.get('referrer-policy')).toBe('no-referrer')
+    expect(response.headers.get('set-cookie')).toBeNull()
+    expect(updateSupabaseSession).not.toHaveBeenCalled()
+  })
+
+  it.each(configurations.flatMap(([origin, project, environment]) => services.flatMap(path => modes.map(([server, browser]) =>
+    [origin, project, environment, path, server, browser]))))('rejects service at %s/%s/%s %s under mode %s/%s', async (origin, project, environment, path, server, browser) => {
+    configuration(origin, project, environment)
+    vi.stubEnv('BLOCKXONE_AUTH_MODE', server)
+    vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_AUTH_MODE', browser)
+    const legacy = server === '' && browser === ''
+    const response = await middleware(new NextRequest(`${origin}${path}`, { method: 'POST', body: '{}' }))
+    expect(response.status).toBe(legacy ? 404 : 503)
+    expect(response.headers.get('cache-control')).toBe(legacy ? 'no-store' : 'private, no-store')
+    expect(response.headers.get('set-cookie')).toBeNull()
+    expect(updateSupabaseSession).not.toHaveBeenCalled()
+  })
+
+  it.each(configurations.flatMap(([origin, project, environment]) => operations.map(([path, method]) =>
+    [origin, project, environment, path, method])))('fails closed on rejected refresh at %s/%s/%s %s %s', async (origin, project, environment, path, method) => {
+    configuration(origin, project, environment)
+    vi.mocked(updateSupabaseSession).mockRejectedValueOnce(new Error('synthetic offering refresh failure'))
+    const response = await middleware(new NextRequest(`${origin}${path}`, { method }))
+    expect(response.status).toBe(503)
+    expect(response.headers.get('cache-control')).toBe('private, no-store')
+    expect(response.headers.get('referrer-policy')).toBe('no-referrer')
+    expect(response.headers.get('set-cookie')).toBeNull()
+    expect(updateSupabaseSession).toHaveBeenCalledOnce()
+  })
+
+  it.each(configurations.flatMap(([origin, project, environment]) => services.map(path =>
+    [origin, project, environment, path])))('preserves refresh denial and cookies at %s/%s/%s %s', async (origin, project, environment, path) => {
+    configuration(origin, project, environment)
+    const denied = NextResponse.json({ error: 'unavailable' }, { status: 503 })
+    denied.cookies.set('fixture-offering-expired', '', { maxAge: 0, httpOnly: true, secure: true, sameSite: 'lax', path: '/' })
+    vi.mocked(updateSupabaseSession).mockResolvedValueOnce(denied)
+    const response = await middleware(new NextRequest(`${origin}${path}`, { method: 'POST' }))
+    expect(response).toBe(denied)
+    expect(response.status).toBe(503)
+    expect(response.cookies.get('fixture-offering-expired')?.maxAge).toBe(0)
+    expect(response.headers.get('cache-control')).toBe('private, no-store')
+    expect(response.headers.get('referrer-policy')).toBe('no-referrer')
+    expect(updateSupabaseSession).toHaveBeenCalledOnce()
+  })
+})
+
+describe('exact applicant draft middleware boundary', () => {
+  const draftService = '/api/portal/application-drafts'
+
+  beforeEach(() => {
+    vi.stubEnv('NODE_ENV', 'production')
+    vi.stubEnv('BLOCKXONE_RELEASE_MODE', '')
+    vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_RELEASE_MODE', '')
+    vi.stubEnv('BLOCKXONE_AUTH_MODE', 'supabase')
+    vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_AUTH_MODE', 'supabase')
+    vi.mocked(updateSupabaseSession).mockReset()
+    vi.mocked(updateSupabaseSession).mockResolvedValue(NextResponse.next())
+  })
+  afterEach(() => vi.unstubAllEnvs())
+
+  it.each([
+    ['https://testnet.bx1.co.za', 'https://fegnnnlseuejkrusbbkv.supabase.co', 'preview'],
+    ['https://bx1.co.za', 'https://oqkevkjbkpugjotihtda.supabase.co', 'production'],
+  ])('preserves the exact GET and POST session response at %s without running a draft command', async (origin, project, environment) => {
+    vi.stubEnv('BLOCKXONE_APP_ORIGIN', origin)
+    vi.stubEnv('SUPABASE_URL', project)
+    vi.stubEnv('VERCEL_ENV', environment)
+    for (const [index, method] of ['GET', 'POST'].entries()) {
+      const refreshed = NextResponse.next()
+      refreshed.cookies.set('fixture-draft-refresh', 'nonsecret', { httpOnly: true, secure: true, sameSite: 'lax', path: '/' })
+      vi.mocked(updateSupabaseSession).mockResolvedValueOnce(refreshed)
+      const request = new NextRequest(`${origin}${draftService}`, { method, headers: { host: new URL(origin).host } })
+      const response = await middleware(request)
+      expect(response).toBe(refreshed)
+      expect(response.status).toBe(200)
+      expect(response.headers.get('location')).toBeNull()
+      expect(response.cookies.get('fixture-draft-refresh')?.value).toBe('nonsecret')
+      expect(response.headers.get('cache-control')).toBe('private, no-store')
+      expect(response.headers.get('cdn-cache-control')).toBe('no-store')
+      expect(response.headers.get('vercel-cdn-cache-control')).toBe('no-store')
+      expect(response.headers.get('referrer-policy')).toBe('no-referrer')
+      expect(response.headers.get('x-robots-tag')).toBe('noindex, nofollow, noarchive')
+      expect(updateSupabaseSession).toHaveBeenNthCalledWith(index + 1, request)
+      expect(request.bodyUsed).toBe(false)
+    }
+    expect(updateSupabaseSession).toHaveBeenCalledTimes(2)
+  })
+
+  it.each([
+    `${draftService}/`, `${draftService}/save`, `${draftService}-admin`, `${draftService}.json`,
+    '/api/portal/Application-drafts', '/API/portal/application-drafts',
+    '/api/portal/%61pplication-drafts', '/api/portal/arbitrary',
+  ])('does not refresh a session for normalized-safe draft lookalike %s', async path => {
+    const response = await middleware(new NextRequest(`https://bx1.co.za${path}`))
+    expect(response.status).toBe(404)
+    expect(response.headers.get('cache-control')).toBe('private, no-store')
+    expect(response.headers.get('referrer-policy')).toBe('no-referrer')
+    expect(updateSupabaseSession).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['supabase', ''], ['', 'supabase'], ['Supabase', 'Supabase'],
+  ])('denies an unpaired draft mode %s/%s before session refresh', async (server, browser) => {
+    vi.stubEnv('BLOCKXONE_AUTH_MODE', server)
+    vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_AUTH_MODE', browser)
+    const response = await middleware(new NextRequest(`https://bx1.co.za${draftService}`))
+    expect(response.status).toBe(503)
+    expect(response.headers.get('cache-control')).toBe('private, no-store')
+    expect(updateSupabaseSession).not.toHaveBeenCalled()
+  })
+
+  it.each(['GET', 'POST'])('retains private denial when %s session refresh fails', async method => {
+    vi.mocked(updateSupabaseSession).mockRejectedValueOnce(new Error('synthetic refresh failure'))
+    const response = await middleware(new NextRequest(`https://bx1.co.za${draftService}`, { method }))
+    expect(response.status).toBe(503)
+    expect(response.headers.get('cache-control')).toBe('private, no-store')
+    expect(response.headers.get('referrer-policy')).toBe('no-referrer')
+    expect(updateSupabaseSession).toHaveBeenCalledOnce()
+  })
+})
+
+describe('branded TEST legacy entry cutover', () => {
+  const branded = 'https://testnet.bx1.co.za'
+  const legacyHost = 'block-x-one-git-codex-testnet-961d10-danielswart-4443s-projects.vercel.app'
+  const legacy = `https://${legacyHost}`
+
+  beforeEach(() => {
+    vi.stubEnv('NODE_ENV', 'production')
+    vi.stubEnv('BLOCKXONE_RELEASE_MODE', '')
+    vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_RELEASE_MODE', '')
+    vi.stubEnv('BLOCKXONE_AUTH_MODE', 'supabase')
+    vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_AUTH_MODE', 'supabase')
+    vi.stubEnv('BLOCKXONE_TESTNET_FUND_DEMO', 'enabled')
+    vi.stubEnv('SUPABASE_URL', 'https://fegnnnlseuejkrusbbkv.supabase.co')
+    vi.stubEnv('VERCEL_ENV', 'preview')
+    vi.stubEnv('BLOCKXONE_APP_ORIGIN', branded)
+    vi.mocked(updateSupabaseSession).mockReset()
+    vi.mocked(updateSupabaseSession).mockResolvedValue(NextResponse.next())
+  })
+  afterEach(() => vi.unstubAllEnvs())
+
+  it.each([
+    '/', '/login', '/register', '/portal?mode=applicant',
+    '/auth/confirm?token_hash=synthetic&type=signup',
+    '/auth/confirm?token_hash=synthetic&type=invite',
+    '/auth/confirm?token_hash=synthetic&type=recovery',
+    '/auth/confirm?token_hash=one&token_hash=two&type=signup',
+  ])('moves legacy GET %s before session refresh or callback cookie handling', async path => {
+    const response = await middleware(new NextRequest(`${legacy}${path}`, { headers: { host: legacyHost } }))
+    expect(response.status).toBe(307)
+    expect(response.headers.get('location')).toBe(`${branded}${path}`)
+    expect(response.headers.get('set-cookie')).toBeNull()
+    expect(response.headers.get('cache-control')).toBe('private, no-store')
+    expect(response.headers.get('referrer-policy')).toBe('no-referrer')
+    expect(updateSupabaseSession).not.toHaveBeenCalled()
+  })
+
+  it('redirects HEAD without refreshing a session', async () => {
+    const response = await middleware(new NextRequest(`${legacy}/login?setup=1`, { method: 'HEAD', headers: { host: legacyHost } }))
+    expect(response.status).toBe(307)
+    expect(response.headers.get('location')).toBe(`${branded}/login?setup=1`)
+    expect(updateSupabaseSession).not.toHaveBeenCalled()
+  })
+
+  it.each(['POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'])('refuses legacy %s without replaying a body or refreshing cookies', async method => {
+    const request = new NextRequest(`${legacy}/auth/login`, {
+      method, headers: { host: legacyHost, origin: legacy, 'content-type': 'application/x-www-form-urlencoded' },
+      body: 'email=synthetic%40example.test&password=synthetic-not-a-secret',
+    })
+    const response = await middleware(request)
+    expect(response.status).toBe(403)
+    expect(response.headers.get('location')).toBeNull()
+    expect(response.headers.get('set-cookie')).toBeNull()
+    expect(response.headers.get('referrer-policy')).toBe('no-referrer')
+    expect(request.bodyUsed).toBe(false)
+    expect(updateSupabaseSession).not.toHaveBeenCalled()
+  })
+
+  it('preserves the canonical refreshed response/cookies without a redirect loop', async () => {
+    const refreshed = NextResponse.next()
+    refreshed.cookies.set('fixture-refresh', 'nonsecret', { httpOnly: true, secure: true, sameSite: 'lax', path: '/' })
+    vi.mocked(updateSupabaseSession).mockResolvedValueOnce(refreshed)
+    const response = await middleware(new NextRequest(`${branded}/login`, { headers: { host: 'testnet.bx1.co.za' } }))
+    expect(response).toBe(refreshed)
+    expect(response.headers.get('location')).toBeNull()
+    expect(response.cookies.get('fixture-refresh')?.value).toBe('nonsecret')
+    expect(updateSupabaseSession).toHaveBeenCalledOnce()
+  })
+
+  it.each([
+    '/register', '/register?intent=investor', '/register?intent=wealth-manager',
+    '/register?error=email_invalid', '/register?intent=investor&error=password_mismatch',
+  ])('allows native POST origins from the branded registration document %s', async path => {
+    const refreshed = NextResponse.next()
+    refreshed.cookies.set('fixture-refresh', 'nonsecret', { httpOnly: true })
+    vi.mocked(updateSupabaseSession).mockResolvedValueOnce(refreshed)
+    const response = await middleware(new NextRequest(`${branded}${path}`, { headers: { host: 'testnet.bx1.co.za' } }))
+    expect(response).toBe(refreshed)
+    expect(response.headers.get('referrer-policy')).toBe('strict-origin')
+    expect(response.headers.get('cache-control')).toBe('private, no-store')
+    expect(response.cookies.get('fixture-refresh')?.value).toBe('nonsecret')
+  })
+
+  it.each([
+    '/register?token_hash=synthetic', '/register?next=https%3A%2F%2Fevil.test',
+    '/register?intent=investor&intent=investor', '/register?error=email_invalid&error=email_invalid',
+    '/register?intent=SuperAdmin', '/register?error=raw-provider-detail', '/register?status=check-email',
+  ])('keeps branded registration token/unknown/duplicate/non-form state private: %s', async path => {
+    const response = await middleware(new NextRequest(`${branded}${path}`, { headers: { host: 'testnet.bx1.co.za' } }))
+    expect(response.headers.get('referrer-policy')).toBe('no-referrer')
+    expect(response.headers.get('cache-control')).toBe('private, no-store')
+  })
+
+  it.each([undefined, 'evil.test', 'testnet.bx1.co.za', `${legacyHost}:444`])('refuses a mismatched legacy Host %s instead of trusting forwarded headers', async host => {
+    const headers: Record<string, string> = { 'x-forwarded-host': legacyHost, forwarded: `host=${legacyHost};proto=https` }
+    if (host) headers.host = host
+    const response = await middleware(new NextRequest(`${legacy}/auth/confirm?token_hash=synthetic&type=signup`, { headers }))
+    expect(response.status).toBe(403)
+    expect(response.headers.get('location')).toBeNull()
+    expect(response.headers.get('set-cookie')).toBeNull()
+    expect(updateSupabaseSession).not.toHaveBeenCalled()
+  })
+
+  it('never lets a path, query or forwarded authority select the destination host', async () => {
+    const path = '//evil.test/login?next=https%3A%2F%2Fevil.test%2F&returnTo=%2F%2Fevil.test'
+    const response = await middleware(new NextRequest(`${legacy}${path}`, {
+      headers: { host: legacyHost, 'x-forwarded-host': 'evil.test', forwarded: 'host=evil.test;proto=http' },
+    }))
+    expect(response.status).toBe(307)
+    expect(response.headers.get('location')).toBe(`${branded}${path}`)
+    expect(new URL(response.headers.get('location')!).origin).toBe(branded)
+    expect(updateSupabaseSession).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    'https://bx1.co.za', 'https://block-x-one.vercel.app', 'https://other-preview.vercel.app',
+    `https://${legacyHost}.evil.test`, 'https://evil.test', 'http://localhost:3000',
+  ])('never promotes a different request origin %s into the legacy redirect', async origin => {
+    const response = await middleware(new NextRequest(`${origin}/`, {
+      headers: { host: legacyHost, 'x-forwarded-host': legacyHost, forwarded: `host=${legacyHost};proto=https` },
+    }))
+    expect(response.status).toBe(200)
+    expect(response.headers.get('location')).toBeNull()
+    expect(updateSupabaseSession).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['BLOCKXONE_APP_ORIGIN', legacy],
+    ['BLOCKXONE_APP_ORIGIN', 'https://testnet.bx1.co.za.evil.test'],
+    ['BLOCKXONE_APP_ORIGIN', 'https://testnet.bx1.co.za:444'],
+    ['BLOCKXONE_APP_ORIGIN', 'https://testnet.bx1.co.za/'],
+    ['BLOCKXONE_TESTNET_FUND_DEMO', 'disabled'],
+    ['BLOCKXONE_AUTH_MODE', 'legacy'], ['NEXT_PUBLIC_BLOCKXONE_AUTH_MODE', 'legacy'],
+    ['SUPABASE_URL', 'https://oqkevkjbkpugjotihtda.supabase.co'],
+    ['VERCEL_ENV', 'production'], ['VERCEL_ENV', 'development'],
+  ])('keeps cutover inactive with invalid branded TEST configuration %s=%s', async (key, value) => {
+    vi.stubEnv(key, value)
+    const response = await middleware(new NextRequest(`${legacy}/`, { headers: { host: legacyHost } }))
+    expect(response.headers.get('location')).toBeNull()
+    expect(updateSupabaseSession).not.toHaveBeenCalled()
+  })
+})
 
 describe('production middleware containment', () => {
   beforeEach(() => {
@@ -91,7 +678,7 @@ describe('production middleware containment', () => {
     expect(response.headers.get('referrer-policy')).toBe('no-referrer')
   })
 
-  it.each(['/login', '/login?setup=1', '/login?error=invalid_credentials', '/workspace', '/auth/confirm', '/login/mfa', '/login/mfa?continue=setup', '/workspace/security'])('permits Origin-bearing native forms only on the clean document %s', async (path) => {
+  it.each(['/login', '/login?setup=1', '/login?error=invalid_credentials', '/workspace', '/auth/confirm', '/login/mfa', '/login/mfa?continue=setup', '/workspace/security', '/workspace/administration', '/workspace/administration?organisation=11111111-1111-4111-8111-111111111111', '/workspace/administration?organisation=11111111-1111-4111-8111-111111111111&proposal=22222222-2222-4222-8222-222222222222'])('permits Origin-bearing native forms only on the clean document %s', async (path) => {
     vi.stubEnv('BLOCKXONE_AUTH_MODE', 'supabase')
     vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_AUTH_MODE', 'supabase')
     const refreshed = NextResponse.next()
@@ -105,7 +692,7 @@ describe('production middleware containment', () => {
     expect(response.cookies.get('fixture-refresh')?.value).toBe('nonsecret')
   })
 
-  it.each(['/auth/confirm?token_hash=synthetic&type=invite', '/login?token=synthetic', '/workspace?code=synthetic', '/workspace/access-denied', '/login/mfa?continue=setup&continue=setup', '/login/mfa?code=synthetic', '/workspace/security?token=synthetic'])('retains no-referrer for token-bearing or non-form %s', async (path) => {
+  it.each(['/auth/confirm?token_hash=synthetic&type=invite', '/login?token=synthetic', '/workspace?code=synthetic', '/workspace/access-denied', '/login/mfa?continue=setup&continue=setup', '/login/mfa?code=synthetic', '/workspace/security?token=synthetic', '/workspace/administration?token=synthetic', '/workspace/administration?proposal=invalid', '/workspace/administration?organisation=11111111-1111-4111-8111-111111111111&organisation=11111111-1111-4111-8111-111111111111'])('retains no-referrer for token-bearing or non-form %s', async (path) => {
     vi.stubEnv('BLOCKXONE_AUTH_MODE', 'supabase')
     vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_AUTH_MODE', 'supabase')
     vi.mocked(updateSupabaseSession).mockResolvedValueOnce(NextResponse.next())
@@ -131,6 +718,15 @@ describe('production middleware containment', () => {
     const response = await middleware(new NextRequest('https://bx1.co.za/workspace'))
     expect(response.status).toBe(503)
     expect(response.headers.get('cache-control')).toBe('private, no-store')
+    expect(updateSupabaseSession).not.toHaveBeenCalled()
+  })
+  it.each(['/WORKSPACE/ADMINISTRATION', '/AUTH/ADMIN-COMMAND', '/API/MINT', '/ADMIN'])('returns a private denial for uppercase protected lookalike %s without refreshing a session', async path => {
+    vi.stubEnv('BLOCKXONE_AUTH_MODE', 'supabase')
+    vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_AUTH_MODE', 'supabase')
+    const response = await middleware(new NextRequest(`https://bx1.co.za${path}`))
+    expect(response.status).toBe(404)
+    expect(response.headers.get('cache-control')).toBe('private, no-store')
+    expect(response.headers.get('referrer-policy')).toBe('no-referrer')
     expect(updateSupabaseSession).not.toHaveBeenCalled()
   })
 

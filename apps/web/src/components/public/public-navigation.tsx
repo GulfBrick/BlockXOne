@@ -7,8 +7,8 @@ import { Menu, X } from 'lucide-react'
 import { animate, createScope, stagger } from 'animejs'
 
 import { Button } from '@/components/ui/button'
-import { BRANDED_ENTRY } from '@/lib/branded-entry'
 import { cn } from '@/lib/utils'
+import type { PlatformEnvironment } from '@/lib/platform-release'
 
 const NAV_LINKS = [
   { href: '/how-it-works', label: 'Platform' },
@@ -16,9 +16,10 @@ const NAV_LINKS = [
   { href: '/for-investors', label: 'Investors' },
   { href: '/for-operators', label: 'Institutions' },
   { href: '/security-and-compliance', label: 'Security' },
+  { href: '/faq', label: 'FAQ' },
 ]
 
-export function PublicNavigation({ showPortalAccess }: { showPortalAccess: boolean }) {
+export function PublicNavigation({ showPortalAccess, environment }: { showPortalAccess: boolean; environment?: PlatformEnvironment; variant?: 'default' | 'homepage' }) {
   const pathname = usePathname()
   const [mobileOpen, setMobileOpen] = useState(false)
   const triggerRef = useRef<HTMLButtonElement>(null)
@@ -95,12 +96,10 @@ export function PublicNavigation({ showPortalAccess }: { showPortalAccess: boole
   }, [mobileOpen])
 
   const isActive = (href: string) => pathname === href || pathname.startsWith(`${href}/`)
-  const workflowIsActive = isActive('/how-it-works') || pathname === '/guided-demo'
-  const primaryAction = workflowIsActive
-    ? showPortalAccess
-      ? { href: '/login', label: 'Choose workspace' }
-      : { href: '/security-and-compliance', label: 'Review security' }
-    : { href: '/how-it-works', label: 'View platform workflow' }
+  const canSignIn = Boolean(environment) && showPortalAccess
+  const primaryAction = environment
+    ? { href: '/register', label: 'Create account' }
+    : { href: '/how-it-works', label: 'Platform' }
 
   return (
     <>
@@ -113,7 +112,7 @@ export function PublicNavigation({ showPortalAccess }: { showPortalAccess: boole
               href={item.href}
               aria-current={active ? 'page' : undefined}
               className={cn(
-                'relative px-3 py-3 text-sm transition-colors duration-base focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bxo-accent-primary',
+                'relative inline-flex min-h-11 items-center whitespace-nowrap px-3 py-3 text-sm transition-colors duration-base focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bxo-accent-primary',
                 active
                   ? 'text-bxo-text-primary'
                   : 'text-bxo-text-secondary hover:text-bxo-text-primary'
@@ -131,20 +130,12 @@ export function PublicNavigation({ showPortalAccess }: { showPortalAccess: boole
             </Link>
           )
         })}
-        <a
-          href={BRANDED_ENTRY.testnetLogin}
-          aria-label="Testnet sign in"
-          className="relative px-3 py-3 text-sm text-bxo-text-secondary transition-colors duration-base hover:text-bxo-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bxo-accent-primary"
-          data-bxo-nav-item
-        >
-          Testnet
-        </a>
       </nav>
 
-      <div className="hidden items-center justify-end gap-2 xl:flex" data-bxo-nav-actions>
-        {showPortalAccess ? (
+      <div className="hidden shrink-0 items-center justify-end gap-2 xl:flex" data-bxo-nav-actions>
+        {canSignIn ? (
           <Button asChild variant="outline" className="bxo-secondary-cta h-11 rounded-sm">
-            <Link href={BRANDED_ENTRY.mainnetLogin}>Mainnet sign in</Link>
+            <Link href="/login">Sign in</Link>
           </Button>
         ) : null}
         <Button asChild className="bxo-primary-cta h-11 rounded-sm font-semibold">
@@ -194,26 +185,19 @@ export function PublicNavigation({ showPortalAccess }: { showPortalAccess: boole
                   </Link>
                 )
               })}
-              <a
-                href={BRANDED_ENTRY.testnetLogin}
-                className="flex min-h-11 items-center border-b border-bxo-border-subtle px-3 text-sm font-semibold text-bxo-text-primary transition-colors hover:text-bxo-accent-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bxo-accent-primary"
-                data-bxo-menu-item
-              >
-                Testnet sign in
-              </a>
               <div className="my-1 border-t border-bxo-border-subtle" />
-              {showPortalAccess ? (
+              {canSignIn ? (
                 <Link
-                  href={BRANDED_ENTRY.mainnetLogin}
+                  href="/login"
                   className="flex min-h-11 items-center px-3 text-sm font-semibold text-bxo-text-primary transition-colors hover:text-bxo-accent-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bxo-accent-primary"
                   data-bxo-menu-item
                 >
-                  Mainnet sign in
+                  Sign in
                 </Link>
               ) : null}
               <Link
                 href={primaryAction.href}
-                className="flex min-h-11 items-center bg-bxo-accent-primary px-3 text-sm font-semibold text-bxo-bg-primary transition-colors hover:bg-bxo-accent-primary-light focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bxo-accent-primary"
+                className="flex min-h-11 items-center bg-bxo-accent-primary px-3 text-sm font-semibold text-bxo-on-accent transition-colors hover:bg-bxo-accent-primary-light focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bxo-accent-primary"
                 data-bxo-menu-item
               >
                 {primaryAction.label}

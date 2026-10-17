@@ -6,19 +6,30 @@ import { validateSetupPassword } from '@/lib/supabase/password-setup'
 import { canonicalAppOrigin, createRequestSupabaseClient, readVerifiedUser, readWorkspace, secureCookieOptions } from '@/lib/supabase/server'
 import { hasCanonicalOrigin, InvalidAuthRequest, LOGIN_EMAIL_COOKIE, PENDING_INVITE_COOKIE, privateResponse, readAuthForm, responseCookieAdapter } from '@/lib/supabase/http'
 import { hasRequiredMfa, isMfaContextCurrent, readMfaContext } from '@/lib/supabase/mfa'
+import { readTestOrdinaryEntry, isTestOrdinaryEntryAllowed } from '@/lib/supabase/test-ordinary-entry'
 import { handleMfaAction, mfaErrorResponse } from '@/lib/supabase/mfa-actions'
+import { administrationErrorResponse, handleAdministrationAction } from '@/lib/administration/actions'
+import { identityEnvironmentEnabled, platformRelease } from '@/lib/platform-release'
+import { PortalError } from '@/lib/portal/server'
+import { readEntry } from '@/lib/portal/entry-server'
+import { beginStaffInvitation, pendingStaffInvitations } from '@/lib/administration/staff-invitations'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
 type Context = { params: Promise<{ action: string }> }
-type PendingInvite = { tokenHash: string; type: 'invite' | 'recovery'; expiresAt: number }
-const actions = new Set(['confirm', 'login', 'setup', 'logout', 'mfa-enroll', 'mfa-verify'])
+type PendingInvite = { tokenHash: string; type: 'invite' | 'recovery' | 'signup'; expiresAt: number }
+const actions = new Set(['confirm', 'login', 'setup', 'logout', 'mfa-enroll', 'mfa-verify', 'mfa-restart-setup', 'admin-command'])
 const tokenPattern = /^[A-Za-z0-9_-]{32,512}$/
+function confirmationType(value: unknown): value is PendingInvite['type'] {
+  return value === 'invite' || value === 'recovery' || (value === 'signup' && identityEnvironmentEnabled(process.env))
+}
 
 function htmlPage(title: string, content: string, status = 200, referrerPolicy: AuthReferrerPolicy = 'no-referrer'): NextResponse {
   // All interpolated arguments here are fixed application copy, never request
   // input, provider text, tokens or claims. No scripts or remote resources.
-  return privateResponse(new NextResponse(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="${referrerPolicy}"><title>${title} | BlockXOne</title><style>html{color-scheme:dark}body{margin:0;background:#01070d;color:#eefbfc;font:16px/1.6 system-ui,sans-serif}main{box-sizing:border-box;max-width:32rem;margin:8vh auto;padding:2rem 1rem}h1{font-size:2rem;line-height:1.2}p{color:#9cb8c4}a{color:#2eeffa;display:inline-block;padding:.75rem 0}button{min-height:44px;padding:.75rem 1.5rem;background:#2eeffa;color:#01070d;border:0;font:inherit;font-weight:600;cursor:pointer}button:focus-visible,a:focus-visible{outline:3px solid #2eeffa;outline-offset:4px}form{margin:1.5rem 0}</style></head><body><main id="main-content"><a href="/">BlockXOne</a><h1>${title}</h1>${content}</main></body></html>`, { status, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'" } }), referrerPolicy)
+  // Inline sampled brand colours are intentional here: the constrained auth
+  // document must not load scripts, external styles, images or remote fonts.
+  return privateResponse(new NextResponse(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="${referrerPolicy}"><title>${title} | BlockXOne</title><style>html{color-scheme:light}body{margin:0;background:#e8f7f9;color:#031a28;font:16px/1.6 Archivo,"Segoe UI",system-ui,sans-serif}header{background:#031a28;color:#eefbfc;padding:.75rem max(1rem,calc((100% - 32rem)/2))}header a{color:#eefbfc;font-size:1.5rem;font-weight:600;text-decoration:none}main{box-sizing:border-box;max-width:32rem;margin:2rem auto;padding:1.5rem;background:#fbfefe;border:1px solid #b6d1da;border-radius:12px}h1{font-size:2rem;line-height:1.2}p{color:#09354a}a{color:#115872;display:inline-block;min-height:44px;box-sizing:border-box;padding:.75rem 0;overflow-wrap:anywhere}button{min-height:44px;padding:.75rem 1.5rem;background:#2eeffa;color:#031a28;border:1px solid #115872;border-radius:7px;font:inherit;font-weight:600;cursor:pointer}button:focus-visible,a:focus-visible{outline:3px solid #115872;outline-offset:4px}header a:focus-visible{outline-color:#2eeffa}form{margin:1.5rem 0}@media(max-width:36rem){main{margin:1.5rem 1rem;padding:1.25rem}}</style></head><body><header><a href="/" aria-label="BlockXOne home">BlockXOne</a></header><main id="main-content"><h1>${title}</h1>${content}</main></body></html>`, { status, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'" } }), referrerPolicy)
 }
 
 function errorResponse(code: AuthErrorCode, status: number, setup = false) {
@@ -42,22 +53,26 @@ function readPending(value: string | undefined): PendingInvite | null {
   try {
     if (!value || value.length > 1800) return null
     const parsed = JSON.parse(decodeURIComponent(value))
-    if (!tokenPattern.test(parsed.tokenHash) || !['invite', 'recovery'].includes(parsed.type) || typeof parsed.expiresAt !== 'number' || parsed.expiresAt <= Date.now() || parsed.expiresAt > Date.now() + 600000) return null
+    if (!tokenPattern.test(parsed.tokenHash) || !confirmationType(parsed.type) || typeof parsed.expiresAt !== 'number' || parsed.expiresAt <= Date.now() || parsed.expiresAt > Date.now() + 600000) return null
     return parsed
   } catch { return null }
 }
 
 async function dispatch(request: NextRequest, context: Context): Promise<NextResponse> {
   const { action } = await context.params
-  const mfaAction = action === 'mfa-enroll' || action === 'mfa-verify'
+  const mfaAction = action === 'mfa-enroll' || action === 'mfa-verify' || action === 'mfa-restart-setup'
+  const adminAction = action === 'admin-command'
   const mode = resolveAuthMode()
+  if (adminAction && mode !== 'supabase') return administrationErrorResponse(mode === 'invalid' ? 'unavailable' : 'unauthorised', mode === 'invalid' ? 503 : 404)
   if (mode !== 'supabase') return mfaAction
     ? mfaErrorResponse(mode === 'invalid' ? 'unavailable' : 'unauthorised', mode === 'invalid' ? 503 : 404)
     : errorResponse(mode === 'invalid' ? 'unavailable' : 'access_denied', mode === 'invalid' ? 503 : 404)
   if (!actions.has(action)) return errorResponse('invalid_request', 404)
+  if (adminAction && request.nextUrl.pathname !== '/auth/admin-command') return administrationErrorResponse('invalid_request', 404)
+  if (adminAction && request.nextUrl.search) return administrationErrorResponse('invalid_request')
   const allowedMethod = action === 'confirm' ? ['GET', 'POST'] : ['POST']
   if (!allowedMethod.includes(request.method)) {
-    const response = mfaAction ? mfaErrorResponse('invalid_request', 405) : errorResponse('invalid_request', 405)
+    const response = adminAction ? administrationErrorResponse('invalid_request', 405) : mfaAction ? mfaErrorResponse('invalid_request', 405) : errorResponse('invalid_request', 405)
     response.headers.set('Allow', allowedMethod.join(', '))
     return response
   }
@@ -68,18 +83,29 @@ async function dispatch(request: NextRequest, context: Context): Promise<NextRes
       const tokenHash = request.nextUrl.searchParams.get('token_hash')
       if (tokenHash !== null || request.nextUrl.searchParams.has('type')) {
         const type = request.nextUrl.searchParams.get('type')
-        if (!tokenHash || !tokenPattern.test(tokenHash) || (type !== 'invite' && type !== 'recovery') || request.nextUrl.searchParams.getAll('token_hash').length !== 1 || request.nextUrl.searchParams.getAll('type').length !== 1) return invalidInvite()
+        if (!tokenHash || !tokenPattern.test(tokenHash) || !confirmationType(type) || request.nextUrl.searchParams.getAll('token_hash').length !== 1 || request.nextUrl.searchParams.getAll('type').length !== 1) return invalidInvite()
         const pending: PendingInvite = { tokenHash, type, expiresAt: Date.now() + 600000 }
         const response = redirect('/auth/confirm')
         response.cookies.set(PENDING_INVITE_COOKIE, encodeURIComponent(JSON.stringify(pending)), secureCookieOptions({ maxAge: 600 }))
         return response
       }
-      if (request.nextUrl.search || !readPending(request.cookies.get(PENDING_INVITE_COOKIE)?.value)) return invalidInvite()
+      const pending = readPending(request.cookies.get(PENDING_INVITE_COOKIE)?.value)
+      if (request.nextUrl.search || !pending) return invalidInvite()
+      if (pending.type === 'signup') return htmlPage('Confirm your email', '<p>Continue to verify your email address and start your application in this environment. Email confirmation does not approve your application or assign a role.</p><form method="post" action="/auth/confirm"><button type="submit">Confirm email and continue</button></form><a href="/login">Return to sign in</a>', 200, authDocumentReferrerPolicy('/auth/confirm', request.nextUrl.searchParams))
       return htmlPage('Confirm your access', '<p>Continue to verify your invitation and set your password.</p><form method="post" action="/auth/confirm"><button type="submit">Continue securely</button></form><a href="/">Back to home</a>', 200, authDocumentReferrerPolicy('/auth/confirm', request.nextUrl.searchParams))
     }
-    if (!hasCanonicalOrigin(request)) return mfaAction ? mfaErrorResponse('invalid_request', 403) : errorResponse('invalid_request', 403, action === 'setup')
-    const form = await readAuthForm(request)
+    if (!hasCanonicalOrigin(request)) return adminAction ? administrationErrorResponse('invalid_request', 403) : mfaAction ? mfaErrorResponse('invalid_request', 403) : errorResponse('invalid_request', 403, action === 'setup')
+    let form: URLSearchParams
+    try { form = await readAuthForm(request) }
+    catch (error) {
+      // Fatal UTF-8/body decoding can throw TypeError before any client exists.
+      // Never classify a later dispatch/finalization TypeError as a safe reject:
+      // the command may already have committed and its outcome is unknown.
+      if (adminAction && error instanceof TypeError) return administrationErrorResponse('invalid_request')
+      throw error
+    }
     const client = createRequestSupabaseClient(jar.adapter)
+    if (adminAction) return jar.finish(await handleAdministrationAction(form, client))
     if (mfaAction) return jar.finish(await handleMfaAction(action, form, client))
     if (action === 'confirm') {
       const pending = readPending(request.cookies.get(PENDING_INVITE_COOKIE)?.value)
@@ -87,6 +113,22 @@ async function dispatch(request: NextRequest, context: Context): Promise<NextRes
       const { error } = await client.auth.verifyOtp({ token_hash: pending.tokenHash, type: pending.type })
       if (error) return jar.finish(clearPending(invalidInvite()))
       const mfa = await readMfaContext(client)
+      if (pending.type === 'signup') {
+        if (mfa && !hasRequiredMfa(mfa)) return jar.finish(clearPending(redirect('/login/mfa')))
+        // New users have no native workspace yet. Only the live-session portal
+        // RPC can admit onboarding; signup metadata never authorizes this path.
+        try { await readEntry(client) } catch (error) {
+          if (error instanceof PortalError && [401, 403].includes(error.status)) return jar.finish(clearPending(errorResponse('access_denied', 403)))
+          throw error
+        }
+        if (mfa && !await isMfaContextCurrent(client, mfa)) return jar.finish(clearPending(errorResponse('unavailable', 503)))
+        return jar.finish(clearPending(redirect('/portal/onboarding')))
+      }
+      if (pending.type === 'invite' && await beginStaffInvitation(client)) {
+        // No organisation membership exists at this point. Password setup
+        // and a fresh verified authenticator precede role activation.
+        return jar.finish(clearPending(redirect('/login?setup=1')))
+      }
       return jar.finish(clearPending(redirect(mfa && !hasRequiredMfa(mfa) ? '/login/mfa?continue=setup' : '/login?setup=1')))
     }
     if (action === 'login') {
@@ -101,11 +143,35 @@ async function dispatch(request: NextRequest, context: Context): Promise<NextRes
         return jar.finish(response)
       }
       const mfa = await readMfaContext(client)
+      if (mfa && isTestOrdinaryEntryAllowed(mfa)) {
+        // An explicit TEST-only read exception, not a staff/password recovery
+        // continuation. Protected queues, commands and MFA factors are unchanged.
+        await readTestOrdinaryEntry(client, mfa)
+        const response = redirect('/portal')
+        response.cookies.set(LOGIN_EMAIL_COOKIE, '', secureCookieOptions({ maxAge: 0 }))
+        return jar.finish(response)
+      }
       let destination = !mfa ? '/workspace/access-denied' : '/login/mfa'
+      const portalEnabled = identityEnvironmentEnabled(process.env)
+      const pendingStaff = mfa ? await pendingStaffInvitations(client) : []
+      if (pendingStaff.length) destination = !hasRequiredMfa(mfa!) ? '/login/mfa?continue=staff' : '/workspace/staff-invite'
       if (mfa && hasRequiredMfa(mfa)) {
         const workspace = await readWorkspace(client)
+        if (pendingStaff.length && !workspace) destination = '/workspace/staff-invite'
+        else if (portalEnabled) {
+          try { await readEntry(client); destination = workspace ? '/portal' : '/portal/onboarding' } catch (error) {
+            if (error instanceof PortalError && [401, 403].includes(error.status)) destination = '/workspace/access-denied'
+            else throw error
+          }
+        } else destination = workspace ? (platformRelease(process.env) ? '/portal' : '/workspace') : '/workspace/access-denied'
+        // Revalidate after every resource read, including the portal RPC.
         if (!await isMfaContextCurrent(client, mfa)) return jar.finish(errorResponse('unavailable', 503))
-        destination = workspace ? '/workspace' : '/workspace/access-denied'
+      } else if (!mfa && portalEnabled) {
+        try { await readEntry(client); destination = '/portal/onboarding' } catch (error) {
+          if (!(error instanceof PortalError) || ![401, 403].includes(error.status)) throw error
+          // This includes suspended native users and recovery restrictions;
+          // lack of a native MFA context is not itself permission to onboard.
+        }
       }
       const response = redirect(destination)
       response.cookies.set(LOGIN_EMAIL_COOKIE, '', secureCookieOptions({ maxAge: 0 }))
@@ -116,10 +182,17 @@ async function dispatch(request: NextRequest, context: Context): Promise<NextRes
       const validationError = validateSetupPassword(password, form.get('confirmPassword') ?? '')
       if (validationError) return jar.finish(setupRetry(validationError))
       const mfa = await readMfaContext(client)
-      if (!mfa) return jar.finish(errorResponse('access_denied', 403, true))
-      if (!hasRequiredMfa(mfa)) return jar.finish(redirect('/login/mfa?continue=setup'))
-      if (!await readWorkspace(client)) return jar.finish(errorResponse('access_denied', 403, true))
-      if (!await isMfaContextCurrent(client, mfa)) return jar.finish(errorResponse('unavailable', 503, true))
+      if (!mfa && !identityEnvironmentEnabled(process.env)) return jar.finish(errorResponse('access_denied', 403, true))
+      if (mfa && !hasRequiredMfa(mfa)) return jar.finish(redirect('/login/mfa?continue=setup'))
+      const existingWorkspace = mfa ? await readWorkspace(client) : null
+      const pendingStaff = mfa ? await pendingStaffInvitations(client) : []
+      if (!existingWorkspace) {
+        if (!pendingStaff.length) {
+          if (!identityEnvironmentEnabled(process.env)) return jar.finish(errorResponse('access_denied', 403, true))
+          await readEntry(client)
+        }
+      }
+      if (mfa && !await isMfaContextCurrent(client, mfa)) return jar.finish(errorResponse('unavailable', 503, true))
       const { error } = await client.auth.updateUser({ password })
       if (error) {
         if (!error.status || error.status >= 500 || error.status === 429) return jar.finish(errorResponse('unavailable', 503, true))
@@ -130,17 +203,23 @@ async function dispatch(request: NextRequest, context: Context): Promise<NextRes
       }
       console.info(JSON.stringify({ event: 'auth_setup_result', code: 'password_saved' }))
       const updated = await readMfaContext(client)
-      if (!updated) return jar.finish(redirect('/workspace/access-denied'))
+      if (!updated) {
+        if (!identityEnvironmentEnabled(process.env)) return jar.finish(redirect('/workspace/access-denied'))
+        await readEntry(client)
+        return jar.finish(redirect('/portal/onboarding'))
+      }
       if (!hasRequiredMfa(updated)) return jar.finish(redirect('/login/mfa?continue=setup'))
       const workspace = await readWorkspace(client)
+      if (!workspace && !pendingStaff.length && identityEnvironmentEnabled(process.env)) await readEntry(client)
       if (!await isMfaContextCurrent(client, updated)) return jar.finish(errorResponse('unavailable', 503, true))
-      return jar.finish(redirect(workspace ? '/workspace' : '/workspace/access-denied'))
+      return jar.finish(redirect(workspace ? (platformRelease(process.env) ? '/portal' : '/workspace') : pendingStaff.length ? '/workspace/staff-invite' : identityEnvironmentEnabled(process.env) ? '/portal/onboarding' : '/workspace/access-denied'))
     }
     if (!await readVerifiedUser(client)) return jar.finish(errorResponse('access_denied', 401))
     const { error } = await client.auth.signOut({ scope: 'local' })
     if (error) return jar.finish(errorResponse('unavailable', 503))
     return jar.finish(clearPending(redirect('/login')))
   } catch (error) {
+    if (adminAction) return jar.finish(administrationErrorResponse(error instanceof InvalidAuthRequest ? 'invalid_request' : 'unavailable'))
     if (mfaAction) return jar.finish(mfaErrorResponse(error instanceof InvalidAuthRequest ? 'invalid_request' : 'unavailable'))
     const response = error instanceof InvalidAuthRequest
       ? action === 'setup' ? setupRetry('setup_request_invalid') : errorResponse('invalid_request', 400)

@@ -131,6 +131,39 @@ export function hasRequiredMfa(context: VerifiedMfaContext): boolean {
     && (!data.status.requires_mfa || (data.aal === 'aal2' && data.status.session_is_mfa)))
 }
 
+// Read-only eligibility for the explicit temporary TEST entry exception. This
+// does not replace any existing assurance predicate or expose token claims.
+export function hasOrdinaryPasswordSession(context: VerifiedMfaContext): boolean {
+  const data = contexts.get(context)
+  return Boolean(data && data.expiresAt > Math.floor(Date.now() / 1000)
+    && data.aal === 'aal1' && data.status.active && data.status.session_aal === 'aal1'
+    && data.status.requires_mfa && !data.status.session_is_mfa && !data.status.session_is_totp
+    && data.factors.some(factor => factor.status === 'verified')
+    && data.methods.length > 0 && data.methods.every(method => method.method === 'password'))
+}
+
+// First-factor setup may be restarted without deleting any factor. Never
+// expose the token or infer permission from the serializable page view.
+function hasFirstFactorSetupContext(context: VerifiedMfaContext): boolean {
+  const data = contexts.get(context)
+  return Boolean(data && data.expiresAt > Math.floor(Date.now() / 1000)
+    && data.aal === 'aal1' && data.status.active && data.status.session_aal === 'aal1'
+    && !data.status.requires_mfa && !data.status.session_is_mfa && !data.status.session_is_totp
+    && !data.factors.some((factor) => factor.status === 'verified'))
+}
+
+export function canRestartPendingTotpSetup(context: VerifiedMfaContext): boolean {
+  const data = contexts.get(context)
+  return Boolean(data && hasFirstFactorSetupContext(context) && data.factors.length < 10
+    && data.factors.some((factor) => factor.factorType === 'totp' && factor.status === 'unverified'))
+}
+
+export function isFreshPendingTotpSetup(context: VerifiedMfaContext, factorId: string): boolean {
+  const data = contexts.get(context)
+  return Boolean(data && uuid(factorId) && hasFirstFactorSetupContext(context) && data.factors.length <= 10
+    && data.factors.some((factor) => factor.id === factorId && factor.factorType === 'totp' && factor.status === 'unverified'))
+}
+
 export function toMfaView(context: VerifiedMfaContext): MfaView {
   const data = contexts.get(context)
   if (!data) throw new AuthUnavailableError()
@@ -139,14 +172,22 @@ export function toMfaView(context: VerifiedMfaContext): MfaView {
   const state = !data.status.requires_mfa ? 'unenrolled'
     : hasRequiredMfa(context) ? 'verified'
       : factors.some((factor) => factor.status === 'verified') ? 'challenge_required' : 'unsupported_factor'
-  return { state, factors, hasPendingTotp: factors.some((factor) => factor.status === 'unverified') }
+  return { state, factors, hasPendingTotp: factors.some((factor) => factor.status === 'unverified'),
+    ...(canRestartPendingTotpSetup(context) ? { canRestartPendingSetup: true } : {}) }
+}
+
+// Privileged reads require a live, verified OWN TOTP binding, even when
+// ordinary login is permitted without enrollment. Recency is command-only.
+export function hasCurrentTotp(context: VerifiedMfaContext): boolean {
+  const data = contexts.get(context)
+  return Boolean(data && hasRequiredMfa(context) && data.aal === 'aal2' && data.status.session_is_totp
+    && data.factors.some((factor) => factor.factorType === 'totp' && factor.status === 'verified'))
 }
 
 export function requireRecentTotp(context: VerifiedMfaContext, nowEpochSeconds: number):
   { allowed: true } | { allowed: false; reason: 'mfa_required' | 'step_up_required' } {
   const data = contexts.get(context)
-  if (!data || !hasRequiredMfa(context) || data.aal !== 'aal2' || !data.status.session_is_totp
-    || !data.factors.some((factor) => factor.factorType === 'totp' && factor.status === 'verified')) return { allowed: false, reason: 'mfa_required' }
+  if (!data || !hasCurrentTotp(context)) return { allowed: false, reason: 'mfa_required' }
   if (!Number.isSafeInteger(nowEpochSeconds) || nowEpochSeconds < 0 || data.expiresAt <= nowEpochSeconds) return { allowed: false, reason: 'step_up_required' }
   const timestamps = data.methods.filter((entry) => entry.method === 'totp').map((entry) => entry.timestamp)
   if (!timestamps.length || timestamps.some((timestamp) => timestamp === null || timestamp > nowEpochSeconds)) return { allowed: false, reason: 'step_up_required' }

@@ -62,12 +62,12 @@ const config: Config = {
 
         /* BlockXOne Design System Colors */
         bxo: {
-          'bg': 'rgb(var(--bxo-carbon-rgb) / <alpha-value>)',
-          'bg-primary': 'rgb(var(--bxo-carbon-rgb) / <alpha-value>)',
-          'bg-secondary': 'rgb(var(--bxo-midnight-rgb) / <alpha-value>)',
-          'surface': 'rgb(var(--bxo-surface-rgb) / <alpha-value>)',
-          'surface-secondary': 'rgb(var(--bxo-surface-secondary-rgb) / <alpha-value>)',
-          'surface-elevated': 'rgb(var(--bxo-deep-teal-rgb) / <alpha-value>)',
+          'bg': 'rgb(var(--bxo-color-bg-primary-rgb) / <alpha-value>)',
+          'bg-primary': 'rgb(var(--bxo-color-bg-primary-rgb) / <alpha-value>)',
+          'bg-secondary': 'rgb(var(--bxo-color-bg-secondary-rgb) / <alpha-value>)',
+          'surface': 'rgb(var(--bxo-color-surface-rgb) / <alpha-value>)',
+          'surface-secondary': 'rgb(var(--bxo-color-surface-secondary-rgb) / <alpha-value>)',
+          'surface-elevated': 'rgb(var(--bxo-color-surface-elevated-rgb) / <alpha-value>)',
 
           'accent': 'rgb(var(--bxo-electric-cyan-rgb) / <alpha-value>)',
           'accent-primary': 'rgb(var(--bxo-electric-cyan-rgb) / <alpha-value>)',
@@ -77,29 +77,30 @@ const config: Config = {
           'accent-muted': 'var(--bxo-accent-muted)',
           'accent-border': 'var(--bxo-accent-border)',
 
-          'success': 'rgb(var(--bxo-success-rgb) / <alpha-value>)',
+          'success': 'rgb(var(--bxo-color-success-rgb) / <alpha-value>)',
           'success-dark': 'var(--bxo-success-dark)',
           'success-light': 'var(--bxo-success-light)',
 
-          'warning': 'rgb(var(--bxo-warning-rgb) / <alpha-value>)',
+          'warning': 'rgb(var(--bxo-color-warning-rgb) / <alpha-value>)',
           'warning-dark': 'var(--bxo-warning-dark)',
           'warning-light': 'var(--bxo-warning-light)',
           'warning-border': 'var(--bxo-warning-border)',
 
-          'danger': 'rgb(var(--bxo-danger-rgb) / <alpha-value>)',
+          'danger': 'rgb(var(--bxo-color-danger-rgb) / <alpha-value>)',
           'danger-dark': 'var(--bxo-danger-dark)',
           'danger-light': 'var(--bxo-danger-light)',
           'danger-soft': 'var(--bxo-danger-soft)',
           'danger-border': 'var(--bxo-danger-border)',
 
-          'info': 'rgb(var(--bxo-signal-cyan-rgb) / <alpha-value>)',
+          'info': 'rgb(var(--bxo-color-info-rgb) / <alpha-value>)',
           'info-dark': 'var(--bxo-info-dark)',
           'info-light': 'var(--bxo-info-light)',
 
-          'text': 'rgb(var(--bxo-frost-rgb) / <alpha-value>)',
-          'text-primary': 'rgb(var(--bxo-frost-rgb) / <alpha-value>)',
-          'text-secondary': 'rgb(var(--bxo-text-secondary-rgb) / <alpha-value>)',
-          'text-tertiary': 'rgb(var(--bxo-text-tertiary-rgb) / <alpha-value>)',
+          'text': 'rgb(var(--bxo-color-text-primary-rgb) / <alpha-value>)',
+          'text-primary': 'rgb(var(--bxo-color-text-primary-rgb) / <alpha-value>)',
+          'text-secondary': 'rgb(var(--bxo-color-text-secondary-rgb) / <alpha-value>)',
+          'text-tertiary': 'rgb(var(--bxo-color-text-tertiary-rgb) / <alpha-value>)',
+          'on-accent': 'rgb(var(--bxo-carbon-rgb) / <alpha-value>)',
           'text-disabled': 'var(--bxo-text-disabled)',
 
           'border': 'var(--bxo-border-default)',

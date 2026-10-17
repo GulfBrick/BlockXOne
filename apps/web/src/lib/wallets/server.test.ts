@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { NextRequest } from 'next/server'
 import { Wallet } from 'ethers'
 import type { CookieAdapter } from '@/lib/supabase/server'
@@ -33,6 +33,8 @@ const actor: WalletActor = {
 }
 const challengeId = '55555555-5555-4555-8555-555555555555'
 const otherId = '66666666-6666-4666-8666-666666666666'
+const applicationOrigin = 'https://testnet.bx1.co.za'
+const applicationHost = 'testnet.bx1.co.za'
 const signer = Wallet.createRandom() // Ephemeral fixture; no real account or stored key.
 const stranger = Wallet.createRandom()
 function accessToken(claims: Record<string, unknown> = {}) {
@@ -43,17 +45,20 @@ let challenge: WalletChallenge
 let client: { auth: { getSession: ReturnType<typeof vi.fn>; getUser: ReturnType<typeof vi.fn> }; rpc: ReturnType<typeof vi.fn> }
 let db: { issueChallenge: ReturnType<typeof vi.fn>; readChallenge: ReturnType<typeof vi.fn>; consumeChallenge: ReturnType<typeof vi.fn> }
 let cookieAdapter: CookieAdapter
+let mfaStatus: { active: boolean; requires_mfa: boolean; session_aal: 'aal1' | 'aal2'; session_is_mfa: boolean; session_is_totp: boolean }
+let scopedWalletResult: { data: unknown; error: { code: string; message?: string } | null }
 
-function request(action = 'challenge', fields: Record<string, string> = {}, overrides: { method?: string; origin?: string | null; host?: string | null; contentType?: string; raw?: string; url?: string } = {}) {
+function request(action = 'challenge', fields: Record<string, string> = {}, overrides: { method?: string; origin?: string | null; host?: string | null; contentType?: string; raw?: string; url?: string; expectedActor?: string | null } = {}) {
   const method = overrides.method ?? 'POST'
   const headers = new Headers({ 'content-type': overrides.contentType ?? 'application/x-www-form-urlencoded' })
-  if (overrides.origin !== null) headers.set('origin', overrides.origin ?? 'https://bx1.co.za')
-  if (overrides.host !== null) headers.set('host', overrides.host ?? 'bx1.co.za')
+  if (overrides.origin !== null) headers.set('origin', overrides.origin ?? applicationOrigin)
+  if (overrides.host !== null) headers.set('host', overrides.host ?? applicationHost)
+  if (overrides.expectedActor !== null && (action === 'context' || overrides.expectedActor !== undefined)) headers.set('x-bx1-expected-actor', overrides.expectedActor ?? actor.userId)
   const defaults: Record<string, string> = action === 'challenge'
     ? { organisationId: actor.organisationId, address: signer.address.toLowerCase(), chainId: '80002' }
-    : { organisationId: actor.organisationId, challengeId, signature: 'invalid' }
+    : action === 'context' ? { organisationId: actor.organisationId } : { organisationId: actor.organisationId, challengeId, signature: 'invalid' }
   const body = method === 'GET' || method === 'HEAD' ? undefined : overrides.raw ?? new URLSearchParams({ ...defaults, ...fields }).toString()
-  return new NextRequest(overrides.url ?? `https://bx1.co.za/api/wallet/${action}`, { method, headers, body })
+  return new NextRequest(overrides.url ?? `${applicationOrigin}/api/wallet/${action}`, { method, headers, body })
 }
 async function dispatch(action = 'challenge', fields: Record<string, string> = {}, overrides: Parameters<typeof request>[2] = {}) {
   return handleWalletRequest(request(action, fields, overrides), { params: Promise.resolve({ action }) })
@@ -74,16 +79,29 @@ async function assertError(response: Response, status: number, error: WalletErro
 
 beforeEach(() => {
   vi.stubEnv('NODE_ENV', 'production')
-  vi.stubEnv('BLOCKXONE_APP_ORIGIN', 'https://bx1.co.za')
+  vi.stubEnv('BLOCKXONE_APP_ORIGIN', applicationOrigin)
   vi.stubEnv('BLOCKXONE_AUTH_MODE', 'supabase')
   vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_AUTH_MODE', 'supabase')
+  vi.stubEnv('SUPABASE_URL', 'https://fegnnnlseuejkrusbbkv.supabase.co')
+  vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'https://fegnnnlseuejkrusbbkv.supabase.co')
+  vi.stubEnv('VERCEL_ENV', 'preview')
+  vi.stubEnv('BLOCKXONE_ENVIRONMENT', 'TESTNET')
+  vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_RUNTIME_SCOPE', 'TESTNET')
   token = accessToken()
   const issued = Date.now()
   challenge = { challengeId, address: signer.address.toLowerCase(), chainId: 80002, domain: 'https://bx1.co.za', message: 'Link this wallet to BlockXOne. This is not a transaction or financial approval.\nFixture bound to actor, tenant, session, domain and nonce.', issuedAt: new Date(issued).toISOString(), expiresAt: new Date(issued + 300000).toISOString() }
+  mfaStatus = { active: true, requires_mfa: false, session_aal: 'aal1', session_is_mfa: false, session_is_totp: false }
+  // A native membership is the baseline. An absent/cross-tenant workspace must
+  // not accidentally receive the new approved-account scope from a generic DTO.
+  scopedWalletResult = { data: null, error: { code: '42501' } }
   client = { auth: {
     getSession: vi.fn(async () => ({ data: { session: { access_token: token } }, error: null })),
     getUser: vi.fn(async () => ({ data: { user: { id: actor.userId, email: 'fixture@example.test', user_metadata: { platformUserId: otherId, role: 'SuperAdmin' } } }, error: null })),
-  }, rpc: vi.fn().mockResolvedValue({ data: { active: true, requires_mfa: false, session_aal: 'aal1', session_is_mfa: false, session_is_totp: false }, error: null }) }
+  }, rpc: vi.fn((name: string) => {
+    if (name === 'bx1_mfa_status') return Promise.resolve({ data: mfaStatus, error: null })
+    if (name === 'bx1_portal_fund_wallet_context_scoped') return { abortSignal: vi.fn(async () => scopedWalletResult) }
+    throw new Error('Unexpected wallet RPC in fixture')
+  }) }
   db = {
     issueChallenge: vi.fn(async () => challenge),
     readChallenge: vi.fn(async () => challenge),
@@ -94,12 +112,27 @@ beforeEach(() => {
   mocks.createClient.mockImplementation((adapter: CookieAdapter) => { cookieAdapter = adapter; return client })
   mocks.workspace.mockResolvedValue({ user: { id: actor.userId, platformUserId: actor.platformUserId, email: 'fixture@example.test', displayName: null }, organisations: [{ id: actor.organisationId, name: 'Fixture', roles: ['Investor'] }] })
 })
+afterEach(() => vi.unstubAllEnvs())
+
+describe('exact wallet deployment profile', () => {
+  it.each([
+    ['SUPABASE_URL', ''], ['SUPABASE_URL', 'https://oqkevkjbkpugjotihtda.supabase.co'],
+    ['NEXT_PUBLIC_SUPABASE_URL', 'https://oqkevkjbkpugjotihtda.supabase.co'],
+    ['VERCEL_ENV', 'production'], ['BLOCKXONE_ENVIRONMENT', 'MAINNET'],
+    ['NEXT_PUBLIC_BLOCKXONE_RUNTIME_SCOPE', 'MAINNET'], ['BLOCKXONE_APP_ORIGIN', 'https://bx1.co.za'],
+  ])('denies mismatched %s before creating a client or verifier', async (name, value) => {
+    vi.stubEnv(name, value)
+    await assertError(await dispatch(), 503, 'unavailable')
+    expect(mocks.createClient).not.toHaveBeenCalled()
+    expect(mocks.database).not.toHaveBeenCalled()
+  })
+})
 
 describe('wallet MFA admission executes the real trusted context', () => {
   function enroll({ aal = 'aal1', live = false, totp = true } = {}) {
     token = accessToken({ aal })
     client.auth.getUser.mockResolvedValue({ data: { user: { id: actor.userId, email: 'fixture@example.test', factors: [{ id: otherId, status: 'verified', factor_type: totp ? 'totp' : 'phone' }] } }, error: null })
-    client.rpc.mockResolvedValue({ data: { active: true, requires_mfa: true, session_aal: live ? 'aal2' : 'aal1', session_is_mfa: live, session_is_totp: live && totp }, error: null })
+    mfaStatus = { active: true, requires_mfa: true, session_aal: live ? 'aal2' : 'aal1', session_is_mfa: live, session_is_totp: live && totp }
   }
   it.each(['challenge', 'verify'])('denies enrolled AAL1 %s before acquiring any database adapter', async (action) => {
     enroll()
@@ -146,6 +179,94 @@ describe('wallet MFA admission executes the real trusted context', () => {
     })
     await assertError(await dispatch(), 401, 'unauthorised')
     expect(mocks.database).not.toHaveBeenCalled()
+  })
+})
+
+describe('scoped wallet context uses the existing real authentication guards', () => {
+  function contextValue(overrides: Record<string, unknown> = {}) {
+    return { actor_id: actor.userId, platform_user_id: actor.platformUserId, session_id: actor.sessionId,
+      organisation_id: actor.organisationId, organisation_name: 'Fixture', chain_id: 80002,
+      environment: 'TESTNET', wallets: [], ...overrides }
+  }
+  function provideContext(overrides: Record<string, unknown> = {}) {
+    scopedWalletResult = { data: contextValue(overrides), error: null }
+  }
+
+  it('returns only scoped ownership records without acquiring or requiring a signing-key writer', async () => {
+    mocks.configured.mockReturnValue(false)
+    const wallet = { id: otherId, organisationId: actor.organisationId, address: signer.address.toLowerCase(),
+      chainId: 80002, verifiedAt: challenge.issuedAt, status: 'PENDING' }
+    provideContext({ wallets: [{ ...wallet, signature: 'must-not-leak', secret: 'must-not-leak' }], private_evidence: 'must-not-leak' })
+    const response = await dispatch('context')
+    expect(response.status).toBe(200)
+    assertPrivate(response)
+    expect(await response.json()).toEqual({ ok: true, context: {
+      organisation: { id: actor.organisationId, name: 'Fixture' }, wallets: [wallet], configured: false,
+    } })
+    expect(client.rpc).toHaveBeenCalledWith('bx1_portal_fund_wallet_context_scoped', { organisation_id: actor.organisationId })
+    expect(mocks.database).not.toHaveBeenCalled()
+    expect(db.issueChallenge).not.toHaveBeenCalled()
+    expect(db.readChallenge).not.toHaveBeenCalled()
+    expect(db.consumeChallenge).not.toHaveBeenCalled()
+  })
+
+  it('uses a synthetic scoped-RPC response for approved-account access without inventing a staff membership', async () => {
+    mocks.workspace.mockResolvedValue({ user: { id: actor.userId, platformUserId: actor.platformUserId }, organisations: [] })
+    provideContext()
+    const response = await dispatch('context')
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ ok: true, context: {
+      organisation: { id: actor.organisationId, name: 'Fixture' }, wallets: [], configured: true,
+    } })
+    expect(client.rpc.mock.calls.filter(([name]) => name === 'bx1_portal_fund_wallet_context_scoped')).toHaveLength(2)
+    expect(mocks.database).not.toHaveBeenCalled()
+    // Unit transport proof only: this fixture does not approve any real account.
+  })
+
+  it.each([null, '', 'not-a-user', otherId])('denies absent or mismatched expected actor %s without enabling keys', async expectedActor => {
+    provideContext()
+    await assertError(await dispatch('context', {}, { expectedActor }), 403, 'unauthorised')
+    expect(mocks.database).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['actor_id', otherId], ['platform_user_id', otherId], ['session_id', otherId],
+    ['organisation_id', otherId], ['chain_id', 137], ['environment', 'MAINNET'],
+    ['organisation_name', ''], ['wallets', [{ id: otherId, organisationId: otherId }]],
+  ] as const)('denies malformed or foreign scoped response field %s', async (key, value) => {
+    provideContext({ [key]: value })
+    await assertError(await dispatch('context'), 503, 'unavailable')
+    expect(mocks.database).not.toHaveBeenCalled()
+  })
+
+  it.each([['42501', 403, 'unauthorised'], ['XX000', 503, 'unavailable']] as const)('retains native scoped %s denial', async (code, status, error) => {
+    scopedWalletResult = { data: null, error: { code, message: 'private native details' } }
+    await assertError(await dispatch('context'), status, error)
+    expect(mocks.database).not.toHaveBeenCalled()
+  })
+
+  it('denies an enrolled AAL1 context before workspace or wallet evidence reads', async () => {
+    client.auth.getUser.mockResolvedValue({ data: { user: { id: actor.userId, email: 'fixture@example.test',
+      factors: [{ id: otherId, status: 'verified', factor_type: 'totp' }] } }, error: null })
+    mfaStatus = { active: true, requires_mfa: true, session_aal: 'aal1', session_is_mfa: false, session_is_totp: false }
+    provideContext()
+    await assertError(await dispatch('context'), 403, 'unauthorised')
+    expect(mocks.workspace).not.toHaveBeenCalled()
+    expect(client.rpc.mock.calls.map(([name]) => name)).toEqual(['bx1_mfa_status'])
+    expect(mocks.database).not.toHaveBeenCalled()
+  })
+
+  it('accepts current real-module AAL2 context without promoting wallet-control proof into signing authority', async () => {
+    token = accessToken({ aal: 'aal2' })
+    client.auth.getUser.mockResolvedValue({ data: { user: { id: actor.userId, email: 'fixture@example.test',
+      factors: [{ id: otherId, status: 'verified', factor_type: 'totp' }] } }, error: null })
+    mfaStatus = { active: true, requires_mfa: true, session_aal: 'aal2', session_is_mfa: true, session_is_totp: true }
+    provideContext()
+    const response = await dispatch('context')
+    expect(response.status).toBe(200)
+    expect((await response.json()).context.wallets).toEqual([])
+    expect(mocks.database).not.toHaveBeenCalled()
+    expect(db.consumeChallenge).not.toHaveBeenCalled()
   })
 })
 
@@ -271,12 +392,12 @@ describe('wallet identity boundary', () => {
 })
 
 describe('wallet HTTP containment', () => {
-  it.each([null, 'null', 'https://evil.test', 'https://bx1.co.za.evil.test'])('rejects missing or bad Origin %s before client creation', async (origin) => {
+  it.each([null, 'null', 'https://evil.test', 'https://testnet.bx1.co.za.evil.test'])('rejects missing or bad Origin %s before client creation', async (origin) => {
     await assertError(await dispatch('challenge', {}, { origin }), 403, 'invalid_request')
     expect(mocks.createClient).not.toHaveBeenCalled()
     expect(mocks.database).not.toHaveBeenCalled()
   })
-  it.each([null, 'evil.test', 'bx1.co.za:443'])('rejects unexpected Host %s', async (host) => {
+  it.each([null, 'evil.test', 'testnet.bx1.co.za:443'])('rejects unexpected Host %s', async (host) => {
     await assertError(await dispatch('challenge', {}, { host }), 403, 'invalid_request')
   })
   it('rejects a foreign request URL despite forged canonical headers', async () => {
@@ -303,7 +424,7 @@ describe('wallet HTTP containment', () => {
   it('rejects streamed bodies above 8 KiB without Content-Length', async () => {
     const chunks = [new TextEncoder().encode('x='.padEnd(4096, 'x')), new TextEncoder().encode('x'.repeat(4097))]
     const stream = new ReadableStream({ pull(controller) { const chunk = chunks.shift(); if (chunk) controller.enqueue(chunk); else controller.close() } })
-    const req = new NextRequest('https://bx1.co.za/api/wallet/challenge', { method: 'POST', headers: { origin: 'https://bx1.co.za', host: 'bx1.co.za', 'content-type': 'application/x-www-form-urlencoded' }, body: stream, duplex: 'half' } as ConstructorParameters<typeof NextRequest>[1])
+    const req = new NextRequest(`${applicationOrigin}/api/wallet/challenge`, { method: 'POST', headers: { origin: applicationOrigin, host: applicationHost, 'content-type': 'application/x-www-form-urlencoded' }, body: stream, duplex: 'half' } as ConstructorParameters<typeof NextRequest>[1])
     await assertError(await handleWalletRequest(req, { params: Promise.resolve({ action: 'challenge' }) }), 400, 'invalid_request')
     expect(mocks.createClient).not.toHaveBeenCalled()
   })
@@ -439,7 +560,11 @@ describe('minimal Node route boundary', () => {
   })
   it('has no privileged key, legacy API, transaction or public finalization path', () => {
     const source = readFileSync(new URL('./server.ts', import.meta.url), 'utf8')
-    expect(source).not.toMatch(/SUPABASE_SERVICE|service_role|signInWithWeb3|signInWithPassword|api-client|eth_sendTransaction|eth_sign|\.rpc\(/)
+    expect(source).not.toMatch(/SUPABASE_SERVICE|service_role|signInWithWeb3|signInWithPassword|api-client|eth_sendTransaction|eth_sign/)
+    expect(source.match(/\.rpc\(/g)).toHaveLength(2)
+    expect([...source.matchAll(/\.rpc\(\s*'([^']+)'/g)].map(match => match[1])).toEqual([
+      'bx1_portal_fund_wallet_context_scoped', 'bx1_portal_fund_wallet_context_scoped',
+    ])
     expect(source).toContain('verifyMessage(')
     expect(source).toContain('getUser(accessToken)')
     const sourceRoute = readFileSync(new URL('../../app/api/wallet/[action]/route.ts', import.meta.url), 'utf8')

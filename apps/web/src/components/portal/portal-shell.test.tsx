@@ -1,0 +1,58 @@
+// @vitest-environment jsdom
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { afterEach, describe, expect, it } from 'vitest'
+import { BX1_ROLES } from '@/lib/supabase/contracts'
+import { PortalShell } from './portal-shell'
+
+afterEach(cleanup)
+const user = { id: '11111111-1111-4111-8111-111111111111', email: 'actor@example.invalid' }
+const capabilities = { manageProducts: false, reviewCompliance: false, invest: false }
+
+describe('FAQ access in mounted portal shells', () => {
+  it('exposes FAQ from the compact applicant account menu without changing the application path', () => {
+    render(<PortalShell user={user} capabilities={capabilities} active="onboarding" title="My applications" applicantOnboarding operatingContext={{ mode: 'APPLICANT' }}><p>Application content</p></PortalShell>)
+    fireEvent.click(screen.getByRole('button', { name: /^Account$/ }))
+    const account = screen.getByRole('navigation', { name: 'Account navigation' })
+    expect(within(account).getByRole('link', { name: 'FAQ' }).getAttribute('href')).toBe('/faq')
+    expect(screen.getByRole('main').textContent).toContain('Application content')
+  })
+
+  it.each(BX1_ROLES)('keeps FAQ unscoped and mounted in desktop and mobile account navigation for %s', role => {
+    const view = render(<PortalShell user={user} capabilities={capabilities} active="overview" title="Workspace" operatingContext={{ mode: 'ROLE', organisationId: '22222222-2222-4222-8222-222222222222', role }}><p>Role content</p></PortalShell>)
+    const faqLinks = view.container.querySelectorAll('a[href="/faq"]')
+    expect(faqLinks).toHaveLength(2)
+    expect(view.container.querySelector('aside a[href="/faq"]')).not.toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /^Account$/ }))
+    const account = screen.getByRole('navigation', { name: 'Account navigation' })
+    expect(within(account).getByRole('link', { name: 'FAQ' }).getAttribute('href')).toBe('/faq')
+    expect(account.closest('details')).toBeNull()
+    expect(view.container.querySelector('a[href="/workspace/security"]')).not.toBeNull()
+    expect(view.container.querySelector('a[href="/workspace"]')).not.toBeNull()
+    expect(view.container.querySelector('form[action="/auth/logout"]')?.getAttribute('method')).toBe('post')
+    expect(view.container.querySelector('a[href*="/portal?organisation="]')).not.toBeNull()
+  })
+
+  it('also provides FAQ in the non-compact applicant shell', () => {
+    const view = render(<PortalShell user={user} capabilities={capabilities} active="overview" title="Account" operatingContext={{ mode: 'APPLICANT' }}><p>Content</p></PortalShell>)
+    expect(view.container.querySelectorAll('a[href="/faq"]')).toHaveLength(2)
+  })
+
+  it.each(BX1_ROLES)('uses the same compact header in TEST and MAIN for %s without global environment badges', role => {
+    const headers: string[] = []
+    for (const environment of ['TESTNET', 'MAINNET'] as const) {
+      const view = render(<PortalShell user={user} capabilities={capabilities} active="overview" title="Workspace" organisationName="Assigned organisation" operatingContext={{ mode: 'ROLE', organisationId: '22222222-2222-4222-8222-222222222222', role }} release={{ environment, version: '1.3.0', source: 'same-source' }}><p>Role content</p></PortalShell>)
+      const header = view.container.querySelector('header')!
+      expect(header.textContent).not.toMatch(/TESTNET|MAINNET|Testnet environment|Mainnet environment/)
+      expect(header.textContent).toContain('Assigned organisation')
+      const accountButton = within(header).getByRole('button', { name: /^Account$/ })
+      const accountPanelId = accountButton.getAttribute('aria-controls')!
+      expect(accountPanelId).toBeTruthy()
+      expect(header.querySelector(`[id="${accountPanelId}"]`)?.getAttribute('aria-label')).toBe('Account options')
+      expect(within(header).getByRole('link', { name: 'Change workspace' }).getAttribute('href')).toBe('/portal?mode=applicant&section=workspaces')
+      // useId varies per mount; compare the interface after validating its binding.
+      headers.push(header.innerHTML.replaceAll(accountPanelId, 'account-panel'))
+      view.unmount()
+    }
+    expect(headers[0]).toBe(headers[1])
+  })
+})

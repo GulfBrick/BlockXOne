@@ -1,12 +1,15 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 vi.mock('server-only', () => ({}))
 import { handleMfaAction } from './mfa-actions'
+import { MFA_ENROLL_QR_MAX_CHARACTERS, MFA_ENROLL_RESPONSE_MAX_BYTES } from './mfa-contracts'
+import { createMfaFormController, readMfaResponse } from '@/components/auth/mfa-form'
 
 const now = 1_800_000_000
 const uid = '10000000-0000-4000-8000-000000000001'
 const sid = '20000000-0000-4000-8000-000000000001'
 const fid = '30000000-0000-4000-8000-000000000001'
+const backupId = '30000000-0000-4000-8000-000000000002'
 const foreign = '40000000-0000-4000-8000-000000000001'
 const qrCode = 'data:image/svg+xml;utf-8,<svg xmlns="http://www.w3.org/2000/svg"></svg>'
 const secret = 'JBSWY3DPEHPK3PXP'
@@ -20,10 +23,28 @@ function fixture(initial: 'none' | 'pending' | 'verified' | 'phone' = 'none') {
     mfa: {
       enroll: vi.fn().mockImplementation(async () => { state = 'pending'; return { data: { id: fid, type: 'totp', totp: { qr_code: qrCode, secret, uri: 'private-uri' }, providerExtra: 'private-extra' }, error: null } }),
       challengeAndVerify: vi.fn().mockImplementation(async () => { state = 'verified'; upgraded = true; return { data: { access_token: 'private-new-token', refresh_token: 'private-refresh-token' }, error: null } }),
+      unenroll: vi.fn(),
     },
   }
   const rpc = vi.fn().mockImplementation(async () => ({ data: { active: true, requires_mfa: state === 'verified' || state === 'phone', session_aal: upgraded ? 'aal2' : 'aal1', session_is_mfa: upgraded, session_is_totp: upgraded }, error: null }))
   return { auth, rpc, client: { auth, rpc } as unknown as SupabaseClient }
+}
+function backupFixture(totpAt = now) {
+  const f = fixture('verified')
+  let pending = false
+  const token = ['eyJhbGciOiJFUzI1NiJ9', Buffer.from(JSON.stringify({ sub: uid, session_id: sid,
+    exp: now + 600, aal: 'aal2', amr: [{ method: 'totp', timestamp: totpAt }] })).toString('base64url'), 'mock-provider-verified'].join('.')
+  f.auth.getSession.mockResolvedValue({ data: { session: { access_token: token } }, error: null })
+  f.auth.getUser.mockImplementation(async () => ({ data: { user: { id: uid, email: 'fixture@example.test', factors: [
+    { id: fid, status: 'verified', factor_type: 'totp' },
+    ...(pending ? [{ id: backupId, status: 'unverified', factor_type: 'totp' }] : []),
+  ] } }, error: null }))
+  f.rpc.mockResolvedValue({ data: { active: true, requires_mfa: true, session_aal: 'aal2', session_is_mfa: true, session_is_totp: true }, error: null })
+  f.auth.mfa.enroll.mockImplementation(async () => {
+    pending = true
+    return { data: { id: backupId, type: 'totp', totp: { qr_code: qrCode, secret } }, error: null }
+  })
+  return { ...f, pending: () => pending }
 }
 const verifyForm = (values: Record<string, string> = {}) => new URLSearchParams({ factorId: fid, code: '012345', continuation: 'workspace', ...values })
 async function expectFailure(response: Response, status: number, error: string) {
@@ -32,19 +53,110 @@ async function expectFailure(response: Response, status: number, error: string) 
   expect(response.headers.get('cache-control')).toContain('no-store')
   expect(response.headers.get('referrer-policy')).toBe('no-referrer')
 }
-beforeEach(() => { vi.spyOn(Date, 'now').mockReturnValue(now * 1000) })
+beforeEach(() => {
+  vi.spyOn(Date, 'now').mockReturnValue(now * 1000)
+  // Baseline is deliberately unqualified; configured deployment tests opt in.
+  vi.stubEnv('BLOCKXONE_APP_ORIGIN', '')
+})
+afterEach(() => { vi.unstubAllEnvs() })
 
 describe('explicit enrollment and safe provider projection', () => {
+  it('round-trips a large synthetic provider SVG through the HTTP parser and transient controller', async () => {
+    const f = fixture()
+    const largeQr = `data:image/svg+xml;utf-8,<svg xmlns="http://www.w3.org/2000/svg">${'<path d="M1 1h1v1H1z"/>'.repeat(18000)}</svg>`
+    expect(largeQr.length).toBeGreaterThan(131072)
+    f.auth.mfa.enroll.mockResolvedValue({ data: { id: fid, type: 'totp', totp: { qr_code: largeQr, secret } }, error: null })
+    const controller = createMfaFormController({
+      view: { state: 'unenrolled', factors: [], hasPendingTotp: false }, continuation: 'security',
+      post: async () => readMfaResponse(await handleMfaAction('mfa-enroll', new URLSearchParams(), f.client), true),
+      navigate: vi.fn(), onChange: vi.fn(),
+    })
+    await controller.enroll()
+    expect(controller.getState().setup?.qrCode.length).toBe(largeQr.length)
+    expect(controller.getState().reloadRequired).toBe(false)
+    controller.clear()
+    expect(controller.getState().setup).toBeUndefined()
+    await controller.enroll()
+    expect(f.auth.mfa.enroll).toHaveBeenCalledOnce()
+  })
   it('returns only a strictly validated one-response enrollment projection', async () => {
     const f = fixture()
     const response = await handleMfaAction('mfa-enroll', new URLSearchParams(), f.client)
     expect(response.status).toBe(200)
     expect(await response.json()).toEqual({ ok: true, factorId: fid, qrCode, secret })
-    expect(f.auth.mfa.enroll).toHaveBeenCalledWith({ factorType: 'totp', friendlyName: 'BlockXOne authenticator' })
+    expect(f.auth.mfa.enroll).toHaveBeenCalledWith({ factorType: 'totp', friendlyName: expect.stringMatching(/^BlockXOne authenticator [0-9a-f-]{36}$/) })
+  })
+  it.each([
+    '<?xml version="1.0"?>\n<!-- Generated by SVGo -->\n',
+    '<?xml version="1.0"?>\r\n<!-- Generated by SVGo -->\r\n',
+    '<?xml version="1.0"?>\n',
+  ])('normalizes the known provider SVG preamble through the HTTP parser and controller: %j', async (preamble) => {
+    const f = fixture()
+    const prefix = 'data:image/svg+xml;utf-8,'
+    const providerQr = `${prefix}${preamble}${qrCode.slice(prefix.length)}`
+    f.auth.mfa.enroll.mockResolvedValue({ data: { id: fid, type: 'totp', totp: { qr_code: providerQr, secret } }, error: null })
+    const controller = createMfaFormController({
+      view: { state: 'unenrolled', factors: [], hasPendingTotp: false }, continuation: 'security',
+      post: async () => readMfaResponse(await handleMfaAction('mfa-enroll', new URLSearchParams(), f.client), true),
+      navigate: vi.fn(), onChange: vi.fn(),
+    })
+    await controller.enroll()
+    expect(controller.getState().setup).toEqual({ factorId: fid, qrCode, secret })
+    expect(controller.getState().reloadRequired).toBe(false)
+    expect(f.auth.mfa.enroll).toHaveBeenCalledOnce()
+    controller.dispose()
+  })
+  it.each([
+    '<!DOCTYPE svg>\n',
+    '<?xml-stylesheet href="https://evil.test/style.css"?>\n',
+    '<?xml version="1.1"?>\n',
+    '<?xml version="1.0" encoding="UTF-16"?>\n',
+    '<?xml version="1.0"?>\n<!-- Unexpected provider content -->\n',
+    '<?xml version="1.0"?>\n<!DOCTYPE svg>\n',
+  ])('rejects unrecognised SVG document prefixes without returning setup material: %j', async (preamble) => {
+    const f = fixture()
+    const prefix = 'data:image/svg+xml;utf-8,'
+    f.auth.mfa.enroll.mockResolvedValue({ data: { id: fid, type: 'totp', totp: { qr_code: `${prefix}${preamble}${qrCode.slice(prefix.length)}`, secret } }, error: null })
+    await expectFailure(await handleMfaAction('mfa-enroll', new URLSearchParams(), f.client), 503, 'unavailable')
+  })
+  it('applies the raw QR bound before stripping a known provider preamble', async () => {
+    const f = fixture()
+    const prefix = 'data:image/svg+xml;utf-8,'
+    const preamble = '<?xml version="1.0"?>\n<!-- Generated by SVGo -->\n'
+    const normalisedQr = `${prefix}<svg>${'x'.repeat(MFA_ENROLL_QR_MAX_CHARACTERS - prefix.length - 11)}</svg>`
+    expect(normalisedQr.length).toBe(MFA_ENROLL_QR_MAX_CHARACTERS)
+    f.auth.mfa.enroll.mockResolvedValue({ data: { id: fid, type: 'totp', totp: { qr_code: `${prefix}${preamble}${normalisedQr.slice(prefix.length)}`, secret } }, error: null })
+    await expectFailure(await handleMfaAction('mfa-enroll', new URLSearchParams(), f.client), 503, 'unavailable')
   })
   it.each(['pending', 'verified', 'phone'] as const)('never auto-deletes or adds a factor when state is %s', async (state) => {
     const f = fixture(state)
     await expectFailure(await handleMfaAction('mfa-enroll', new URLSearchParams(), f.client), 409, state === 'pending' ? 'pending_setup_exists' : 'already_enrolled')
+    expect(f.auth.mfa.enroll).not.toHaveBeenCalled()
+  })
+  it('adds a backup factor only after a recent live AAL2 TOTP without removing the first', async () => {
+    const f = backupFixture()
+    const response = await handleMfaAction('mfa-enroll', new URLSearchParams(), f.client)
+    expect(await response.json()).toEqual({ ok: true, factorId: backupId, qrCode, secret })
+    expect(f.pending()).toBe(true)
+    expect(f.auth.mfa.enroll).toHaveBeenCalledOnce()
+    await expectFailure(await handleMfaAction('mfa-enroll', new URLSearchParams(), f.client), 409, 'pending_setup_exists')
+    expect(f.auth.mfa.enroll).toHaveBeenCalledOnce()
+  })
+  it('gives first and backup enrollments distinct names that cannot collide with a legacy factor', async () => {
+    const first = fixture()
+    const backup = backupFixture()
+    await handleMfaAction('mfa-enroll', new URLSearchParams(), first.client)
+    await handleMfaAction('mfa-enroll', new URLSearchParams(), backup.client)
+    const firstName = first.auth.mfa.enroll.mock.calls[0][0].friendlyName
+    const backupName = backup.auth.mfa.enroll.mock.calls[0][0].friendlyName
+    expect(firstName).not.toBe('BlockXOne authenticator')
+    expect(backupName).not.toBe('BlockXOne authenticator')
+    expect(firstName).not.toBe(backupName)
+    expect(backup.auth.mfa.unenroll).not.toHaveBeenCalled()
+  })
+  it('refuses backup enrollment when the current TOTP proof is stale', async () => {
+    const f = backupFixture(now - 301)
+    await expectFailure(await handleMfaAction('mfa-enroll', new URLSearchParams(), f.client), 403, 'step_up_required')
     expect(f.auth.mfa.enroll).not.toHaveBeenCalled()
   })
   it('denies inactive/revoked identity before any factor mutation', async () => {
@@ -64,13 +176,13 @@ describe('explicit enrollment and safe provider projection', () => {
     f.auth.mfa.enroll.mockResolvedValue({ data, error: null })
     await expectFailure(await handleMfaAction('mfa-enroll', new URLSearchParams(), f.client), 503, 'unavailable')
   })
-  it.each([65536, 65537])('bounds QR characters at the client limit: %s', async (length) => {
+  it.each([MFA_ENROLL_QR_MAX_CHARACTERS, MFA_ENROLL_QR_MAX_CHARACTERS + 1])('bounds QR characters at the client limit: %s', async (length) => {
     const f = fixture()
     const prefix = 'data:image/svg+xml;utf-8,<svg>'
     const boundedQr = `${prefix}${'x'.repeat(length - prefix.length - 6)}</svg>`
     f.auth.mfa.enroll.mockResolvedValue({ data: { id: fid, type: 'totp', totp: { qr_code: boundedQr, secret } }, error: null })
     const response = await handleMfaAction('mfa-enroll', new URLSearchParams(), f.client)
-    if (length > 65536) await expectFailure(response, 503, 'unavailable')
+    if (length > MFA_ENROLL_QR_MAX_CHARACTERS) await expectFailure(response, 503, 'unavailable')
     else expect(await response.json()).toEqual({ ok: true, factorId: fid, qrCode: boundedQr, secret })
   })
   it.each([
@@ -81,11 +193,11 @@ describe('explicit enrollment and safe provider projection', () => {
     const prefix = 'data:image/svg+xml;utf-8,<svg>'
     const emptyBytes = Buffer.byteLength(JSON.stringify({ ok: true, factorId: fid, qrCode: `${prefix}</svg>`, secret }), 'utf8')
     const characterBytes = Buffer.byteLength(JSON.stringify(character), 'utf8') - 2
-    const available = 131072 + extra - emptyBytes
+    const available = MFA_ENROLL_RESPONSE_MAX_BYTES + extra - emptyBytes
     const boundedQr = `${prefix}${character.repeat(Math.floor(available / characterBytes))}${'x'.repeat(available % characterBytes)}</svg>`
     const body = { ok: true, factorId: fid, qrCode: boundedQr, secret }
-    expect(boundedQr.length).toBeLessThanOrEqual(65536)
-    expect(Buffer.byteLength(JSON.stringify(body), 'utf8')).toBe(131072 + extra)
+    expect(boundedQr.length).toBeLessThanOrEqual(MFA_ENROLL_QR_MAX_CHARACTERS)
+    expect(Buffer.byteLength(JSON.stringify(body), 'utf8')).toBe(MFA_ENROLL_RESPONSE_MAX_BYTES + extra)
     f.auth.mfa.enroll.mockResolvedValue({ data: { id: fid, type: 'totp', totp: { qr_code: boundedQr, secret } }, error: null })
     const response = await handleMfaAction('mfa-enroll', new URLSearchParams(), f.client)
     if (extra) await expectFailure(response, 503, 'unavailable')
@@ -110,7 +222,180 @@ describe('mutation-time token continuity', () => {
   })
 })
 
+describe('restarting an unfinished first authenticator setup without deletion', () => {
+  function restartFixture() {
+    const f = fixture('pending')
+    let fresh = false
+    let verified = false
+    f.auth.getUser.mockImplementation(async () => ({ data: { user: { id: uid, email: 'fixture@example.test', factors: [
+      ...(!verified ? [{ id: fid, status: 'unverified', factor_type: 'totp' }] : []),
+      ...(fresh ? [{ id: backupId, status: verified ? 'verified' : 'unverified', factor_type: 'totp' }] : []),
+    ] } }, error: null }))
+    f.rpc.mockImplementation(async () => ({ data: { active: true, requires_mfa: verified, session_aal: verified ? 'aal2' : 'aal1', session_is_mfa: verified, session_is_totp: verified }, error: null }))
+    f.auth.mfa.enroll.mockImplementation(async () => {
+      fresh = true
+      return { data: { id: backupId, type: 'totp', totp: { qr_code: qrCode, secret } }, error: null }
+    })
+    const verify = f.auth.mfa.challengeAndVerify.getMockImplementation()!
+    f.auth.mfa.challengeAndVerify.mockImplementation(async () => { verified = true; return verify() })
+    return f
+  }
+  it('returns a new own pending QR after explicit restart and never unenrolls any factor', async () => {
+    const f = restartFixture()
+    const response = await handleMfaAction('mfa-restart-setup', new URLSearchParams(), f.client)
+    expect(await response.json()).toEqual({ ok: true, factorId: backupId, qrCode, secret })
+    expect(f.auth.mfa.enroll).toHaveBeenCalledExactlyOnceWith({ factorType: 'totp', friendlyName: expect.stringMatching(/^BlockXOne authenticator [0-9a-f-]{36}$/) })
+    expect(f.auth.getUser).toHaveBeenCalledTimes(2)
+    expect(f.auth.mfa.unenroll).not.toHaveBeenCalled()
+    const completed = await handleMfaAction('mfa-verify', verifyForm({ factorId: backupId, continuation: 'security' }), f.client)
+    expect(await completed.json()).toEqual({ ok: true, next: '/workspace/security' })
+    expect(f.auth.mfa.challengeAndVerify).toHaveBeenCalledWith({ factorId: backupId, code: '012345' })
+    expect(f.auth.mfa.unenroll).not.toHaveBeenCalled()
+  })
+  it.each(['none', 'verified', 'phone'] as const)('does not restart %s context', async state => {
+    const f = fixture(state)
+    await expectFailure(await handleMfaAction('mfa-restart-setup', new URLSearchParams(), f.client), 403, 'unauthorised')
+    expect(f.auth.mfa.enroll).not.toHaveBeenCalled()
+    expect(f.auth.mfa.unenroll).not.toHaveBeenCalled()
+  })
+  it('denies restart when any other factor is verified', async () => {
+    const f = fixture('phone')
+    f.auth.getUser.mockResolvedValue({ data: { user: { id: uid, email: 'fixture@example.test', factors: [
+      { id: backupId, status: 'verified', factor_type: 'phone' }, { id: fid, status: 'unverified', factor_type: 'totp' },
+    ] } }, error: null })
+    await expectFailure(await handleMfaAction('mfa-restart-setup', new URLSearchParams(), f.client), 403, 'unauthorised')
+    expect(f.auth.mfa.enroll).not.toHaveBeenCalled()
+    expect(f.auth.mfa.unenroll).not.toHaveBeenCalled()
+  })
+  it.each(['token', 'database'])('denies restart when %s reports AAL2 even without a verified factor', async source => {
+    const f = fixture('pending')
+    if (source === 'token') {
+      const value = ['eyJhbGciOiJFUzI1NiJ9', Buffer.from(JSON.stringify({ sub: uid, session_id: sid, exp: now + 600, aal: 'aal2', amr: [] })).toString('base64url'), 'mock-provider-verified'].join('.')
+      f.auth.getSession.mockResolvedValue({ data: { session: { access_token: value } }, error: null })
+    } else f.rpc.mockResolvedValue({ data: { active: true, requires_mfa: false, session_aal: 'aal2', session_is_mfa: false, session_is_totp: false }, error: null })
+    await expectFailure(await handleMfaAction('mfa-restart-setup', new URLSearchParams(), f.client), 403, 'unauthorised')
+    expect(f.auth.mfa.enroll).not.toHaveBeenCalled()
+    expect(f.auth.mfa.unenroll).not.toHaveBeenCalled()
+  })
+  it('denies an expired session and token changes immediately before provider work', async () => {
+    const expired = restartFixture()
+    vi.spyOn(Date, 'now').mockReturnValue((now + 600) * 1000)
+    await expectFailure(await handleMfaAction('mfa-restart-setup', new URLSearchParams(), expired.client), 401, 'unauthorised')
+    expect(expired.auth.mfa.enroll).not.toHaveBeenCalled()
+    vi.spyOn(Date, 'now').mockReturnValue(now * 1000)
+    const changed = restartFixture()
+    const original = changed.auth.getSession.getMockImplementation()!
+    let reads = 0
+    changed.auth.getSession.mockImplementation(async () => {
+      const response = await original()
+      if (++reads > 2) response.data.session.access_token += '.changed'
+      return response
+    })
+    await expectFailure(await handleMfaAction('mfa-restart-setup', new URLSearchParams(), changed.client), 401, 'unauthorised')
+    expect(changed.auth.mfa.enroll).not.toHaveBeenCalled()
+  })
+  it('withholds seed material if another factor becomes verified during provider work', async () => {
+    const f = restartFixture()
+    f.auth.mfa.enroll.mockImplementation(async () => {
+      f.auth.getUser.mockResolvedValue({ data: { user: { id: uid, email: 'fixture@example.test', factors: [
+        { id: fid, status: 'verified', factor_type: 'totp' }, { id: backupId, status: 'unverified', factor_type: 'totp' },
+      ] } }, error: null })
+      f.rpc.mockResolvedValue({ data: { active: true, requires_mfa: true, session_aal: 'aal1', session_is_mfa: false, session_is_totp: false }, error: null })
+      return { data: { id: backupId, type: 'totp', totp: { qr_code: qrCode, secret } }, error: null }
+    })
+    await expectFailure(await handleMfaAction('mfa-restart-setup', new URLSearchParams(), f.client), 503, 'unavailable')
+    expect(f.auth.mfa.unenroll).not.toHaveBeenCalled()
+  })
+  it('requires a distinct provider ID to be present in the own authoritative pending factors', async () => {
+    for (const providerId of [fid, foreign]) {
+      const f = restartFixture()
+      f.auth.mfa.enroll.mockResolvedValue({ data: { id: providerId, type: 'totp', totp: { qr_code: qrCode, secret } }, error: null })
+      await expectFailure(await handleMfaAction('mfa-restart-setup', new URLSearchParams(), f.client), 503, 'unavailable')
+      expect(f.auth.mfa.unenroll).not.toHaveBeenCalled()
+    }
+  })
+  it('withholds seeds if the session expires or changes after creation', async () => {
+    const f = restartFixture()
+    f.auth.mfa.enroll.mockImplementation(async () => {
+      vi.spyOn(Date, 'now').mockReturnValue((now + 600) * 1000)
+      return { data: { id: backupId, type: 'totp', totp: { qr_code: qrCode, secret } }, error: null }
+    })
+    await expectFailure(await handleMfaAction('mfa-restart-setup', new URLSearchParams(), f.client), 503, 'unavailable')
+    expect(f.auth.mfa.unenroll).not.toHaveBeenCalled()
+  })
+  it('bounds pending setup attempts across all factor types before asking the provider', async () => {
+    const f = fixture('pending')
+    f.auth.getUser.mockResolvedValue({ data: { user: { id: uid, email: 'fixture@example.test', factors: [
+      { id: fid, status: 'unverified', factor_type: 'totp' },
+      ...Array.from({ length: 9 }, (_, index) => ({ id: '30000000-0000-4000-8000-' + String(index + 2).padStart(12, '0'), status: 'unverified', factor_type: 'phone' })),
+    ] } }, error: null })
+    await expectFailure(await handleMfaAction('mfa-restart-setup', new URLSearchParams(), f.client), 403, 'unauthorised')
+    expect(f.auth.mfa.enroll).not.toHaveBeenCalled()
+    expect(f.auth.mfa.unenroll).not.toHaveBeenCalled()
+  })
+  it('never deletes factors or retries automatically after a provider limit or unknown outcome', async () => {
+    for (const outcome of ['provider-error', 'unknown'] as const) {
+      const f = restartFixture()
+      if (outcome === 'provider-error') f.auth.mfa.enroll.mockResolvedValue({ data: null, error: { status: 422, code: 'too_many_enrolled_mfa_factors', message: 'private' } })
+      else f.auth.mfa.enroll.mockRejectedValue(new Error('private unknown outcome'))
+      await expectFailure(await handleMfaAction('mfa-restart-setup', new URLSearchParams(), f.client), 503, 'unavailable')
+      expect(f.auth.mfa.enroll).toHaveBeenCalledOnce()
+      expect(f.auth.mfa.unenroll).not.toHaveBeenCalled()
+    }
+  })
+  it('takes no client authority or factor selectors and keeps removed cancellation actions denied', async () => {
+    const f = restartFixture()
+    for (const form of [new URLSearchParams({ factorId: fid }), new URLSearchParams({ code: '123456' }), new URLSearchParams({ userId: uid })]) {
+      await expectFailure(await handleMfaAction('mfa-restart-setup', form, f.client), 400, 'invalid_request')
+    }
+    await expectFailure(await handleMfaAction('mfa-cancel-setup', new URLSearchParams(), f.client), 404, 'invalid_request')
+    expect(f.auth.getSession).not.toHaveBeenCalled()
+    expect(f.auth.mfa.unenroll).not.toHaveBeenCalled()
+  })
+})
+
 describe('own-factor verification and fixed continuations', () => {
+  const deployments = [
+    { name: 'TESTNET', origin: 'https://block-x-one-test.vercel.app', supabase: 'https://fegnnnlseuejkrusbbkv.supabase.co', vercel: 'preview' },
+    { name: 'MAINNET', origin: 'https://bx1.co.za', supabase: 'https://oqkevkjbkpugjotihtda.supabase.co', vercel: 'production' },
+  ]
+  it.each(deployments)('lands a verified native $name sign-in on the shared dashboard', async deployment => {
+    vi.stubEnv('BLOCKXONE_AUTH_MODE', 'supabase')
+    vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_AUTH_MODE', 'supabase')
+    vi.stubEnv('BLOCKXONE_APP_ORIGIN', deployment.origin)
+    vi.stubEnv('SUPABASE_URL', deployment.supabase)
+    vi.stubEnv('VERCEL_ENV', deployment.vercel)
+    const f = fixture('verified')
+    const response = await handleMfaAction('mfa-verify', verifyForm(), f.client)
+    expect(await response.json()).toEqual({ ok: true, next: '/portal' })
+    expect(f.auth.mfa.challengeAndVerify).toHaveBeenCalledWith({ factorId: fid, code: '012345' })
+  })
+  it.each(deployments)('preserves setup and security destinations on qualified $name', async deployment => {
+    vi.stubEnv('BLOCKXONE_AUTH_MODE', 'supabase')
+    vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_AUTH_MODE', 'supabase')
+    vi.stubEnv('BLOCKXONE_APP_ORIGIN', deployment.origin)
+    vi.stubEnv('SUPABASE_URL', deployment.supabase)
+    vi.stubEnv('VERCEL_ENV', deployment.vercel)
+    for (const [continuation, next] of [['setup', '/login?setup=1'], ['security', '/workspace/security']]) {
+      const f = fixture('verified')
+      const response = await handleMfaAction('mfa-verify', verifyForm({ continuation }), f.client)
+      expect(await response.json()).toEqual({ ok: true, next })
+    }
+  })
+  it.each([
+    { origin: 'https://bx1.co.za', supabase: 'https://fegnnnlseuejkrusbbkv.supabase.co', vercel: 'production' },
+    { origin: 'https://block-x-one-test.vercel.app', supabase: 'https://oqkevkjbkpugjotihtda.supabase.co', vercel: 'preview' },
+    { origin: 'https://bx1.co.za/portal', supabase: 'https://oqkevkjbkpugjotihtda.supabase.co', vercel: 'production' },
+  ])('retains the existing workspace fallback when deployment identity is unqualified: %j', async deployment => {
+    vi.stubEnv('BLOCKXONE_AUTH_MODE', 'supabase')
+    vi.stubEnv('NEXT_PUBLIC_BLOCKXONE_AUTH_MODE', 'supabase')
+    vi.stubEnv('BLOCKXONE_APP_ORIGIN', deployment.origin)
+    vi.stubEnv('SUPABASE_URL', deployment.supabase)
+    vi.stubEnv('VERCEL_ENV', deployment.vercel)
+    const f = fixture('verified')
+    const response = await handleMfaAction('mfa-verify', verifyForm(), f.client)
+    expect(await response.json()).toEqual({ ok: true, next: '/workspace' })
+  })
   it.each([['workspace', '/workspace'], ['setup', '/login?setup=1'], ['security', '/workspace/security']])('returns only %s continuation after verified live TOTP upgrade', async (continuation, next) => {
     const f = fixture('verified')
     const response = await handleMfaAction('mfa-verify', verifyForm({ continuation }), f.client)
@@ -125,6 +410,15 @@ describe('own-factor verification and fixed continuations', () => {
     expect(f.auth.mfa.challengeAndVerify).not.toHaveBeenCalled()
     const response = await handleMfaAction('mfa-verify', verifyForm({ continuation: 'security' }), f.client)
     expect(await response.json()).toEqual({ ok: true, next: '/workspace/security' })
+  })
+  it('verifies a pending backup factor only through fresh security continuation', async () => {
+    const f = backupFixture()
+    await handleMfaAction('mfa-enroll', new URLSearchParams(), f.client)
+    await expectFailure(await handleMfaAction('mfa-verify', verifyForm({ factorId: backupId }), f.client), 403, 'unauthorised')
+    expect(f.auth.mfa.challengeAndVerify).not.toHaveBeenCalled()
+    const response = await handleMfaAction('mfa-verify', verifyForm({ factorId: backupId, continuation: 'security' }), f.client)
+    expect(await response.json()).toEqual({ ok: true, next: '/workspace/security' })
+    expect(f.auth.mfa.challengeAndVerify).toHaveBeenCalledWith({ factorId: backupId, code: '012345' })
   })
   it('never trusts foreign factorId or unsupported-factor login', async () => {
     const f = fixture('verified')
@@ -161,7 +455,7 @@ describe('strict action forms and zero secret logging', () => {
   })
   it('rejects unknown/duplicate fields, invalid factor ID and arbitrary continuation', async () => {
     const f = fixture('verified')
-    for (const form of [new URLSearchParams(), verifyForm({ factorId: 'invalid' }), verifyForm({ continuation: '//evil.test' })]) {
+    for (const form of [new URLSearchParams(), verifyForm({ factorId: 'invalid' }), verifyForm({ continuation: '//evil.test' }), verifyForm({ continuation: '/portal' }), verifyForm({ continuation: 'workspace?next=/portal' })]) {
       await expectFailure(await handleMfaAction('mfa-verify', form, f.client), 400, 'invalid_request')
     }
     const duplicate = verifyForm(); duplicate.append('code', '012345')

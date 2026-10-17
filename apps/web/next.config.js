@@ -64,9 +64,16 @@ const serverActionAllowedOrigins = isProduction
   : ['localhost:3000']
 
 const apiOrigin = configuredApiUrl ? new URL(configuredApiUrl).origin : ''
-const demoRequestOrigin = configuredDemoRequestEndpoint
+const demoRequestOrigin = demoRequestEnabled && configuredDemoRequestEndpoint
   ? new URL(configuredDemoRequestEndpoint).origin
   : ''
+const isTestnetKycSurface = authMode === 'supabase'
+  && process.env.VERCEL_ENV === 'preview'
+  && process.env.SUPABASE_URL === 'https://fegnnnlseuejkrusbbkv.supabase.co'
+
+function contentSecurityPolicy(frameSources) {
+  return `default-src 'self'; script-src 'self' 'unsafe-eval' 'unsafe-inline' https://apis.google.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' ${apiOrigin} ${demoRequestOrigin} https://*.firebaseio.com https://*.googleapis.com; frame-src ${frameSources.join(' ')};`
+}
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
@@ -119,10 +126,19 @@ const nextConfig = {
           },
           {
             key: 'Content-Security-Policy',
-            value: `default-src 'self'; script-src 'self' 'unsafe-eval' 'unsafe-inline' https://apis.google.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' ${apiOrigin} ${demoRequestOrigin} https://*.firebaseio.com https://*.googleapis.com; frame-src https://accounts.google.com;`
+            value: contentSecurityPolicy(['https://accounts.google.com'])
           }
         ]
       },
+      ...(isTestnetKycSurface ? [{
+        // Only the TEST applicant workspace embeds Sumsub. MAIN retains the
+        // global camera/microphone denial and cannot request a sandbox token.
+        source: '/portal/onboarding',
+        headers: [
+          { key: 'Permissions-Policy', value: 'camera=(self "https://api.sumsub.com" "https://in.sumsub.com"), microphone=(self "https://api.sumsub.com" "https://in.sumsub.com"), geolocation=()' },
+          { key: 'Content-Security-Policy', value: contentSecurityPolicy(['https://accounts.google.com', 'https://api.sumsub.com', 'https://in.sumsub.com']) },
+        ],
+      }] : []),
       ...(authMode === 'supabase' ? ['/login', '/login/mfa', '/auth/:path*', '/workspace/:path*'].map((source) => ({
         source,
         headers: [
@@ -132,6 +148,8 @@ const nextConfig = {
           { key: 'Pragma', value: 'no-cache' },
           // Native forms need a non-null Origin. Middleware/metadata narrow
           // token-bearing URLs; Auth handlers retain no-referrer by default.
+          // The exact administration document uses the same private policy;
+          // its query selectors are validated by middleware and page metadata.
           { key: 'Referrer-Policy', value: source === '/auth/:path*' ? 'no-referrer' : 'strict-origin' },
           { key: 'X-Robots-Tag', value: 'noindex, nofollow, noarchive' },
         ],

@@ -94,7 +94,7 @@ export default function NewOfferingPage() {
   const [executionReadyTestnets, setExecutionReadyTestnets] = useState<ManagedTestnetChainID[]>([])
   const [selectedTestnetChainID, setSelectedTestnetChainID] = useState<ManagedTestnetChainID>(80002)
   const [assetClass, setAssetClass] = useState<PilotAssetClass>('PRIVATE_DEBT_NOTE')
-  const [runtimeScope, setRuntimeScope] = useState<PilotRuntimeScope>(frontendRuntimeScope)
+  const [runtimeScope, setRuntimeScope] = useState<PilotRuntimeScope | 'MAINNET' | null>(frontendRuntimeScope)
   const offeringIdempotencyKey = useRef('')
   const [form, setForm] = useState({
     name: '',
@@ -249,13 +249,13 @@ export default function NewOfferingPage() {
   const selectedTestnet = managedTestnet(selectedTestnetChainID)
   const testnetExecutionReady = executionReadyTestnets.includes(selectedTestnetChainID)
   const runtimeScopeMatchesFrontend = runtimeScope === frontendRuntimeScope
-  const offeringTargetReady = runtimeScopeMatchesFrontend && (
-    runtimeScope === 'LOCAL_PILOT' ? localPilotExecutionReady : testnetExecutionReady
+  const offeringTargetReady = runtimeScope === 'TESTNET' && runtimeScopeMatchesFrontend && (
+    testnetExecutionReady
   )
-  const offeringTargetBlockedMessage = !runtimeScopeMatchesFrontend
-    ? `This ${runtimeScope === 'TESTNET' ? 'testnet' : 'private-network'} instrument cannot be offered from the ${frontendRuntimeScope === 'TESTNET' ? 'testnet' : 'private-network'} workspace.`
-    : runtimeScope === 'LOCAL_PILOT'
-      ? 'Local offering creation is blocked until the chain catalog supplies exactly one execution-ready local chain 31337 row with LOCAL_ONLY_NO_REAL_VALUE availability.'
+  const offeringTargetBlockedMessage = frontendRuntimeScope !== 'TESTNET'
+    ? 'This legacy offering path is unavailable in the configured environment.'
+    : !runtimeScopeMatchesFrontend
+      ? 'This historical instrument does not match the admitted testnet workspace.'
       : 'Testnet offering creation is blocked until the selected managed network has an ACTIVE_MANIFEST.'
 
   function update(name: keyof typeof form, value: string | boolean) {
@@ -354,9 +354,6 @@ export default function NewOfferingPage() {
 
     if (instrument.runtime_scope !== frontendRuntimeScope) {
       throw new Error('The instrument network mode does not match this workspace network mode.')
-    }
-    if (instrument.runtime_scope === 'LOCAL_PILOT' && !localPilotExecutionReady) {
-      throw new Error('Strict local chain 31337 execution evidence is required before an offering can be prepared.')
     }
     if (instrument.runtime_scope === 'TESTNET' && !testnetExecutionReady) {
       throw new Error('The selected testnet rail is not execution-ready. An exact ACTIVE network and factory manifest is required.')
@@ -518,13 +515,9 @@ export default function NewOfferingPage() {
                     </label>
                     <label className="text-sm font-semibold text-bxo-text-secondary">
                       Network
-                      <select className={fieldClass} value={runtimeScope} disabled aria-readonly="true">
-                        {frontendRuntimeScope === 'LOCAL_PILOT' ? (
-                          <option value="LOCAL_PILOT">
-                            {localPilotExecutionReady
-                              ? 'Private validation network · execution ready'
-                              : 'Private validation network unavailable · strict chain evidence missing'}
-                          </option>
+                      <select className={fieldClass} value={runtimeScope ?? ''} disabled aria-readonly="true">
+                        {frontendRuntimeScope !== 'TESTNET' ? (
+                          <option value={frontendRuntimeScope ?? ''}>Legacy execution unavailable in this environment</option>
                         ) : (
                           <option value="TESTNET">
                             {executionReadyTestnets.length > 0

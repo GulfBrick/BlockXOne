@@ -36,6 +36,95 @@
     --ease-std: var(--bxo-ease-out);
     --ease-emph: var(--bxo-ease-emphasized);
   }
+
+  .bxo-content-light {
+    /* The same V3 workspace palette used by the role dashboards. Only semantic
+       aliases change; the original logo and sampled brand primitives do not. */
+    --bxo-color-bg-primary-rgb: 251 254 254;
+    --bxo-color-bg-secondary-rgb: 238 251 252;
+    --bxo-color-surface-rgb: 251 254 254;
+    --bxo-color-surface-secondary-rgb: 233 248 249;
+    --bxo-color-surface-elevated-rgb: 238 251 252;
+    --bxo-color-text-primary-rgb: var(--bxo-midnight-rgb);
+    --bxo-color-text-secondary-rgb: var(--bxo-deep-teal-rgb);
+    --bxo-color-text-tertiary-rgb: var(--bxo-structural-blue-rgb);
+    --bxo-color-success-rgb: 20 121 102;
+    --bxo-color-warning-rgb: 117 104 52;
+    --bxo-color-danger-rgb: 165 52 75;
+    --bxo-color-info-rgb: var(--bxo-structural-blue-rgb);
+    --bxo-bg-primary: rgb(var(--bxo-color-bg-primary-rgb));
+    --bxo-bg-secondary: var(--bxo-frost);
+    --bxo-surface: color-mix(in srgb, var(--bxo-frost) 25%, white);
+    --bxo-surface-secondary: color-mix(in srgb, var(--bxo-frost) 92%, var(--bxo-chrome));
+    --bxo-surface-elevated: var(--bxo-frost);
+    --bxo-text-primary: var(--bxo-midnight);
+    --bxo-text-secondary: var(--bxo-deep-teal);
+    --bxo-text-tertiary: var(--bxo-structural-blue);
+    --bxo-text-disabled: rgb(17 88 114 / 0.65);
+    --bxo-text-accent: var(--bxo-structural-blue);
+    --bxo-border-default: color-mix(in srgb, var(--bxo-steel) 75%, var(--bxo-midnight));
+    --bxo-border-subtle: var(--bxo-chrome);
+    --bxo-border-strong: var(--bxo-structural-blue);
+    --bxo-divider: var(--bxo-chrome);
+    --bxo-accent-border: var(--bxo-steel);
+    --bxo-accent-soft: color-mix(in srgb, var(--bxo-electric-cyan) 8%, var(--bxo-frost));
+    --bxo-accent-muted: color-mix(in srgb, var(--bxo-electric-cyan) 16%, var(--bxo-frost));
+    --bxo-success: rgb(var(--bxo-color-success-rgb));
+    --bxo-warning: rgb(var(--bxo-color-warning-rgb));
+    --bxo-danger: rgb(var(--bxo-color-danger-rgb));
+    --bxo-danger-light: var(--bxo-danger);
+    --bxo-info: var(--bxo-structural-blue);
+    --bxo-gradient-panel: linear-gradient(160deg, var(--bxo-surface), var(--bxo-frost));
+    --bxo-shadow-xs: 0 1px 2px rgb(3 26 40 / 0.04);
+    --bxo-shadow-sm: 0 4px 12px rgb(3 26 40 / 0.06);
+    --bxo-shadow-md: 0 12px 32px rgb(3 26 40 / 0.08);
+    --bxo-shadow-lg: 0 20px 48px rgb(3 26 40 / 0.1);
+    --background: 180 60% 99%;
+    --foreground: 202.7 86% 8.4%;
+    --card: 180 60% 99%;
+    --card-foreground: 202.7 86% 8.4%;
+    --popover: 180 60% 99%;
+    --popover-foreground: 202.7 86% 8.4%;
+    --secondary: 184.3 70% 96.1%;
+    --secondary-foreground: 202.7 86% 8.4%;
+    --muted: 184.3 70% 96.1%;
+    --muted-foreground: 199.4 78.3% 16.3%;
+    --destructive: 347.8 52.1% 42.5%;
+    --border: 196.2 25.3% 57.4%;
+    --input: 196.2 25.3% 57.4%;
+    --ring: 196.7 74% 25.7%;
+    color-scheme: light;
+    background: color-mix(in srgb, var(--bxo-frost) 90%, var(--bxo-chrome));
+    color: var(--bxo-text-primary);
+  }
+
+  /* Editorial hero/caption regions are deliberately navy, like the homepage
+     hero and dashboard navigation. Reset their semantic pairs together. */
+  .bxo-content-light :is(.bxo-marketing-hero, .bxo-editorial-hero, .bxo-cinematic-hero, .bxo-evidence-statement, .bxo-image-stage__caption, .bxo-product-surface__bar, .bxo-product-surface__nav) {
+    --bxo-color-bg-primary-rgb: var(--bxo-midnight-rgb);
+    --bxo-color-bg-secondary-rgb: var(--bxo-midnight-rgb);
+    --bxo-color-surface-rgb: var(--bxo-midnight-rgb);
+    --bxo-color-surface-secondary-rgb: var(--bxo-deep-teal-rgb);
+    --bxo-color-surface-elevated-rgb: var(--bxo-structural-blue-rgb);
+    --bxo-color-text-primary-rgb: var(--bxo-frost-rgb);
+    --bxo-color-text-secondary-rgb: var(--bxo-chrome-rgb);
+    --bxo-color-text-tertiary-rgb: var(--bxo-steel-rgb);
+    --bxo-bg-primary: var(--bxo-midnight);
+    --bxo-bg-secondary: var(--bxo-midnight);
+    --bxo-surface: var(--bxo-midnight);
+    --bxo-surface-secondary: var(--bxo-deep-teal);
+    --bxo-surface-elevated: var(--bxo-structural-blue);
+    --bxo-text-primary: var(--bxo-frost);
+    --bxo-text-secondary: var(--bxo-chrome);
+    --bxo-text-tertiary: var(--bxo-steel);
+    --bxo-text-accent: var(--bxo-electric-cyan);
+    --bxo-border-default: var(--bxo-structural-blue);
+    --bxo-border-subtle: rgb(182 209 218 / 0.25);
+    --bxo-border-strong: var(--bxo-electric-cyan);
+    --bxo-divider: rgb(182 209 218 / 0.25);
+    color-scheme: dark;
+    color: var(--bxo-frost);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -533,7 +622,7 @@
     border: 1px solid var(--bxo-accent-primary-light);
     border-radius: var(--bxo-radius-sm);
     background: var(--bxo-gradient-cyan);
-    color: var(--bxo-bg-primary);
+    color: var(--bxo-text-on-accent);
     box-shadow: var(--bxo-shadow-accent-md);
     transition:
       filter var(--bxo-duration-base) var(--bxo-ease-out),
@@ -581,20 +670,20 @@
   }
 
   .bxo-public-header {
-    background: rgba(1, 7, 13, 0.94);
-    backdrop-filter: blur(14px);
+    background: var(--bxo-midnight);
+    backdrop-filter: none;
     box-shadow: none;
   }
 
   .bxo-public-menu {
     border: 1px solid var(--bxo-border-default);
     border-radius: var(--bxo-radius-md);
-    background: rgba(1, 7, 13, 0.98);
+    background: var(--bxo-midnight);
     box-shadow: 0 24px 60px rgba(0, 0, 0, 0.48);
   }
 
   .bxo-public-footer {
-    background: #01070d;
+    background: var(--bxo-midnight);
   }
 
   .bxo-footer-link {
@@ -1506,15 +1595,15 @@
   .bxo-marketing-hero__layout {
     display: grid;
     width: min(100%, 90rem);
-    min-height: 35rem;
+    min-height: 0;
     margin: 0 auto;
-    padding: clamp(4rem, 8vw, 7rem) clamp(1rem, 2.2vw, 2rem);
+    padding: clamp(2rem, 4vw, 3rem) clamp(1rem, 2.2vw, 2rem);
   }
 
   .bxo-marketing-hero__layout--visual {
-    min-height: min(78dvh, 52rem);
+    min-height: 0;
     grid-template-columns: minmax(0, 1.08fr) minmax(23rem, 0.92fr);
-    gap: clamp(2.5rem, 5vw, 6rem);
+    gap: clamp(1.5rem, 3vw, 3rem);
     align-items: center;
   }
 
@@ -1526,8 +1615,8 @@
 
   .bxo-marketing-hero__media {
     position: relative;
-    width: min(100%, 42rem);
-    aspect-ratio: 4 / 5;
+    width: min(100%, 34rem);
+    aspect-ratio: 4 / 3;
     justify-self: end;
     overflow: hidden;
     border: 1px solid var(--bxo-border-subtle);
@@ -1564,7 +1653,7 @@
 
   .bxo-marketing-hero__aside {
     grid-column: 1 / -1;
-    margin-top: clamp(3rem, 6vw, 6rem);
+    margin-top: clamp(1.5rem, 3vw, 2.5rem);
   }
 
   .bxo-footer-link {
@@ -1597,7 +1686,7 @@
   }
 
   .bxo-marketing-hero__media {
-    min-height: min(62vw, 38rem);
+    min-height: 0;
   }
 
   .bxo-structure-row {
@@ -1689,8 +1778,8 @@
   .bxo-marketing-hero__layout,
   .bxo-marketing-hero__layout--visual {
     min-height: auto;
-    padding-top: 4rem;
-    padding-bottom: 4rem;
+    padding-top: 2rem;
+    padding-bottom: 2rem;
   }
 
   .bxo-marketing-hero__media {
@@ -1702,6 +1791,56 @@
   .bxo-gradient-text {
     color: CanvasText;
     background: none;
+  }
+}
+
+@layer components {
+  .bxo-content-light :is(.text-bxo-accent, .text-bxo-accent-primary, .bxo-editorial-sequence__index, .bxo-structure-row__index, .bxo-product-surface__step-icon),
+  .bxo-content-light .bxo-editorial-index > :first-child,
+  .bxo-content-light .bxo-evidence-question span,
+  .bxo-content-light .bxo-responsibility-list article > span,
+  .bxo-content-light .bxo-evidence-field-list span {
+    color: var(--bxo-text-accent);
+  }
+
+  .bxo-content-light .hover\:text-bxo-accent-primary-light:hover,
+  .bxo-content-light .hover\:text-bxo-accent-primary:hover {
+    color: var(--bxo-text-accent);
+  }
+
+  /* Older buttons use the page-background token as their cyan foreground.
+     Preserve their navy contrast while the page background becomes light. */
+  .bxo-content-light .text-bxo-bg-primary,
+  .bxo-content-light .group:hover .group-hover\:text-bxo-bg-primary {
+    color: var(--bxo-text-on-accent);
+  }
+
+  .bxo-content-light :is(a, button, input, select, textarea, summary):focus-visible {
+    outline-color: var(--bxo-text-accent);
+  }
+
+  .bxo-content-light :is(.bxo-panel, .bxo-marketing-record, .bxo-platform-window__topbar, .bxo-platform-window__rail, .bxo-platform-window__stage, .bxo-platform-window__workflow, .bxo-platform-window__evidence, .bxo-product-surface, .bxo-product-surface__evidence, .bxo-lifecycle-map__step) {
+    background: var(--bxo-surface);
+    border-color: var(--bxo-border-default);
+    box-shadow: var(--bxo-shadow-sm);
+    backdrop-filter: none;
+  }
+
+  .bxo-content-light :is(.bxo-marketing-record, .bxo-product-surface)::before {
+    background: var(--bxo-border-subtle);
+  }
+
+  .bxo-content-light .bxo-editorial-section {
+    background: transparent;
+  }
+
+  .bxo-content-light .bxo-light-section {
+    background: var(--bxo-frost);
+    color: var(--bxo-text-primary);
+  }
+
+  .bxo-content-light :is(.bxo-marketing-hero, .bxo-editorial-hero, .bxo-cinematic-hero, .bxo-evidence-statement, .bxo-product-surface__bar, .bxo-product-surface__nav, .bxo-image-stage__caption) {
+    background: var(--bxo-midnight);
   }
 }
 
