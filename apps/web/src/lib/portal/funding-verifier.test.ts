@@ -224,6 +224,7 @@ describe('bounded fixed-origin RPC transport', () => {
   it('redacts network errors instead of exposing credential-bearing diagnostics', async () => {
     const original = new Error('upstream password=private')
     const error = await createFundingRpc(vi.fn(async () => { throw original }))(FUNDING_RPC_URLS[0], 'eth_chainId', []).catch(error => error)
+    if (!(error instanceof FundingVerificationError)) throw new Error('Expected bounded funding verification failure.')
     expect(error).toMatchObject({ code: 'RPC_RESPONSE_UNAVAILABLE', message: 'RPC_RESPONSE_UNAVAILABLE', status: 503,
       diagnostic: { stage: 'FETCH', httpStatus: null, rpcCode: null, requestId: 1 } })
     expect(error).not.toHaveProperty('cause')
