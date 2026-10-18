@@ -1,6 +1,6 @@
 import { createClient } from '@supabase/supabase-js'
 import { FUNDING_TEST_PROJECT } from './funding-claim.ts'
-import { createFundingRpc, FundingVerificationError, readBoundedFundingJson, verifyFundingExpectation, type FundingVerificationExpectation } from './funding-verifier.ts'
+import { createAuthenticatedFundingRpc, FundingVerificationError, readBoundedFundingJson, verifyFundingExpectation, type FundingVerificationExpectation } from './funding-verifier.ts'
 
 // funding-claim.ts and funding-verifier.ts are copied byte-for-byte from apps/web/src/lib/portal
 // during the cloud package step. There is only one authored verifier/claim implementation.
@@ -52,7 +52,8 @@ Deno.serve(async (request: Request) => {
     const expectation = result.data as unknown as FundingVerificationExpectation
     if (expectation.actor_id !== expectedActor || expectation.session_id !== claims.session_id || expectation.kind !== payload.kind || expectation.target_id !== payload.id
       || contextKey(expectation.operating_context) !== contextKey(payload.operating_context)) fail('VERIFICATION_CONTEXT_MISMATCH', 403)
-    const observation = await verifyFundingExpectation(expectation, { rpc: createFundingRpc(fetch, deadline) })
+    const observation = await verifyFundingExpectation(expectation, { rpc: createAuthenticatedFundingRpc(
+      Deno.env.get('BLOCKXONE_AMOY_RPC_CLIENT_ID'), Deno.env.get('BLOCKXONE_AMOY_RPC_SECRET_KEY'), fetch, deadline) })
     if (deadline.aborted || claims.exp * 1000 <= Date.now() || Date.parse(expectation.expires_at) <= Date.now()) fail('VERIFICATION_EXPIRED', 409)
     const writer = createClient(base, service, { global: { fetch: authFetch }, auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false } })
     const saved = await writer.rpc('bx1_portal_record_funding_observation', { expectation_id: expectation.id, observation }).abortSignal(deadline)

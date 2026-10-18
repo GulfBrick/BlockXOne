@@ -5,6 +5,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { fundPaymentIntentSchema } from './fund-lifecycle-contracts'
 import { FundLifecycleError } from './fund-lifecycle-server'
 import { createFundingRpc, FUNDING_RPC_URLS, FundingVerificationError } from './funding-verifier'
+import { createFundServerRpc } from './fund-rpc-server'
 import { fundPaymentReceiptPrefillSchema, type FundPaymentReceiptRequest } from './fund-payment-receipt-contracts'
 
 const savedSchema = z.object({
@@ -83,7 +84,7 @@ function checked(value: unknown, now: () => number): SavedPayment {
  * subsequent signed funding-reference verification, Treasury or Controller. */
 export async function inspectRecordedFundPayment(value: unknown, dependencies: Dependencies = {}) {
   const now = dependencies.now ?? Date.now, saved = checked(value, now), p = saved.intent
-  const rpc = dependencies.rpc ?? createFundingRpc()
+  const rpc = dependencies.rpc ?? createFundServerRpc()
   const txHash = lower(p.transaction_hash!), payer = lower(p.payer_address), token = lower(p.token_address), beneficiary = lower(p.beneficiary_address)
   try {
     const heads = await Promise.all(FUNDING_RPC_URLS.map(async url => {

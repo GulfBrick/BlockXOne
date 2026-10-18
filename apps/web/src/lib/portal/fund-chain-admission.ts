@@ -2,6 +2,7 @@ import 'server-only'
 import { AbiCoder, Interface, keccak256 } from 'ethers'
 import { z } from 'zod'
 import { createFundingRpc, FUNDING_RPC_URLS } from './funding-verifier'
+import { createFundServerRpc } from './fund-rpc-server'
 import { fundChainExpectationSchema } from './fund-lifecycle-chain'
 import { fundSetupSnapshotSchema } from './fund-setup-contracts'
 import { FUND_SETUP_STEPS, fundSetupHash, observeSetupSafe, predictFundSuite, type FundSetupObservers } from './fund-setup-chain'
@@ -48,10 +49,11 @@ function block(value: unknown): FundAdmissionHead {
   return { number, hash: b.hash.toLowerCase(), timestamp: new Date(Number(seconds) * 1000).toISOString() }
 }
 export function fundAdmissionRpc(options: FundSetupObservers = {}): FundAdmissionRpc {
+  let fallback: FundAdmissionRpc | undefined
   return async (url, method, params) => {
     const index = FUNDING_RPC_URLS.indexOf(url as typeof FUNDING_RPC_URLS[number])
     if (index < 0) return fail('ADMISSION_OBSERVER_NOT_APPROVED')
-    const source = (index === 0 ? options.primary : options.secondary) ?? options.rpc ?? createFundingRpc()
+    const source = (index === 0 ? options.primary : options.secondary) ?? options.rpc ?? (fallback ??= createFundServerRpc())
     try { return await source(url, method, params) } catch (error) { if (error instanceof FundAdmissionChainError) throw error; return fail('ADMISSION_OBSERVATION_UNAVAILABLE') }
   }
 }

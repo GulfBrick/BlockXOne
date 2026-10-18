@@ -2,6 +2,7 @@ import 'server-only'
 import { createHash } from 'node:crypto'
 import { AbiCoder, Interface, getCreateAddress, getCreate2Address, keccak256, toUtf8Bytes } from 'ethers'
 import { createFundingRpc, FUNDING_RPC_URLS, FundingVerificationError, readFundingRpcDiagnostic } from './funding-verifier'
+import { createFundServerRpc } from './fund-rpc-server'
 import { canonicalFundCreation, canonicalFundRuntime, FUND_SETUP_CATALOG_HASH, getCanonicalFundArtifact, getOfficialSafeArtifact, type FundSetupArtifactName } from './fund-setup-artifacts'
 
 const ZERO = `0x${'0'.repeat(40)}`, SENTINEL = '0x0000000000000000000000000000000000000001'
@@ -153,13 +154,15 @@ function logSetupRpcFailure(error: unknown, observerIndex: number, method: strin
       httpStatus: diagnostic.httpStatus, rpcCode: diagnostic.rpcCode, requestId: diagnostic.requestId })
   } catch { /* Best-effort diagnostics must never replace the original failure. */ }
 }
-function rpcFor(options: FundSetupObservers, index: number): Rpc { const raw = (index === 0 ? options.primary : options.secondary) ?? options.rpc ?? createFundingRpc()
+function rpcFor(options: FundSetupObservers, index: number): Rpc { const raw = (index === 0 ? options.primary : options.secondary) ?? options.rpc ?? createFundServerRpc()
   return async (url, method, params) => { if (url !== FUNDING_RPC_URLS[index]) return fail('SETUP_OBSERVER_INVALID', 503)
     try { return await raw(url, method, params) } catch (error) { if (error instanceof FundSetupChainError) throw error; logSetupRpcFailure(error, index, method); return fail('SETUP_OBSERVATION_UNAVAILABLE', 503) } } }
 function block(value: unknown) { const b = object(value), timestamp = quantity(b.timestamp); if (timestamp > 8640000000000n) return fail('SETUP_BLOCK_INVALID', 503)
   return { number: quantity(b.number), hash: hash(b.hash), timestamp: new Date(Number(timestamp) * 1000).toISOString(), transactions: b.transactions } }
-async function observers(options: FundSetupObservers) { return Promise.all(FUNDING_RPC_URLS.map(async (url, i) => {
-  const rpc = rpcFor(options, i), [chain, raw] = await Promise.all([rpc(url, 'eth_chainId', []), rpc(url, 'eth_getBlockByNumber', ['finalized', false])])
+async function observers(options: FundSetupObservers) {
+  const bound = options.rpc || options.primary && options.secondary ? options : { ...options, rpc: createFundServerRpc() }
+  return Promise.all(FUNDING_RPC_URLS.map(async (url, i) => {
+  const rpc = rpcFor(bound, i), [chain, raw] = await Promise.all([rpc(url, 'eth_chainId', []), rpc(url, 'eth_getBlockByNumber', ['finalized', false])])
   if (quantity(chain) !== 80002n || raw === null) return fail('SETUP_FINALITY_UNAVAILABLE', 503)
   const head = block(raw), current = block(await rpc(url, 'eth_getBlockByNumber', [hex(head.number), false]))
   if (head.hash !== current.hash || head.number !== current.number || head.timestamp !== current.timestamp) return fail('SETUP_FINALITY_CHANGED', 503)

@@ -258,6 +258,20 @@ export function createFundingRpc(fetcher: typeof fetch = fetch, signal?: AbortSi
     }
   }
 }
+/** Mandatory server credentials affect only the fixed primary's transport, never its evidence identity. */
+export function createAuthenticatedFundingRpc(clientId: unknown, secretKey: unknown, fetcher: typeof fetch = fetch, signal?: AbortSignal): Rpc {
+  if (typeof clientId !== 'string' || clientId.length !== 32 || !/^[0-9a-f]{32}$/.test(clientId)
+    || typeof secretKey !== 'string' || secretKey.length < 64 || secretKey.length > 256 || /[^A-Za-z0-9_-]/.test(secretKey)) reject('RPC_AUTH_NOT_CONFIGURED')
+  const capturedClientId = clientId, capturedSecretKey = secretKey
+  const authenticatedFetch: typeof fetch = (input, init) => {
+    if (input !== FUNDING_RPC_URLS[0]) return fetcher(input, init)
+    const headers = new Headers(init?.headers)
+    headers.set('x-client-id', capturedClientId)
+    headers.set('x-secret-key', capturedSecretKey)
+    return fetcher(`${FUNDING_RPC_URLS[0]}/${capturedClientId}`, { ...init, headers })
+  }
+  return createFundingRpc(authenticatedFetch, signal)
+}
 export async function readBoundedFundingJson(source: Pick<Response, 'body' | 'headers'>, maximum: number, signal: AbortSignal): Promise<unknown> {
   const claimed = source.headers.get('content-length')
   if (claimed !== null && (!/^[0-9]+$/.test(claimed) || BigInt(claimed) > BigInt(maximum))) reject('BODY_TOO_LARGE', 413)

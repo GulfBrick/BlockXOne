@@ -2,7 +2,8 @@ import 'server-only'
 import { createHash } from 'node:crypto'
 import { Interface, Signature, TypedDataEncoder, keccak256, recoverAddress, toUtf8Bytes } from 'ethers'
 import { z } from 'zod'
-import { FUNDING_RPC_URLS, createFundingRpc } from './funding-verifier'
+import { FUNDING_RPC_URLS } from './funding-verifier'
+import { createFundServerRpc } from './fund-rpc-server'
 import { fundIntentSchema, type FundTransactionIntent } from './fund-lifecycle-contracts'
 
 /** Source selection is not a deployed release or provider/governance admission. No address defaults. */
@@ -101,7 +102,7 @@ export class FundChainError extends Error {
 }
 const reject = (code: string, status = 409): never => { throw new FundChainError(code, status) }
 function rpcFor(dependencies: FundChainDependencies): Rpc {
-  const source = dependencies.rpc ?? createFundingRpc()
+  const source = dependencies.rpc ?? createFundServerRpc()
   return async (url, method, params) => {
     try { return await source(url, method, params) }
     catch (error) { if (error instanceof FundChainError) throw error; return reject('FUND_NETWORK_OBSERVATION_UNAVAILABLE', 503) }
