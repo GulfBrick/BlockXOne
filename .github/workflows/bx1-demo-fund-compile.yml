@@ -89,6 +89,8 @@ on:
       - supabase/functions/bx1-staff-invite-dispatch/**
       - apps/web/scripts/test-portal.mjs
       - apps/web/scripts/test-portal-funding.mjs
+      - apps/web/scripts/test-fund-setup-recovery.mjs
+      - supabase/features/bx1_fund_setup_unknown_recovery.sql
       - apps/web/scripts/probe-amoy-funding.mjs
       - apps/web/scripts/test-registration-browser.mjs
       - supabase/features/bx1_portal_funding.sql
@@ -805,6 +807,47 @@ jobs:
           BX1_REGISTRATION_BROWSER_EXPECTATION: ${{ inputs.registration_origin_expectation }}
         run: node apps/web/scripts/test-registration-browser.mjs
 
+  fund-setup-recovery-sql:
+    name: Original setup recovery on isolated cloud PostgreSQL 17
+    if: ${{ github.repository == 'GulfBrick/BlockXOne' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'codex/investor-journey-20261016' && github.base_ref == 'codex/stage2-sandbox-completion-20261011') || (github.event_name == 'workflow_dispatch' && inputs.mode == 'investor-journey-focused' && (github.ref == 'refs/heads/codex/stage2-sandbox-completion-20261011' || github.ref == 'refs/heads/codex/investor-journey-20261016'))) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: docker.io/library/postgres:17@sha256:2d2b8998d31037bf721cfdf764d76ba74171b4fab3431b7f72c27c56ddbdf9e3
+        env:
+          POSTGRES_DB: bx1_demo_ci
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: bx1-synthetic-ci-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d bx1_demo_ci"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Check out the exact reviewed setup recovery source without write credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+          submodules: false
+          lfs: false
+      - name: Select pinned Node for the cloud-only recovery fixture
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22.23.1'
+          check-latest: false
+          package-manager-cache: false
+      - name: Install locked web dependencies in the disposable cloud runner
+        working-directory: apps/web
+        run: npm ci --no-audit --no-fund
+      - name: Prove actual retry writer, two-connection CAS, immutable history and audit rollback
+        env:
+          BX1_FUND_SETUP_RECOVERY_SQL_TEST_URL: postgresql://postgres:bx1-synthetic-ci-only@127.0.0.1:5432/bx1_demo_ci
+        run: node apps/web/scripts/test-fund-setup-recovery.mjs
+
   fund-dashboard-focused:
     name: Focused dashboard, theme or password-recovery acceptance
     if: ${{ (github.event_name == 'pull_request' && github.repository == 'GulfBrick/BlockXOne' && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'codex/investor-journey-20261016' && github.base_ref == 'codex/stage2-sandbox-completion-20261011') || (github.event_name == 'workflow_dispatch' && (inputs.mode == 'fund-dashboard-focused' || inputs.mode == 'theme-focused' || inputs.mode == 'auth-recovery-focused' || inputs.mode == 'connected-session-focused' || inputs.mode == 'document-read-recovery-focused' || inputs.mode == 'fund-signer-entry-focused' || inputs.mode == 'connected-fund-providers-focused' || inputs.mode == 'offering-signatures-api-focused' || inputs.mode == 'provider-diagnostics-focused' || inputs.mode == 'document-result-recovery-focused' || inputs.mode == 'wallet-context-focused' || inputs.mode == 'appointment-commit-focused' || inputs.mode == 'publication-view-focused' || inputs.mode == 'investor-admission-roleplay-focused' || inputs.mode == 'appointment-projection-cost-focused' || inputs.mode == 'investor-journey-focused') && (github.ref == 'refs/heads/codex/stage2-sandbox-completion-20261011' || (inputs.mode == 'investor-journey-focused' && github.ref == 'refs/heads/codex/investor-journey-20261016'))) }}
@@ -878,6 +921,10 @@ jobs:
             'src/lib/portal/fund-setup-chain.test.ts',
             'src/lib/portal/fund-chain-admission.test.ts',
             'src/lib/portal/fund-setup-server.test.ts',
+            'src/lib/portal/fund-setup-client.test.ts',
+            'src/lib/portal/fund-setup-recovery-contracts.test.ts',
+            'src/lib/portal/fund-setup-recovery-server.test.ts',
+            'src/lib/portal/fund-setup-recovery-chain.test.ts',
             'src/lib/portal/amoy-archive-observers-schema.test.ts',
             'src/lib/portal/amoy-archive-pair-v2-schema.test.ts',
           ] : process.env.BX1_FOCUSED_UI_MODE === 'appointment-projection-cost-focused' ? [

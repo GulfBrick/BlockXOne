@@ -195,7 +195,7 @@ describe('bounded fixed-origin RPC transport', () => {
       expect(fetcher).toHaveBeenCalledWith(url, expect.objectContaining({ method: 'POST', redirect: 'error', cache: 'no-store', signal: expect.any(AbortSignal) }))
     }
   })
-  it('permits only exact latest or pending sender-nonce reads on fixed endpoints', async () => {
+  it('permits exact latest, pending and bounded numeric historical sender-nonce reads on fixed endpoints', async () => {
     const fetcher = vi.fn(async (_url: unknown, init?: RequestInit) => {
       const request = JSON.parse(String(init?.body))
       return Response.json({ jsonrpc: '2.0', id: request.id, result: '0x2' })
@@ -203,10 +203,16 @@ describe('bounded fixed-origin RPC transport', () => {
     const rpc = createFundingRpc(fetcher), wallet = '0x1111111111111111111111111111111111111111'
     expect(await rpc(FUNDING_RPC_URLS[0], 'eth_getTransactionCount', [wallet, 'latest'])).toBe('0x2')
     expect(await rpc(FUNDING_RPC_URLS[1], 'eth_getTransactionCount', [wallet, 'pending'])).toBe('0x2')
+    for (const tag of ['0x0', '0xc', `0x${'f'.repeat(64)}`]) {
+      expect(await rpc(FUNDING_RPC_URLS[0], 'eth_getTransactionCount', [wallet, tag])).toBe('0x2')
+    }
     await expect(rpc(FUNDING_RPC_URLS[0], 'eth_getTransactionCount', [wallet, 'earliest'])).rejects.toMatchObject({ code: 'RPC_PARAMETERS_NOT_ALLOWED' })
     await expect(rpc(FUNDING_RPC_URLS[0], 'eth_getTransactionCount', ['not-a-wallet', 'pending'])).rejects.toMatchObject({ code: 'RPC_PARAMETERS_NOT_ALLOWED' })
     await expect(rpc(FUNDING_RPC_URLS[0], 'eth_getTransactionCount', [wallet, 'pending', true])).rejects.toMatchObject({ code: 'RPC_PARAMETERS_NOT_ALLOWED' })
-    expect(fetcher).toHaveBeenCalledTimes(2)
+    for (const tag of ['0x', '0x00', '0x01', '0x-1', `0x${'f'.repeat(65)}`, 'finalized', 12, { blockNumber: '0xc' }, ['0xc']]) {
+      await expect(rpc(FUNDING_RPC_URLS[0], 'eth_getTransactionCount', [wallet, tag])).rejects.toMatchObject({ code: 'RPC_PARAMETERS_NOT_ALLOWED' })
+    }
+    expect(fetcher).toHaveBeenCalledTimes(5)
   })
   it.each([
     () => Response.json({ jsonrpc: '2.0', id: 999, result: '0x13882' }),
