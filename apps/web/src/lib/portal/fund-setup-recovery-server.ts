@@ -32,7 +32,7 @@ function validateRead(raw: unknown, actorId: string, request: FundSetupRetryRequ
     || parsed.data.product_id !== request.product_id || parsed.data.expected_revision !== current.setup?.revision
     || parsed.data.expected_step_revision !== step.revision || parsed.data.intent_hash !== step.intent_hash
     || !portalContextMatches(parsed.data.operating_context, request.operating_context)
-    || parsed.data.intent_hash !== fundSetupHash(parsed.data.intent) || parsed.data.sender !== step.sender
+    || parsed.data.sender !== step.sender
     || parsed.data.intent.nonce !== step.nonce || fundSetupHash(parsed.data.intent) !== fundSetupHash(step.intent)
     || parsed.data.original_state !== step.state || parsed.data.original_transaction_hash !== step.transaction_hash
     || Date.parse(parsed.data.expires_at) <= Date.now()) return denied('SETUP_RETRY_READ_UNVERIFIED')
@@ -42,7 +42,9 @@ function validateRead(raw: unknown, actorId: string, request: FundSetupRetryRequ
   // Rebuild from the saved configuration and dependencies, not from request fields.
   const canonical = buildSetupIntent('trex_version', saved.configuration, saved.dependencies as FundSetupAddresses,
     saved.sender, saved.intent.nonce, saved.setup_configuration_hash)
-  if (fundSetupHash(canonical) !== saved.intent_hash) return denied('SETUP_RETRY_INTENT_UNVERIFIED')
+  // Native record identity uses PostgreSQL jsonb::text, not the JS canonical
+  // serialization. Compare payloads within one domain; retain the native hash.
+  if (fundSetupHash(canonical) !== fundSetupHash(saved.intent)) return denied('SETUP_RETRY_INTENT_UNVERIFIED')
   return saved
 }
 function validateProof(raw: unknown, read: FundSetupRetryRead): FundSetupRecoveryProof {
@@ -120,7 +122,7 @@ export async function recoverFundSetup(client: SupabaseClient, actorId: string, 
   if (request.action === 'CLAIM' && (read.original_state !== 'UNKNOWN' || read.original_transaction_hash)) return denied('SETUP_RETRY_NOT_HASHLESS', 'A transaction reference is already saved. Check that transaction; do not submit another.')
   if (read.original_state === 'FINAL') return { snapshot: authorised, lease: null, proof: null }
   let proof: FundSetupRecoveryProof
-  try { proof = validateProof(await checkFundSetupRecovery(read.intent, read.anchor), read) }
+  try { proof = validateProof(await checkFundSetupRecovery(read.intent, read.anchor, { intent_hash: read.intent_hash }), read) }
   catch (error) {
     if (error instanceof FundSetupRecoveryChainError) return denied(error.code, 'Independent recovery checks are not available. The original step remains saved; no new transaction was authorised.', 503)
     throw error

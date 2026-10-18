@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { setupFixture, setupFixtureActor as actor, setupFixtureContext as context, setupFixtureProduct as product,
   setupFixtureSetup as setupId, setupFixtureAddress as address, setupFixtureId as id } from './fund-setup-fixtures.test-support'
 import { buildSetupIntent, fundSetupHash, type FundSetupAddresses } from './fund-setup-chain'
+import nativeGolden from './fixtures/fund-setup-native-hash-golden.json'
 import type { FundSetupSnapshot } from './fund-setup-contracts'
 import type { FundSetupRecoveryProof, FundSetupRetryLease, FundSetupRetryRead, FundSetupRetryRequest } from './fund-setup-recovery-contracts'
 vi.mock('server-only', () => ({}))
@@ -33,7 +34,7 @@ beforeEach(() => {
   fixture = setupFixture(); const setup = fixture.setup!, step = setup.steps[10]
   const dependencies = Object.fromEntries(setup.steps.slice(0, 10).map((item, i) => [item.step_key, address(i + 20)])) as FundSetupAddresses
   const intent = buildSetupIntent('trex_version', setup.configuration!, dependencies, address(3), '12', setup.setup_configuration_hash!)
-  Object.assign(step, { state: 'UNKNOWN', actor_id: actor, sender: address(3), nonce: '12', intent, intent_hash: fundSetupHash(intent),
+  Object.assign(step, { state: 'UNKNOWN', actor_id: actor, sender: address(3), nonce: '12', intent, intent_hash: nativeGolden.native_intent_hash,
     expires_at: '2000-01-01T00:00:00Z', claimed_at: '2000-01-01T00:00:00Z' })
   setup.next_step = 'trex_version'; setup.dependencies = dependencies; setup.saved_intent = intent
   read = { setup_id: setupId, expected_revision: 1, actor_id: actor, operating_context: context, environment: 'TESTNET',
@@ -41,7 +42,7 @@ beforeEach(() => {
     configuration_hash: fixture.configuration_hash!, setup_configuration_hash: setup.setup_configuration_hash!, source_pin: fixture.source_pin,
     expires_at: setup.expires_at, step_id: step.id, step_key: 'trex_version', expected_step_revision: 1,
     sender: address(3), configuration: setup.configuration, safe_configuration: null, dependencies, roleplay_policy: null,
-    intent, intent_hash: step.intent_hash!, original_state: 'UNKNOWN', original_transaction_hash: null,
+    intent: structuredClone(intent), intent_hash: step.intent_hash!, original_state: 'UNKNOWN', original_transaction_hash: null,
     original_claimed_at: step.claimed_at!, original_expires_at: step.expires_at!,
     anchor: { block_number: '100', block_hash: `0x${'a'.repeat(64)}` }, retry_count: 0, next_retry_at: null, active_lease: null, leases: [] }
   proof = { version: 1, chain_id: 80002, checked_at: new Date().toISOString(), status: 'RETRY_AVAILABLE', reason_code: null,
@@ -81,8 +82,25 @@ describe('hashless setup recovery server boundary - synthetic source proof only'
     const result = await recoverFundSetup(client(), actor, base())
     expect(result.proof?.status).toBe('RETRY_AVAILABLE'); expect(result.lease).toBeNull()
     expect(mocks.worker).toHaveBeenCalledTimes(1)
-    expect(mocks.check).toHaveBeenCalledWith(read.intent, read.anchor)
+    expect(mocks.check).toHaveBeenCalledWith(read.intent, read.anchor, { intent_hash: nativeGolden.native_intent_hash })
     expect(result.snapshot.setup!.steps[10].expires_at).toBe('2000-01-01T00:00:00Z')
+  })
+  it('preserves the PostgreSQL golden identity without equating it to the JS payload digest', async () => {
+    expect(read.configuration).toEqual(nativeGolden.configuration)
+    expect(read.dependencies).toEqual(nativeGolden.dependencies)
+    expect(read.intent).toEqual(nativeGolden.intent)
+    expect(fundSetupHash(read.intent)).not.toBe(nativeGolden.native_intent_hash)
+    const result = await recoverFundSetup(client(), actor, base())
+    expect(result.proof?.intent_hash).toBe(nativeGolden.native_intent_hash)
+    expect(result.snapshot.setup!.steps[10].intent_hash).toBe(nativeGolden.native_intent_hash)
+    expect(mocks.check).toHaveBeenCalledWith(read.intent, read.anchor, { intent_hash: nativeGolden.native_intent_hash })
+  })
+  it('rejects a jointly altered payload even when both reads retain the same native record identity', async () => {
+    read.intent.data += '00'
+    fixture.setup!.steps[10].intent = structuredClone(read.intent)
+    await expect(recoverFundSetup(client(), actor, base())).rejects.toMatchObject({ code: 'SETUP_RETRY_INTENT_UNVERIFIED' })
+    expect(mocks.check).not.toHaveBeenCalled()
+    expect(mocks.worker.mock.calls.filter(([name]) => name === 'record_fund_setup_retry')).toHaveLength(0)
   })
   it.each(['actor', 'context', 'intent', 'nonce', 'state', 'product'] as const)('rejects a worker %s mismatch before provider work', async fault => {
     if (fault === 'actor') read.actor_id = id(99)

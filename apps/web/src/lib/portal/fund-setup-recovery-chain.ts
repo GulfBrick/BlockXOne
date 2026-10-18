@@ -67,6 +67,8 @@ function checkedIntent(value: FundSetupIntent) {
 /** Read-only, bounded recovery of the same saved bootstrap call. Never signs or sends. */
 export async function checkFundSetupRecovery(value: FundSetupIntent, anchor: FundSetupRecoveryAnchor,
   options: FundSetupRecoveryOptions = {}): Promise<FundSetupRecoveryProof> {
+  const intentHash = options.intent_hash
+  if (typeof intentHash !== 'string' || !/^[0-9a-f]{64}$/.test(intentHash)) return fail('RECOVERY_INTENT_HASH_INVALID')
   const { intent, dependencies } = checkedIntent(value), nonce = decimal(intent.nonce), lowerNumber = decimal(anchor.block_number)
   const lowerHash = hash(anchor.block_hash), clock = options.now ?? Date.now, started = clock()
   const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 90_000)
@@ -109,7 +111,7 @@ export async function checkFundSetupRecovery(value: FundSetupIntent, anchor: Fun
       extra: Partial<FundSetupRecoveryProof> = {}): FundSetupRecoveryProof => {
       if (signal.aborted || clock() - started >= 90_000) return fail('RECOVERY_DEADLINE_EXCEEDED')
       return { version: 1, chain_id: 80002, checked_at: new Date(clock()).toISOString(), status, reason_code,
-        sender: intent.sender, nonce: intent.nonce, intent_hash: fundSetupHash(intent),
+        sender: intent.sender, nonce: intent.nonce, intent_hash: intentHash,
         anchor: { block_number: lowerNumber.toString(), block_hash: lowerHash }, providers,
         finalized_nonce: finalizedNonce, transaction_hash: null, retry_checks: null, winner: null, ...extra }
     }
@@ -198,7 +200,7 @@ export async function checkFundSetupRecovery(value: FundSetupIntent, anchor: Fun
     if (winner.chain_id !== 80002 || winner.to !== intent.to || winner.value !== '0' || winner.data !== intent.data) {
       return proof('HOLD', 'SETUP_RETRY_NONCE_WINNER_MISMATCH', { transaction_hash: winner.transaction_hash, winner })
     }
-    const observed = await observeSetupStep(intent, winner.transaction_hash, { rpc: read, intent_hash: fundSetupHash(intent) })
+    const observed = await observeSetupStep(intent, winner.transaction_hash, { rpc: read, intent_hash: intentHash })
     if (!['FINAL', 'FAILED'].includes(observed.status) || observed.block_number !== winner.block_number || observed.block_hash !== winner.block_hash) return proof('WAITING', 'RECOVERY_WINNER_NOT_FINAL')
     await checkHeaders([lower, common, found.block])
     return proof('WINNER', observed.status === 'FAILED' ? 'RECOVERY_WINNER_REVERTED' : null, { transaction_hash: winner.transaction_hash, winner })

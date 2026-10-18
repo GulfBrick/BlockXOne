@@ -165,6 +165,9 @@ try {
     insert into auth.users(id) values('${actor}');insert into bx1_portal.organisations values('${organisation}');
     grant usage on schema bx1_portal to bx1_fund_execution_worker;`)
   for (const [source, name] of [[portal, 'bx1_portal.require_keys'], [portal, 'bx1_portal.immutable_record'], [funding, 'bx1_portal.funding_require_revision'], [lifecycle, 'bx1_portal.fund_digest']]) await db.query(definition(source, name))
+  const nativeGolden = JSON.parse(await file('../src/lib/portal/fixtures/fund-setup-native-hash-golden.json'))
+  eq(await scalar('select bx1_portal.fund_digest($1::jsonb)', [JSON.stringify(nativeGolden.intent)]),
+    nativeGolden.native_intent_hash, 'shared recovery golden uses the actual native PostgreSQL digest domain')
   await db.query(table(portal, 'bx1_portal.events')); await db.query(table(lifecycle, 'bx1_portal.fund_operation_events'))
   const coreStart = setup.indexOf('create table bx1_portal.fund_setups ('), coreEnd = setup.indexOf('create function bx1_portal.fund_setup_graph(')
   assert(coreStart >= 0 && coreEnd > coreStart); await db.query(setup.slice(coreStart, coreEnd))
@@ -316,7 +319,7 @@ try {
   await record(discoveryRead, 'HASH', { lease_id: null, transaction_hash: hash(800), discovery_proof: discoveryProof })
   eq((await snapshot(discovered)).step.state, 'BROADCAST', 'discovery still does not assert FINAL')
   await owner(); await db.query(catalogProof)
-  console.log(`BX1_FUND_SETUP_RECOVERY_SQL_PASS assertions=${checks} fixture=disposable-cloud-PostgreSQL17 writer=actual guards=original auditRollback=actual twoConnectionCAS=proven originalNonce=retained authority=MFA-wallet-stubs-only hostedAcceptance=not-proven Amoy=not-proven`)
+  console.log(`BX1_FUND_SETUP_RECOVERY_SQL_PASS assertions=${checks} fixture=disposable-cloud-PostgreSQL17 nativeHashGolden=verified writer=actual guards=original auditRollback=actual twoConnectionCAS=proven originalNonce=retained authority=MFA-wallet-stubs-only hostedAcceptance=not-proven Amoy=not-proven`)
 } catch (error) {
   const code = typeof error?.code === 'string' && /^[0-9A-Z]{5}$/.test(error.code) ? error.code : 'assertion'
   const label = code === 'assertion' && typeof error?.message === 'string'
