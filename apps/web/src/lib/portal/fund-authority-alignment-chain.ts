@@ -1,13 +1,13 @@
 import 'server-only'
 import { Interface, Signature, TypedDataEncoder, keccak256, recoverAddress, toUtf8Bytes } from 'ethers'
-import { fundAdmissionInputSchema, fundAdmissionRpc, readFundAdmissionSnapshot, recheckFundAdmissionSnapshot, type FundAdmissionSnapshot } from './fund-chain-admission'
+import { FundAdmissionChainError, fundAdmissionInputSchema, fundAdmissionRpc, readFundAdmissionSnapshot, recheckFundAdmissionSnapshot, type FundAdmissionSnapshot } from './fund-chain-admission'
 import { canonicalFundRuntime, FUND_SETUP_CATALOG_HASH, getOfficialSafeArtifact } from './fund-setup-artifacts'
-import { FUND_SETUP_SAFE_PROXY_RUNTIME, FUND_SETUP_SAFE_SINGLETONS, fundSetupHash, observeSetupSafe, type FundSetupObservers } from './fund-setup-chain'
+import { FUND_SETUP_SAFE_PROXY_RUNTIME, FUND_SETUP_SAFE_SINGLETONS, FundSetupChainError, fundSetupHash, observeSetupSafe, type FundSetupObservers } from './fund-setup-chain'
 import { createFundAuthorityAlignmentReadSchema, fundAuthorityAlignmentIntentSchema, fundAuthorityAlignmentObservationSchema,
   fundAuthoritySignatureSchema, fundAuthoritySafeTypes, type FundAuthorityAlignmentIntent, type FundAuthorityAlignmentRead,
   type FundAuthorityAlignmentObservation, type FundAuthoritySignature } from './fund-authority-alignment-contracts'
 import { portalContextMatches } from './operating-context'
-import { FUNDING_RPC_URLS } from './funding-verifier'
+import { FUNDING_RPC_URLS, FundingVerificationError, readFundingRpcDiagnostic } from './funding-verifier'
 
 const ZERO = `0x${'0'.repeat(40)}`, SENTINEL = `0x${'0'.repeat(39)}1`
 const HALF_ORDER = 0x7fffffffffffffffffffffffffffffff5d576e7357a4501ddfe92f46681b20a0n
@@ -55,12 +55,52 @@ function header(value: unknown, expected?: bigint) {
   if (expected !== undefined && number !== expected || seconds > 8640000000000n) return fail('ALIGNMENT_BLOCK_INVALID', 503)
   return { number: number.toString(), hash: hash(data.hash), timestamp: new Date(Number(seconds) * 1000).toISOString() }
 }
+const RPC_METHODS = ['eth_chainId', 'eth_getBlockByNumber', 'eth_getTransactionCount', 'eth_getCode', 'eth_call', 'eth_getStorageAt', 'eth_getTransactionByHash', 'eth_getTransactionReceipt'] as const
+const DIAGNOSTIC_CODES = [
+  'ADMISSION_OBSERVATION_UNAVAILABLE', 'RPC_RESPONSE_UNAVAILABLE', 'RPC_RESULT_UNAVAILABLE', 'RPC_AUTH_NOT_ADMITTED', 'RPC_CREDENTIALS_INVALID',
+  'SETUP_FINALITY_UNAVAILABLE', 'SETUP_FINALITY_CHANGED', 'SETUP_OBSERVER_INVALID', 'SETUP_OBSERVATION_UNAVAILABLE', 'SETUP_BLOCK_INVALID',
+  'SETUP_SAFE_NOT_AVAILABLE', 'SETUP_SAFE_READ_UNAVAILABLE', 'SETUP_SAFE_STORAGE_INVALID', 'SETUP_SAFE_POLICY_INVALID',
+  'SETUP_SAFE_SINGLETON_NOT_AVAILABLE', 'SETUP_SAFE_OBSERVERS_DISAGREE', 'SETUP_SAFE_REORG_AFTER_WAIT',
+  'ALIGNMENT_RPC_RECORD_INVALID', 'ALIGNMENT_ADDRESS_INVALID', 'ALIGNMENT_HASH_INVALID', 'ALIGNMENT_RPC_QUANTITY_INVALID',
+  'ALIGNMENT_OBSERVERS_DISAGREE', 'ALIGNMENT_BLOCK_INVALID', 'ALIGNMENT_RPC_NOT_ALLOWED', 'ALIGNMENT_DEADLINE_EXCEEDED',
+  'ALIGNMENT_CALL_BUDGET_EXCEEDED', 'ALIGNMENT_OBSERVATION_UNAVAILABLE', 'ALIGNMENT_READ_INVALID', 'ALIGNMENT_AUTHORITY_CHANGED',
+  'ALIGNMENT_DEPENDENCY_MISSING', 'ALIGNMENT_CONTROLLER_BINDING_CHANGED', 'ALIGNMENT_GETTER_INVALID', 'ALIGNMENT_CONTROLLER_GOVERNANCE_CHANGED',
+  'ALIGNMENT_SAFE_STORAGE_INVALID', 'ALIGNMENT_SAFE_GOVERNANCE_CHANGED', 'ALIGNMENT_INTENT_INVALID', 'ALIGNMENT_INTENT_BINDING_CHANGED',
+  'ALIGNMENT_ORIGINAL_EXECUTION_REQUIRED', 'ALIGNMENT_CANONICAL_BLOCK_CHANGED', 'ALIGNMENT_GOVERNANCE_CHANGED_DURING_CHECKS',
+  'ALIGNMENT_EXECUTOR_NONCE_UNAVAILABLE', 'ALIGNMENT_EPOCH_GAP_NOT_SUPPORTED', 'ALIGNMENT_SAVED_NONCE_CHANGED',
+  'ALIGNMENT_SAVED_INTENT_REQUIRED', 'ALIGNMENT_AUTHORITY_EXPIRED',
+] as const
+function diagnosticCode(error: unknown) {
+  if (!(error instanceof FundAdmissionChainError || error instanceof FundSetupChainError
+    || error instanceof FundAuthorityAlignmentChainError || error instanceof FundingVerificationError)) return 'UNCLASSIFIED'
+  return DIAGNOSTIC_CODES.find(code => code === error.code) ?? 'UNCLASSIFIED'
+}
+/** No raw exception, provider identity, request data or credential enters this log. */
+function logTransportFailure(error: unknown, url: string, method: string): boolean {
+  let checked = false
+  try {
+    const observerIndex = FUNDING_RPC_URLS.indexOf(url as typeof FUNDING_RPC_URLS[number])
+    if (observerIndex < 0 || !RPC_METHODS.some(allowed => allowed === method)
+      || !(error instanceof FundAdmissionChainError || error instanceof FundingVerificationError)) return false
+    const diagnostic = readFundingRpcDiagnostic(error.diagnostic)
+    if (!diagnostic) return false
+    const code = diagnosticCode(error)
+    checked = true
+    console.warn('BX1_AUTHORITY_ALIGNMENT_FAILURE', { kind: 'TRANSPORT', observerIndex, method, code,
+      stage: diagnostic.stage, httpStatus: diagnostic.httpStatus, rpcCode: diagnostic.rpcCode, requestId: diagnostic.requestId })
+  } catch { /* Best-effort diagnostics never replace verification failures. */ }
+  return checked
+}
+function logCheckFailure(error: unknown): void {
+  try { console.warn('BX1_AUTHORITY_ALIGNMENT_FAILURE', { kind: 'CHECK', code: diagnosticCode(error) }) }
+  catch { /* Best-effort diagnostics never replace verification failures. */ }
+}
 /** One bounded read phase; even injected transports cannot add endpoints or writes. */
 async function bounded<T>(options: FundAuthorityAlignmentOptions, task: (rpc: Rpc, now: () => number) => Promise<T>): Promise<T> {
   const now = options.now ?? Date.now, started = now(), abort = new AbortController()
   const signal = options.signal ? AbortSignal.any([options.signal, abort.signal]) : abort.signal
   const timer = setTimeout(() => abort.abort(), 90_000), source = fundAdmissionRpc(options)
-  let calls = 0
+  let calls = 0, transportLogged = false
   const rpc: Rpc = async (url, method, params) => {
     if (!FUNDING_RPC_URLS.includes(url as typeof FUNDING_RPC_URLS[number])
       || !['eth_chainId', 'eth_getBlockByNumber', 'eth_getTransactionCount', 'eth_getCode', 'eth_call', 'eth_getStorageAt', 'eth_getTransactionByHash', 'eth_getTransactionReceipt'].includes(method)) return fail('ALIGNMENT_RPC_NOT_ALLOWED', 503)
@@ -73,12 +113,14 @@ async function bounded<T>(options: FundAuthorityAlignmentOptions, task: (rpc: Rp
         signal.addEventListener('abort', stop, { once: true }); if (signal.aborted) stop()
       })])
     } catch (error) {
+      if (!transportLogged) transportLogged = logTransportFailure(error, url, method)
       if (error instanceof FundAuthorityAlignmentChainError) throw error
       return fail('ALIGNMENT_OBSERVATION_UNAVAILABLE', 503)
     } finally { if (stop) signal.removeEventListener('abort', stop) }
   }
   try { return await task(rpc, now) }
   catch (error) {
+    if (!transportLogged) logCheckFailure(error)
     if (signal.aborted || now() - started >= 90_000) return fail('ALIGNMENT_DEADLINE_EXCEEDED', 503)
     if (error instanceof FundAuthorityAlignmentChainError) throw error
     return fail('ALIGNMENT_OBSERVATION_UNAVAILABLE', 503)

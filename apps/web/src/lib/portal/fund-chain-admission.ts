@@ -1,7 +1,7 @@
 import 'server-only'
 import { AbiCoder, Interface, keccak256 } from 'ethers'
 import { z } from 'zod'
-import { createFundingRpc, FUNDING_RPC_URLS } from './funding-verifier'
+import { createFundingRpc, FUNDING_RPC_URLS, FundingVerificationError, readFundingRpcDiagnostic, type FundingRpcDiagnostic } from './funding-verifier'
 import { createFundServerRpc } from './fund-rpc-server'
 import { fundChainExpectationSchema } from './fund-lifecycle-chain'
 import { fundSetupSnapshotSchema } from './fund-setup-contracts'
@@ -31,7 +31,12 @@ export const fundAdmissionInputSchema = z.object({
 export type FundAdmissionInput = z.infer<typeof fundAdmissionInputSchema>
 const candidateManifestSchema = fundChainExpectationSchema.options[0].shape.manifest.omit({ status: true }).extend({ status: z.literal('NOT_ADMITTED') })
 export class FundAdmissionChainError extends Error {
-  constructor(public readonly code: string) { super('The saved setup or independently observed governance does not support this release candidate. Nothing was admitted or sent.') }
+  public readonly diagnostic?: FundingRpcDiagnostic
+  constructor(public readonly code: string, diagnostic?: FundingRpcDiagnostic) {
+    super('The saved setup or independently observed governance does not support this release candidate. Nothing was admitted or sent.')
+    const checked = readFundingRpcDiagnostic(diagnostic)
+    if (checked) this.diagnostic = checked
+  }
 }
 const fail = (code: string): never => { throw new FundAdmissionChainError(code) }
 export type FundAdmissionRpc = ReturnType<typeof createFundingRpc>
@@ -54,7 +59,13 @@ export function fundAdmissionRpc(options: FundSetupObservers = {}): FundAdmissio
     const index = FUNDING_RPC_URLS.indexOf(url as typeof FUNDING_RPC_URLS[number])
     if (index < 0) return fail('ADMISSION_OBSERVER_NOT_APPROVED')
     const source = (index === 0 ? options.primary : options.secondary) ?? options.rpc ?? (fallback ??= createFundServerRpc())
-    try { return await source(url, method, params) } catch (error) { if (error instanceof FundAdmissionChainError) throw error; return fail('ADMISSION_OBSERVATION_UNAVAILABLE') }
+    try { return await source(url, method, params) } catch (error) {
+      if (error instanceof FundAdmissionChainError) throw error
+      let diagnostic: FundingRpcDiagnostic | undefined
+      try { if (error instanceof FundingVerificationError) diagnostic = readFundingRpcDiagnostic(error.diagnostic) }
+      catch { /* Malformed telemetry must not replace the original rejection. */ }
+      throw new FundAdmissionChainError('ADMISSION_OBSERVATION_UNAVAILABLE', diagnostic)
+    }
   }
 }
 /** Common canonical finalized block; the provider URLs are fixed public identifiers. */
