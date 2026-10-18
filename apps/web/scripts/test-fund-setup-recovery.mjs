@@ -102,7 +102,7 @@ async function seed(n) {
     if (g.ordinal < 11) {
       const result = { status: 'FINAL', block_number: String(100 + g.ordinal), block_hash: hash(100 + g.ordinal) }
       await db.query(`insert into bx1_portal.fund_setup_observations(id,setup_id,step_id,request_hash,result_hash,actor_id,operating_context,result)
-        values($1,$2,$3,bx1_portal.fund_digest(to_jsonb($1::text)),bx1_portal.fund_digest($4::jsonb),$5,$6::jsonb,$4::jsonb)`,
+        values($1::uuid,$2,$3,bx1_portal.fund_digest(to_jsonb(($1::uuid)::text)),bx1_portal.fund_digest($4::jsonb),$5,$6::jsonb,$4::jsonb)`,
       [observedId, s.setup, stepId, JSON.stringify(result), actor, JSON.stringify(context)])
     }
   }
@@ -318,7 +318,10 @@ try {
   await owner(); await db.query(catalogProof)
   console.log(`BX1_FUND_SETUP_RECOVERY_SQL_PASS assertions=${checks} fixture=disposable-cloud-PostgreSQL17 writer=actual guards=original auditRollback=actual twoConnectionCAS=proven originalNonce=retained authority=MFA-wallet-stubs-only hostedAcceptance=not-proven Amoy=not-proven`)
 } catch (error) {
-  console.error(`BX1_FUND_SETUP_RECOVERY_SQL_FAILED phase=${phase} code=${typeof error?.code === 'string' ? error.code : 'assertion'}`)
+  const code = typeof error?.code === 'string' && /^[0-9A-Z]{5}$/.test(error.code) ? error.code : 'assertion'
+  const label = code === 'assertion' && typeof error?.message === 'string'
+    ? error.message.split(/\r?\n/, 1)[0].replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ').slice(0, 240) : null
+  console.error(`BX1_FUND_SETUP_RECOVERY_SQL_FAILED phase=${phase} code=${code}${label ? ` label=${JSON.stringify(label)}` : ''}`)
   process.exitCode = 1
 } finally {
   if (connected) await db.query('rollback').catch(() => {})
