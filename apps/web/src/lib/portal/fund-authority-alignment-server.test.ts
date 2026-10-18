@@ -176,7 +176,7 @@ describe('fund authority alignment authenticated server adapter', () => {
 
   it.each([['ALIGNMENT_OBSERVERS_DISAGREE', 409], ['ALIGNMENT_OBSERVATION_UNAVAILABLE', 503]] as const)(
     'maps %s to a redacted bounded domain error without a worker write', async (code, status) => {
-      let current = baseRead(); mocks.prepare.mockRejectedValueOnce(new FundAuthorityAlignmentChainError(code, status))
+      const current = baseRead(); mocks.prepare.mockRejectedValueOnce(new FundAuthorityAlignmentChainError(code, status))
       mocks.worker.mockImplementation(async (name: string) => name === 'read_fund_authority_alignment' ? structuredClone(current) : null)
       const failure = await handleFundAuthorityAlignment(database(() => current, []), actor,
         request('PREPARE', { request_key: requestKey })).catch((error: unknown) => error)
