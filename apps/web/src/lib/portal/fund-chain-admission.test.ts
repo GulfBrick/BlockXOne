@@ -1,9 +1,9 @@
 import { Interface } from 'ethers'
 import { describe, expect, it, vi } from 'vitest'
 vi.mock('server-only', () => ({}))
-import { buildFundAdmissionCandidate, fundAdmissionInputSchema, fundAdmissionRpc, readFundAdmissionSnapshot } from './fund-chain-admission'
+import { buildFundAdmissionCandidate, FundAdmissionChainError, fundAdmissionInputSchema, fundAdmissionRpc, readFundAdmissionSnapshot } from './fund-chain-admission'
 import { fundChainExpectationSchema } from './fund-lifecycle-chain'
-import { FUNDING_RPC_URLS } from './funding-verifier'
+import { createFundingRpc, FUNDING_RPC_URLS, FundingVerificationError } from './funding-verifier'
 import { FUND_SETUP_CATALOG_HASH, getCanonicalFundArtifact } from './fund-setup-artifacts'
 import { canonicalAdmissionFixture, testAddress, testHash, testId } from './fund-chain-test-fixtures'
 
@@ -83,5 +83,54 @@ describe('canonical setup to truthful release candidate', () => {
     const result = await buildFundAdmissionCandidate(fixture.input, { rpc: fixture.rpc })
     expect(result.roleplay_policy).toEqual(fixture.input.setup.roleplay_policy)
     expect(result.independent_audit_proven).toBe(false)
+  })
+})
+
+describe('internal admission transport diagnostics', () => {
+  it('copies only a genuine transport diagnostic without retaining its upstream cause', async () => {
+    const transport = createFundingRpc(vi.fn(async () => Response.json({ error: 'private upstream body' }, { status: 429 })))
+    const original: unknown = await transport(FUNDING_RPC_URLS[0], 'eth_chainId', []).catch(error => error)
+    if (!(original instanceof FundingVerificationError)) throw new Error('Expected a bounded transport failure.')
+    const wrapped: unknown = await fundAdmissionRpc({ rpc: async () => { throw original } })(FUNDING_RPC_URLS[0], 'eth_chainId', []).catch(error => error)
+    if (!(wrapped instanceof FundAdmissionChainError)) throw new Error('Expected the original admission failure mapping.')
+    expect(wrapped.code).toBe('ADMISSION_OBSERVATION_UNAVAILABLE')
+    expect(wrapped.diagnostic).toEqual({ stage: 'HTTP', httpStatus: 429, rpcCode: null, requestId: 1 })
+    expect(wrapped.diagnostic).not.toBe(original.diagnostic)
+    expect(Object.isFrozen(wrapped.diagnostic)).toBe(true)
+    expect(wrapped.message).toBe(new FundAdmissionChainError('ADMISSION_OBSERVATION_UNAVAILABLE').message)
+    expect(wrapped).not.toHaveProperty('cause')
+    expect(JSON.stringify(wrapped)).not.toMatch(/private|upstream|headers|params|https/)
+  })
+  it.each([
+    { stage: 'HTTP', httpStatus: 429, rpcCode: null, requestId: 1, extra: 'private' },
+    { stage: 'FETCH', httpStatus: 429, rpcCode: null, requestId: 1 },
+    { stage: 'RPC_ERROR', httpStatus: 200, rpcCode: -31999, requestId: 1 },
+    { stage: 'HTTP', httpStatus: 429, rpcCode: null, requestId: 0 },
+  ])('discards malformed telemetry %# and keeps the same rejection', async diagnostic => {
+    const original = new FundingVerificationError('RPC_RESPONSE_UNAVAILABLE')
+    Object.defineProperty(original, 'diagnostic', { value: diagnostic })
+    const error: unknown = await fundAdmissionRpc({ rpc: async () => { throw original } })(FUNDING_RPC_URLS[0], 'eth_call', []).catch(error => error)
+    expect(error).toBeInstanceOf(FundAdmissionChainError)
+    if (!(error instanceof FundAdmissionChainError)) throw new Error('Expected the original admission failure mapping.')
+    expect(error).toMatchObject({ code: 'ADMISSION_OBSERVATION_UNAVAILABLE' })
+    expect(error.diagnostic).toBeUndefined()
+  })
+  it('discards throwing telemetry access and untrusted diagnostic-shaped errors', async () => {
+    const throwing = new FundingVerificationError('RPC_RESPONSE_UNAVAILABLE')
+    Object.defineProperty(throwing, 'diagnostic', { get: () => { throw new Error('private getter') } })
+    const untrusted = Object.assign(new Error('private upstream error'), { diagnostic: { stage: 'HTTP', httpStatus: 429, rpcCode: null, requestId: 1 } })
+    for (const original of [throwing, untrusted]) {
+      const error: unknown = await fundAdmissionRpc({ rpc: async () => { throw original } })(FUNDING_RPC_URLS[1], 'eth_call', []).catch(error => error)
+      if (!(error instanceof FundAdmissionChainError)) throw new Error('Expected the original admission failure mapping.')
+      expect(error).toMatchObject({ code: 'ADMISSION_OBSERVATION_UNAVAILABLE' })
+      expect(error.diagnostic).toBeUndefined()
+      expect(error).not.toHaveProperty('cause')
+      expect(JSON.stringify(error)).not.toContain('private')
+    }
+  })
+  it('preserves an existing typed admission error without inspecting telemetry', async () => {
+    const original = new FundAdmissionChainError('ADMISSION_WRONG_CHAIN')
+    Object.defineProperty(original, 'diagnostic', { get: () => { throw new Error('must not inspect') } })
+    await expect(fundAdmissionRpc({ rpc: async () => { throw original } })(FUNDING_RPC_URLS[0], 'eth_chainId', [])).rejects.toBe(original)
   })
 })

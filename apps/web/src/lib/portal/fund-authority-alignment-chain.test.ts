@@ -3,8 +3,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 vi.mock('server-only', () => ({}))
 vi.mock('./fund-rpc-server', () => ({ createFundServerRpc: vi.fn(() => { throw new Error('Injected alignment fixtures must not read provider credentials') }) }))
 import { canonicalAdmissionFixture, testAddress, testBlock, testHash, testId, type FundFixtureMutation } from './fund-chain-test-fixtures'
-import { FUNDING_RPC_URLS } from './funding-verifier'
-import { fundSetupHash } from './fund-setup-chain'
+import { createFundingRpc, FUNDING_RPC_URLS, FundingVerificationError } from './funding-verifier'
+import { FundSetupChainError, fundSetupHash } from './fund-setup-chain'
 import { getCanonicalFundArtifact, getOfficialSafeArtifact } from './fund-setup-artifacts'
 import { fundAuthorityAlignmentObservationSchema, fundAuthoritySafeTypes, type FundAuthorityAlignmentIntent,
   type FundAuthorityAlignmentRead, type FundAuthoritySignature } from './fund-authority-alignment-contracts'
@@ -250,5 +250,80 @@ describe('one preadmission Safe authority alignment - synthetic RPC/signature fi
     const task = prepareFundAuthorityAlignment(f.read, { rpc: vi.fn(() => new Promise<never>(() => {})) })
     const rejected = expect(task).rejects.toMatchObject({ code: 'ALIGNMENT_DEADLINE_EXCEEDED', status: 503 })
     await vi.advanceTimersByTimeAsync(90000); await rejected
+  })
+})
+
+describe('closed alignment failure diagnostics', () => {
+  it.each([
+    ['HTTP', 429, null, () => Response.json({ error: 'private upstream body' }, { status: 429 })],
+    ['RPC_ERROR', 200, -32000, () => Response.json({ jsonrpc: '2.0', id: 1, error: { code: -32000, message: 'private upstream message' } })],
+    ['FETCH', null, null, () => { throw new Error('https://private.invalid/?key=secret') }],
+  ] as const)('retains only closed %s transport fields through admission and suppresses duplicate check logs', async (stage, httpStatus, rpcCode, response) => {
+    const logger = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const f = fixture(), transport = createFundingRpc(vi.fn(async () => response()))
+      const secondary = (url: string, method: string, params: unknown[]) => method === 'eth_chainId' ? transport(url, method, params) : f.rpc(url, method, params)
+      const error: unknown = await prepareFundAuthorityAlignment(f.read, { primary: f.rpc, secondary }).catch(error => error)
+      expect(error).toMatchObject({ code: 'ALIGNMENT_OBSERVATION_UNAVAILABLE', status: 503 })
+      expect(logger).toHaveBeenCalledExactlyOnceWith('BX1_AUTHORITY_ALIGNMENT_FAILURE', { kind: 'TRANSPORT', observerIndex: 1,
+        method: 'eth_chainId', code: 'ADMISSION_OBSERVATION_UNAVAILABLE', stage, httpStatus, rpcCode, requestId: 1 })
+      expect(JSON.stringify(logger.mock.calls)).not.toMatch(/private|secret|https|params|headers|stack/)
+      expect(JSON.stringify(logger.mock.calls)).not.toContain(f.read.actor_id)
+      expect(JSON.stringify(logger.mock.calls)).not.toContain(f.source.config.safe_address)
+      expect(error).not.toHaveProperty('diagnostic')
+      expect(error).not.toHaveProperty('cause')
+    } finally { logger.mockRestore() }
+  })
+  it('rejects malformed and throwing diagnostic access without logging their contents or changing the failure', async () => {
+    const logger = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const malformed = new FundingVerificationError('RPC_RESPONSE_UNAVAILABLE')
+      Object.defineProperty(malformed, 'diagnostic', { value: { stage: 'HTTP', httpStatus: 429, rpcCode: null, requestId: 1, raw: 'private' } })
+      const throwing = new FundingVerificationError('RPC_RESPONSE_UNAVAILABLE')
+      Object.defineProperty(throwing, 'diagnostic', { get: () => { throw new Error('private getter') } })
+      for (const original of [malformed, throwing]) {
+        logger.mockClear()
+        const f = fixture(), primary = (url: string, method: string, params: unknown[]) => method === 'eth_chainId' ? Promise.reject(original) : f.rpc(url, method, params)
+        await expect(prepareFundAuthorityAlignment(f.read, { primary, secondary: f.rpc })).rejects.toMatchObject({ code: 'ALIGNMENT_OBSERVATION_UNAVAILABLE', status: 503 })
+        expect(logger).toHaveBeenCalledExactlyOnceWith('BX1_AUTHORITY_ALIGNMENT_FAILURE', { kind: 'CHECK', code: 'SETUP_OBSERVATION_UNAVAILABLE' })
+        expect(JSON.stringify(logger.mock.calls)).not.toMatch(/private|raw|diagnostic|https/)
+      }
+    } finally { logger.mockRestore() }
+  })
+  it('logs only a finite semantic code and maps arbitrary typed codes to UNCLASSIFIED', async () => {
+    const logger = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const f = fixture()
+      f.read.authority_expires_at = '2000-01-01T00:00:00Z'
+      await expect(prepareFundAuthorityAlignment(f.read, { rpc: f.rpc })).rejects.toMatchObject({ code: 'ALIGNMENT_AUTHORITY_CHANGED', status: 409 })
+      expect(logger).toHaveBeenCalledExactlyOnceWith('BX1_AUTHORITY_ALIGNMENT_FAILURE', { kind: 'CHECK', code: 'ALIGNMENT_AUTHORITY_CHANGED' })
+      logger.mockClear()
+      const altered = fixture()
+      Object.defineProperty(altered.read, 'operation', { get: () => { throw new FundSetupChainError('private arbitrary code', 503) } })
+      await expect(prepareFundAuthorityAlignment(altered.read, { rpc: altered.rpc })).rejects.toMatchObject({ code: 'ALIGNMENT_OBSERVATION_UNAVAILABLE', status: 503 })
+      expect(logger).toHaveBeenCalledExactlyOnceWith('BX1_AUTHORITY_ALIGNMENT_FAILURE', { kind: 'CHECK', code: 'UNCLASSIFIED' })
+      expect(JSON.stringify(logger.mock.calls)).not.toContain('private')
+    } finally { logger.mockRestore() }
+  })
+  it('does not replace either rejection when console.warn throws', async () => {
+    const logger = vi.spyOn(console, 'warn').mockImplementation(() => { throw new Error('private logger failure') })
+    try {
+      const f = fixture()
+      f.read.authority_expires_at = '2000-01-01T00:00:00Z'
+      await expect(prepareFundAuthorityAlignment(f.read, { rpc: f.rpc })).rejects.toMatchObject({ code: 'ALIGNMENT_AUTHORITY_CHANGED', status: 409 })
+      logger.mockClear()
+      const ready = fixture(), original = new FundingVerificationError('RPC_RESPONSE_UNAVAILABLE', 503, { stage: 'HTTP', httpStatus: 429, rpcCode: null, requestId: 1 })
+      const primary = (url: string, method: string, params: unknown[]) => method === 'eth_chainId' ? Promise.reject(original) : ready.rpc(url, method, params)
+      await expect(prepareFundAuthorityAlignment(ready.read, { primary, secondary: ready.rpc })).rejects.toMatchObject({ code: 'ALIGNMENT_OBSERVATION_UNAVAILABLE', status: 503 })
+      expect(logger).toHaveBeenCalledOnce()
+    } finally { logger.mockRestore() }
+  })
+  it('adds no failure log on a successful preparation', async () => {
+    const logger = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const f = fixture()
+      expect((await prepareFundAuthorityAlignment(f.read, { rpc: f.rpc })).intent).not.toBeNull()
+      expect(logger).not.toHaveBeenCalled()
+    } finally { logger.mockRestore() }
   })
 })
