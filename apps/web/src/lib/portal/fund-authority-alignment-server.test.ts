@@ -27,6 +27,7 @@ const actor = testId(1), setupId = testId(5), requestId = testId(40), operationI
 const context = { mode: 'ROLE' as const, organisationId: testId(2), role: 'TokenisationAgent' as const }
 const requestKey = testId(42), digest = 'ab'.repeat(32), intentDigest = 'cd'.repeat(32), reasonHash = testHash(50)
 const owners = [testAddress(1), testAddress(9)].sort(), future = '2100-01-01T00:00:00Z', now = '2026-10-19T00:00:00Z'
+const zero = '0x0000000000000000000000000000000000000000' as const
 const snapshot = { block: { number: '100', hash: testHash(100), timestamp: now }, providers: [
   { url: 'https://80002.rpc.thirdweb.com' as const, finalized_block_number: '101', finalized_block_hash: testHash(101) },
   { url: 'https://polygon-amoy.gateway.tenderly.co' as const, finalized_block_number: '102', finalized_block_hash: testHash(102) },
@@ -38,7 +39,7 @@ const intent = {
   safe_address: testAddress(72), safe_owners: owners, safe_threshold: 2, executor_address: owners[0], executor_nonce: '12',
   safe_transaction: { to: testAddress(70), value: '0' as const, data: '0x1234', operation: 0 as const,
     safeTxGas: '0' as const, baseGas: '0' as const, gasPrice: '0' as const,
-    gasToken: testAddress(0), refundReceiver: testAddress(0), nonce: '8' },
+    gasToken: zero, refundReceiver: zero, nonce: '8' },
   safe_transaction_hash: testHash(53), snapshot, valid_until: future,
 }
 const execution = { chain_id: 80002 as const, from: owners[0], to: intent.safe_address, value: '0' as const, data: '0x5678', nonce: '12' }

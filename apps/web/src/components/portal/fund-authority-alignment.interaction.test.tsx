@@ -27,11 +27,12 @@ const ownerA = walletA.address.toLowerCase(), ownerB = walletB.address.toLowerCa
 const controller = `0x${'70'.repeat(20)}`, safe = `0x${'72'.repeat(20)}`, factory = `0x${'71'.repeat(20)}`
 const reasonHash = hash(50), txHash = hash(51), digest = 'ab'.repeat(32), intentDigest = 'cd'.repeat(32)
 const future = '2100-01-01T00:00:00Z', observed = '2026-10-19T00:00:00Z'
+const zero = '0x0000000000000000000000000000000000000000' as const
 const controllerInterface = new Interface(['function advanceAuthorityEpoch(uint256 nextEpoch,bytes32 reasonHash)'])
 const safeInterface = new Interface(['function execTransaction(address to,uint256 value,bytes data,uint8 operation,uint256 safeTxGas,uint256 baseGas,uint256 gasPrice,address gasToken,address refundReceiver,bytes signatures) returns (bool)'])
 const safeTransaction = { to: controller, value: '0' as const, data: controllerInterface.encodeFunctionData('advanceAuthorityEpoch', [2, reasonHash]).toLowerCase(), operation: 0 as const,
   safeTxGas: '0' as const, baseGas: '0' as const, gasPrice: '0' as const,
-  gasToken: `0x${'00'.repeat(20)}`, refundReceiver: `0x${'00'.repeat(20)}`, nonce: '8' }
+  gasToken: zero, refundReceiver: zero, nonce: '8' }
 const intent = { version: 1 as const, chain_id: 80002 as const, admission_request_id: requestId, native_binding_hash: digest,
   reason_hash: reasonHash, previous_epoch: 1, target_epoch: 2, controller_address: controller,
   controller_runtime_hash: hash(52), factory_address: factory, safe_address: safe, safe_owners: owners,

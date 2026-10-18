@@ -3,7 +3,7 @@
 -- Apply atomically as TEST owner. New functions are closed except finite wrappers.
 do $alignment_preflight$
 declare p pg_catalog.pg_proc;spec jsonb;signature text;found_count integer;
-  expected constant jsonb:=$alignment_sources$[{"signature":"bx1_private.fund_alignment_operation_guard()","definer":false,"sha256":"bf643f17e7026edbd0465bd075d98eaeabaa885322462b57fbed4d70cca85d1e"},{"signature":"bx1_private.fund_alignment_binding(uuid)","definer":true,"sha256":"0b9aa9fb9f02bd8915ce9c23c9a13ebb89ac17031b0c5740135f16ff10e03812"},{"signature":"bx1_private.fund_alignment_snapshot_valid(jsonb)","definer":true,"sha256":"25c5320755fde3f8efd3fe914a6b3cc24b46366e99dc95e001253ba470f1dd5d"},{"signature":"bx1_private.fund_alignment_view(uuid,uuid,boolean)","definer":true,"sha256":"c08987000be5dc2ca33cf12572cfcb2d41121bc210d927c7bbf12b1299b1672a"},{"signature":"bx1_private.fund_alignment_execution_data(uuid)","definer":true,"sha256":"151ce7b10b4e7100fc853e1110bdc830252579087f3446866960316a0e8057ee"},{"signature":"bx1_private.fund_alignment_enter(uuid,uuid,text)","definer":true,"sha256":"9bc75c6e1784d4486a40e618651b5a7d07a19359be82ed1e3a2ae80d19567dca"},{"signature":"bx1_private.fund_alignment_consume(uuid,uuid,text)","definer":true,"sha256":"37acae3589d890881a101fda9aa24dd1a6176f208dc6d6ba6122878a174ebe66"},{"signature":"public.bx1_portal_fund_alignment_authorise(uuid,integer,jsonb,text)","definer":true,"sha256":"63828cea69e82644c8c16754c1abbae15492880480905027ce1a8f5a9c770fbe"},{"signature":"bx1_portal.read_fund_authority_alignment(uuid,uuid,jsonb,uuid)","definer":true,"sha256":"345c15b05ffebcc1a5308e24b7e26c689087b4e7332392cb2d9e4e60e6a1c24e"},{"signature":"bx1_portal.record_fund_authority_alignment(jsonb,text,uuid,jsonb,uuid)","definer":true,"sha256":"efcbdbddb917fc89dcdfe6ad3ac5f365d4090df4cedbb1658e247a778ba4e2e8"},{"signature":"bx1_portal.read_fund_admission_authorised(uuid,uuid)","definer":true,"sha256":"a7400ab9955307343c9dbf8b03d0bd1d14765fb9f01cb02396cd8780a43e8ac0"},{"signature":"bx1_portal.record_fund_admission_authorised(uuid,jsonb,text,uuid)","definer":true,"sha256":"5cb502738f6b49ed65e0949aece6586e4da3143698db785a973229c0e07f00d3"}]$alignment_sources$;
+  expected constant jsonb:=$alignment_sources$[{"signature":"bx1_private.fund_alignment_operation_guard()","definer":false,"sha256":"bf643f17e7026edbd0465bd075d98eaeabaa885322462b57fbed4d70cca85d1e"},{"signature":"bx1_private.fund_alignment_binding(uuid)","definer":true,"sha256":"0b9aa9fb9f02bd8915ce9c23c9a13ebb89ac17031b0c5740135f16ff10e03812"},{"signature":"bx1_private.fund_alignment_snapshot_valid(jsonb)","definer":true,"sha256":"25c5320755fde3f8efd3fe914a6b3cc24b46366e99dc95e001253ba470f1dd5d"},{"signature":"bx1_private.fund_alignment_view(uuid,uuid,boolean)","definer":true,"sha256":"c08987000be5dc2ca33cf12572cfcb2d41121bc210d927c7bbf12b1299b1672a"},{"signature":"bx1_private.fund_alignment_execution_data(uuid)","definer":true,"sha256":"151ce7b10b4e7100fc853e1110bdc830252579087f3446866960316a0e8057ee"},{"signature":"bx1_private.fund_alignment_enter(uuid,uuid,text)","definer":true,"sha256":"9bc75c6e1784d4486a40e618651b5a7d07a19359be82ed1e3a2ae80d19567dca"},{"signature":"bx1_private.fund_alignment_consume(uuid,uuid,text)","definer":true,"sha256":"37acae3589d890881a101fda9aa24dd1a6176f208dc6d6ba6122878a174ebe66"},{"signature":"public.bx1_portal_fund_alignment_authorise(uuid,integer,jsonb,text)","definer":true,"sha256":"63828cea69e82644c8c16754c1abbae15492880480905027ce1a8f5a9c770fbe"},{"signature":"bx1_portal.read_fund_authority_alignment(uuid,uuid,jsonb,uuid)","definer":true,"sha256":"345c15b05ffebcc1a5308e24b7e26c689087b4e7332392cb2d9e4e60e6a1c24e"},{"signature":"bx1_portal.record_fund_authority_alignment(jsonb,text,uuid,jsonb,uuid)","definer":true,"sha256":"ee2e89dc3cc0a4c0caa3167d1efa93ffdd5d55c16273b6d8b69b186c66ad1dc2"},{"signature":"bx1_portal.read_fund_admission_authorised(uuid,uuid)","definer":true,"sha256":"a7400ab9955307343c9dbf8b03d0bd1d14765fb9f01cb02396cd8780a43e8ac0"},{"signature":"bx1_portal.record_fund_admission_authorised(uuid,jsonb,text,uuid)","definer":true,"sha256":"5cb502738f6b49ed65e0949aece6586e4da3143698db785a973229c0e07f00d3"}]$alignment_sources$;
 begin
   if current_user<>'postgres' or not exists(select 1 from bx1_portal.entry_configuration where singleton and environment='TESTNET') then
     raise exception 'alignment_exact_test_owner_required' using errcode='55000';end if;
@@ -287,7 +287,7 @@ end $fn$;
 create or replace function bx1_portal.record_fund_authority_alignment(preparation jsonb,action text,request_key uuid,evidence jsonb,receipt_id uuid) returns jsonb
 language plpgsql volatile security definer set search_path='' as $fn$
 declare prior text;r bx1_portal.fund_admission_requests;o bx1_private.fund_alignment_operations;old_request bx1_private.fund_alignment_requests;
-  b jsonb;i jsonb;tx jsonb;signature text;signer text;obs jsonb;owners jsonb;runtime text;answer jsonb;before_rev integer;candidate text;current_read jsonb;
+  b jsonb;i jsonb;tx jsonb;signature text;v_signer text;obs jsonb;owners jsonb;runtime text;answer jsonb;before_rev integer;candidate text;current_read jsonb;
 begin
   if action not in ('PREPARE','SIGNATURE','CLAIM','HASH','OBSERVE') or action is null or request_key is null
     or request_key='00000000-0000-0000-0000-000000000000' or pg_catalog.jsonb_typeof(preparation) is distinct from 'object'
@@ -358,16 +358,16 @@ begin
         revision=x.revision+1 where x.id=o.id;end if;
     end if;
   elsif action='SIGNATURE' then
-    perform bx1_portal.require_keys(evidence,array['signer','signature']);signer:=evidence->>'signer';signature:=evidence->>'signature';
+    perform bx1_portal.require_keys(evidence,array['signer','signature']);v_signer:=evidence->>'signer';signature:=evidence->>'signature';
     if o.state not in ('PREPARED','SIGNING') or o.claimed_at is not null or o.intent is null or (o.intent->>'valid_until')::timestamptz<=pg_catalog.clock_timestamp()
-      or not (o.intent->'safe_owners' ? signer) or bx1_portal.fund_setup_wallet_current(r.actor_id,signer) is not true
+      or not (o.intent->'safe_owners' ? v_signer) or bx1_portal.fund_setup_wallet_current(r.actor_id,v_signer) is not true
       or signature is null or signature !~ '^0x[0-9a-f]{130}$' or pg_catalog.substr(signature,131,2) not in ('1b','1c')
       or pg_catalog.substr(signature,3,64) ~ '^0{64}$' or pg_catalog.substr(signature,67,64) ~ '^0{64}$'
       or pg_catalog.decode(pg_catalog.substr(signature,67,64),'hex')>pg_catalog.decode('7fffffffffffffffffffffffffffffff5d576e7357a4501ddfe92f46681b20a0','hex')
-      or exists(select 1 from bx1_private.fund_alignment_signatures x where x.operation_id=o.id and x.signer=signer) then
+      or exists(select 1 from bx1_private.fund_alignment_signatures x where x.operation_id=o.id and x.signer=v_signer) then
       raise exception 'alignment_signature_owner_or_canonical_form_denied' using errcode='23514';end if;
     -- Cryptographic recovery is performed by the sealed chain worker, never by a public DTO.
-    insert into bx1_private.fund_alignment_signatures(operation_id,signer,signature,request_key) values(o.id,signer,signature,record_fund_authority_alignment.request_key);
+    insert into bx1_private.fund_alignment_signatures(operation_id,signer,signature,request_key) values(o.id,v_signer,signature,record_fund_authority_alignment.request_key);
     update bx1_private.fund_alignment_operations x set state='SIGNING',revision=x.revision+1 where x.id=o.id;
   elsif action='CLAIM' then
     perform bx1_portal.require_keys(evidence,array['intent','execution']);tx:=evidence->'execution';

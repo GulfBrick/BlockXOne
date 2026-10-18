@@ -53,6 +53,15 @@ describe('bounded TEST Safe authority alignment native source', () => {
     expect(feature).toContain("obs#>'{receipt_hashes,0}' is distinct from obs#>'{receipt_hashes,1}'")
   })
 
+  it('qualifies the signer variable without changing the native signer column or owner checks', () => {
+    expect(feature).toContain('signature text;v_signer text;')
+    expect(feature).toContain('x.signer=v_signer')
+    expect(feature).not.toContain('x.signer=signer')
+    expect(feature).toContain("o.intent->'safe_owners' ? v_signer")
+    expect(feature).toContain('fund_setup_wallet_current(r.actor_id,v_signer)')
+    expect(feature).toContain('values(o.id,v_signer,signature,record_fund_authority_alignment.request_key)')
+  })
+
   it('uses only a disposable cloud fixture and exposes its genuine-auth/provider limitations', () => {
     expect(fixture).toContain("process.env.GITHUB_ACTIONS !== 'true'")
     expect(fixture).toContain('BX1_FUND_AUTHORITY_ALIGNMENT_SQL_TEST_URL')

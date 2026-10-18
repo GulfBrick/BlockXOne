@@ -131,14 +131,14 @@ describe('one preadmission Safe authority alignment - synthetic RPC/signature fi
     const f = fixture({ mutate: (url, method, params, value) => {
       const call = method === 'eth_call' ? params[0] as { to: string; data: string } : null
       if (kind === 'runtime' && method === 'eth_getCode' && params[0] === f.source.dependencies.controller) return '0x00'
-      if (call?.to === f.source.dependencies.controller) {
+      if (call && call.to === f.source.dependencies.controller) {
         const name = CONTROLLER.parseTransaction({ data: call.data })?.name
         if (kind === 'institution' && name === 'institutionalAuthority') return CONTROLLER.encodeFunctionResult(name, [testAddress(99)])
         if (kind === 'factory' && name === 'factory') return CONTROLLER.encodeFunctionResult(name, [testAddress(99)])
         if (kind === 'paused' && name === 'paused') return CONTROLLER.encodeFunctionResult(name, [true])
         if (kind === 'provider' && name === 'authorityEpoch' && url === FUNDING_RPC_URLS[1]) return CONTROLLER.encodeFunctionResult(name, [2])
       }
-      if (call?.to === f.source.config.safe_address) {
+      if (call && call.to === f.source.config.safe_address) {
         const name = SAFE.parseTransaction({ data: call.data })?.name
         if (kind === 'safe-owner' && name === 'getOwners') return SAFE.encodeFunctionResult(name, [[testAddress(98), testAddress(99)]])
         if (kind === 'safe-module' && name === 'getModulesPaginated') return SAFE.encodeFunctionResult(name, [[testAddress(99)], testAddress(1)])
