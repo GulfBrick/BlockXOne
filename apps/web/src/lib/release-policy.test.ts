@@ -28,6 +28,7 @@ describe('native Auth admission', () => {
       '/api/portal/offering-signatures', '/api/portal/offering-signatures/processing', '/api/portal/offering-signatures/provider-status',
       '/api/portal/application-drafts',
       '/api/portal/fund-lifecycle/admission', '/api/portal/fund-lifecycle/approval', '/api/portal/fund-lifecycle/execute',
+      '/api/portal/fund-lifecycle/authority-alignment',
       '/api/portal/fund-lifecycle/keys/bind', '/api/portal/fund-lifecycle/keys/read',
       '/api/portal/fund-lifecycle/payment', '/api/portal/fund-lifecycle/payment/receipt',
       '/api/portal/fund-lifecycle/payment/reference', '/api/portal/fund-lifecycle/payment/submit',
@@ -38,6 +39,7 @@ describe('native Auth admission', () => {
       '/api/portal/fund-lifecycle/recipient/read', '/api/portal/fund-lifecycle/recipient/signature', '/api/portal/fund-lifecycle/recipient/verify',
       '/api/portal/fund-lifecycle/setup/command', '/api/portal/fund-lifecycle/setup/prepare',
       '/api/portal/fund-lifecycle/setup/read', '/api/portal/fund-lifecycle/setup/verify',
+      '/api/portal/fund-lifecycle/setup/retry',
       '/api/portal/fund-lifecycle/signature', '/api/portal/fund-lifecycle/transaction', '/api/portal/fund-lifecycle/verify',
     ])
   })

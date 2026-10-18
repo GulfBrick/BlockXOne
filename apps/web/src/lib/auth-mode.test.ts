@@ -40,6 +40,7 @@ describe('exact connected wallet context routing', () => {
 describe('complete exact native fund route inventory', () => {
   const paths = [
     '/api/portal/fund-lifecycle/admission', '/api/portal/fund-lifecycle/approval', '/api/portal/fund-lifecycle/execute',
+    '/api/portal/fund-lifecycle/authority-alignment',
     '/api/portal/fund-lifecycle/keys/bind', '/api/portal/fund-lifecycle/keys/read',
     '/api/portal/fund-lifecycle/payment', '/api/portal/fund-lifecycle/payment/receipt',
     '/api/portal/fund-lifecycle/payment/reference', '/api/portal/fund-lifecycle/payment/submit',
@@ -50,10 +51,11 @@ describe('complete exact native fund route inventory', () => {
     '/api/portal/fund-lifecycle/recipient/read', '/api/portal/fund-lifecycle/recipient/signature', '/api/portal/fund-lifecycle/recipient/verify',
     '/api/portal/fund-lifecycle/setup/command', '/api/portal/fund-lifecycle/setup/prepare',
     '/api/portal/fund-lifecycle/setup/read', '/api/portal/fund-lifecycle/setup/verify',
+    '/api/portal/fund-lifecycle/setup/retry',
     '/api/portal/fund-lifecycle/signature', '/api/portal/fund-lifecycle/transaction', '/api/portal/fund-lifecycle/verify',
   ] as const
 
-  it('matches all 26 existing route handlers without admitting a directory or wildcard', () => {
+  it('matches all 28 existing route handlers without admitting a directory or wildcard', () => {
     const directory = resolve(process.cwd(), 'src/app/api/portal/fund-lifecycle')
     function routes(relative = ''): string[] {
       return readdirSync(resolve(directory, relative), { withFileTypes: true }).flatMap(entry => {
@@ -61,7 +63,7 @@ describe('complete exact native fund route inventory', () => {
         return entry.isFile() && entry.name === 'route.ts' ? [`/api/portal/fund-lifecycle/${relative}`] : []
       })
     }
-    expect(paths).toHaveLength(26)
+    expect(paths).toHaveLength(28)
     expect(routes().sort()).toEqual([...paths].sort())
     expect(SUPABASE_ALLOWED_PATHS.filter(path => path.startsWith('/api/portal/fund-lifecycle'))).toEqual([...paths])
   })

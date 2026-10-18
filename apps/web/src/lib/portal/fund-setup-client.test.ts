@@ -3,7 +3,7 @@ import { setupPost, SetupRequestError } from './fund-setup-client'
 
 const actor = '988d46c4-a585-4793-92b3-f1ae964e63bd'
 const context = { mode: 'ROLE' as const, organisationId: '0ba2b126-bd85-4cfb-9a1d-83633c9def1e', role: 'TokenisationAgent' as const }
-afterEach(() => vi.unstubAllGlobals())
+afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks() })
 describe('saved fund setup web handoff', () => {
   it('uses the same authenticated canonical API and explicit actual actor/context', async () => {
     const fetcher = vi.fn(async () => Response.json({ saved: true }))
@@ -32,5 +32,17 @@ describe('saved fund setup web handoff', () => {
     try { await setupPost('/api/portal/fund-lifecycle/setup/read', {}, actor, context) } catch (error) {
       expect(error).toBeInstanceOf(SetupRequestError); expect(String(error)).not.toContain('password')
     }
+  })
+  it('bounds only recovery and authority alignment at 120 seconds and retains 45 seconds elsewhere', async () => {
+    const timeout = vi.spyOn(AbortSignal, 'timeout')
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ saved: true })))
+    await setupPost('/api/portal/fund-lifecycle/setup/retry', {}, actor, context)
+    expect(timeout).toHaveBeenLastCalledWith(120000)
+    await setupPost('/api/portal/fund-lifecycle/authority-alignment', {}, actor, context)
+    expect(timeout).toHaveBeenLastCalledWith(120000)
+    await setupPost('/api/portal/fund-lifecycle/authority-alignment/extra', {}, actor, context)
+    expect(timeout).toHaveBeenLastCalledWith(45000)
+    await setupPost('/api/portal/fund-lifecycle/setup/read', {}, actor, context)
+    expect(timeout).toHaveBeenLastCalledWith(45000)
   })
 })

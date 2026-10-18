@@ -7,6 +7,7 @@ import { callFundWorker } from './fund-lifecycle-worker'
 import { requireFundRpcResult } from './fund-lifecycle-api'
 import { FundLifecycleError } from './fund-lifecycle-server'
 import { portalContextMatches, portalOperatingContextSchema } from './operating-context'
+import { authoriseFundAuthorityPhase } from './fund-authority-alignment-server'
 
 export const fundAdmissionRequestSchema = z.object({ setup_id: z.string().uuid(), expected_revision: z.number().int().positive(),
   request_key: z.string().uuid(), operating_context: portalOperatingContextSchema }).strict()
@@ -38,7 +39,12 @@ export async function admitFundRelease(client: SupabaseClient, actorId: string, 
   }
   // Re-read with the saved real session after provider/DB waits. Browser JSON
   // never supplies receipt IDs, runtime hashes or an admission status.
-  const current = reservationSchema.parse(await callFundWorker('read_fund_admission', [reservation.request_id]))
+  const scope = { setup_id: input.setup_id, setup_revision: input.expected_revision, operating_context: input.operating_context }
+  const readAuthorisation = await authoriseFundAuthorityPhase(client, actorId, scope, 'ADMISSION_READ')
+  if (readAuthorisation.admission_request_id !== reservation.request_id || fundSetupHash(readAuthorisation.input) !== fundSetupHash(reservation.input)) {
+    throw new FundLifecycleError('ADMISSION_AUTHORITY_CHANGED', 'The original release authority changed. Refresh its saved request.', 409)
+  }
+  const current = reservationSchema.parse(await callFundWorker('read_fund_admission_authorised', [reservation.request_id, readAuthorisation.authorisation_receipt_id]))
   if (current.request_id !== reservation.request_id || fundSetupHash(current.input) !== fundSetupHash(reservation.input)) {
     throw new FundLifecycleError('ADMISSION_BINDING_CHANGED', 'The saved release changed. Continue its original request.', 409)
   }
@@ -55,7 +61,11 @@ export async function admitFundRelease(client: SupabaseClient, actorId: string, 
   if (candidate.manifest.suite.token.address !== expected.token) throw new FundLifecycleError('ADMISSION_ADDRESS_CHANGED', 'The fund contract prediction changed. No release was admitted.', 409)
   const body = Object.fromEntries(Object.entries({ ...candidate.manifest, status: 'ADMITTED' }).filter(([key]) => key !== 'hash'))
   const admittedHash = fundSetupHash(body)
-  const result = resultSchema.parse(await callFundWorker('record_fund_admission', [current.request_id, candidate, admittedHash]))
+  const writeAuthorisation = await authoriseFundAuthorityPhase(client, actorId, scope, 'ADMISSION_WRITE')
+  if (writeAuthorisation.admission_request_id !== current.request_id || fundSetupHash(writeAuthorisation.input) !== fundSetupHash(current.input)) {
+    throw new FundLifecycleError('ADMISSION_AUTHORITY_CHANGED', 'The original release authority changed after observation. No release was admitted.', 409)
+  }
+  const result = resultSchema.parse(await callFundWorker('record_fund_admission_authorised', [current.request_id, candidate, admittedHash, writeAuthorisation.authorisation_receipt_id]))
   if (result.request_id !== current.request_id || result.manifest_id !== current.input.manifest_id) throw new FundLifecycleError('ADMISSION_RESULT_UNVERIFIED', 'The saved release result could not be verified. Refresh before retrying.', 503)
   return result
 }

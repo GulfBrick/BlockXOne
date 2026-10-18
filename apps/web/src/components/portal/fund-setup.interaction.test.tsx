@@ -146,3 +146,86 @@ describe('mounted persistent fund setup handoff', () => {
     expect(wallet.request).not.toHaveBeenCalled(); expect(preparation.prepare).not.toHaveBeenCalled(); expect(sent()).toEqual([])
   })
 })
+
+function retryFixture() {
+  const value = saved('UNKNOWN'), setup = value.setup!, template = structuredClone(setup.steps[0]), target = setup.steps[10]
+  setup.steps.slice(0, 10).forEach(item => { item.state = 'FINAL' })
+  Object.assign(target, template, { id: id(110), step_key: 'trex_version', ordinal: 11, kind: 'CALL', nonce: '12',
+    intent: { ...template.intent!, step_key: 'trex_version', kind: 'CALL', nonce: '12', to: second } })
+  setup.next_step = 'trex_version'; setup.saved_intent = target.intent
+  return value
+}
+function recoveryReply(value: FundSetupSnapshot, withLease = false, withProof = true) {
+  const now = Date.now()
+  const target = value.setup!.steps[10]
+  return { snapshot: value, lease: withLease ? { id: id(900), setup_id: setupId, step_id: target.id, actor_id: actor,
+    operating_context: context, intent_hash: binding, sender, nonce: '12', request_key: id(901), expected_revision: 4,
+    expected_step_revision: 3, created_at: new Date(now).toISOString(), expires_at: new Date(now + 120000).toISOString() } : null,
+  proof: withProof ? { version: 1, chain_id: 80002, checked_at: new Date().toISOString(), status: 'RETRY_AVAILABLE', reason_code: null,
+    sender, nonce: '12', intent_hash: binding, anchor: { block_number: '100', block_hash: `0x${binding}` },
+    finalized_nonce: { block_number: '100', block_hash: `0x${binding}`, nonce: '12' },
+    providers: ['https://80002.rpc.thirdweb.com', 'https://polygon-amoy.gateway.tenderly.co'].map(url => ({ url,
+      finalized_block_number: '100', finalized_block_hash: `0x${binding}`, latest_nonce: '12', pending_nonce: '12' })),
+    transaction_hash: null, retry_checks: { runtime_hash: target.intent!.expected_runtime_hash, owner: sender, before_version: '0.0.0', simulation_succeeded: true }, winner: null } : null }
+}
+describe('mounted original Step11 recovery - synthetic responses, no live chain proof', () => {
+  it('checks a hashless original without a wallet request or automatic retry', async () => {
+    const fixture = retryFixture(), fetcher = vi.fn().mockResolvedValueOnce(response(fixture))
+      .mockResolvedValueOnce(Response.json(recoveryReply(fixture)))
+    vi.stubGlobal('fetch', fetcher); render(tree())
+    fireEvent.click(await screen.findByRole('button', { name: 'Check transaction and recover' }))
+    const retry = await screen.findByRole('button', { name: 'Retry this saved step with MetaMask' })
+    expect((retry as HTMLButtonElement).disabled).toBe(true)
+    expect(JSON.parse(fetcher.mock.calls[1][1].body as string)).toMatchObject({ action: 'CHECK', setup_id: setupId, step_id: id(110) })
+    expect(sent()).toEqual([]); expect(preparation.prepare).not.toHaveBeenCalled()
+  })
+  it('never sends from a replay response containing a lease but no RETRY_AVAILABLE proof', async () => {
+    const fixture = retryFixture(), granted = structuredClone(fixture)
+    granted.setup!.revision++; granted.setup!.steps[10].revision++
+    const fetcher = vi.fn().mockResolvedValueOnce(response(fixture)).mockResolvedValueOnce(Response.json(recoveryReply(fixture)))
+      .mockResolvedValueOnce(Response.json(recoveryReply(granted, true, false)))
+    vi.stubGlobal('fetch', fetcher); preparation.prepare.mockResolvedValue({ nonce: '0xc', transaction: { from: sender, to: second, data: fixture.setup!.steps[10].intent!.data, value: '0x0', nonce: '0xc', chainId: '0x13882' } })
+    render(tree()); await connect()
+    fireEvent.click(screen.getByRole('button', { name: 'Check transaction and recover' }))
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'I reviewed this same action, wallet and transaction number.' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Retry this saved step with MetaMask' }))
+    await screen.findByText(/recovery handoff is no longer current/)
+    expect(sent()).toEqual([])
+    expect(preparation.prepare).toHaveBeenCalledWith(wallet, expect.objectContaining({ from: sender, to: second }), { retryNonce: '0xc' })
+  })
+  it.each([4001, 429, -32002])('records wallet outcome %i without resetting the original or automatically resending', async code => {
+    const fixture = retryFixture(), granted = structuredClone(fixture)
+    granted.setup!.revision++; granted.setup!.steps[10].revision++
+    const fetcher = vi.fn().mockImplementation(async (_url: string, options: RequestInit) => {
+      const body = JSON.parse(String(options.body))
+      if (!body.action) return response(fixture)
+      if (body.action === 'CHECK') return Response.json(recoveryReply(fixture))
+      if (body.action === 'CLAIM') { const reply = recoveryReply(granted, true); reply.lease!.request_key = body.request_key; return Response.json(reply) }
+      if (body.action === 'OUTCOME') return Response.json(recoveryReply(granted, false, false))
+      throw new Error('Unlisted fixture request')
+    })
+    const connectedRequest = wallet.request.getMockImplementation()!
+    wallet.request.mockImplementation(async request => request.method === 'eth_sendTransaction' ? Promise.reject({ code }) : connectedRequest(request))
+    preparation.prepare.mockResolvedValue({ nonce: '0xc', transaction: { from: sender, to: second, data: fixture.setup!.steps[10].intent!.data, value: '0x0', nonce: '0xc', chainId: '0x13882' } })
+    vi.stubGlobal('fetch', fetcher); render(tree()); await connect()
+    fireEvent.click(screen.getByRole('button', { name: 'Check transaction and recover' }))
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'I reviewed this same action, wallet and transaction number.' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Retry this saved step with MetaMask' }))
+    await waitFor(() => expect(fetcher.mock.calls.map(([, options]) => JSON.parse(String(options.body))).some(body => body.action === 'OUTCOME')).toBe(true))
+    const outcome = fetcher.mock.calls.map(([, options]) => JSON.parse(String(options.body))).find(body => body.action === 'OUTCOME')
+    expect(outcome.outcome).toBe(code === 4001 ? 'REJECTED' : code === -32002 ? 'PENDING_PROMPT' : 'UNKNOWN')
+    expect(sent()).toHaveLength(1)
+    expect(granted.setup!.steps[10].state).toBe('UNKNOWN')
+  })
+  it('retains a late lease-linked candidate after another winner is FINAL without replacing that winner', async () => {
+    const fixture = retryFixture(), winner = `0x${'de'.repeat(32)}`, late = `0x${'fa'.repeat(32)}`
+    fixture.setup!.steps[10].state = 'FINAL'; fixture.setup!.steps[10].transaction_hash = winner; fixture.setup!.next_step = 'trex_factory'
+    localStorage.setItem(`bx1:fund-setup:retry:v1:${actor}:${setupId}:${id(110)}`, JSON.stringify({ lease_id: id(900), transaction_hash: late, request_key: id(902) }))
+    const fetcher = vi.fn().mockResolvedValueOnce(response(fixture)).mockResolvedValueOnce(Response.json(recoveryReply(fixture, false, false)))
+    vi.stubGlobal('fetch', fetcher); render(tree())
+    fireEvent.click(await screen.findByRole('button', { name: 'Retain additional transaction reference' }))
+    await screen.findByText('The additional transaction reference is retained. The confirmed result was not replaced.')
+    expect(JSON.parse(fetcher.mock.calls[1][1].body as string)).toMatchObject({ action: 'HASH', lease_id: id(900), transaction_hash: late, step_id: id(110) })
+    expect(fixture.setup!.steps[10].transaction_hash).toBe(winner); expect(sent()).toEqual([])
+  })
+})
