@@ -103,6 +103,34 @@ describe('complete exact fund API middleware boundary', () => {
   })
   afterEach(() => vi.unstubAllEnvs())
 
+  it('passes the literal recovery POST without consuming its body or replacing refreshed cookies', async () => {
+    // Deliberately independent of SUPABASE_ALLOWED_PATHS: a new handler must
+    // not disappear from this proof when its route admission is omitted.
+    const refreshed = NextResponse.next()
+    refreshed.cookies.set('fixture-retry-refresh', 'nonsecret', { httpOnly: true, secure: true, sameSite: 'lax', path: '/' })
+    vi.mocked(updateSupabaseSession).mockResolvedValueOnce(refreshed)
+    const body = '{"action":"CHECK","fixture":"not-an-authorised-recovery"}'
+    const request = new NextRequest('https://testnet.bx1.co.za/api/portal/fund-lifecycle/setup/retry', {
+      method: 'POST', headers: { host: 'testnet.bx1.co.za', origin: 'https://testnet.bx1.co.za', 'content-type': 'application/json' }, body,
+    })
+    const response = await middleware(request)
+    expect(response).toBe(refreshed)
+    expect(response.status).toBe(200)
+    expect(response.headers.get('x-middleware-next')).toBe('1')
+    expect(response.headers.get('location')).toBeNull()
+    expect(response.cookies.get('fixture-retry-refresh')?.value).toBe('nonsecret')
+    expect(response.headers.get('cache-control')).toBe('private, no-store')
+    expect(response.headers.get('pragma')).toBe('no-cache')
+    expect(response.headers.get('cdn-cache-control')).toBe('no-store')
+    expect(response.headers.get('vercel-cdn-cache-control')).toBe('no-store')
+    expect(response.headers.get('referrer-policy')).toBe('no-referrer')
+    expect(response.headers.get('x-robots-tag')).toBe('noindex, nofollow, noarchive')
+    expect(updateSupabaseSession).toHaveBeenCalledExactlyOnceWith(request)
+    expect(request.bodyUsed).toBe(false)
+    expect(await request.text()).toBe(body)
+    // Reaching the handler does not grant its current actor/MFA/native authority.
+  })
+
   it.each(paths)('passes POST %s to the existing session boundary without consuming its body or refresh cookies', async path => {
     const refreshed = NextResponse.next()
     refreshed.cookies.set('fixture-fund-refresh', 'nonsecret', { httpOnly: true, secure: true, sameSite: 'lax', path: '/' })

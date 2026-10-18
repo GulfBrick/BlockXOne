@@ -895,6 +895,9 @@ jobs:
           import { spawn } from 'node:child_process'
           import { runHermeticVitest } from './scripts/run-hermetic-tests.mjs'
           const files = process.env.BX1_FOCUSED_UI_MODE === 'investor-journey-focused' ? [
+            'src/middleware.test.ts',
+            'src/lib/auth-mode.test.ts',
+            'src/lib/release-policy.test.ts',
             'src/lib/portal/fund-rpc-server.test.ts',
             'src/components/portal/investor-journey.interaction.test.tsx',
             'src/components/portal/offering-workflow.interaction.test.tsx',
