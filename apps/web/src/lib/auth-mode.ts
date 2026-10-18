@@ -43,6 +43,7 @@ export const SUPABASE_ALLOWED_PATHS = [
   // Exact native fund routes only. Their existing handlers still enforce live
   // identity, environment, scope, MFA, evidence and command authority.
   '/api/portal/fund-lifecycle/admission', '/api/portal/fund-lifecycle/approval', '/api/portal/fund-lifecycle/execute',
+  '/api/portal/fund-lifecycle/authority-alignment',
   '/api/portal/fund-lifecycle/keys/bind', '/api/portal/fund-lifecycle/keys/read',
   '/api/portal/fund-lifecycle/payment', '/api/portal/fund-lifecycle/payment/receipt',
   '/api/portal/fund-lifecycle/payment/reference', '/api/portal/fund-lifecycle/payment/submit',

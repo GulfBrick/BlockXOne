@@ -6,6 +6,7 @@ import { portalContextKey, portalContextMatches, type PortalOperatingContext } f
 import { setupPost } from '@/lib/portal/fund-setup-client'
 import { usePortalActorId, usePortalOperatingContext } from './portal-client'
 import styles from './fund-lifecycle.module.css'
+import { FundAuthorityAlignment } from './fund-authority-alignment'
 
 const markerSchema = z.object({ setup_id: z.string().uuid(), expected_revision: z.number().int().positive(), request_key: z.string().uuid() }).strict()
 const resultSchema = z.object({ request_id: z.string().uuid(), status: z.literal('ADMITTED'), manifest_id: z.string().uuid(), signer_policy_id: z.string().uuid().optional() }).strict()
@@ -16,11 +17,12 @@ export function FundReleaseAdmission({ setupId, revision, actorId, operatingCont
 }) {
   const currentActor = usePortalActorId(), currentContext = usePortalOperatingContext()
   const [busy, setBusy] = useState(false), [message, setMessage] = useState(''), [ready, setReady] = useState(false), [admitted, setAdmitted] = useState(false)
+  const [alignmentNeeded, setAlignmentNeeded] = useState(false)
   const lock = useRef(false), active = useRef(true), generation = useRef(0), controller = useRef<AbortController | null>(null)
   const scope = `${actorId}:${portalContextKey(operatingContext)}:${setupId}:${revision}`
   const key = `bx1:fund-admission:v1:${scope}`
   const authorised = actorId === currentActor && portalContextMatches(currentContext, operatingContext)
-  useEffect(() => { generation.current++; active.current = true; setBusy(false); setMessage(''); setReady(false); setAdmitted(false)
+  useEffect(() => { generation.current++; active.current = true; setBusy(false); setMessage(''); setReady(false); setAdmitted(false); setAlignmentNeeded(false)
     try {
       const raw = sessionStorage.getItem(key)
       if (raw && (raw.length > 1024 || !markerSchema.safeParse(JSON.parse(raw)).success)) throw new Error('The original release request needs recovery. Refresh this saved fund; do not replace it.')
@@ -46,14 +48,15 @@ export function FundReleaseAdmission({ setupId, revision, actorId, operatingCont
       setMessage(`The verified release is connected to this fund. Continue to its deployment request. Reference ${result.request_id}.`)
       await onRefresh()
     } catch (error) {
-      if (current()) setMessage(abort.signal.aborted ? 'Verification did not finish in time. The original release request is retained; check it again without starting another setup.'
-        : error instanceof Error ? error.message : 'Release verification was not confirmed. Retry the original saved request.')
+      if (current()) { setAlignmentNeeded(true); setMessage(abort.signal.aborted ? 'Verification did not finish in time. The original release request is retained; check it again without starting another setup.'
+        : error instanceof Error ? error.message : 'Release verification was not confirmed. Retry the original saved request.') }
     } finally { clearTimeout(timeout); if (current()) { lock.current = false; setBusy(false) } }
   }
   return <section className={styles.card}><div className={styles.cardBody}>
     <h3>{admitted ? 'Ready for the fund deployment request' : 'Connect the verified contracts to this fund'}</h3>
     <p>Check the current offering approvals, proved signing keys and observed contract configuration. This enables the deployment hand-off; it does not open funding or issue units.</p>
-    <button type="button" className={styles.primary} disabled={!authorised || !ready || busy || admitted} onClick={() => void verify()}>{busy ? 'Verifying the current release…' : admitted ? 'Release connected' : 'Verify release and continue'}</button>
+    <button type="button" className={alignmentNeeded ? styles.secondary : styles.primary} disabled={!authorised || !ready || busy || admitted} onClick={() => void verify()}>{busy ? 'Verifying the current release…' : admitted ? 'Release connected' : 'Verify release and continue'}</button>
     {message ? <p className={styles.feedback} role="status" aria-live="polite">{message}</p> : null}
+    {alignmentNeeded && !admitted ? <FundAuthorityAlignment setupId={setupId} revision={revision} actorId={actorId} operatingContext={operatingContext} onAligned={verify} /> : null}
   </div></section>
 }

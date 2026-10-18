@@ -33,11 +33,15 @@ describe('saved fund setup web handoff', () => {
       expect(error).toBeInstanceOf(SetupRequestError); expect(String(error)).not.toContain('password')
     }
   })
-  it('bounds only the recovery endpoint at 120 seconds and retains the original 45-second timeout elsewhere', async () => {
+  it('bounds only recovery and authority alignment at 120 seconds and retains 45 seconds elsewhere', async () => {
     const timeout = vi.spyOn(AbortSignal, 'timeout')
     vi.stubGlobal('fetch', vi.fn(async () => Response.json({ saved: true })))
     await setupPost('/api/portal/fund-lifecycle/setup/retry', {}, actor, context)
     expect(timeout).toHaveBeenLastCalledWith(120000)
+    await setupPost('/api/portal/fund-lifecycle/authority-alignment', {}, actor, context)
+    expect(timeout).toHaveBeenLastCalledWith(120000)
+    await setupPost('/api/portal/fund-lifecycle/authority-alignment/extra', {}, actor, context)
+    expect(timeout).toHaveBeenLastCalledWith(45000)
     await setupPost('/api/portal/fund-lifecycle/setup/read', {}, actor, context)
     expect(timeout).toHaveBeenLastCalledWith(45000)
   })

@@ -28,6 +28,8 @@ type WorkerFunction = 'prepare_fund_operation' | 'claim_fund_observation' | 'rec
   | 'read_fund_setup_preparation' | 'prepare_fund_setup_step' | 'read_fund_setup_observation' | 'record_fund_setup_observation'
   | 'read_fund_setup_retry' | 'record_fund_setup_retry'
   | 'read_fund_admission' | 'record_fund_admission'
+  | 'read_fund_admission_authorised' | 'record_fund_admission_authorised'
+  | 'read_fund_authority_alignment' | 'record_fund_authority_alignment'
   | 'read_fund_recipient_preparation' | 'prepare_fund_recipient_operation' | 'read_fund_recipient_observation' | 'record_fund_recipient_observation'
   | 'read_fund_recipient_claim' | 'record_fund_recipient_claim' | 'read_fund_recipient_signature' | 'record_fund_recipient_signature'
   | 'read_fund_recipient_execution'
@@ -47,6 +49,10 @@ export async function callFundWorker(name: WorkerFunction, parameters: unknown[]
     record_fund_setup_retry: 'select bx1_portal.record_fund_setup_retry($1::jsonb,$2::text,$3::uuid,$4::jsonb) as result',
     read_fund_admission: 'select bx1_portal.read_fund_admission($1::uuid) as result',
     record_fund_admission: 'select bx1_portal.record_fund_admission($1::uuid,$2::jsonb,$3::text) as result',
+    read_fund_admission_authorised: 'select bx1_portal.read_fund_admission_authorised($1::uuid,$2::uuid) as result',
+    record_fund_admission_authorised: 'select bx1_portal.record_fund_admission_authorised($1::uuid,$2::jsonb,$3::text,$4::uuid) as result',
+    read_fund_authority_alignment: 'select bx1_portal.read_fund_authority_alignment($1::uuid,$2::uuid,$3::jsonb,$4::uuid) as result',
+    record_fund_authority_alignment: 'select bx1_portal.record_fund_authority_alignment($1::jsonb,$2::text,$3::uuid,$4::jsonb,$5::uuid) as result',
     read_fund_recipient_preparation: 'select bx1_portal.read_fund_recipient_preparation($1::uuid,$2::integer,$3::uuid,$4::jsonb) as result',
     prepare_fund_recipient_operation: 'select bx1_portal.prepare_fund_recipient_operation($1::jsonb,$2::jsonb) as result',
     read_fund_recipient_observation: 'select bx1_portal.read_fund_recipient_observation($1::uuid,$2::integer,$3::uuid,$4::jsonb) as result',

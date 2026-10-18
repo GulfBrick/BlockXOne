@@ -4,7 +4,7 @@ export class SetupRequestError extends Error {
   constructor(message: string, public readonly uncertain: boolean) { super(message) }
 }
 export async function setupPost(path: string, body: Record<string, unknown>, actorId: string, context: PortalOperatingContext, signal?: AbortSignal): Promise<unknown> {
-  const timeout = path === '/api/portal/fund-lifecycle/setup/retry' ? 120000 : 45000
+  const timeout = path === '/api/portal/fund-lifecycle/setup/retry' || path === '/api/portal/fund-lifecycle/authority-alignment' ? 120000 : 45000
   let response: Response
   try { response = await fetch(path, { method: 'POST', credentials: 'same-origin', cache: 'no-store', redirect: 'error',
     headers: { 'Content-Type': 'application/json', 'x-bx1-expected-actor': actorId },
