@@ -12,8 +12,9 @@ const observerPairs = [
   ['https://polygon-amoy.drpc.org', 'https://polygon-amoy-bor-rpc.publicnode.com'],
   ['https://polygon-amoy.drpc.org', 'https://polygon-amoy.gateway.tenderly.co'],
   ['https://80002.rpc.thirdweb.com', 'https://polygon-amoy.gateway.tenderly.co'],
+  ['https://80002.rpc.thirdweb.com', 'https://polygon-amoy.g.alchemy.com/v2'],
 ] as const
-const provider = z.object({ url: z.enum(['https://polygon-amoy.drpc.org', 'https://polygon-amoy-bor-rpc.publicnode.com', 'https://polygon-amoy.gateway.tenderly.co', 'https://80002.rpc.thirdweb.com']),
+const provider = z.object({ url: z.enum(['https://polygon-amoy.drpc.org', 'https://polygon-amoy-bor-rpc.publicnode.com', 'https://polygon-amoy.gateway.tenderly.co', 'https://80002.rpc.thirdweb.com', 'https://polygon-amoy.g.alchemy.com/v2']),
   finalized_block_number: quantity, finalized_block_hash: hash }).strict()
 const observed = z.object({ block: z.object({ number: quantity, hash, timestamp: instant }).strict(),
   providers: z.tuple([provider, provider]) }).strict()

@@ -172,7 +172,7 @@ describe('dual-observer original setup transaction', () => {
     const result = await observeSetupStep(intent, txHash, { rpc: f.rpc })
     expect(result.status).toBe('FINAL')
     expect(result.transaction_hash).toBe(txHash)
-    expect(result.providers.map(source => source.url)).toEqual(['https://80002.rpc.thirdweb.com', 'https://polygon-amoy.gateway.tenderly.co'])
+    expect(result.providers.map(source => source.url)).toEqual(['https://80002.rpc.thirdweb.com', 'https://polygon-amoy.g.alchemy.com/v2'])
     expect(intent.checks.length).toBeGreaterThan(0)
     for (const [index, url] of FUNDING_RPC_URLS.entries()) {
       expect(f.rpc).toHaveBeenCalledWith(url, 'eth_getCode', [intent.expected_address, '0x64'])
@@ -230,7 +230,7 @@ describe('dual-observer original setup transaction', () => {
   it.each(['eth_getCode', 'eth_call'])('does not fall back to one observer or latest state when archive %s is unavailable', async method => {
     const intent = buildSetupIntent('ctr_implementation', configuration, dependencies, sender, '7')
     const f = fixture(intent, (url, requested, params, value) => {
-      if (url === 'https://polygon-amoy.gateway.tenderly.co' && requested === method && params[params.length - 1] === '0x64') throw new Error('Historical state unavailable')
+      if (url === 'https://polygon-amoy.g.alchemy.com/v2' && requested === method && params[params.length - 1] === '0x64') throw new Error('Historical state unavailable')
       return value
     })
     await expect(observeSetupStep(intent, txHash, { rpc: f.rpc })).rejects.toMatchObject({ code: 'SETUP_OBSERVATION_UNAVAILABLE', status: 503 })

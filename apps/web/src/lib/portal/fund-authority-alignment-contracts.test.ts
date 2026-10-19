@@ -10,6 +10,7 @@ import {
   fundAuthorityAlignmentObservationSchema,
   fundAuthorityAlignmentRequestSchema,
   fundAuthorityAlignmentResponseSchema,
+  fundAuthoritySnapshotSchema,
 } from './fund-authority-alignment-contracts'
 
 const actor = testId(1), setupId = testId(5), requestId = testId(40), operationId = testId(41), claimKey = testId(42)
@@ -21,7 +22,7 @@ const snapshot = {
   block: { number: '100', hash: testHash(100), timestamp: observed },
   providers: [
     { url: 'https://80002.rpc.thirdweb.com' as const, finalized_block_number: '101', finalized_block_hash: testHash(101) },
-    { url: 'https://polygon-amoy.gateway.tenderly.co' as const, finalized_block_number: '102', finalized_block_hash: testHash(102) },
+    { url: 'https://polygon-amoy.g.alchemy.com/v2' as const, finalized_block_number: '102', finalized_block_hash: testHash(102) },
   ],
 }
 const safeTransaction = {
@@ -54,6 +55,19 @@ function response(operationValue: ReturnType<typeof operation> | null, execution
 const execution = { chain_id: 80002 as const, from: owners[0], to: intent.safe_address, value: '0' as const, data: '0x5678', nonce: '12' }
 
 describe('fund authority alignment public contracts', () => {
+  it('preserves historical pair orders but accepts only the exact ordered new pair', () => {
+    const d = 'https://polygon-amoy.drpc.org', p = 'https://polygon-amoy-bor-rpc.publicnode.com', t = 'https://polygon-amoy.gateway.tenderly.co'
+    const w = 'https://80002.rpc.thirdweb.com', a = 'https://polygon-amoy.g.alchemy.com/v2'
+    const pairs = [[d, p], [d, t], [w, t]]
+    for (const pair of pairs) for (const urls of [pair, [...pair].reverse()]) {
+      const saved = { ...snapshot, providers: urls.map((url, index) => ({ ...snapshot.providers[index], url })) }
+      expect(fundAuthoritySnapshotSchema.parse(saved)).toEqual(saved)
+    }
+    expect(fundAuthoritySnapshotSchema.parse(snapshot)).toEqual(snapshot)
+    for (const urls of [[a, w], [w, p], [w, d], [a, d], [a, p], [a, t], [w, w], [a, a], [w, `${a}/private`], [w, `${a}?key=private`]]) {
+      expect(fundAuthoritySnapshotSchema.safeParse({ ...snapshot, providers: urls.map((url, index) => ({ ...snapshot.providers[index], url })) }).success).toBe(false)
+    }
+  })
   it('accepts only the six exact closed actions and rejects aliases or browser evidence', () => {
     const scope = { setup_id: setupId, setup_revision: 100, operating_context: context }
     expect(fundAuthorityAlignmentRequestSchema.parse({ ...scope, action: 'READ' })).toEqual({ ...scope, action: 'READ' })

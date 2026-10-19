@@ -14,11 +14,19 @@ export const fundAuthoritySafeTypes = { SafeTx: [
   { name: 'safeTxGas', type: 'uint256' }, { name: 'baseGas', type: 'uint256' }, { name: 'gasPrice', type: 'uint256' },
   { name: 'gasToken', type: 'address' }, { name: 'refundReceiver', type: 'address' }, { name: 'nonce', type: 'uint256' },
 ] }
+const historicalAuthorityObserverPairs = [
+  ['https://polygon-amoy.drpc.org', 'https://polygon-amoy-bor-rpc.publicnode.com'],
+  ['https://polygon-amoy.drpc.org', 'https://polygon-amoy.gateway.tenderly.co'],
+  ['https://80002.rpc.thirdweb.com', 'https://polygon-amoy.gateway.tenderly.co'],
+] as const
 export const fundAuthoritySnapshotSchema = z.object({
   block: z.object({ number: amount, hash, timestamp: instant }).strict(),
-  providers: z.array(z.object({ url: z.enum(['https://80002.rpc.thirdweb.com', 'https://polygon-amoy.gateway.tenderly.co']),
+  providers: z.array(z.object({ url: z.enum(['https://polygon-amoy.drpc.org', 'https://polygon-amoy-bor-rpc.publicnode.com', 'https://80002.rpc.thirdweb.com', 'https://polygon-amoy.gateway.tenderly.co', 'https://polygon-amoy.g.alchemy.com/v2']),
     finalized_block_number: amount, finalized_block_hash: hash }).strict()).length(2)
-    .refine(values => values[0].url !== values[1].url),
+    // Stored historical orders remain readable; the new pair has one explicit order.
+    .refine(values => (values[0]?.url === 'https://80002.rpc.thirdweb.com' && values[1]?.url === 'https://polygon-amoy.g.alchemy.com/v2')
+      || historicalAuthorityObserverPairs.some(([first, second]) =>
+        values[0]?.url === first && values[1]?.url === second || values[0]?.url === second && values[1]?.url === first)),
 }).strict()
 export const fundAuthorityAlignmentIntentSchema = z.object({
   version: z.literal(1), chain_id: z.literal(80002), admission_request_id: id,

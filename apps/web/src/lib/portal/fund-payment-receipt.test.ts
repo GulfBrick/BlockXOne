@@ -241,6 +241,8 @@ describe('strict client-safe discovery contract', () => {
     ['https://polygon-amoy.gateway.tenderly.co', 'https://polygon-amoy.drpc.org'],
     ['https://80002.rpc.thirdweb.com', 'https://polygon-amoy.gateway.tenderly.co'],
     ['https://polygon-amoy.gateway.tenderly.co', 'https://80002.rpc.thirdweb.com'],
+    ['https://80002.rpc.thirdweb.com', 'https://polygon-amoy.g.alchemy.com/v2'],
+    ['https://polygon-amoy.g.alchemy.com/v2', 'https://80002.rpc.thirdweb.com'],
   ])('retains the exact historical or active evidence pair without relabeling %s / %s', async (first, second) => {
     const f = fixture(), prefill = await inspectRecordedFundPayment(f.saved, { rpc: f.rpc, now })
     const providers = [{ ...prefill.providers[0], url: first }, { ...prefill.providers[1], url: second }]
@@ -255,6 +257,12 @@ describe('strict client-safe discovery contract', () => {
     ['https://80002.rpc.thirdweb.com', 'https://polygon-amoy-bor-rpc.publicnode.com'],
     ['https://polygon-amoy-bor-rpc.publicnode.com', 'https://polygon-amoy.gateway.tenderly.co'],
     ['https://polygon-amoy.gateway.tenderly.co', 'https://polygon-amoy-bor-rpc.publicnode.com'],
+    ['https://polygon-amoy.g.alchemy.com/v2', 'https://polygon-amoy.drpc.org'],
+    ['https://polygon-amoy.drpc.org', 'https://polygon-amoy.g.alchemy.com/v2'],
+    ['https://polygon-amoy.g.alchemy.com/v2', 'https://polygon-amoy.gateway.tenderly.co'],
+    ['https://polygon-amoy.gateway.tenderly.co', 'https://polygon-amoy.g.alchemy.com/v2'],
+    ['https://polygon-amoy.g.alchemy.com/v2', 'https://polygon-amoy-bor-rpc.publicnode.com'],
+    ['https://polygon-amoy-bor-rpc.publicnode.com', 'https://polygon-amoy.g.alchemy.com/v2'],
   ])('rejects every unapproved cross-pair without relabeling %s / %s', async (first, second) => {
     const f = fixture(), prefill = await inspectRecordedFundPayment(f.saved, { rpc: f.rpc, now })
     const providers = [{ ...prefill.providers[0], url: first }, { ...prefill.providers[1], url: second }]
@@ -278,12 +286,13 @@ describe('strict client-safe discovery contract', () => {
     'https://polygon-amoy.drpc.org/secret', 'https://unapproved.example', 'https://name:secret@polygon-amoy.gateway.tenderly.co',
     'https://polygon-amoy.gateway.tenderly.co?apiKey=secret', 'https://name:secret@80002.rpc.thirdweb.com',
     'https://80002.rpc.thirdweb.com?apiKey=secret', 'https://80002.rpc.thirdweb.com/unapproved',
-    'https://80002.rpc.thirdweb.com.example'])('never serializes credential-bearing or nonapproved observer endpoint %s', async url => {
+    'https://80002.rpc.thirdweb.com.example', 'https://polygon-amoy.g.alchemy.com/v2/private', 'https://polygon-amoy.g.alchemy.com/v2?key=private',
+    'https://name:private@polygon-amoy.g.alchemy.com/v2'])('never serializes credential-bearing or nonapproved observer endpoint %s', async url => {
     const f = fixture(), prefill = await inspectRecordedFundPayment(f.saved, { rpc: f.rpc, now })
     expect(fundPaymentReceiptPrefillSchema.safeParse({ ...prefill, providers: [{ ...prefill.providers[0], url }, prefill.providers[1]] }).success).toBe(false)
   })
   it.each(['https://polygon-amoy.drpc.org', 'https://polygon-amoy-bor-rpc.publicnode.com',
-    'https://polygon-amoy.gateway.tenderly.co', 'https://80002.rpc.thirdweb.com'])('does not present two copies of %s as distinct service evidence', async url => {
+    'https://polygon-amoy.gateway.tenderly.co', 'https://80002.rpc.thirdweb.com', 'https://polygon-amoy.g.alchemy.com/v2'])('does not present two copies of %s as distinct service evidence', async url => {
     const f = fixture(), prefill = await inspectRecordedFundPayment(f.saved, { rpc: f.rpc, now })
     const provider = { ...prefill.providers[0], url }
     expect(fundPaymentReceiptPrefillSchema.safeParse({ ...prefill, providers: [provider, provider] }).success).toBe(false)

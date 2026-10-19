@@ -2,7 +2,7 @@ import { Interface, keccak256 } from 'ethers'
 import { FUNDING_CHAIN_ID, fundingClaimHash, verifyFundingClaim, type FundingClaim } from './funding-claim'
 
 /** Fixed TEST service endpoints; upstream-node independence/retention is not asserted. */
-export const FUNDING_RPC_URLS = ['https://80002.rpc.thirdweb.com', 'https://polygon-amoy.gateway.tenderly.co'] as const
+export const FUNDING_RPC_URLS = ['https://80002.rpc.thirdweb.com', 'https://polygon-amoy.g.alchemy.com/v2'] as const
 export type FundingVerificationKind = 'ROUTE' | 'REFERENCE'
 export type FundingRouteExpectation = {
   id: string; revision: number; environment: 'TESTNET'; chain_id: 80002;
@@ -212,9 +212,39 @@ export async function verifyFundingExpectation(expectation: FundingVerificationE
   return { ...common, ...facts, kind: 'REFERENCE' }
 }
 
+/** One fixed secondary queue per operation; slots include response consumption. */
+function alchemyReadQueue() {
+  type Waiting = { signal: AbortSignal; expiresAt: number; resolve: (release: () => void) => void; reject: (error: FundingVerificationError) => void; cancel: () => void }
+  const waiting: Waiting[] = []
+  let active = 0, lastStart = -Infinity, timer: ReturnType<typeof setTimeout> | undefined
+  const pump = () => {
+    if (timer !== undefined) { clearTimeout(timer); timer = undefined }
+    if (!waiting.length || active >= 4) return
+    const delay = Math.max(0, lastStart + 100 - Date.now())
+    if (delay > 0) { timer = setTimeout(pump, delay); return }
+    const item = waiting.shift()!
+    item.signal.removeEventListener('abort', item.cancel)
+    if (item.signal.aborted || Date.now() >= item.expiresAt) { item.reject(new FundingVerificationError('RPC_RESPONSE_UNAVAILABLE')); pump(); return }
+    active++; lastStart = Date.now()
+    let released = false
+    item.resolve(() => { if (!released) { released = true; active--; pump() } })
+    pump()
+  }
+  return (signal: AbortSignal, expiresAt: number) => new Promise<() => void>((resolve, reject) => {
+    const item: Waiting = { signal, expiresAt, resolve, reject, cancel: () => {
+      const index = waiting.indexOf(item)
+      if (index >= 0) waiting.splice(index, 1)
+      signal.removeEventListener('abort', item.cancel)
+      reject(new FundingVerificationError('RPC_RESPONSE_UNAVAILABLE')); pump()
+    } }
+    if (signal.aborted || Date.now() >= expiresAt) { reject(new FundingVerificationError('RPC_RESPONSE_UNAVAILABLE')); return }
+    waiting.push(item); signal.addEventListener('abort', item.cancel, { once: true }); pump()
+  })
+}
 /** Bounded JSON transport shared by the Edge entrypoint and the explicit cloud probe. */
 export function createFundingRpc(fetcher: typeof fetch = fetch, signal?: AbortSignal): Rpc {
   let requestId = 0
+  const acquireSecondary = alchemyReadQueue()
   return async (url, method, params) => {
     if (!(FUNDING_RPC_URLS as readonly string[]).includes(url)) reject('RPC_ENDPOINT_NOT_ALLOWED')
     if (!['eth_chainId', 'eth_getBlockByNumber', 'eth_getTransactionReceipt', 'eth_getTransactionByHash', 'eth_getTransactionCount', 'eth_getStorageAt', 'eth_getCode', 'eth_call'].includes(method)) reject('RPC_METHOD_NOT_ALLOWED')
@@ -230,10 +260,12 @@ export function createFundingRpc(fetcher: typeof fetch = fetch, signal?: AbortSi
       || typeof params[1] !== 'string' || !/^0x(?:0|[1-9a-f][0-9a-f]*)$/i.test(params[1])
       || typeof params[2] !== 'string' || !/^0x(?:0|[1-9a-f][0-9a-f]*)$/i.test(params[2]))) reject('RPC_PARAMETERS_NOT_ALLOWED')
     const id = ++requestId
-    const timeout = AbortSignal.timeout(8_000)
+    const expiresAt = Date.now() + 8_000, timeout = AbortSignal.timeout(8_000)
     const bound = signal ? AbortSignal.any([signal, timeout]) : timeout
     let stage: FundingRpcDiagnostic['stage'] = 'FETCH', httpStatus: number | null = null, rpcCode: number | null = null
+    let release: (() => void) | undefined
     try {
+      if (url === FUNDING_RPC_URLS[1]) { release = await acquireSecondary(bound, expiresAt); if (bound.aborted || Date.now() >= expiresAt) reject('RPC_RESPONSE_UNAVAILABLE') }
       const response = await fetcher(url, { method: 'POST', redirect: 'error', cache: 'no-store', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id, method, params }), signal: bound })
       stage = 'HTTP'
       httpStatus = Number.isInteger(response.status) && response.status >= 100 && response.status <= 599 ? response.status : null
@@ -257,17 +289,23 @@ export function createFundingRpc(fetcher: typeof fetch = fetch, signal?: AbortSi
       const diagnostic = readFundingRpcDiagnostic({ stage, httpStatus, rpcCode, requestId: id })
       if (error instanceof FundingVerificationError) throw new FundingVerificationError(error.code, error.status, diagnostic)
       throw new FundingVerificationError('RPC_RESPONSE_UNAVAILABLE', 503, diagnostic)
-    }
+    } finally { release?.() }
   }
 }
-/** Mandatory server credentials affect only the fixed primary's transport, never its evidence identity. */
-export function createAuthenticatedFundingRpc(clientId: unknown, secretKey: unknown, fetcher: typeof fetch = fetch, signal?: AbortSignal): Rpc {
+/** Each fixed service receives only its own captured credentials, never an evidence alias. */
+export function createAuthenticatedFundingRpc(clientId: unknown, secretKey: unknown, fetcher: typeof fetch = fetch, signal?: AbortSignal, alchemySecretKey?: unknown): Rpc {
   if (typeof clientId !== 'string' || clientId.length !== 32 || !/^[0-9a-f]{32}$/.test(clientId)
-    || typeof secretKey !== 'string' || secretKey.length < 64 || secretKey.length > 256 || /[^A-Za-z0-9_-]/.test(secretKey)) reject('RPC_AUTH_NOT_CONFIGURED')
-  const capturedClientId = clientId, capturedSecretKey = secretKey
+    || typeof secretKey !== 'string' || secretKey.length < 64 || secretKey.length > 256 || /[^A-Za-z0-9_-]/.test(secretKey)
+    || typeof alchemySecretKey !== 'string' || alchemySecretKey.length < 16 || alchemySecretKey.length > 512
+    || /[^A-Za-z0-9._~+/=-]/.test(alchemySecretKey) || !/^[A-Za-z0-9._~+/-]+=*$/.test(alchemySecretKey)) reject('RPC_AUTH_NOT_CONFIGURED')
+  const capturedClientId = clientId, capturedSecretKey = secretKey, capturedAlchemySecretKey = alchemySecretKey
   const authenticatedFetch: typeof fetch = (input, init) => {
-    if (input !== FUNDING_RPC_URLS[0]) return fetcher(input, init)
     const headers = new Headers(init?.headers)
+    if (input === FUNDING_RPC_URLS[1]) {
+      headers.set('Authorization', `Bearer ${capturedAlchemySecretKey}`)
+      return fetcher(FUNDING_RPC_URLS[1], { ...init, headers })
+    }
+    if (input !== FUNDING_RPC_URLS[0]) reject('RPC_ENDPOINT_NOT_ALLOWED')
     headers.set('x-client-id', capturedClientId)
     headers.set('x-secret-key', capturedSecretKey)
     return fetcher(`${FUNDING_RPC_URLS[0]}/${capturedClientId}`, { ...init, headers })
