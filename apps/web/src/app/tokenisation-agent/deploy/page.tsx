@@ -50,9 +50,7 @@ function errorMessage(caught: unknown, fallback: string) {
 export default function LocalTokenDeploymentPage() {
   const { user, loading: authLoading } = useAuth()
   const managedTestnet = isManagedTestnetRuntime()
-  const canDeploy = managedTestnet
-    ? user?.permissions?.['tokenops:deploy_bxo_testnet_token'] === true
-    : user?.permissions?.['tokenops:deploy_erc3643'] === true
+  const canDeploy = managedTestnet && user?.permissions?.['tokenops:deploy_bxo_testnet_token'] === true
   const [items, setItems] = useState<TokenDeploymentQueueItem[]>([])
   const [approvalItems, setApprovalItems] = useState<ChainOperationApprovalQueueItem[]>([])
   const [evidence, setEvidence] = useState<Record<string, DeploymentEvidence>>({})
@@ -169,7 +167,7 @@ export default function LocalTokenDeploymentPage() {
   }, [authLoading, load])
 
   async function deploy(item: TokenDeploymentQueueItem) {
-    if (!user || workingId || item.token_contract) return
+    if (!user || !canDeploy || workingId || item.token_contract) return
     setWorkingId(item.id)
     setError('')
     setMessage('')
@@ -240,7 +238,7 @@ export default function LocalTokenDeploymentPage() {
     operation: ChainOperationRecord,
     decision: ChainOperationDecision
   ) {
-    if (!user) throw new Error('Your verified session is required.')
+    if (!user || !managedTestnet) throw new Error('A verified session in the admitted testnet environment is required.')
     setError('')
     setMessage('')
     setMessageFinal(false)

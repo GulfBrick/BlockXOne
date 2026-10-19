@@ -1,0 +1,707 @@
+{
+  "schema": "blockxone.canonical-fund-cloud-compile.v1",
+  "status": "COMPILED_SOURCE_NOT_DEPLOYED_NOT_ADMITTED",
+  "application_commit": "6760781aad5afc7af47b47789040efec06766e20",
+  "chain_id": 80002,
+  "compiler": "0.8.17+commit.8df45f5f.Emscripten.clang",
+  "settings": {
+    "optimizer": {
+      "enabled": true,
+      "runs": 200
+    },
+    "evmVersion": "london",
+    "viaIR": false,
+    "metadata": {
+      "bytecodeHash": "ipfs"
+    },
+    "outputSelection": {
+      "*": {
+        "*": [
+          "abi",
+          "metadata",
+          "storageLayout",
+          "evm.bytecode",
+          "evm.deployedBytecode"
+        ],
+        "": [
+          "ast"
+        ]
+      }
+    }
+  },
+  "package_lock_sha256": "978ea43f927142bb28bdad081b2800e006f8e1f275b6201a74475a4f9634d290",
+  "packages": [
+    {
+      "name": "@erc3643org/erc-3643",
+      "version": "4.1.3",
+      "git_head": "b6c5fabf86e733ede017fef754d59eeb8f80e3f4",
+      "tarball": "https://registry.npmjs.org/@erc3643org/erc-3643/-/erc-3643-4.1.3.tgz",
+      "integrity": "sha512-ckq3bHUnw5vzi5hHBQOQHCSo4BSyMxjl7IarJvNovUBsRLqlZX3eqTaLXQpn2r6L7Ob1k+Au5MSxEg0zDW4wIA==",
+      "archive_sha256": "117eefd52feeadbda7f058dbd87835ad12444ad3405e3551a405157f389b190a"
+    },
+    {
+      "name": "@onchain-id/solidity",
+      "version": "2.2.1",
+      "git_head": "a483cda6821e3883497972d36d0c4c1e1693e483",
+      "tarball": "https://registry.npmjs.org/@onchain-id/solidity/-/solidity-2.2.1.tgz",
+      "integrity": "sha512-B54InT8yi89qlh9UVCARcfdQLVDP7Lef87B/Ww2Wn19oyEbPmlWho2EK1sgnrt/8Q0fGX/7y5rDnx3HPy28NTA==",
+      "archive_sha256": "354da7e179fec2b616d423c5e274dbe9b38d0b9c11e61c8337de393d767119bc"
+    },
+    {
+      "name": "@openzeppelin/contracts",
+      "version": "4.9.6",
+      "tarball": "https://registry.npmjs.org/@openzeppelin/contracts/-/contracts-4.9.6.tgz",
+      "integrity": "sha512-xSmezSupL+y9VkHZJGDoCBpmnB2ogM13ccaYDWqJTfS3dbuHkgjuwDFUmaFauBCboQMGB/S5UqUl2y54X99BmA==",
+      "archive_sha256": "32b6b5c684c48ad0260baeffe61105b74f390115dbdc0d8853c6ceca8a8610bb"
+    },
+    {
+      "name": "@openzeppelin/contracts-upgradeable",
+      "version": "4.9.6",
+      "tarball": "https://registry.npmjs.org/@openzeppelin/contracts-upgradeable/-/contracts-upgradeable-4.9.6.tgz",
+      "integrity": "sha512-m4iHazOsOCv1DgM7eD7GupTJ+NFVujRZt1wzddDPSVGpWdKq1SKkla5htKG7+IS4d2XOCtzkUNwRZ7Vq5aEUMA==",
+      "archive_sha256": "5f68facafdcdf34b2f1e8582f1ccfe1de710ba088ebf02d2e2c640775f850b4d"
+    },
+    {
+      "name": "solc",
+      "version": "0.8.17",
+      "tarball": "https://registry.npmjs.org/solc/-/solc-0.8.17.tgz",
+      "integrity": "sha512-Dtidk2XtTTmkB3IKdyeg6wLYopJnBVxdoykN8oP8VY3PQjN16BScYoUJTXFm2OP7P0hXNAqWiJNmmfuELtLf8g==",
+      "archive_sha256": "d384ac1d28f47fbf45e9c56d1bd43d60d4c534776589ef8618a39679bfe30ddd"
+    },
+    {
+      "name": "tmp",
+      "version": "0.0.33",
+      "tarball": "https://registry.npmjs.org/tmp/-/tmp-0.0.33.tgz",
+      "integrity": "sha512-jRCJlojKnZ3addtTOjdIqoRuPEKBvNXcGYqzO6zWZX8KfKEpnGY5jfggJQ3EjKuu8D4bJRr0y+cYJFmYbImXGw==",
+      "archive_sha256": "d23b215e6ce454f076e163a3feb7a1b548ddf44be3a41353f74837722b11d6c5"
+    },
+    {
+      "name": "os-tmpdir",
+      "version": "1.0.2",
+      "tarball": "https://registry.npmjs.org/os-tmpdir/-/os-tmpdir-1.0.2.tgz",
+      "integrity": "sha512-D2FR03Vir7FIu45XBY20mTb+/ZSWB00sjU9jdQXt83gDrI4Ztz5Fs7/yy74g2N5SVQY4xY1qDr4rNddwYRVX0g==",
+      "archive_sha256": "13e722c2d777c084983e2e1e1150a496aa25685791a71244e61a605ec892ad89"
+    },
+    {
+      "name": "semver",
+      "version": "5.7.2",
+      "tarball": "https://registry.npmjs.org/semver/-/semver-5.7.2.tgz",
+      "integrity": "sha512-cBznnQ9KjJqU67B52RMC65CMarK2600WFnbkcaiwWq3xy/5haFJlshgnpjovMVJ+Hff49d8GEn0b87C5pDQ10g==",
+      "archive_sha256": "e548374dbc4898ddcf349bde966885ac87949be21fd04cd096f53fef0ce655f9"
+    },
+    {
+      "name": "js-sha3",
+      "version": "0.8.0",
+      "tarball": "https://registry.npmjs.org/js-sha3/-/js-sha3-0.8.0.tgz",
+      "integrity": "sha512-gF1cRrHhIzNfToc802P800N8PpXS+evLLXfsVpowqmAFR9uwbi89WvXg2QspOmXL8QL86J4T1EpFu+yUkwJY3Q==",
+      "archive_sha256": "e7553c170ef6c9bdd5ae140bb6216867c671918e6c7bb8b2878ecfd45fd25fa4"
+    },
+    {
+      "name": "commander",
+      "version": "8.3.0",
+      "tarball": "https://registry.npmjs.org/commander/-/commander-8.3.0.tgz",
+      "integrity": "sha512-OkTL9umf+He2DZkUq8f8J9of7yL6RJKI24dVITBmNfZBmri9zYZQrKkuXiKhyfPSu8tUhnVBB1iKXevvnlR4Ww==",
+      "archive_sha256": "1b38e65f9229a84060ca5d041a58e3bc1ea374da6d933f9060ca86a67949c10b"
+    },
+    {
+      "name": "memorystream",
+      "version": "0.3.1",
+      "tarball": "https://registry.npmjs.org/memorystream/-/memorystream-0.3.1.tgz",
+      "integrity": "sha512-S3UwM3yj5mtUSEfP41UZmt/0SCoVYUcU1rkXv+BQ5Ig8ndL4sPoJNBUJERafdPb5jjHJGuMgytgKvKIf58XNBw==",
+      "archive_sha256": "64f8daa9b9c215b22bb534fe9916e335e99b7cedab7bc9a05f4b2bc4dbf7f2ff"
+    },
+    {
+      "name": "command-exists",
+      "version": "1.2.9",
+      "tarball": "https://registry.npmjs.org/command-exists/-/command-exists-1.2.9.tgz",
+      "integrity": "sha512-LTQ/SGc+s0Xc0Fu5WaKnR0YiygZkm9eKFvyS+fRsU7/ZWFF8ykFM6Pc9aCVf1+xasOOZpO3BAVgVrKvsqKHV7w==",
+      "archive_sha256": "f1008fb499d172caed4f8f7fea0c2c489116a46aad8ec3d7eeb4e7944fb6e75d"
+    },
+    {
+      "name": "follow-redirects",
+      "version": "1.15.11",
+      "tarball": "https://registry.npmjs.org/follow-redirects/-/follow-redirects-1.15.11.tgz",
+      "integrity": "sha512-deG2P0JfjrTxl50XGCDyfI97ZGVCxIpfKYmfyrQ54n5FO/0gfIES8C/Psl6kWVDolizcaaxZJnTS0QSMxvnsBQ==",
+      "archive_sha256": "0c863ee07bf82ea65cdfc5a6e54cbd5235c8a946f09a0e35c1617a87c6bc9283"
+    }
+  ],
+  "artifacts": [
+    {
+      "name": "Token",
+      "source": "@erc3643org/erc-3643/contracts/token/Token.sol",
+      "file": "artifacts/Token.json",
+      "sha256": "d959612f55494c16b18ba70159227a69588f6f98a0e3ad7231fe65d33c5a79c1",
+      "constructor": {
+        "type": "constructor",
+        "inputs": [],
+        "stateMutability": "nonpayable"
+      },
+      "runtime_has_immutables": false,
+      "deployed_address": null
+    },
+    {
+      "name": "IdentityRegistry",
+      "source": "@erc3643org/erc-3643/contracts/registry/implementation/IdentityRegistry.sol",
+      "file": "artifacts/IdentityRegistry.json",
+      "sha256": "bbf2913fdbc5af8fc3b79058119956e2ba394ec5b7a43affd37354beff466a50",
+      "constructor": {
+        "type": "constructor",
+        "inputs": [],
+        "stateMutability": "nonpayable"
+      },
+      "runtime_has_immutables": false,
+      "deployed_address": null
+    },
+    {
+      "name": "IdentityRegistryStorage",
+      "source": "@erc3643org/erc-3643/contracts/registry/implementation/IdentityRegistryStorage.sol",
+      "file": "artifacts/IdentityRegistryStorage.json",
+      "sha256": "a2ff2833ec299ce3de3e36122daa24a6db6ff9ef48f1b476b50f521b157617a3",
+      "constructor": {
+        "type": "constructor",
+        "inputs": [],
+        "stateMutability": "nonpayable"
+      },
+      "runtime_has_immutables": false,
+      "deployed_address": null
+    },
+    {
+      "name": "TrustedIssuersRegistry",
+      "source": "@erc3643org/erc-3643/contracts/registry/implementation/TrustedIssuersRegistry.sol",
+      "file": "artifacts/TrustedIssuersRegistry.json",
+      "sha256": "872eae00994795d880e24f7ec63f660d9dfa3b4a9bf0376f72f7bf679b7cbb32",
+      "constructor": {
+        "type": "constructor",
+        "inputs": [],
+        "stateMutability": "nonpayable"
+      },
+      "runtime_has_immutables": false,
+      "deployed_address": null
+    },
+    {
+      "name": "ClaimTopicsRegistry",
+      "source": "@erc3643org/erc-3643/contracts/registry/implementation/ClaimTopicsRegistry.sol",
+      "file": "artifacts/ClaimTopicsRegistry.json",
+      "sha256": "1dca7b6e1eb7e4def99232f2889e5c71f37ce1688baa7fb9e1030e7626472ad0",
+      "constructor": {
+        "type": "constructor",
+        "inputs": [],
+        "stateMutability": "nonpayable"
+      },
+      "runtime_has_immutables": false,
+      "deployed_address": null
+    },
+    {
+      "name": "ModularCompliance",
+      "source": "@erc3643org/erc-3643/contracts/compliance/modular/ModularCompliance.sol",
+      "file": "artifacts/ModularCompliance.json",
+      "sha256": "5e51893729846d551e6ab1376229bb7dbbc106f0535f8d3f1e882352c52e0b13",
+      "constructor": {
+        "type": "constructor",
+        "inputs": [],
+        "stateMutability": "nonpayable"
+      },
+      "runtime_has_immutables": false,
+      "deployed_address": null
+    },
+    {
+      "name": "TokenProxy",
+      "source": "@erc3643org/erc-3643/contracts/proxy/TokenProxy.sol",
+      "file": "artifacts/TokenProxy.json",
+      "sha256": "2cc047efb49e210c7521ca10041daf931e16e29ebd3d95588b66caf3fd4706d8",
+      "constructor": {
+        "inputs": [
+          {
+            "internalType": "address",
+            "name": "implementationAuthority",
+            "type": "address"
+          },
+          {
+            "internalType": "address",
+            "name": "_identityRegistry",
+            "type": "address"
+          },
+          {
+            "internalType": "address",
+            "name": "_compliance",
+            "type": "address"
+          },
+          {
+            "internalType": "string",
+            "name": "_name",
+            "type": "string"
+          },
+          {
+            "internalType": "string",
+            "name": "_symbol",
+            "type": "string"
+          },
+          {
+            "internalType": "uint8",
+            "name": "_decimals",
+            "type": "uint8"
+          },
+          {
+            "internalType": "address",
+            "name": "_onchainID",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "nonpayable",
+        "type": "constructor"
+      },
+      "runtime_has_immutables": false,
+      "deployed_address": null
+    },
+    {
+      "name": "IdentityRegistryProxy",
+      "source": "@erc3643org/erc-3643/contracts/proxy/IdentityRegistryProxy.sol",
+      "file": "artifacts/IdentityRegistryProxy.json",
+      "sha256": "056f146bc6e6c3c09c4cf24c0a62d21edf5734e0aec4a7537f2b6363b873fd66",
+      "constructor": {
+        "inputs": [
+          {
+            "internalType": "address",
+            "name": "implementationAuthority",
+            "type": "address"
+          },
+          {
+            "internalType": "address",
+            "name": "_trustedIssuersRegistry",
+            "type": "address"
+          },
+          {
+            "internalType": "address",
+            "name": "_claimTopicsRegistry",
+            "type": "address"
+          },
+          {
+            "internalType": "address",
+            "name": "_identityStorage",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "nonpayable",
+        "type": "constructor"
+      },
+      "runtime_has_immutables": false,
+      "deployed_address": null
+    },
+    {
+      "name": "IdentityRegistryStorageProxy",
+      "source": "@erc3643org/erc-3643/contracts/proxy/IdentityRegistryStorageProxy.sol",
+      "file": "artifacts/IdentityRegistryStorageProxy.json",
+      "sha256": "158fe9e8255a0d5615447f0ef91eb49af868b9981120e591ce2b274bcb9d1d82",
+      "constructor": {
+        "inputs": [
+          {
+            "internalType": "address",
+            "name": "implementationAuthority",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "nonpayable",
+        "type": "constructor"
+      },
+      "runtime_has_immutables": false,
+      "deployed_address": null
+    },
+    {
+      "name": "TrustedIssuersRegistryProxy",
+      "source": "@erc3643org/erc-3643/contracts/proxy/TrustedIssuersRegistryProxy.sol",
+      "file": "artifacts/TrustedIssuersRegistryProxy.json",
+      "sha256": "869468e5e23aa4e7b6a2a1eb9038d2767b94c841e3c42ba20a643555239c1056",
+      "constructor": {
+        "inputs": [
+          {
+            "internalType": "address",
+            "name": "implementationAuthority",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "nonpayable",
+        "type": "constructor"
+      },
+      "runtime_has_immutables": false,
+      "deployed_address": null
+    },
+    {
+      "name": "ClaimTopicsRegistryProxy",
+      "source": "@erc3643org/erc-3643/contracts/proxy/ClaimTopicsRegistryProxy.sol",
+      "file": "artifacts/ClaimTopicsRegistryProxy.json",
+      "sha256": "4f6aa56f2fda21551750ad1cdb7671e88065265aa5aebc263eab7e4b671669fd",
+      "constructor": {
+        "inputs": [
+          {
+            "internalType": "address",
+            "name": "implementationAuthority",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "nonpayable",
+        "type": "constructor"
+      },
+      "runtime_has_immutables": false,
+      "deployed_address": null
+    },
+    {
+      "name": "ModularComplianceProxy",
+      "source": "@erc3643org/erc-3643/contracts/proxy/ModularComplianceProxy.sol",
+      "file": "artifacts/ModularComplianceProxy.json",
+      "sha256": "41903ee395d2af2fa48f452b5a82c1dc96008cd473aac80b1cfbf273e04bf084",
+      "constructor": {
+        "inputs": [
+          {
+            "internalType": "address",
+            "name": "implementationAuthority",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "nonpayable",
+        "type": "constructor"
+      },
+      "runtime_has_immutables": false,
+      "deployed_address": null
+    },
+    {
+      "name": "TREXImplementationAuthority",
+      "source": "@erc3643org/erc-3643/contracts/proxy/authority/TREXImplementationAuthority.sol",
+      "file": "artifacts/TREXImplementationAuthority.json",
+      "sha256": "8a632e41bd5d47816e44fbc08cda811eeba24e71eb888d2c5d7ab1280218a4e5",
+      "constructor": {
+        "inputs": [
+          {
+            "internalType": "bool",
+            "name": "referenceStatus",
+            "type": "bool"
+          },
+          {
+            "internalType": "address",
+            "name": "trexFactory",
+            "type": "address"
+          },
+          {
+            "internalType": "address",
+            "name": "iaFactory",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "nonpayable",
+        "type": "constructor"
+      },
+      "runtime_has_immutables": false,
+      "deployed_address": null
+    },
+    {
+      "name": "IAFactory",
+      "source": "@erc3643org/erc-3643/contracts/proxy/authority/IAFactory.sol",
+      "file": "artifacts/IAFactory.json",
+      "sha256": "53b3176290ed4bc4ff093334ded62319bd75120990c6193d72b0b6b529d36d21",
+      "constructor": {
+        "inputs": [
+          {
+            "internalType": "address",
+            "name": "trexFactory",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "nonpayable",
+        "type": "constructor"
+      },
+      "runtime_has_immutables": false,
+      "deployed_address": null
+    },
+    {
+      "name": "TREXFactory",
+      "source": "@erc3643org/erc-3643/contracts/factory/TREXFactory.sol",
+      "file": "artifacts/TREXFactory.json",
+      "sha256": "9ca4821dc8f52f59647d35cdd038a6acdfbc07935fe9e6f0ee3bb470d85b83be",
+      "constructor": {
+        "inputs": [
+          {
+            "internalType": "address",
+            "name": "implementationAuthority_",
+            "type": "address"
+          },
+          {
+            "internalType": "address",
+            "name": "idFactory_",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "nonpayable",
+        "type": "constructor"
+      },
+      "runtime_has_immutables": false,
+      "deployed_address": null
+    },
+    {
+      "name": "Identity",
+      "source": "@onchain-id/solidity/contracts/Identity.sol",
+      "file": "artifacts/Identity.json",
+      "sha256": "6f1312db7162f4782a39af20baed7b299584bb9afeb56d1ececbd8dd324c70d2",
+      "constructor": {
+        "inputs": [
+          {
+            "internalType": "address",
+            "name": "initialManagementKey",
+            "type": "address"
+          },
+          {
+            "internalType": "bool",
+            "name": "_isLibrary",
+            "type": "bool"
+          }
+        ],
+        "stateMutability": "nonpayable",
+        "type": "constructor"
+      },
+      "runtime_has_immutables": false,
+      "deployed_address": null
+    },
+    {
+      "name": "ClaimIssuer",
+      "source": "@onchain-id/solidity/contracts/ClaimIssuer.sol",
+      "file": "artifacts/ClaimIssuer.json",
+      "sha256": "f4a4430eb88f5ed8a5c56f3acad88a6fa3cb9201cd8c56a8909971e7be7508db",
+      "constructor": {
+        "inputs": [
+          {
+            "internalType": "address",
+            "name": "initialManagementKey",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "nonpayable",
+        "type": "constructor"
+      },
+      "runtime_has_immutables": false,
+      "deployed_address": null
+    },
+    {
+      "name": "IdentityProxy",
+      "source": "@onchain-id/solidity/contracts/proxy/IdentityProxy.sol",
+      "file": "artifacts/IdentityProxy.json",
+      "sha256": "f3ac806ca34afd90bab63f92216bea3824703523c9d26b8813ac727c917a8d10",
+      "constructor": {
+        "inputs": [
+          {
+            "internalType": "address",
+            "name": "_implementationAuthority",
+            "type": "address"
+          },
+          {
+            "internalType": "address",
+            "name": "initialManagementKey",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "nonpayable",
+        "type": "constructor"
+      },
+      "runtime_has_immutables": false,
+      "deployed_address": null
+    },
+    {
+      "name": "ImplementationAuthority",
+      "source": "@onchain-id/solidity/contracts/proxy/ImplementationAuthority.sol",
+      "file": "artifacts/ImplementationAuthority.json",
+      "sha256": "77757a7f2d6e876acbf8e9471931e998232e3f7bf02db92632ae353793993e2c",
+      "constructor": {
+        "inputs": [
+          {
+            "internalType": "address",
+            "name": "implementation",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "nonpayable",
+        "type": "constructor"
+      },
+      "runtime_has_immutables": false,
+      "deployed_address": null
+    },
+    {
+      "name": "IdFactory",
+      "source": "@onchain-id/solidity/contracts/factory/IdFactory.sol",
+      "file": "artifacts/IdFactory.json",
+      "sha256": "91be381c76d72c1960f1bad900dfbf0801c09bc27083d45673c417cf49d5acbf",
+      "constructor": {
+        "inputs": [
+          {
+            "internalType": "address",
+            "name": "implementationAuthority",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "nonpayable",
+        "type": "constructor"
+      },
+      "runtime_has_immutables": true,
+      "deployed_address": null
+    },
+    {
+      "name": "Bx1FundController",
+      "source": "contracts/canonical/Bx1FundController.sol",
+      "file": "artifacts/Bx1FundController.json",
+      "sha256": "e1537a5f063846d6ab8ff5fd7620c9475bbc55c5238749a0dd13716430d5fd1e",
+      "constructor": {
+        "inputs": [
+          {
+            "internalType": "address",
+            "name": "authority",
+            "type": "address"
+          },
+          {
+            "internalType": "address",
+            "name": "officialFactory",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "nonpayable",
+        "type": "constructor"
+      },
+      "runtime_has_immutables": true,
+      "deployed_address": null
+    },
+    {
+      "name": "Bx1MaximumHoldingModule",
+      "source": "contracts/canonical/Bx1MaximumHoldingModule.sol",
+      "file": "artifacts/Bx1MaximumHoldingModule.json",
+      "sha256": "b476e0f0b183bb19c53bf84f01339cd587542df797d50416f8621b88d3c4b03f",
+      "constructor": {
+        "inputs": [
+          {
+            "internalType": "uint256",
+            "name": "maximumHoldingBaseUnits",
+            "type": "uint256"
+          }
+        ],
+        "stateMutability": "nonpayable",
+        "type": "constructor"
+      },
+      "runtime_has_immutables": true,
+      "deployed_address": null
+    },
+    {
+      "name": "Bx1TestSettlementToken",
+      "source": "contracts/canonical/Bx1TestSettlementToken.sol",
+      "file": "artifacts/Bx1TestSettlementToken.json",
+      "sha256": "b890216afa4ca142de3ddcb50ca719363d76f8ab042c5d22c5b6c49acf716e78",
+      "constructor": {
+        "inputs": [
+          {
+            "internalType": "address",
+            "name": "initialHolder",
+            "type": "address"
+          },
+          {
+            "internalType": "uint256",
+            "name": "initialSupplyBaseUnits",
+            "type": "uint256"
+          }
+        ],
+        "stateMutability": "nonpayable",
+        "type": "constructor"
+      },
+      "runtime_has_immutables": false,
+      "deployed_address": null
+    }
+  ],
+  "warnings": [
+    {
+      "severity": "warning",
+      "code": "2519",
+      "source_location": {
+        "end": 1110,
+        "file": "@onchain-id/solidity/contracts/factory/IdFactory.sol",
+        "start": 1079
+      },
+      "message": "This declaration shadows an existing declaration."
+    },
+    {
+      "severity": "warning",
+      "code": "2519",
+      "source_location": {
+        "end": 9394,
+        "file": "@onchain-id/solidity/contracts/factory/IdFactory.sol",
+        "start": 9363
+      },
+      "message": "This declaration shadows an existing declaration."
+    },
+    {
+      "severity": "warning",
+      "code": "3628",
+      "source_location": {
+        "end": 6211,
+        "file": "@erc3643org/erc-3643/contracts/proxy/TokenProxy.sol",
+        "start": 3873
+      },
+      "message": "This contract has a payable fallback function, but no receive ether function. Consider adding a receive ether function."
+    },
+    {
+      "severity": "warning",
+      "code": "3628",
+      "source_location": {
+        "end": 5189,
+        "file": "@erc3643org/erc-3643/contracts/proxy/ClaimTopicsRegistryProxy.sol",
+        "start": 3873
+      },
+      "message": "This contract has a payable fallback function, but no receive ether function. Consider adding a receive ether function."
+    },
+    {
+      "severity": "warning",
+      "code": "3628",
+      "source_location": {
+        "end": 5648,
+        "file": "@erc3643org/erc-3643/contracts/proxy/IdentityRegistryProxy.sol",
+        "start": 3873
+      },
+      "message": "This contract has a payable fallback function, but no receive ether function. Consider adding a receive ether function."
+    },
+    {
+      "severity": "warning",
+      "code": "3628",
+      "source_location": {
+        "end": 5193,
+        "file": "@erc3643org/erc-3643/contracts/proxy/IdentityRegistryStorageProxy.sol",
+        "start": 3873
+      },
+      "message": "This contract has a payable fallback function, but no receive ether function. Consider adding a receive ether function."
+    },
+    {
+      "severity": "warning",
+      "code": "3628",
+      "source_location": {
+        "end": 5193,
+        "file": "@erc3643org/erc-3643/contracts/proxy/TrustedIssuersRegistryProxy.sol",
+        "start": 3874
+      },
+      "message": "This contract has a payable fallback function, but no receive ether function. Consider adding a receive ether function."
+    },
+    {
+      "severity": "warning",
+      "code": "3628",
+      "source_location": {
+        "end": 5185,
+        "file": "@erc3643org/erc-3643/contracts/proxy/ModularComplianceProxy.sol",
+        "start": 3873
+      },
+      "message": "This contract has a payable fallback function, but no receive ether function. Consider adding a receive ether function."
+    },
+    {
+      "severity": "warning",
+      "code": "3628",
+      "source_location": {
+        "end": 2618,
+        "file": "@onchain-id/solidity/contracts/proxy/IdentityProxy.sol",
+        "start": 115
+      },
+      "message": "This contract has a payable fallback function, but no receive ether function. Consider adding a receive ether function."
+    }
+  ],
+  "deployment_addresses": {},
+  "admission_receipt": null,
+  "tested_evm_execution": false,
+  "business_journey_proven": false
+}

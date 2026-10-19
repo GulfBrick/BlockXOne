@@ -33,6 +33,23 @@
   --bxo-text-secondary-rgb: 156 184 196;
   --bxo-text-tertiary-rgb: 111 145 159;
 
+  /* Semantic RGB aliases keep opacity utilities theme-aware without changing
+     the sampled brand primitives or the dark navigation palette. */
+  --bxo-color-bg-primary-rgb: var(--bxo-carbon-rgb);
+  --bxo-color-bg-secondary-rgb: var(--bxo-midnight-rgb);
+  --bxo-color-surface-rgb: var(--bxo-surface-rgb);
+  --bxo-color-surface-secondary-rgb: var(--bxo-surface-secondary-rgb);
+  --bxo-color-surface-elevated-rgb: var(--bxo-deep-teal-rgb);
+  --bxo-color-text-primary-rgb: var(--bxo-frost-rgb);
+  --bxo-color-text-secondary-rgb: var(--bxo-text-secondary-rgb);
+  --bxo-color-text-tertiary-rgb: var(--bxo-text-tertiary-rgb);
+  --bxo-color-success-rgb: var(--bxo-success-rgb);
+  --bxo-color-warning-rgb: var(--bxo-warning-rgb);
+  --bxo-color-danger-rgb: var(--bxo-danger-rgb);
+  --bxo-color-info-rgb: var(--bxo-signal-cyan-rgb);
+  --bxo-text-on-accent: var(--bxo-carbon);
+  --bxo-text-accent: var(--bxo-electric-cyan);
+
   /* Backward-compatible application aliases. */
   --bxo-bg-primary: var(--bxo-carbon);
   --bxo-bg-secondary: var(--bxo-midnight);

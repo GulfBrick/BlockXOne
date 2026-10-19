@@ -9,24 +9,33 @@ import { BX1_ROLES } from './contracts'
 function fixture() {
   const rows: Record<string, unknown> = {
     bx1_profiles: { id: 'user-a', platform_user_id: 'platform-a', display_name: 'Alice', status: 'ACTIVE' },
-    bx1_memberships: [{ organisation_id: 'org-a', role: 'Investor', status: 'ACTIVE' }],
+    bx1_memberships: [{ id: 'membership-a', organisation_id: 'org-a', role: 'Investor', status: 'ACTIVE' }],
     bx1_organisations: [{ id: 'org-a', name: 'Internal A', status: 'ACTIVE' }],
   }
+  const responses: Record<string, Promise<{ data: unknown; error: null }>> = {}
+  const requestsStarted: string[] = []
   const filters: unknown[][] = []
   const client = {
     auth: { getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'user-a', email: 'alice@example.test', user_metadata: { role: 'SuperAdmin' }, app_metadata: { roles: ['SuperAdmin'], organisationId: 'forged-org' } } }, error: null }) },
+    rpc: vi.fn(async () => ({
+      data: rows.bx1_effective_membership_ids ?? (rows.bx1_memberships as { id: string }[]).map((member) => member.id),
+      error: rows.bx1_effective_membership_error ?? null,
+    })),
     from: vi.fn((table: string) => {
       const query = {
         select: vi.fn().mockReturnThis(),
         eq: vi.fn((...args: unknown[]) => { filters.push([table, ...args]); return query }),
         in: vi.fn().mockReturnThis(),
-        maybeSingle: vi.fn(async () => ({ data: rows[table], error: null })),
-        then: (resolve: (value: unknown) => unknown) => Promise.resolve({ data: rows[table], error: null }).then(resolve),
+        maybeSingle: vi.fn().mockReturnThis(),
+        then: (resolve: (value: unknown) => unknown) => {
+          requestsStarted.push(table)
+          return (responses[table] ?? Promise.resolve({ data: rows[table], error: null })).then(resolve)
+        },
       }
       return query
     }),
   }
-  return { client, rows, filters }
+  return { client, rows, filters, responses, requestsStarted }
 }
 
 beforeEach(() => {
@@ -38,6 +47,31 @@ beforeEach(() => {
 })
 
 describe('request-local Supabase client', () => {
+  it.each(['profile', 'memberships'])('overlaps own-record requests and waits for both when %s finishes first', async (first) => {
+    const { client, rows, responses, requestsStarted } = fixture()
+    let finishProfile!: (value: { data: unknown; error: null }) => void
+    let finishMemberships!: (value: { data: unknown; error: null }) => void
+    responses.bx1_profiles = new Promise(resolve => { finishProfile = resolve })
+    responses.bx1_memberships = new Promise(resolve => { finishMemberships = resolve })
+    const pending = readWorkspace(client as never)
+    await vi.waitFor(() => {
+      expect(requestsStarted).toEqual(['bx1_profiles', 'bx1_memberships'])
+    })
+    expect(client.rpc).not.toHaveBeenCalled()
+    expect(client.from).not.toHaveBeenCalledWith('bx1_organisations')
+    const completeProfile = () => finishProfile({ data: rows.bx1_profiles, error: null })
+    const completeMemberships = () => finishMemberships({ data: rows.bx1_memberships, error: null })
+    if (first === 'profile') completeProfile()
+    else completeMemberships()
+    await new Promise<void>(resolve => setImmediate(resolve))
+    expect(client.rpc).not.toHaveBeenCalled()
+    expect(client.from).not.toHaveBeenCalledWith('bx1_organisations')
+    if (first === 'profile') completeMemberships()
+    else completeProfile()
+    const workspace = await pending
+    expect(client.rpc).toHaveBeenCalledWith('bx1_workspace_effective_membership_ids')
+    expect(workspace?.organisations).toEqual([{ id: 'org-a', name: 'Internal A', roles: ['Investor'] }])
+  })
   it('forces host-only HttpOnly cookies, retains deletion options and no-store fetch', async () => {
     const adapter = { getAll: vi.fn(() => []), setAll: vi.fn() }
     createRequestSupabaseClient(adapter)
@@ -64,7 +98,7 @@ describe('request-local Supabase client', () => {
 describe('workspace reads', () => {
   it.each(BX1_ROLES)('passes verified own rows through real policy for %s without wallet facts', async (role) => {
     const { client, rows } = fixture()
-    rows.bx1_memberships = [{ organisation_id: 'org-a', role, status: 'ACTIVE' }]
+    rows.bx1_memberships = [{ id: 'membership-a', organisation_id: 'org-a', role, status: 'ACTIVE' }]
     const evaluate = vi.spyOn(policy, 'evaluateActionPermission')
     const result = await readWorkspace(client as never)
     expect(result?.organisations[0].roles).toEqual([role])
@@ -96,12 +130,12 @@ describe('workspace reads', () => {
   })
   it('denies suspended membership rows and does not promote metadata roles', async () => {
     const { client, rows } = fixture()
-    rows.bx1_memberships = [{ organisation_id: 'org-a', role: 'Investor', status: 'SUSPENDED' }]
+    rows.bx1_memberships = [{ id: 'membership-a', organisation_id: 'org-a', role: 'Investor', status: 'SUSPENDED' }]
     await expect(readWorkspace(client as never)).rejects.toThrow(AuthUnavailableError)
   })
   it('checks each resolved organisation without admitting metadata-only assignments', async () => {
     const { client, rows } = fixture()
-    rows.bx1_memberships = [{ organisation_id: 'org-a', role: 'Investor', status: 'ACTIVE' }, { organisation_id: 'org-b', role: 'SuperAdmin', status: 'ACTIVE' }]
+    rows.bx1_memberships = [{ id: 'membership-a', organisation_id: 'org-a', role: 'Investor', status: 'ACTIVE' }, { id: 'membership-b', organisation_id: 'org-b', role: 'SuperAdmin', status: 'ACTIVE' }]
     rows.bx1_organisations = [{ id: 'org-a', name: 'A', status: 'ACTIVE' }, { id: 'org-b', name: 'B', status: 'ACTIVE' }, { id: 'forged-org', name: 'Forged', status: 'ACTIVE' }]
     const evaluate = vi.spyOn(policy, 'evaluateActionPermission')
     const result = await readWorkspace(client as never)
@@ -116,6 +150,7 @@ describe('workspace reads', () => {
     expect(result).toEqual({ user: { id: 'user-a', email: 'alice@example.test', platformUserId: 'platform-a', displayName: 'Alice' }, organisations: [{ id: 'org-a', name: 'Internal A', roles: ['Investor'] }] })
     expect(filters).toContainEqual(['bx1_profiles', 'id', 'user-a'])
     expect(filters).toContainEqual(['bx1_memberships', 'user_id', 'user-a'])
+    expect(client.rpc).toHaveBeenCalledWith('bx1_workspace_effective_membership_ids')
     expect(client.auth.getUser).toHaveBeenCalledOnce()
     expect(JSON.stringify(result)).not.toContain('SuperAdmin')
   })
@@ -140,7 +175,23 @@ describe('workspace reads', () => {
   })
   it('rejects an unknown role instead of trusting metadata or widening access', async () => {
     const { client, rows } = fixture()
-    rows.bx1_memberships = [{ organisation_id: 'org-a', role: 'Root', status: 'ACTIVE' }]
+    rows.bx1_memberships = [{ id: 'membership-a', organisation_id: 'org-a', role: 'Root', status: 'ACTIVE' }]
+    await expect(readWorkspace(client as never)).rejects.toThrow(AuthUnavailableError)
+  })
+  it('removes an expired manager membership even if an earlier table read still returned it', async () => {
+    const { client, rows } = fixture()
+    rows.bx1_memberships = [
+      { id: 'membership-a', organisation_id: 'org-a', role: 'Investor', status: 'ACTIVE' },
+      { id: 'membership-b', organisation_id: 'org-b', role: 'OfferingManager', status: 'ACTIVE' },
+    ]
+    rows.bx1_organisations = [{ id: 'org-a', name: 'Independent investor account', status: 'ACTIVE' }, { id: 'org-b', name: 'Expired customer manager', status: 'ACTIVE' }]
+    rows.bx1_effective_membership_ids = ['membership-a']
+    const result = await readWorkspace(client as never)
+    expect(result?.organisations).toEqual([{ id: 'org-a', name: 'Independent investor account', roles: ['Investor'] }])
+  })
+  it('fails closed when the native membership authority check is unavailable', async () => {
+    const { client, rows } = fixture()
+    rows.bx1_effective_membership_error = { message: 'provider unavailable' }
     await expect(readWorkspace(client as never)).rejects.toThrow(AuthUnavailableError)
   })
 })

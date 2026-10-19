@@ -1,0 +1,19 @@
+.flow { min-width: 0; width: 100%; max-width: 740px; margin-inline: auto; }
+.flow > *, .flow form { min-width: 0; max-width: 100%; }
+.flow [hidden] { display: none !important; }
+.flow hr { display: none; }
+.steps { display: flex; flex-wrap: nowrap; overflow-x: auto; max-width: 100%; gap: 6px; list-style: none; padding: 3px; margin: 0 0 12px; }
+.steps li { flex: 0 0 auto; }
+.steps button { white-space: nowrap; }
+.steps button { min-height: 44px; padding: 8px 12px; background: var(--bxo-surface-secondary); color: var(--bxo-text-primary); border: 1px solid var(--bxo-border-default); border-radius: 6px; font: inherit; cursor: pointer; }
+.steps button[aria-current=step] { border-color: var(--portal-link); background: var(--bxo-accent-soft); color: var(--portal-link); font-weight: 650; }
+.flow input, .flow select, .flow textarea { font-size: 16px; }
+.flow button { min-height: 44px; }
+.flow :where(button,input,textarea,select):focus-visible { outline: 3px solid var(--bxo-electric-cyan); outline-offset: 3px; }
+.heading { margin: 0; font-size: 24px; }
+.navigation { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; margin-top: 16px; }
+.summary { display: grid; gap: 12px; overflow-wrap: anywhere; }
+.summary dt { font-weight: 650; }
+.summary dd { margin: 4px 0 0; white-space: pre-wrap; }
+.status { font-size: 14px; color: var(--bxo-text-secondary); }
+@media (max-width: 760px) { .navigation button { flex: 1; } }

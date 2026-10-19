@@ -1,0 +1,494 @@
+{
+  "schema": "blockxone.canonical-fund-artifact.v1",
+  "status": "COMPILED_SOURCE_NOT_DEPLOYED_NOT_ADMITTED",
+  "chain_id": 80002,
+  "contract_name": "TokenProxy",
+  "source_path": "@erc3643org/erc-3643/contracts/proxy/TokenProxy.sol",
+  "source_sha256": "52eb3a4a75a4e8e1f360a366a746ff9cd01869cb76d826b2cfd2e3646a5592ac",
+  "application_commit": "6760781aad5afc7af47b47789040efec06766e20",
+  "release_source": {
+    "erc3643_repository": "https://github.com/ERC-3643/ERC-3643",
+    "erc3643_commit": "b6c5fabf86e733ede017fef754d59eeb8f80e3f4",
+    "onchainid_repository": "https://github.com/onchain-id/solidity",
+    "onchainid_commit": "a483cda6821e3883497972d36d0c4c1e1693e483"
+  },
+  "compiler_version": "0.8.17+commit.8df45f5f.Emscripten.clang",
+  "settings": {
+    "optimizer": {
+      "enabled": true,
+      "runs": 200
+    },
+    "evmVersion": "london",
+    "viaIR": false,
+    "metadata": {
+      "bytecodeHash": "ipfs"
+    },
+    "outputSelection": {
+      "*": {
+        "*": [
+          "abi",
+          "metadata",
+          "storageLayout",
+          "evm.bytecode",
+          "evm.deployedBytecode"
+        ],
+        "": [
+          "ast"
+        ]
+      }
+    }
+  },
+  "abi": [
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "implementationAuthority",
+          "type": "address"
+        },
+        {
+          "internalType": "address",
+          "name": "_identityRegistry",
+          "type": "address"
+        },
+        {
+          "internalType": "address",
+          "name": "_compliance",
+          "type": "address"
+        },
+        {
+          "internalType": "string",
+          "name": "_name",
+          "type": "string"
+        },
+        {
+          "internalType": "string",
+          "name": "_symbol",
+          "type": "string"
+        },
+        {
+          "internalType": "uint8",
+          "name": "_decimals",
+          "type": "uint8"
+        },
+        {
+          "internalType": "address",
+          "name": "_onchainID",
+          "type": "address"
+        }
+      ],
+      "stateMutability": "nonpayable",
+      "type": "constructor"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "_implementationAuthority",
+          "type": "address"
+        }
+      ],
+      "name": "ImplementationAuthoritySet",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": false,
+          "internalType": "uint8",
+          "name": "version",
+          "type": "uint8"
+        }
+      ],
+      "name": "Initialized",
+      "type": "event"
+    },
+    {
+      "stateMutability": "payable",
+      "type": "fallback"
+    },
+    {
+      "inputs": [],
+      "name": "getImplementationAuthority",
+      "outputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "_newImplementationAuthority",
+          "type": "address"
+        }
+      ],
+      "name": "setImplementationAuthority",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    }
+  ],
+  "constructor": {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "implementationAuthority",
+        "type": "address"
+      },
+      {
+        "internalType": "address",
+        "name": "_identityRegistry",
+        "type": "address"
+      },
+      {
+        "internalType": "address",
+        "name": "_compliance",
+        "type": "address"
+      },
+      {
+        "internalType": "string",
+        "name": "_name",
+        "type": "string"
+      },
+      {
+        "internalType": "string",
+        "name": "_symbol",
+        "type": "string"
+      },
+      {
+        "internalType": "uint8",
+        "name": "_decimals",
+        "type": "uint8"
+      },
+      {
+        "internalType": "address",
+        "name": "_onchainID",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "nonpayable",
+    "type": "constructor"
+  },
+  "constructor_arguments": null,
+  "deployed_address": null,
+  "deployment_transaction": null,
+  "creation": {
+    "code": "0x60806040523480156200001157600080fd5b5060405162000d0538038062000d058339810160408190526200003491620004dd565b6001600160a01b038716158015906200005557506001600160a01b03861615155b80156200006a57506001600160a01b03851615155b620000bc5760405162461bcd60e51b815260206004820152601f60248201527f696e76616c696420617267756d656e74202d207a65726f20616464726573730060448201526064015b60405180910390fd5b604051602001620000d890602080825260009082015260400190565b6040516020818303038152906040528051906020012084604051602001620001019190620005da565b60405160208183030381529060405280519060200120141580156200017f57506040516020016200013d90602080825260009082015260400190565b6040516020818303038152906040528051906020012083604051602001620001669190620005da565b6040516020818303038152906040528051906020012014155b620001cd5760405162461bcd60e51b815260206004820152601f60248201527f696e76616c696420617267756d656e74202d20656d70747920737472696e67006044820152606401620000b3565b60128260ff161115620002235760405162461bcd60e51b815260206004820152601960248201527f646563696d616c73206265747765656e203020616e64203138000000000000006044820152606401620000b3565b6200023b8760008051602062000ce583398151915255565b6040516001600160a01b038816907f3b1074392ed8e8424715d0dda2197eede67080b377fc8370e26f3e882207f6b890600090a260006200028960008051602062000ce58339815191525490565b6001600160a01b031663709bc7f36040518163ffffffff1660e01b8152600401602060405180830381865afa158015620002c7573d6000803e3d6000fd5b505050506040513d601f19601f82011682018060405250810190620002ed9190620005f6565b90506000816001600160a01b0316888888888888604051602401620003189695949392919062000614565b60408051601f198184030181529181526020820180516001600160e01b0316633e46d86760e21b179052516200034f919062000673565b600060405180830381855af49150503d80600081146200038c576040519150601f19603f3d011682016040523d82523d6000602084013e62000391565b606091505b5050905080620003e45760405162461bcd60e51b815260206004820152601660248201527f496e697469616c697a6174696f6e206661696c65642e000000000000000000006044820152606401620000b3565b50505050505050505062000691565b80516001600160a01b03811681146200040b57600080fd5b919050565b634e487b7160e01b600052604160045260246000fd5b60005b838110156200044357818101518382015260200162000429565b50506000910152565b600082601f8301126200045e57600080fd5b81516001600160401b03808211156200047b576200047b62000410565b604051601f8301601f19908116603f01168101908282118183101715620004a657620004a662000410565b81604052838152866020858801011115620004c057600080fd5b620004d384602083016020890162000426565b9695505050505050565b600080600080600080600060e0888a031215620004f957600080fd5b6200050488620003f3565b96506200051460208901620003f3565b95506200052460408901620003f3565b60608901519095506001600160401b03808211156200054257600080fd5b620005508b838c016200044c565b955060808a01519150808211156200056757600080fd5b50620005768a828b016200044c565b93505060a088015160ff811681146200058e57600080fd5b91506200059e60c08901620003f3565b905092959891949750929550565b60008151808452620005c681602086016020860162000426565b601f01601f19169290920160200192915050565b602081526000620005ef6020830184620005ac565b9392505050565b6000602082840312156200060957600080fd5b620005ef82620003f3565b600060018060a01b038089168352808816602084015260c060408401526200064060c0840188620005ac565b8381036060850152620006548188620005ac565b60ff969096166080850152509290921660a09091015250949350505050565b600082516200068781846020870162000426565b9190910192915050565b61064480620006a16000396000f3fe6080604052600436106100295760003560e01c80632d5f1187146100cf57806392dd9d6514610108575b60006100416000805160206105ef8339815191525490565b6001600160a01b031663709bc7f36040518163ffffffff1660e01b8152600401602060405180830381865afa15801561007e573d6000803e3d6000fd5b505050506040513d601f19601f820116820180604052508101906100a291906105ad565b90503660008037600080366000846127105a03f43d806000803e8180156100c857816000f35b816000fd5b005b3480156100db57600080fd5b506000805160206105ef833981519152546040516001600160a01b03909116815260200160405180910390f35b34801561011457600080fd5b506100cd6101233660046105d1565b6000805160206105ef833981519152546001600160a01b0316336001600160a01b0316146101ae5760405162461bcd60e51b815260206004820152602d60248201527f6f6e6c792063757272656e7420696d706c656d656e746174696f6e417574686f60448201526c1c9a5d1e4818d85b8818d85b1b609a1b60648201526084015b60405180910390fd5b6001600160a01b0381166102045760405162461bcd60e51b815260206004820152601f60248201527f696e76616c696420617267756d656e74202d207a65726f20616464726573730060448201526064016101a5565b60006001600160a01b0316816001600160a01b031663709bc7f36040518163ffffffff1660e01b8152600401602060405180830381865afa15801561024d573d6000803e3d6000fd5b505050506040513d601f19601f8201168201806040525081019061027191906105ad565b6001600160a01b0316141580156102fc575060006001600160a01b0316816001600160a01b0316636ff6e83f6040518163ffffffff1660e01b8152600401602060405180830381865afa1580156102cc573d6000803e3d6000fd5b505050506040513d601f19601f820116820180604052508101906102f091906105ad565b6001600160a01b031614155b801561037c575060006001600160a01b0316816001600160a01b0316631ee9ce8b6040518163ffffffff1660e01b8152600401602060405180830381865afa15801561034c573d6000803e3d6000fd5b505050506040513d601f19601f8201168201806040525081019061037091906105ad565b6001600160a01b031614155b80156103fc575060006001600160a01b0316816001600160a01b0316639e3e7bb96040518163ffffffff1660e01b8152600401602060405180830381865afa1580156103cc573d6000803e3d6000fd5b505050506040513d601f19601f820116820180604052508101906103f091906105ad565b6001600160a01b031614155b801561047c575060006001600160a01b0316816001600160a01b03166361f898256040518163ffffffff1660e01b8152600401602060405180830381865afa15801561044c573d6000803e3d6000fd5b505050506040513d601f19601f8201168201806040525081019061047091906105ad565b6001600160a01b031614155b80156104fc575060006001600160a01b0316816001600160a01b031663fedcc0526040518163ffffffff1660e01b8152600401602060405180830381865afa1580156104cc573d6000803e3d6000fd5b505050506040513d601f19601f820116820180604052508101906104f091906105ad565b6001600160a01b031614155b6105485760405162461bcd60e51b815260206004820181905260248201527f696e76616c696420496d706c656d656e746174696f6e20417574686f7269747960448201526064016101a5565b61055e816000805160206105ef83398151915255565b6040516001600160a01b038216907f3b1074392ed8e8424715d0dda2197eede67080b377fc8370e26f3e882207f6b890600090a250565b6001600160a01b03811681146105aa57600080fd5b50565b6000602082840312156105bf57600080fd5b81516105ca81610595565b9392505050565b6000602082840312156105e357600080fd5b81356105ca8161059556fe821f3e4d3d679f19eacc940c87acf846ea6eae24a63058ea750304437a62aafca26469706673582212209ba2af2d09f9963a3494ad3e9331a32545dc45e3d0fa3678365a89b92238a07f64736f6c63430008110033821f3e4d3d679f19eacc940c87acf846ea6eae24a63058ea750304437a62aafc",
+    "sha256": "f904f1ed43192610085c2d5211fa823d35ae40980fc2b141da6b2bd1c9a899d4",
+    "keccak256": "0xaea150900ec4b4a9b01e05594e61c3adb43d2894cf87bc7a1b5638a9acd7d2cd",
+    "link_references": {},
+    "source_map": "3873:2338:12:-:0;;;3917:1587;;;;;;;;;;;;;;;;;;;;;;;;;;;;:::i;:::-;-1:-1:-1;;;;;4300:37:12;;;;;;:84;;-1:-1:-1;;;;;;4353:31:12;;;;4300:84;:125;;;;-1:-1:-1;;;;;;4400:25:12;;;;4300:125;4279:191;;;;-1:-1:-1;;;4279:191:12;;2550:2:63;4279:191:12;;;2532:21:63;2589:2;2569:18;;;2562:30;2628:33;2608:18;;;2601:61;2679:18;;4279:191:12;;;;;;;;;4543:14;;;;;;2910:2:63;2892:21;;;2949:1;2929:18;;;2922:29;2983:2;2968:18;;2708:284;4543:14:12;;;;;;;;;;;;;4533:25;;;;;;4522:5;4511:17;;;;;;;;:::i;:::-;;;;;;;;;;;;;4501:28;;;;;;:57;;:132;;;;;4618:14;;;;;;2910:2:63;2892:21;;;2949:1;2929:18;;;2922:29;2983:2;2968:18;;2708:284;4618:14:12;;;;;;;;;;;;;4608:25;;;;;;4595:7;4584:19;;;;;;;;:::i;:::-;;;;;;;;;;;;;4574:30;;;;;;:59;;4501:132;4480:198;;;;-1:-1:-1;;;4480:198:12;;3700:2:63;4480:198:12;;;3682:21:63;3739:2;3719:18;;;3712:30;3778:33;3758:18;;;3751:61;3829:18;;4480:198:12;3498:355:63;4480:198:12;4727:2;4714:9;:15;;;;4688:71;;;;-1:-1:-1;;;4688:71:12;;4060:2:63;4688:71:12;;;4042:21:63;4099:2;4079:18;;;4072:30;4138:27;4118:18;;;4111:55;4183:18;;4688:71:12;3858:349:63;4688:71:12;4769:54;4799:23;-1:-1:-1;;;;;;;;;;;6099:99:7;5929:285;4769:54:12;4838:51;;-1:-1:-1;;;;;4838:51:12;;;;;;;;4900:13;4946:28;-1:-1:-1;;;;;;;;;;;5598:73:7;;5391:323;4946:28:12;-1:-1:-1;;;;;4916:83:12;;:85;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;:::i;:::-;4900:101;;5072:12;5090:5;-1:-1:-1;;;;;5090:18:12;5244:17;5283:11;5316:5;5343:7;5372:9;5403:10;5126:305;;;;;;;;;;;;;:::i;:::-;;;;-1:-1:-1;;5126:305:12;;;;;;;;;;;;;;-1:-1:-1;;;;;5126:305:12;-1:-1:-1;;;5126:305:12;;;5090:355;;;5126:305;5090:355;:::i;:::-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;5071:374;;;5463:7;5455:42;;;;-1:-1:-1;;;5455:42:12;;5667:2:63;5455:42:12;;;5649:21:63;5706:2;5686:18;;;5679:30;5745:24;5725:18;;;5718:52;5787:18;;5455:42:12;5465:346:63;5455:42:12;4269:1235;;3917:1587;;;;;;;3873:2338;;14:177:63;93:13;;-1:-1:-1;;;;;135:31:63;;125:42;;115:70;;181:1;178;171:12;115:70;14:177;;;:::o;196:127::-;257:10;252:3;248:20;245:1;238:31;288:4;285:1;278:15;312:4;309:1;302:15;328:250;413:1;423:113;437:6;434:1;431:13;423:113;;;513:11;;;507:18;494:11;;;487:39;459:2;452:10;423:113;;;-1:-1:-1;;570:1:63;552:16;;545:27;328:250::o;583:699::-;637:5;690:3;683:4;675:6;671:17;667:27;657:55;;708:1;705;698:12;657:55;731:13;;-1:-1:-1;;;;;793:10:63;;;790:36;;;806:18;;:::i;:::-;881:2;875:9;849:2;935:13;;-1:-1:-1;;931:22:63;;;955:2;927:31;923:40;911:53;;;979:18;;;999:22;;;976:46;973:72;;;1025:18;;:::i;:::-;1065:10;1061:2;1054:22;1100:2;1092:6;1085:18;1146:3;1139:4;1134:2;1126:6;1122:15;1118:26;1115:35;1112:55;;;1163:1;1160;1153:12;1112:55;1176:76;1249:2;1242:4;1234:6;1230:17;1223:4;1215:6;1211:17;1176:76;:::i;:::-;1270:6;583:699;-1:-1:-1;;;;;;583:699:63:o;1287:1056::-;1429:6;1437;1445;1453;1461;1469;1477;1530:3;1518:9;1509:7;1505:23;1501:33;1498:53;;;1547:1;1544;1537:12;1498:53;1570:40;1600:9;1570:40;:::i;:::-;1560:50;;1629:49;1674:2;1663:9;1659:18;1629:49;:::i;:::-;1619:59;;1697:49;1742:2;1731:9;1727:18;1697:49;:::i;:::-;1790:2;1775:18;;1769:25;1687:59;;-1:-1:-1;;;;;;1843:14:63;;;1840:34;;;1870:1;1867;1860:12;1840:34;1893:61;1946:7;1937:6;1926:9;1922:22;1893:61;:::i;:::-;1883:71;;2000:3;1989:9;1985:19;1979:26;1963:42;;2030:2;2020:8;2017:16;2014:36;;;2046:1;2043;2036:12;2014:36;;2069:63;2124:7;2113:8;2102:9;2098:24;2069:63;:::i;:::-;2059:73;;;2175:3;2164:9;2160:19;2154:26;2220:4;2213:5;2209:16;2202:5;2199:27;2189:55;;2240:1;2237;2230:12;2189:55;2263:5;-1:-1:-1;2287:50:63;2332:3;2317:19;;2287:50;:::i;:::-;2277:60;;1287:1056;;;;;;;;;;:::o;2997:271::-;3039:3;3077:5;3071:12;3104:6;3099:3;3092:19;3120:76;3189:6;3182:4;3177:3;3173:14;3166:4;3159:5;3155:16;3120:76;:::i;:::-;3250:2;3229:15;-1:-1:-1;;3225:29:63;3216:39;;;;3257:4;3212:50;;2997:271;-1:-1:-1;;2997:271:63:o;3273:220::-;3422:2;3411:9;3404:21;3385:4;3442:45;3483:2;3472:9;3468:18;3460:6;3442:45;:::i;:::-;3434:53;3273:220;-1:-1:-1;;;3273:220:63:o;4212:208::-;4282:6;4335:2;4323:9;4314:7;4310:23;4306:32;4303:52;;;4351:1;4348;4341:12;4303:52;4374:40;4404:9;4374:40;:::i;4425:743::-;4693:4;4739:1;4735;4730:3;4726:11;4722:19;4780:2;4772:6;4768:15;4757:9;4750:34;4832:2;4824:6;4820:15;4815:2;4804:9;4800:18;4793:43;4872:3;4867:2;4856:9;4852:18;4845:31;4899:46;4940:3;4929:9;4925:19;4917:6;4899:46;:::i;:::-;4993:9;4985:6;4981:22;4976:2;4965:9;4961:18;4954:50;5021:33;5047:6;5039;5021:33;:::i;:::-;5103:4;5091:17;;;;5085:3;5070:19;;5063:46;-1:-1:-1;5146:15:63;;;;5140:3;5125:19;;;5118:44;-1:-1:-1;5013:41:63;4425:743;-1:-1:-1;;;;4425:743:63:o;5173:287::-;5302:3;5340:6;5334:13;5356:66;5415:6;5410:3;5403:4;5395:6;5391:17;5356:66;:::i;:::-;5438:16;;;;;5173:287;-1:-1:-1;;5173:287:63:o;5465:346::-;3873:2338:12;;;;;;"
+  },
+  "runtime_template": {
+    "code": "0x6080604052600436106100295760003560e01c80632d5f1187146100cf57806392dd9d6514610108575b60006100416000805160206105ef8339815191525490565b6001600160a01b031663709bc7f36040518163ffffffff1660e01b8152600401602060405180830381865afa15801561007e573d6000803e3d6000fd5b505050506040513d601f19601f820116820180604052508101906100a291906105ad565b90503660008037600080366000846127105a03f43d806000803e8180156100c857816000f35b816000fd5b005b3480156100db57600080fd5b506000805160206105ef833981519152546040516001600160a01b03909116815260200160405180910390f35b34801561011457600080fd5b506100cd6101233660046105d1565b6000805160206105ef833981519152546001600160a01b0316336001600160a01b0316146101ae5760405162461bcd60e51b815260206004820152602d60248201527f6f6e6c792063757272656e7420696d706c656d656e746174696f6e417574686f60448201526c1c9a5d1e4818d85b8818d85b1b609a1b60648201526084015b60405180910390fd5b6001600160a01b0381166102045760405162461bcd60e51b815260206004820152601f60248201527f696e76616c696420617267756d656e74202d207a65726f20616464726573730060448201526064016101a5565b60006001600160a01b0316816001600160a01b031663709bc7f36040518163ffffffff1660e01b8152600401602060405180830381865afa15801561024d573d6000803e3d6000fd5b505050506040513d601f19601f8201168201806040525081019061027191906105ad565b6001600160a01b0316141580156102fc575060006001600160a01b0316816001600160a01b0316636ff6e83f6040518163ffffffff1660e01b8152600401602060405180830381865afa1580156102cc573d6000803e3d6000fd5b505050506040513d601f19601f820116820180604052508101906102f091906105ad565b6001600160a01b031614155b801561037c575060006001600160a01b0316816001600160a01b0316631ee9ce8b6040518163ffffffff1660e01b8152600401602060405180830381865afa15801561034c573d6000803e3d6000fd5b505050506040513d601f19601f8201168201806040525081019061037091906105ad565b6001600160a01b031614155b80156103fc575060006001600160a01b0316816001600160a01b0316639e3e7bb96040518163ffffffff1660e01b8152600401602060405180830381865afa1580156103cc573d6000803e3d6000fd5b505050506040513d601f19601f820116820180604052508101906103f091906105ad565b6001600160a01b031614155b801561047c575060006001600160a01b0316816001600160a01b03166361f898256040518163ffffffff1660e01b8152600401602060405180830381865afa15801561044c573d6000803e3d6000fd5b505050506040513d601f19601f8201168201806040525081019061047091906105ad565b6001600160a01b031614155b80156104fc575060006001600160a01b0316816001600160a01b031663fedcc0526040518163ffffffff1660e01b8152600401602060405180830381865afa1580156104cc573d6000803e3d6000fd5b505050506040513d601f19601f820116820180604052508101906104f091906105ad565b6001600160a01b031614155b6105485760405162461bcd60e51b815260206004820181905260248201527f696e76616c696420496d706c656d656e746174696f6e20417574686f7269747960448201526064016101a5565b61055e816000805160206105ef83398151915255565b6040516001600160a01b038216907f3b1074392ed8e8424715d0dda2197eede67080b377fc8370e26f3e882207f6b890600090a250565b6001600160a01b03811681146105aa57600080fd5b50565b6000602082840312156105bf57600080fd5b81516105ca81610595565b9392505050565b6000602082840312156105e357600080fd5b81356105ca8161059556fe821f3e4d3d679f19eacc940c87acf846ea6eae24a63058ea750304437a62aafca26469706673582212209ba2af2d09f9963a3494ad3e9331a32545dc45e3d0fa3678365a89b92238a07f64736f6c63430008110033",
+    "sha256": "9cd63d3b81e41c7f178601c8b30e18d9577fa6bdc748f5db260182a35dbe36ec",
+    "keccak256": "0xb6f22d5ac53561afed79bc5f3ad7ac6ba03477b00151dca7734c15a848b7be90",
+    "link_references": {},
+    "source_map": "3873:2338:12:-:0;;;;;;;;;;;;;;;;;;;;;;;5601:13;5647:28;-1:-1:-1;;;;;;;;;;;5598:73:7;;5391:323;5647:28:12;-1:-1:-1;;;;;5617:83:12;;:85;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;:::i;:::-;5601:101;;5815:14;5810:3;5805;5792:38;5921:1;5918;5902:14;5897:3;5890:5;5882;5875;5871:17;5858:65;5949:16;5999:5;5996:1;5993;5978:27;6025:7;6049:63;;;;6169:5;6166:1;6159:16;6049:63;6088:5;6085:1;6078:16;6018:175;;5391:323:7;;;;;;;;;;-1:-1:-1;;;;;;;;;;;;5598:73:7;5391:323;;-1:-1:-1;;;;;570:32:63;;;552:51;;540:2;525:18;5391:323:7;;;;;;;4141:1174;;;;;;;;;;-1:-1:-1;4141:1174:7;;;;;:::i;:::-;-1:-1:-1;;;;;;;;;;;5598:73:7;-1:-1:-1;;;;;4250:42:7;:10;-1:-1:-1;;;;;4250:42:7;;4242:100;;;;-1:-1:-1;;;4242:100:7;;1068:2:63;4242:100:7;;;1050:21:63;1107:2;1087:18;;;1080:30;1146:34;1126:18;;;1119:62;-1:-1:-1;;;1197:18:63;;;1190:43;1250:19;;4242:100:7;;;;;;;;;-1:-1:-1;;;;;4360:41:7;;4352:85;;;;-1:-1:-1;;;4352:85:7;;1482:2:63;4352:85:7;;;1464:21:63;1521:2;1501:18;;;1494:30;1560:33;1540:18;;;1533:61;1611:18;;4352:85:7;1280:355:63;4352:85:7;4564:1;-1:-1:-1;;;;;4468:98:7;4498:27;-1:-1:-1;;;;;4468:82:7;;:84;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;:::i;:::-;-1:-1:-1;;;;;4468:98:7;;;:210;;;;;4676:1;-1:-1:-1;;;;;4582:96:7;4612:27;-1:-1:-1;;;;;4582:80:7;;:82;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;:::i;:::-;-1:-1:-1;;;;;4582:96:7;;;4468:210;:321;;;;;4787:1;-1:-1:-1;;;;;4694:95:7;4724:27;-1:-1:-1;;;;;4694:79:7;;:81;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;:::i;:::-;-1:-1:-1;;;;;4694:95:7;;;4468:321;:433;;;;;4899:1;-1:-1:-1;;;;;4805:96:7;4835:27;-1:-1:-1;;;;;4805:80:7;;:82;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;:::i;:::-;-1:-1:-1;;;;;4805:96:7;;;4468:433;:544;;;;;5010:1;-1:-1:-1;;;;;4917:95:7;4947:27;-1:-1:-1;;;;;4917:79:7;;:81;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;:::i;:::-;-1:-1:-1;;;;;4917:95:7;;;4468:544;:656;;;;;5122:1;-1:-1:-1;;;;;5028:96:7;5058:27;-1:-1:-1;;;;;5028:80:7;;:82;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;:::i;:::-;-1:-1:-1;;;;;5028:96:7;;;4468:656;4447:723;;;;-1:-1:-1;;;4447:723:7;;1842:2:63;4447:723:7;;;1824:21:63;;;1861:18;;;1854:30;1920:34;1900:18;;;1893:62;1972:18;;4447:723:7;1640:356:63;4447:723:7;5180:58;5210:27;-1:-1:-1;;;;;;;;;;;6099:99:7;5929:285;5180:58;5253:55;;-1:-1:-1;;;;;5253:55:7;;;;;;;;4141:1174;:::o;14:131:63:-;-1:-1:-1;;;;;89:31:63;;79:42;;69:70;;135:1;132;125:12;69:70;14:131;:::o;150:251::-;220:6;273:2;261:9;252:7;248:23;244:32;241:52;;;289:1;286;279:12;241:52;321:9;315:16;340:31;365:5;340:31;:::i;:::-;390:5;150:251;-1:-1:-1;;;150:251:63:o;614:247::-;673:6;726:2;714:9;705:7;701:23;697:32;694:52;;;742:1;739;732:12;694:52;781:9;768:23;800:31;825:5;800:31;:::i"
+  },
+  "immutable_references": {},
+  "immutable_bindings": {},
+  "deployed_runtime_keccak256": null,
+  "runtime_hash_warning": "Template hash is not deployed runtime proof. Patch/verify all immutable constructor bindings and compare independently observed code after finality.",
+  "storage_layout": {
+    "storage": [
+      {
+        "astId": 11922,
+        "contract": "@erc3643org/erc-3643/contracts/proxy/TokenProxy.sol:TokenProxy",
+        "label": "_initialized",
+        "offset": 0,
+        "slot": "0",
+        "type": "t_uint8"
+      },
+      {
+        "astId": 11925,
+        "contract": "@erc3643org/erc-3643/contracts/proxy/TokenProxy.sol:TokenProxy",
+        "label": "_initializing",
+        "offset": 1,
+        "slot": "0",
+        "type": "t_bool"
+      }
+    ],
+    "types": {
+      "t_bool": {
+        "encoding": "inplace",
+        "label": "bool",
+        "numberOfBytes": "1"
+      },
+      "t_uint8": {
+        "encoding": "inplace",
+        "label": "uint8",
+        "numberOfBytes": "1"
+      }
+    }
+  },
+  "compiler_metadata": {
+    "compiler": {
+      "version": "0.8.17+commit.8df45f5f"
+    },
+    "language": "Solidity",
+    "output": {
+      "abi": [
+        {
+          "inputs": [
+            {
+              "internalType": "address",
+              "name": "implementationAuthority",
+              "type": "address"
+            },
+            {
+              "internalType": "address",
+              "name": "_identityRegistry",
+              "type": "address"
+            },
+            {
+              "internalType": "address",
+              "name": "_compliance",
+              "type": "address"
+            },
+            {
+              "internalType": "string",
+              "name": "_name",
+              "type": "string"
+            },
+            {
+              "internalType": "string",
+              "name": "_symbol",
+              "type": "string"
+            },
+            {
+              "internalType": "uint8",
+              "name": "_decimals",
+              "type": "uint8"
+            },
+            {
+              "internalType": "address",
+              "name": "_onchainID",
+              "type": "address"
+            }
+          ],
+          "stateMutability": "nonpayable",
+          "type": "constructor"
+        },
+        {
+          "anonymous": false,
+          "inputs": [
+            {
+              "indexed": true,
+              "internalType": "address",
+              "name": "_implementationAuthority",
+              "type": "address"
+            }
+          ],
+          "name": "ImplementationAuthoritySet",
+          "type": "event"
+        },
+        {
+          "anonymous": false,
+          "inputs": [
+            {
+              "indexed": false,
+              "internalType": "uint8",
+              "name": "version",
+              "type": "uint8"
+            }
+          ],
+          "name": "Initialized",
+          "type": "event"
+        },
+        {
+          "stateMutability": "payable",
+          "type": "fallback"
+        },
+        {
+          "inputs": [],
+          "name": "getImplementationAuthority",
+          "outputs": [
+            {
+              "internalType": "address",
+              "name": "",
+              "type": "address"
+            }
+          ],
+          "stateMutability": "view",
+          "type": "function"
+        },
+        {
+          "inputs": [
+            {
+              "internalType": "address",
+              "name": "_newImplementationAuthority",
+              "type": "address"
+            }
+          ],
+          "name": "setImplementationAuthority",
+          "outputs": [],
+          "stateMutability": "nonpayable",
+          "type": "function"
+        }
+      ],
+      "devdoc": {
+        "kind": "dev",
+        "methods": {
+          "getImplementationAuthority()": {
+            "details": "See {IProxy-getImplementationAuthority}."
+          },
+          "setImplementationAuthority(address)": {
+            "details": "See {IProxy-setImplementationAuthority}."
+          }
+        },
+        "version": 1
+      },
+      "userdoc": {
+        "events": {
+          "ImplementationAuthoritySet(address)": {
+            "notice": "events"
+          }
+        },
+        "kind": "user",
+        "methods": {},
+        "version": 1
+      }
+    },
+    "settings": {
+      "compilationTarget": {
+        "@erc3643org/erc-3643/contracts/proxy/TokenProxy.sol": "TokenProxy"
+      },
+      "evmVersion": "london",
+      "libraries": {},
+      "metadata": {
+        "bytecodeHash": "ipfs"
+      },
+      "optimizer": {
+        "enabled": true,
+        "runs": 200
+      },
+      "remappings": []
+    },
+    "sources": {
+      "@erc3643org/erc-3643/contracts/proxy/AbstractProxy.sol": {
+        "keccak256": "0x1359033671c65f2fc2c655be8fb0c4db525a8be2ec82f7240cad9ff0cff00ef6",
+        "license": "GPL-3.0",
+        "urls": [
+          "bzz-raw://62ad2fca73611ecdb7c6683f3e9b8a3d8fba95976126f004f2ed92b0be6c27eb",
+          "dweb:/ipfs/QmPM9FsHfVntZrSZ7jNMARLc3dL9rDnKqZ7AstZMV56EVf"
+        ]
+      },
+      "@erc3643org/erc-3643/contracts/proxy/TokenProxy.sol": {
+        "keccak256": "0x01b2ee7ead2896e6e68efb4ca504f18c47b96b114cc8cbd70f22882a6e81d8c5",
+        "license": "GPL-3.0",
+        "urls": [
+          "bzz-raw://0757ccfd90e6956927a731d4e323fa02c71c1d4865b2c2efd563af0ba4ef3476",
+          "dweb:/ipfs/QmaogMibgyLztcj6dUPfQLRXvzxnSU4hqFeFnPS3MCqz28"
+        ]
+      },
+      "@erc3643org/erc-3643/contracts/proxy/authority/ITREXImplementationAuthority.sol": {
+        "keccak256": "0x96cc8bd9cd6eb01b0b03a088b89bf4dbcfc44b2a8ca712efaf00773971e40d01",
+        "license": "GPL-3.0",
+        "urls": [
+          "bzz-raw://e530b14f2394bc14b501125fddabceae0cfbd8ca35e828d0d050e3601f3bd019",
+          "dweb:/ipfs/QmTaLKuNn6bc8QZRgDHU69k2V58MnheQSKBpPuNRaJ9CA4"
+        ]
+      },
+      "@erc3643org/erc-3643/contracts/proxy/interface/IProxy.sol": {
+        "keccak256": "0xeaa124596c23c7b300811a998f706a3b7c2886434b25a9b41920aec1ef6435c4",
+        "license": "GPL-3.0",
+        "urls": [
+          "bzz-raw://aa76ac61b74bc2d0d66dda9aa3a3b8a037a70e697643375de2b537c5838dcaa5",
+          "dweb:/ipfs/QmYHyS2rRXPo4LyYtvzMo64WoNQQmudyUrBsvSKVUxjLgD"
+        ]
+      },
+      "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol": {
+        "keccak256": "0x89be10e757d242e9b18d5a32c9fbe2019f6d63052bbe46397a430a1d60d7f794",
+        "license": "MIT",
+        "urls": [
+          "bzz-raw://f103ee2e4aecd37aac6ceefe670709cdd7613dee25fa2d4d9feaf7fc0aaa155e",
+          "dweb:/ipfs/QmRiNZLoJk5k3HPMYGPGjZFd2ke1ZxjhJZkM45Ec9GH9hv"
+        ]
+      },
+      "@openzeppelin/contracts-upgradeable/utils/AddressUpgradeable.sol": {
+        "keccak256": "0x9c80f545915582e63fe206c6ce27cbe85a86fc10b9cd2a0e8c9488fb7c2ee422",
+        "license": "MIT",
+        "urls": [
+          "bzz-raw://310136ad60820af4177a11a61d77a3686faf5fca4942b600e08fc940db38396b",
+          "dweb:/ipfs/QmbCzMNSTL7Zi7M4UCSqBrkHtp4jjxUnGbkneCZKdR1qeq"
+        ]
+      }
+    },
+    "version": 1
+  },
+  "source_hashes": {
+    "@erc3643org/erc-3643/contracts/token/Token.sol": "754bf46aa42f260fbab50c7dec08769935f65c6a5067a7a70f1ad74a91d34828",
+    "@erc3643org/erc-3643/contracts/token/IToken.sol": "36db234ae57863f6a158a469a93e6243875b615fcb84e564ef49b12416ee44c9",
+    "@erc3643org/erc-3643/contracts/registry/interface/IIdentityRegistry.sol": "9b2bb6010b31b8506b3621449588b30a6cd77a2a1fc4b9e6c02da966b6981b0e",
+    "@erc3643org/erc-3643/contracts/registry/interface/ITrustedIssuersRegistry.sol": "6c39cb60cf6647c91923eec087f673ab95a3331309b22cb435e68148646ef607",
+    "@onchain-id/solidity/contracts/interface/IClaimIssuer.sol": "f9fc0d9978cbfdfda4a1acd2a99771cb4655fecfb43fee7eaee1b584727eca8d",
+    "@onchain-id/solidity/contracts/interface/IIdentity.sol": "80b5c1a284821b9ccb226164e46c1766335003ce1b97805d0bfc142121dfd70f",
+    "@onchain-id/solidity/contracts/interface/IERC734.sol": "8177f74b508b46270dee0f58ff402888455a77ac34ec7ecd971f78161809f382",
+    "@onchain-id/solidity/contracts/interface/IERC735.sol": "e78f056da8ad43e0cd1bcb606c32dd6d095b54eb3aab01c051bf82d64f41e7f5",
+    "@erc3643org/erc-3643/contracts/registry/interface/IClaimTopicsRegistry.sol": "f8589bbc6966d5e73670d43977eccacac2830d7f1c69700159c6e555b1e6997e",
+    "@erc3643org/erc-3643/contracts/registry/interface/IIdentityRegistryStorage.sol": "de9ffcc1342e836060454fd136862c929087ec8bf515585910a46f9c24b50c28",
+    "@erc3643org/erc-3643/contracts/compliance/modular/IModularCompliance.sol": "29149ff57a25fcfb884cb4a4d60b42abe4bb7f23b6d1a8fd1378e74b75d6876e",
+    "@openzeppelin/contracts/token/ERC20/IERC20.sol": "7ebde70853ccafcf1876900dad458f46eb9444d591d39bfc58e952e2582f5587",
+    "@erc3643org/erc-3643/contracts/token/TokenStorage.sol": "16e4197b62ddc2b439d5718422f0897c073587462c65da75350cc99b563b9762",
+    "@erc3643org/erc-3643/contracts/roles/AgentRoleUpgradeable.sol": "7fbc3e4c736de064011ab628674c488b115f39966b10b50c96d7afbfaa2fb95a",
+    "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol": "2d9e57d2a4b0775334be2968019c1939377d45b69e8b724fe6bb80af47e28419",
+    "@openzeppelin/contracts-upgradeable/utils/ContextUpgradeable.sol": "2d3d7dc6e116cb8ebb8517208141cb3d0950b337a285f15f8476ec3df29d824e",
+    "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol": "a2c4e5c274a586f145d278293ae33198cd8f412ab7e6d26f2394c8949b32b24b",
+    "@openzeppelin/contracts-upgradeable/utils/AddressUpgradeable.sol": "db92fc1b515decad3a783b1422190877d2d70b907c6e36fb0998d9465aee42db",
+    "@erc3643org/erc-3643/contracts/roles/Roles.sol": "a17dfc7447ab75333812f35c68879da0ef7e54bf6a62bfe392b28c04c6293e5c",
+    "@erc3643org/erc-3643/contracts/registry/implementation/IdentityRegistry.sol": "124aa7f7aac4c6f1d16b8768923a8b2d1d6a095e79f5885bff68f9b85e0dfd79",
+    "@erc3643org/erc-3643/contracts/registry/storage/IRStorage.sol": "8ec5f52ebcd7123ed3025a7cf9167d3c82ecf74fc32acd872e47ab16bbd6f8e3",
+    "@erc3643org/erc-3643/contracts/registry/implementation/IdentityRegistryStorage.sol": "51b019dd1b25f42376d1583539bb18561064f0e103d403e568e47608c949ef04",
+    "@erc3643org/erc-3643/contracts/registry/storage/IRSStorage.sol": "3309ab668b9def6d8a062b106cf59313e09f693ff74869621e2915358ce97af6",
+    "@erc3643org/erc-3643/contracts/registry/implementation/TrustedIssuersRegistry.sol": "00a3555b6a26010f8ae7658de9e2f0ae4d81ca01e7d9a008612292cbee7bebe9",
+    "@erc3643org/erc-3643/contracts/registry/storage/TIRStorage.sol": "119fd55dac46e35a3feec61db0e05c231f1d6b4b4f3a9813b1a5e2366bb5053a",
+    "@erc3643org/erc-3643/contracts/registry/implementation/ClaimTopicsRegistry.sol": "8d30228da393b7bf469191c0af166fc5db6d5f754fe6872213a0cfccd2053653",
+    "@erc3643org/erc-3643/contracts/registry/storage/CTRStorage.sol": "cbf4442f027affd89e8f174efe8830901f3cf51f7ff8847ee99c09916724602a",
+    "@erc3643org/erc-3643/contracts/compliance/modular/ModularCompliance.sol": "578e9fc32fef42560ebd2767705104a754b1fc2cc730c61548468ffe2bf7c429",
+    "@erc3643org/erc-3643/contracts/compliance/modular/MCStorage.sol": "6e5f84928b2685ff5092ebd4910aba6b691e2c8126244710de557da811a83f2c",
+    "@erc3643org/erc-3643/contracts/compliance/modular/modules/IModule.sol": "2b52eae758f7dbe146067ec08cdb4594651a6118c684072c5201265266bba457",
+    "@erc3643org/erc-3643/contracts/proxy/TokenProxy.sol": "52eb3a4a75a4e8e1f360a366a746ff9cd01869cb76d826b2cfd2e3646a5592ac",
+    "@erc3643org/erc-3643/contracts/proxy/AbstractProxy.sol": "29ac7460fc0df80825b9b3cabdc4474316d760e5a59e00b9c59e993fabab909c",
+    "@erc3643org/erc-3643/contracts/proxy/interface/IProxy.sol": "b8ef183f4574cfe21d1cdd60751e9223373b61e421fce64d2263ee7413916c7c",
+    "@erc3643org/erc-3643/contracts/proxy/authority/ITREXImplementationAuthority.sol": "6b00301ab3b349b0ee3733d98696c0e76ea15c5789f26996d481c2f0cd78d881",
+    "@erc3643org/erc-3643/contracts/proxy/IdentityRegistryProxy.sol": "6af0fb18ee6b36be3a775e22019a5593f6b6e30b8746d8c01ecfc4c22903722f",
+    "@erc3643org/erc-3643/contracts/proxy/IdentityRegistryStorageProxy.sol": "d01c785c062b0e7ec5045720942be125e0cb21565c0cb38c46b624c68f1c589a",
+    "@erc3643org/erc-3643/contracts/proxy/TrustedIssuersRegistryProxy.sol": "2ca9d505a71996a81a2974c65158c20ed8f50adfcb45b9b662292652820b5c41",
+    "@erc3643org/erc-3643/contracts/proxy/ClaimTopicsRegistryProxy.sol": "f268d157f1c6390514154835c5fa1cfb9eaf712f133c9c3ef1ac668067f2d827",
+    "@erc3643org/erc-3643/contracts/proxy/ModularComplianceProxy.sol": "b7e9774f5c0e868e966db21be6b06d6a3e66e13f81bcad95da83dc0b9309124c",
+    "@erc3643org/erc-3643/contracts/proxy/authority/TREXImplementationAuthority.sol": "24c09f05946c5a083ae1842fd1b6bb0ef495b695294c82df8163ab2775a5bf03",
+    "@openzeppelin/contracts/access/Ownable.sol": "a8e4e1ae19d9bd3e8b0a6d46577eec098c01fbaffd3ec1252fd20d799e73393b",
+    "@openzeppelin/contracts/utils/Context.sol": "b2cfee351bcafd0f8f27c72d76c054df9b571b62cfac4781ed12c86354e2a56c",
+    "@erc3643org/erc-3643/contracts/factory/ITREXFactory.sol": "302514899c9e63fa606ab52233c693744929879b8d34317dcaef8e1755cb4edf",
+    "@erc3643org/erc-3643/contracts/proxy/authority/IIAFactory.sol": "b479ee085d16e83c27170e45d5813c1b0bbbbc1b0a411f6df58babc4ed795749",
+    "@erc3643org/erc-3643/contracts/proxy/authority/IAFactory.sol": "af68c5ffa2b8cb42dc365f95a8b91666f4833138580f6fa5ed0d931188bfe351",
+    "@erc3643org/erc-3643/contracts/factory/TREXFactory.sol": "030a42cf9e0bc5e6dba5f4d06316f7019a181a951c2de0f37a344faeaadaa17c",
+    "@erc3643org/erc-3643/contracts/roles/AgentRole.sol": "23705f81c449bdd6410af03c1bfb20791b9d690f7345dab6118caabe8f8eed26",
+    "@onchain-id/solidity/contracts/factory/IIdFactory.sol": "93a0443cc5b959961aba42e741e8ac7abed539e600ba4189c4d164f512a33b33",
+    "@onchain-id/solidity/contracts/Identity.sol": "771560d61adb5c0514c4d30a49f8d13f2d35e0abded2d76e38d9e8d1ee2d1873",
+    "@onchain-id/solidity/contracts/version/Version.sol": "80e875ef73e5f903c34c87b813c1f1fccf15a0a0ec9b0dce27320905e21dd748",
+    "@onchain-id/solidity/contracts/storage/Storage.sol": "5f33032e6f89213d68136750a21dd2ff1ad75c375f6e4d1129c6cadad287990a",
+    "@onchain-id/solidity/contracts/storage/Structs.sol": "5c63704c233ea259367e55bf971356298ae91dcde217cc3b1612d3d24a897cd3",
+    "@onchain-id/solidity/contracts/ClaimIssuer.sol": "233228d40c6e8ddd0179f0df6d71db212b394857b62e28f1aac3ad8a4637a85b",
+    "@onchain-id/solidity/contracts/proxy/IdentityProxy.sol": "5d69fe0bbbf0c51f7729416c6f3054e215f016dc3fdbd03f4cf6edea35c58fde",
+    "@onchain-id/solidity/contracts/interface/IImplementationAuthority.sol": "a087f070ed6c5700e92f8addfe1b193511ec52505811480fdf475cf6939a0646",
+    "@onchain-id/solidity/contracts/proxy/ImplementationAuthority.sol": "7f78cf5a0e21a0843b3f5312d155e6d888f21550e32a3f1b19a0af6355857681",
+    "@onchain-id/solidity/contracts/factory/IdFactory.sol": "43a0847c9b6f99f08cd2d74e01b27bbbfdc049c26560e7f9cb9d112943b2f245",
+    "contracts/canonical/Bx1FundController.sol": "5e11e6a16109c984a698f1e498338f8f4b1298389c7d054069258f1cc4c40cc7",
+    "contracts/canonical/Bx1MaximumHoldingModule.sol": "7f21d8460c27a634a26f302ec5900dcfb3b0bffbcf06e1637e5c85e9532d2204",
+    "@erc3643org/erc-3643/contracts/compliance/modular/modules/AbstractModule.sol": "10224a27416a7bda4938da57b0047d7b155e646a406cafb2bc8ce61d94afd6ce",
+    "contracts/canonical/Bx1TestSettlementToken.sol": "c1ea6df2894c2cdcfba2466fc1367e662a126952c5efe077beef4b5e5f404825",
+    "@openzeppelin/contracts/token/ERC20/ERC20.sol": "d20d52b4be98738b8aa52b5bb0f88943f62128969b33d654fbca731539a7fe0a",
+    "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol": "af5c8a77965cc82c33b7ff844deb9826166689e55dc037a7f2f790d057811990"
+  }
+}

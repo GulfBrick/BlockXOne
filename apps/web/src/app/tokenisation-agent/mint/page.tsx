@@ -52,7 +52,7 @@ export default function MintTokensPage() {
   const [message, setMessage] = useState('')
   const [messageFinal, setMessageFinal] = useState(false)
   const [error, setError] = useState('')
-  const canMint = user?.permissions?.['tokenops:mint'] === true
+  const canMint = managedTestnet && user?.permissions?.['tokenops:mint'] === true
 
   const loadMintQueue = useCallback(async () => {
     if (!user || !canMint) {
@@ -237,7 +237,7 @@ export default function MintTokensPage() {
     current: ChainOperationRecord,
     decision: ChainOperationDecision
   ) {
-    if (!user) throw new Error('Your verified session is required.')
+    if (!user || !managedTestnet) throw new Error('A verified session in the admitted testnet environment is required.')
     setError('')
     setMessage('')
     setMessageFinal(false)

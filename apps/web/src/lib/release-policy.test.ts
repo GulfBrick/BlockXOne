@@ -7,10 +7,75 @@ import {
   PILOT_ALLOWED_PREFIXES,
   PRODUCTION_BLOCKED_PREFIXES
 } from './release-policy'
-import { resolveAuthMode, isLegacyClientAuthDisabled } from './auth-mode'
+import { resolveAuthMode, isLegacyClientAuthDisabled, isSupabaseWebPathAllowed, SUPABASE_ALLOWED_PATHS } from './auth-mode'
 
 describe('native Auth admission', () => {
-  it.each(['/login/mfa', '/workspace/security', '/auth/mfa-enroll', '/auth/mfa-verify'])('admits MFA path %s only exactly in paired mode', pathname => {
+  it('lists exactly the reviewed native routes; TEST customer admission remains server-gated', () => {
+    expect([...SUPABASE_ALLOWED_PATHS]).toEqual([
+      '/login', '/forgot-password', '/auth/recover', '/auth/confirm', '/auth/login', '/auth/setup', '/auth/logout',
+      '/workspace', '/workspace/access-denied', '/api/wallet/challenge', '/api/wallet/verify', '/api/wallet/context',
+      '/login/mfa', '/workspace/security', '/auth/mfa-enroll', '/auth/mfa-verify', '/auth/mfa-restart-setup',
+      '/workspace/administration', '/workspace/administration/staff-invitations', '/auth/admin-command', '/auth/staff-invite', '/workspace/staff-invite',
+      '/workspace/testnet-fund', '/api/testnet-fund/command',
+      '/register', '/auth/register', '/portal', '/portal/onboarding',
+      '/portal/products', '/portal/products/new', '/portal/products/detail',
+      '/portal/compliance', '/portal/compliance/detail', '/portal/opportunities',
+      '/portal/opportunities/detail', '/portal/portfolio', '/portal/orders/detail',
+      '/api/portal/command', '/api/portal/documents', '/api/portal/funding/verify', '/api/portal/entry',
+      '/api/portal/kyc/session', '/api/portal/kyc/webhook', '/api/portal/kyc/evidence', '/api/portal/kyc/readiness',
+      '/api/portal/documents/processing',
+      '/api/portal/offering-documents', '/api/portal/offering-documents/processing',
+      '/api/portal/offering-signatures', '/api/portal/offering-signatures/processing', '/api/portal/offering-signatures/provider-status',
+      '/api/portal/application-drafts',
+      '/api/portal/fund-lifecycle/admission', '/api/portal/fund-lifecycle/approval', '/api/portal/fund-lifecycle/execute',
+      '/api/portal/fund-lifecycle/authority-alignment',
+      '/api/portal/fund-lifecycle/keys/bind', '/api/portal/fund-lifecycle/keys/read',
+      '/api/portal/fund-lifecycle/payment', '/api/portal/fund-lifecycle/payment/receipt',
+      '/api/portal/fund-lifecycle/payment/reference', '/api/portal/fund-lifecycle/payment/submit',
+      '/api/portal/fund-lifecycle/read',
+      '/api/portal/fund-lifecycle/recipient/claim', '/api/portal/fund-lifecycle/recipient/claim-preview',
+      '/api/portal/fund-lifecycle/recipient/claim-signature', '/api/portal/fund-lifecycle/recipient/command',
+      '/api/portal/fund-lifecycle/recipient/find', '/api/portal/fund-lifecycle/recipient/prepare',
+      '/api/portal/fund-lifecycle/recipient/read', '/api/portal/fund-lifecycle/recipient/signature', '/api/portal/fund-lifecycle/recipient/verify',
+      '/api/portal/fund-lifecycle/setup/command', '/api/portal/fund-lifecycle/setup/prepare',
+      '/api/portal/fund-lifecycle/setup/read', '/api/portal/fund-lifecycle/setup/verify',
+      '/api/portal/fund-lifecycle/setup/retry',
+      '/api/portal/fund-lifecycle/signature', '/api/portal/fund-lifecycle/transaction', '/api/portal/fund-lifecycle/verify',
+    ])
+  })
+  it.each(['/forgot-password', '/auth/recover'])('keeps recovery route %s native-only and exact', pathname => {
+    expect(isProductionWebPathBlocked(pathname, 'production', '', '', 'supabase', 'supabase')).toBe(false)
+    for (const environment of ['production', 'development', 'dev', 'test']) {
+      expect(isProductionWebPathBlocked(pathname, environment, 'pilot', 'pilot', '', '')).toBe(true)
+      expect(isProductionWebPathBlocked(pathname, environment, '', '', 'supabase', '')).toBe(true)
+    }
+    for (const variant of [`${pathname}/`, `${pathname}/extra`, pathname.toUpperCase(), pathname.replaceAll('/', '\\')]) {
+      expect(isProductionWebPathBlocked(variant, 'production', '', '', 'supabase', 'supabase')).toBe(true)
+    }
+    expect(isSupabaseWebPathAllowed(`${pathname}.json`)).toBe(false)
+  })
+  it.each(['/workspace/administration', '/auth/admin-command'])('admits only exact administration path %s in paired mode', pathname => {
+    expect(isProductionWebPathBlocked(pathname, 'production', '', '', 'supabase', 'supabase')).toBe(false)
+    for (const variant of [`${pathname}/`, `${pathname}/extra`, `${pathname}.json`, pathname.toUpperCase(), pathname.replaceAll('/', '\\'), pathname.replace('admin', '%61dmin'), pathname.replace('/', '//'), `${pathname}/../private`]) expect(isProductionWebPathBlocked(variant, 'production', '', '', 'supabase', 'supabase'), `Blocked administration lookalike: ${variant}`).toBe(true)
+    for (const [server, client] of [['supabase', ''], ['', 'supabase'], ['', ''], ['Supabase', 'Supabase']]) expect(isProductionWebPathBlocked(pathname, 'production', '', '', server, client)).toBe(true)
+  })
+  it.each(PRODUCTION_BLOCKED_PREFIXES)('never treats upper-case protected family %s as public or as an admitted alias', prefix => {
+    for (const variant of [prefix.toUpperCase(), `${prefix.toUpperCase()}/UNKNOWN`, `${prefix[0]}${prefix[1].toUpperCase()}${prefix.slice(2)}/unknown`]) {
+      expect(isProductionWebPathBlocked(variant, 'production', '', '', 'supabase', 'supabase'), `Protected family must fail closed: ${variant}`).toBe(true)
+      expect(isProductionWebPathBlocked(variant, 'production', '', '', 'supabase', ''), `Invalid mode must not make lookalike public: ${variant}`).toBe(true)
+    }
+  })
+  it.each(SUPABASE_ALLOWED_PATHS)('does not admit upper-case alias of exact native path %s', pathname => {
+    expect(isProductionWebPathBlocked(pathname, 'production', '', '', 'supabase', 'supabase')).toBe(false)
+    expect(isProductionWebPathBlocked(pathname.toUpperCase(), 'production', '', '', 'supabase', 'supabase'), `Not an alias: ${pathname.toUpperCase()}`).toBe(true)
+  })
+  it.each(['/AUTH', '/WORKSPACE', ...SUPABASE_ALLOWED_PATHS.filter(path => path.startsWith('/auth/') || path.startsWith('/workspace/')).map(path => path.toUpperCase())])('does not give native upper-case path %s a legacy development fallback', pathname => {
+    for (const environment of ['production', 'development', 'dev', 'test']) {
+      expect(isProductionWebPathBlocked(pathname, environment, '', '', '', ''), `${pathname} is native-only in ${environment}`).toBe(true)
+      expect(isProductionWebPathBlocked(pathname, environment, 'pilot', 'pilot', '', ''), `${pathname} is not a pilot alias in ${environment}`).toBe(true)
+    }
+  })
+  it.each(['/login/mfa', '/workspace/security', '/auth/mfa-enroll', '/auth/mfa-verify', '/auth/mfa-restart-setup'])('admits MFA path %s only exactly in paired mode', pathname => {
     expect(isProductionWebPathBlocked(pathname, 'production', '', '', 'supabase', 'supabase')).toBe(false)
     for (const path of [`${pathname}/extra`, `${pathname}/`, pathname.replace('/', '//'), pathname.replaceAll('/', '\\'), pathname.replace('mfa', '%6dfa')]) {
       if (path !== pathname) expect(isProductionWebPathBlocked(path, 'production', '', '', 'supabase', 'supabase')).toBe(true)
@@ -18,7 +83,7 @@ describe('native Auth admission', () => {
     expect(isProductionWebPathBlocked(pathname, 'production', '', '', 'supabase', '')).toBe(true)
     expect(isProductionWebPathBlocked(pathname, 'production', '', '', '', '')).toBe(true)
   })
-  it.each(['/auth/mfa-unenroll', '/auth/mfa-reset', '/auth/mfa-cancel', '/auth/mfa/verify', '/login/MFA', '/workspace/security/reset', '/auth/mfa-verify.json'])('keeps MFA bypass/alias path %s blocked', pathname => {
+  it.each(['/auth/mfa-unenroll', '/auth/mfa-reset', '/auth/mfa-cancel', '/auth/mfa-cancel-setup', '/auth/mfa/verify', '/login/MFA', '/workspace/security/reset', '/auth/mfa-verify.json'])('keeps MFA bypass/alias path %s blocked', pathname => {
     expect(isProductionWebPathBlocked(pathname, 'production', 'pilot', 'pilot', 'supabase', 'supabase')).toBe(true)
   })
   it.each(['/login', '/auth/confirm', '/auth/login', '/auth/setup', '/auth/logout', '/workspace', '/workspace/access-denied', '/api/wallet/challenge', '/api/wallet/verify'])('admits only the exact native path %s', (pathname) => {
@@ -35,7 +100,7 @@ describe('native Auth admission', () => {
   ])('denies wallet lookalikes and financial route %s', (pathname) => {
     expect(isProductionWebPathBlocked(pathname, 'production', 'pilot', 'pilot', 'supabase', 'supabase')).toBe(true)
   })
-  it.each(['/api/login', '/api/logout', '/api/auth/login', '/api/auth/signup', '/api/auth/user', '/investor/login', '/operator/login', '/wm/funds/new', '/admin', '/register', '/auth/signup', '/workspace/private', '/%61uth/login', '/auth%2Flogin', '//auth/login', '/auth/login/', '/auth\\login'])('denies %s despite development and pilot flags', (pathname) => {
+  it.each(['/api/login', '/api/logout', '/api/auth/login', '/api/auth/signup', '/api/auth/user', '/investor/login', '/operator/login', '/wm/funds/new', '/admin', '/register/extra', '/Register', '/register/', '/portal/unknown', '/portal%2fproducts', '/portal//products', '/auth/signup', '/workspace/private', '/%61uth/login', '/auth%2Flogin', '//auth/login', '/auth/login/', '/auth\\login'])('denies %s despite development and pilot flags', (pathname) => {
     expect(isProductionWebPathBlocked(pathname, 'development', 'pilot', 'pilot', 'supabase', 'supabase')).toBe(true)
   })
   it('keeps public routes and exact-mode navigation while invalid flags stay contained', () => {

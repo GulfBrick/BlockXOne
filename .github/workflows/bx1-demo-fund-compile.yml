@@ -1,0 +1,1144 @@
+name: BX1 platform cloud acceptance
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Cloud acceptance, empty-form browser proof, or focused UI and password-recovery checks
+        type: choice
+        options: [acceptance, registration-browser-proof, fund-dashboard-focused, theme-focused, auth-recovery-focused, connected-session-focused, document-read-recovery-focused, fund-signer-entry-focused, connected-fund-providers-focused, official-scanner-focused, offering-signatures-api-focused, offering-scanner-operating, offering-scanner-source-focused, provider-diagnostics-focused, document-result-recovery-focused, wallet-context-focused, appointment-commit-focused, publication-view-focused, investor-admission-roleplay-focused, appointment-projection-cost-focused, investor-journey-focused, step9-transport-trace, step9-provider-qualification]
+        default: acceptance
+      scanner_scope:
+        description: Queue for one protected manual scanner invocation only
+        type: choice
+        options: [OFFERING, ADMISSION]
+        default: OFFERING
+      scanner_operation:
+        description: CLAIM processes one job; RECOVER resumes one already-recorded ADMISSION result without a new scan
+        type: choice
+        options: [CLAIM, RECOVER]
+        default: CLAIM
+      registration_origin_expectation:
+        description: Expected browser-generated Origin on the current hosted TEST document
+        type: choice
+        options: [null-origin, canonical-origin]
+        default: canonical-origin
+  push:
+    paths:
+      - apps/web/src/middleware*
+      - apps/web/src/lib/supabase/middleware*
+      - apps/web/src/lib/branded-entry*
+      - apps/web/src/lib/auth-mode*
+      - apps/web/src/lib/auth-referrer-policy*
+      - apps/web/src/lib/platform-release*
+      - apps/web/src/lib/runtime-scope*
+      - apps/web/src/lib/instrument-term-options*
+      - apps/web/src/app/login/**
+      - apps/web/src/app/forgot-password/**
+      - apps/web/src/components/auth/password-recovery-form.tsx
+      - apps/web/src/lib/supabase/password-recovery.ts
+      - apps/web/src/app/wm/funds/new/**
+      - apps/web/src/app/tokenisation-agent/deploy/**
+      - apps/web/src/app/tokenisation-agent/mint/**
+      - apps/web/src/components/public/public-shell.tsx
+      - apps/web/src/components/public/public-navigation.tsx
+      - apps/web/scripts/test-entry.mjs
+      - apps/web/scripts/test-entry-mainnet.mjs
+      - apps/web/scripts/test-application-admission.mjs
+      - supabase/features/bx1_application_admission.sql
+      - supabase/features/bx1_customer_handoff.sql
+      - supabase/features/bx1_document_processing.sql
+      - supabase/features/bx1_document_result_recovery.sql
+      - apps/web/scripts/document-processing-proof.mjs
+      - apps/web/scripts/document-scanner-runner.mjs
+      - apps/web/scripts/document-scanner-runner.node-test.mjs
+      - apps/web/scripts/document-scanner-engine-proof.mjs
+      - apps/web/scripts/document-scanner-official-proof.mjs
+      - apps/web/scripts/document-scanner-snapshot.mjs
+      - apps/web/scripts/document-scanner-snapshot.node-test.mjs
+      - apps/web/scripts/document-scanner-offering-operating.mjs
+      - apps/web/scripts/document-scanner-offering-operating.node-test.mjs
+      - supabase/features/bx1_provider_binding.sql
+      - supabase/features/bx1_provider_subject_availability.sql
+      - apps/web/scripts/provider-binding-proof.mjs
+      - supabase/features/bx1_entity_eligibility.sql
+      - apps/web/scripts/entity-eligibility-proof.mjs
+      - supabase/features/bx1_account_representatives.sql
+      - apps/web/scripts/account-representatives-proof.mjs
+      - supabase/features/bx1_offering_workflow.sql
+      - apps/web/scripts/offering-workflow-proof.mjs
+      - supabase/features/bx1_product_common_envelope.sql
+      - apps/web/scripts/product-common-envelope-proof.mjs
+      - supabase/features/bx1_offering_documents.sql
+      - apps/web/scripts/offering-document-processing-proof.mjs
+      - supabase/features/bx1_entry.sql
+      - supabase/features/bx1_entry_admission.sql
+      - PLATFORM_RELEASE.json
+      - apps/web/src/lib/portal/**
+      - apps/web/src/components/portal/**
+      - apps/web/src/app/portal/**
+      - apps/web/src/app/api/portal/**
+      - apps/web/src/app/register/**
+      - apps/web/src/app/auth/**
+      - apps/web/src/app/workspace/staff-invite/**
+      - apps/web/src/app/workspace/administration/staff-invitations/**
+      - apps/web/src/components/auth/staff-invitation-accept.tsx
+      - apps/web/src/components/workspace/staff-invitations-panel.tsx
+      - apps/web/src/lib/administration/staff-invitations.ts
+      - apps/web/scripts/test-supabase-staff-invitations.mjs
+      - supabase/functions/bx1-staff-invite-dispatch/**
+      - apps/web/scripts/test-portal.mjs
+      - apps/web/scripts/test-portal-funding.mjs
+      - apps/web/scripts/test-fund-setup-recovery.mjs
+      - supabase/features/bx1_fund_setup_unknown_recovery.sql
+      - apps/web/scripts/test-fund-authority-alignment.mjs
+      - supabase/features/bx1_fund_authority_alignment.sql
+      - supabase/tests/bx1_fund_authority_alignment.sql
+      - apps/web/scripts/test-amoy-archive-alchemy-pair.mjs
+      - supabase/features/bx1_amoy_archive_alchemy_pair.sql
+      - apps/web/scripts/probe-amoy-funding.mjs
+      - apps/web/scripts/test-registration-browser.mjs
+      - supabase/features/bx1_portal_funding.sql
+      - supabase/tests/bx1_portal_funding.sql
+      - supabase/functions/bx1-funding-verifier/**
+      - supabase/features/bx1_portal.sql
+      - supabase/migrations/**
+      - supabase/tests/**
+      - contracts/demo/**
+      - apps/web/src/lib/testnet-fund/**
+      - apps/web/src/components/testnet-fund/**
+      - apps/web/src/app/api/testnet-fund/**
+      - apps/web/src/app/workspace/testnet-fund/**
+      - apps/web/scripts/test-testnet-fund.mjs
+      - supabase/migrations/20260920161000_testnet_fund_demo.sql
+      - supabase/tests/testnet_fund_demo.sql
+      - .github/workflows/bx1-demo-fund-compile.yml
+  pull_request:
+    paths:
+      - apps/web/scripts/test-amoy-archive-alchemy-pair.mjs
+      - supabase/features/bx1_amoy_archive_alchemy_pair.sql
+      - apps/web/scripts/test-fund-authority-alignment.mjs
+      - supabase/features/bx1_fund_authority_alignment.sql
+      - supabase/tests/bx1_fund_authority_alignment.sql
+      - apps/web/src/middleware*
+      - apps/web/src/lib/supabase/middleware*
+      - apps/web/src/lib/branded-entry*
+      - apps/web/src/lib/auth-mode*
+      - apps/web/src/lib/auth-referrer-policy*
+      - apps/web/src/lib/platform-release*
+      - apps/web/src/lib/runtime-scope*
+      - apps/web/src/lib/instrument-term-options*
+      - apps/web/src/app/login/**
+      - apps/web/src/app/forgot-password/**
+      - apps/web/src/components/auth/password-recovery-form.tsx
+      - apps/web/src/lib/supabase/password-recovery.ts
+      - apps/web/src/app/wm/funds/new/**
+      - apps/web/src/app/tokenisation-agent/deploy/**
+      - apps/web/src/app/tokenisation-agent/mint/**
+      - apps/web/src/components/public/public-shell.tsx
+      - apps/web/src/components/public/public-navigation.tsx
+      - apps/web/scripts/test-entry.mjs
+      - apps/web/scripts/test-entry-mainnet.mjs
+      - apps/web/scripts/test-application-admission.mjs
+      - supabase/features/bx1_application_admission.sql
+      - supabase/features/bx1_customer_handoff.sql
+      - supabase/features/bx1_document_processing.sql
+      - supabase/features/bx1_document_result_recovery.sql
+      - apps/web/scripts/document-processing-proof.mjs
+      - apps/web/scripts/document-scanner-runner.mjs
+      - apps/web/scripts/document-scanner-runner.node-test.mjs
+      - apps/web/scripts/document-scanner-engine-proof.mjs
+      - apps/web/scripts/document-scanner-official-proof.mjs
+      - apps/web/scripts/document-scanner-snapshot.mjs
+      - apps/web/scripts/document-scanner-snapshot.node-test.mjs
+      - apps/web/scripts/document-scanner-offering-operating.mjs
+      - apps/web/scripts/document-scanner-offering-operating.node-test.mjs
+      - supabase/features/bx1_provider_binding.sql
+      - supabase/features/bx1_provider_subject_availability.sql
+      - apps/web/scripts/provider-binding-proof.mjs
+      - supabase/features/bx1_entity_eligibility.sql
+      - apps/web/scripts/entity-eligibility-proof.mjs
+      - supabase/features/bx1_account_representatives.sql
+      - apps/web/scripts/account-representatives-proof.mjs
+      - supabase/features/bx1_offering_workflow.sql
+      - apps/web/scripts/offering-workflow-proof.mjs
+      - supabase/features/bx1_product_common_envelope.sql
+      - apps/web/scripts/product-common-envelope-proof.mjs
+      - supabase/features/bx1_offering_documents.sql
+      - apps/web/scripts/offering-document-processing-proof.mjs
+      - supabase/features/bx1_entry.sql
+      - supabase/features/bx1_entry_admission.sql
+      - PLATFORM_RELEASE.json
+      - apps/web/src/lib/portal/**
+      - apps/web/src/components/portal/**
+      - apps/web/src/app/portal/**
+      - apps/web/src/app/api/portal/**
+      - apps/web/src/app/register/**
+      - apps/web/src/app/auth/**
+      - apps/web/src/app/workspace/staff-invite/**
+      - apps/web/src/app/workspace/administration/staff-invitations/**
+      - apps/web/src/components/auth/staff-invitation-accept.tsx
+      - apps/web/src/components/workspace/staff-invitations-panel.tsx
+      - apps/web/src/lib/administration/staff-invitations.ts
+      - apps/web/scripts/test-supabase-staff-invitations.mjs
+      - supabase/functions/bx1-staff-invite-dispatch/**
+      - apps/web/scripts/test-portal.mjs
+      - apps/web/scripts/test-portal-funding.mjs
+      - apps/web/scripts/probe-amoy-funding.mjs
+      - apps/web/scripts/test-registration-browser.mjs
+      - supabase/features/bx1_portal_funding.sql
+      - supabase/tests/bx1_portal_funding.sql
+      - supabase/functions/bx1-funding-verifier/**
+      - supabase/features/bx1_portal.sql
+      - supabase/migrations/**
+      - supabase/tests/**
+      - contracts/demo/**
+      - apps/web/src/lib/testnet-fund/**
+      - apps/web/src/components/testnet-fund/**
+      - apps/web/src/app/api/testnet-fund/**
+      - apps/web/src/app/workspace/testnet-fund/**
+      - apps/web/scripts/test-testnet-fund.mjs
+      - supabase/migrations/20260920161000_testnet_fund_demo.sql
+      - supabase/tests/testnet_fund_demo.sql
+      - .github/workflows/bx1-demo-fund-compile.yml
+
+permissions:
+  contents: read
+
+jobs:
+  step9-transport-trace:
+    name: Original Step 9 read-only transport trace
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.mode == 'step9-transport-trace' || inputs.mode == 'step9-provider-qualification') && github.repository == 'GulfBrick/BlockXOne' && github.ref == 'refs/heads/codex/investor-journey-20261016' && github.run_attempt == 1 }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check out the exact reviewed trace source without credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+          submodules: false
+          lfs: false
+      - name: Select pinned cloud Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22.23.1'
+          check-latest: false
+          package-manager-cache: false
+      - name: Install only existing locked web dependencies without lifecycle scripts
+        shell: bash
+        working-directory: apps/web
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          npm install --global npm@10.9.8 --no-audit --no-fund
+          test "$(node --version)" = 'v22.23.1'
+          test "$(npm --version)" = '10.9.8'
+          npm ci --ignore-scripts --no-audit --no-fund
+      - name: Trace the original transaction through the unchanged read-only transport
+        env:
+          BX1_FUND_SETUP_TRANSPORT_TRACE: ${{ inputs.mode == 'step9-provider-qualification' && 'original-step9-qualification-v2' || 'original-step9-readonly-v1' }}
+        run: node apps/web/scripts/probe-fund-setup-transport.mjs
+
+  document-scanner-engine:
+    name: Real scanner engine and bounded producer
+    if: ${{ (github.event_name != 'workflow_dispatch' && !((github.event_name == 'push' && github.repository == 'GulfBrick/BlockXOne' && github.ref == 'refs/heads/codex/investor-journey-20261016') || (github.event_name == 'pull_request' && github.repository == 'GulfBrick/BlockXOne' && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'codex/investor-journey-20261016' && github.base_ref == 'codex/stage2-sandbox-completion-20261011'))) || inputs.mode == 'acceptance' || inputs.mode == 'connected-fund-providers-focused' || inputs.mode == 'official-scanner-focused' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out exact scanner source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+          submodules: false
+          lfs: false
+      - name: Select pinned Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22.23.1'
+          check-latest: false
+          package-manager-cache: false
+      - name: Install cryptographically pinned official ClamAV in disposable cloud runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 2 --max-time 180 \
+            'https://github.com/Cisco-Talos/clamav/releases/download/clamav-1.4.6/clamav-1.4.6.linux.x86_64.deb' \
+            --output "$RUNNER_TEMP/bx1-clamav-1.4.6.deb"
+          printf '%s  %s\n' 'd3ee9e401974855a1edc1761b1425417d126de618d5f0c91cd51209f69f6fcc2' "$RUNNER_TEMP/bx1-clamav-1.4.6.deb" | sha256sum --check --strict
+          sudo dpkg --install "$RUNNER_TEMP/bx1-clamav-1.4.6.deb"
+          test -x /usr/local/bin/clamscan
+          printf '%s  %s\n' '08160a5c11103e1a7af3b783b25e947a52bb0a598c40102c7aaa6525e477f7bf' '/usr/local/bin/clamscan' | sha256sum --check --strict
+          /usr/local/bin/clamscan --version
+      - name: Prove producer protocol negatives without real customer data
+        shell: bash
+        run: node --test apps/web/scripts/document-scanner-runner.node-test.mjs apps/web/scripts/document-scanner-snapshot.node-test.mjs apps/web/scripts/document-scanner-offering-operating.node-test.mjs
+      - name: Prove real benign and detection-fixture scans
+        shell: bash
+        env:
+          BX1_SCANNER_CLOUD_PROOF: github-clamav-1.4.6
+          BX1_SCANNER_CLOUD_ENGINE: /usr/local/bin/clamscan
+          BX1_SCANNER_PACKAGE_SHA256: d3ee9e401974855a1edc1761b1425417d126de618d5f0c91cd51209f69f6fcc2
+        run: node apps/web/scripts/document-scanner-engine-proof.mjs
+      - name: Verify current official signature set without accessing any private queue
+        if: ${{ github.event_name == 'workflow_dispatch' && (inputs.mode == 'connected-fund-providers-focused' || inputs.mode == 'official-scanner-focused') }}
+        shell: bash
+        env:
+          BX1_SCANNER_OFFICIAL_CLOUD_PROOF: github-clamav-official-1.4.6
+          BX1_SCANNER_PACKAGE_SHA256: d3ee9e401974855a1edc1761b1425417d126de618d5f0c91cd51209f69f6fcc2
+        run: node apps/web/scripts/document-scanner-official-proof.mjs
+  offering-scanner-source-focused:
+    name: Focused offering worker source acceptance
+    if: ${{ (github.event_name == 'push' && github.repository == 'GulfBrick/BlockXOne' && github.ref == 'refs/heads/codex/investor-journey-20261016') || (github.event_name == 'pull_request' && github.repository == 'GulfBrick/BlockXOne' && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'codex/investor-journey-20261016' && github.base_ref == 'codex/stage2-sandbox-completion-20261011') || (github.event_name == 'workflow_dispatch' && (inputs.mode == 'offering-scanner-source-focused' || inputs.mode == 'offering-signatures-api-focused' || inputs.mode == 'investor-journey-focused') && github.repository == 'GulfBrick/BlockXOne' && (github.ref == 'refs/heads/codex/stage2-sandbox-completion-20261011' || (inputs.mode == 'investor-journey-focused' && github.ref == 'refs/heads/codex/investor-journey-20261016'))) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check out reviewed worker source without credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+          submodules: false
+          lfs: false
+      - name: Select pinned Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22.23.1'
+          check-latest: false
+          package-manager-cache: false
+      - name: Verify only the new operating boundary without secrets or queue access
+        run: node --test apps/web/scripts/document-scanner-offering-operating.node-test.mjs
+  offering-document-scanner-operating:
+    name: Manual protected TEST offering document worker
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'offering-scanner-operating' && github.repository == 'GulfBrick/BlockXOne' && github.ref == 'refs/heads/codex/stage2-sandbox-completion-20261011' && github.run_attempt == 1 }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: bx1-test-offering-scanner
+    concurrency:
+      group: bx1-test-offering-scanner
+      cancel-in-progress: false
+    env:
+      BX1_SCANNER_SCOPE: ${{ inputs.scanner_scope }}
+      BX1_SCANNER_OPERATION: ${{ inputs.scanner_operation }}
+      BX1_SCANNER_APPROVED_SOURCE_COMMIT: ${{ vars.BX1_SCANNER_APPROVED_SOURCE_COMMIT }}
+      BX1_SCANNER_OPERATING_CLOUD_RUN: test-offering-scanner-v1
+      BX1_SCANNER_PACKAGE_SHA256: d3ee9e401974855a1edc1761b1425417d126de618d5f0c91cd51209f69f6fcc2
+      BX1_SCANNER_PROJECT_REF: fegnnnlseuejkrusbbkv
+      BLOCKXONE_ENVIRONMENT: TESTNET
+      BLOCKXONE_APP_ORIGIN: https://testnet.bx1.co.za
+      BLOCKXONE_DOCUMENT_PROCESSING_WORKER_ID: bx1-test-offering-document-worker-v1
+      BLOCKXONE_DOCUMENT_SCANNER_ID: bx1-test-clamav-1-4-6-official-v1
+    steps:
+      - name: Check out reviewed operating source without credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+          submodules: false
+          lfs: false
+      - name: Select pinned Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22.23.1'
+          check-latest: false
+          package-manager-cache: false
+      - name: Reject unapproved commit, environment or repeated operating attempt
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          node --input-type=module -e "import { validateOperatingEnvironment } from './apps/web/scripts/document-scanner-offering-operating.mjs'; validateOperatingEnvironment();"
+      - name: Install pinned official scanner without any application secret
+        if: ${{ inputs.scanner_operation == 'CLAIM' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 2 --max-time 180 \
+            'https://github.com/Cisco-Talos/clamav/releases/download/clamav-1.4.6/clamav-1.4.6.linux.x86_64.deb' \
+            --output "$RUNNER_TEMP/bx1-clamav-1.4.6.deb"
+          printf '%s  %s\n' 'd3ee9e401974855a1edc1761b1425417d126de618d5f0c91cd51209f69f6fcc2' "$RUNNER_TEMP/bx1-clamav-1.4.6.deb" | sha256sum --check --strict
+          sudo dpkg --install "$RUNNER_TEMP/bx1-clamav-1.4.6.deb"
+          test -x /usr/local/bin/clamscan
+          printf '%s  %s\n' '08160a5c11103e1a7af3b783b25e947a52bb0a598c40102c7aaa6525e477f7bf' '/usr/local/bin/clamscan' | sha256sum --check --strict
+          /usr/local/bin/clamscan --version
+      - name: Validate operating boundary without queue access or credentials
+        shell: bash
+        run: node --test apps/web/scripts/document-scanner-offering-operating.node-test.mjs
+      - name: Process one explicitly selected TEST document operation
+        shell: bash
+        env:
+          BLOCKXONE_DOCUMENT_SCANNER_HMAC_KEY: ${{ secrets.BLOCKXONE_DOCUMENT_SCANNER_HMAC_KEY }}
+          BX1_SCANNER_RECOVERY_BINDING: ${{ inputs.scanner_operation == 'RECOVER' && secrets.BX1_SCANNER_RECOVERY_BINDING || '' }}
+        run: node apps/web/scripts/document-scanner-offering-operating.mjs
+  compile-and-build:
+    if: ${{ (github.event_name != 'workflow_dispatch' && !((github.event_name == 'push' && github.repository == 'GulfBrick/BlockXOne' && github.ref == 'refs/heads/codex/investor-journey-20261016') || (github.event_name == 'pull_request' && github.repository == 'GulfBrick/BlockXOne' && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'codex/investor-journey-20261016' && github.base_ref == 'codex/stage2-sandbox-completion-20261011'))) || inputs.mode == 'acceptance' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [TESTNET, MAINNET]
+    services:
+      postgres:
+        image: docker.io/library/postgres:17@sha256:2d2b8998d31037bf721cfdf764d76ba74171b4fab3431b7f72c27c56ddbdf9e3
+        env:
+          POSTGRES_DB: bx1_demo_ci
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: bx1-synthetic-ci-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d bx1_demo_ci"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Check out exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+          submodules: false
+          lfs: false
+
+      - name: Select pinned Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22.23.1'
+          check-latest: false
+          package-manager-cache: false
+
+      - name: Install exact Solidity compiler into ephemeral runner path
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --global npm@10.9.8 --no-audit --no-fund
+          test "$(node --version)" = 'v22.23.1'
+          test "$(npm --version)" = '10.9.8'
+          npm install --prefix "$RUNNER_TEMP/bx1-solc" --ignore-scripts --no-audit --no-fund --save-exact solc@0.8.24
+          test -f "$RUNNER_TEMP/bx1-solc/node_modules/solc/index.js"
+
+      - name: Compile exact source and generate ABI and bytecode
+        shell: bash
+        env:
+          BX1_SOLC_ENTRY: ${{ runner.temp }}/bx1-solc/node_modules/solc/index.js
+        run: |
+          set -euo pipefail
+          node contracts/demo/compile.mjs \
+            --json-out "$RUNNER_TEMP/bx1-demo-fund/Bx1DemoFund.json" \
+            --ts-out apps/web/src/lib/testnet-fund/artifact.generated.ts
+
+      - name: Verify compiler output and exact demo interface without EVM execution
+        shell: bash
+        env:
+          BX1_DEMO_ARTIFACT_JSON: ${{ runner.temp }}/bx1-demo-fund/Bx1DemoFund.json
+        run: node --test contracts/demo/Bx1DemoFund.test.mjs
+
+      - name: Publish compiled artifact and generated web module
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: bx1-amoy-demo-fund-${{ matrix.target }}-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            ${{ runner.temp }}/bx1-demo-fund/Bx1DemoFund.json
+            apps/web/src/lib/testnet-fund/artifact.generated.ts
+
+      - name: Install locked hosted web dependencies
+        shell: bash
+        working-directory: apps/web
+        run: npm ci --no-audit --no-fund
+
+      - name: Run the controlled hermetic web suite, including fund admission
+        shell: bash
+        working-directory: apps/web
+        run: npm test
+
+      - name: Verify isolated fund SQL state machine
+        shell: bash
+        working-directory: apps/web
+        env:
+          BX1_DEMO_SQL_TEST_URL: postgresql://postgres:bx1-synthetic-ci-only@127.0.0.1:5432/bx1_demo_ci
+        run: node scripts/test-testnet-fund.mjs
+
+      - name: Install pinned ClamAV for connected offering-document proof
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 2 --max-time 180 \
+            'https://github.com/Cisco-Talos/clamav/releases/download/clamav-1.4.6/clamav-1.4.6.linux.x86_64.deb' \
+            --output "$RUNNER_TEMP/bx1-clamav-1.4.6.deb"
+          printf '%s  %s\n' 'd3ee9e401974855a1edc1761b1425417d126de618d5f0c91cd51209f69f6fcc2' "$RUNNER_TEMP/bx1-clamav-1.4.6.deb" | sha256sum --check --strict
+          sudo dpkg --install "$RUNNER_TEMP/bx1-clamav-1.4.6.deb"
+          test -x /usr/local/bin/clamscan
+          printf '%s  %s\n' '08160a5c11103e1a7af3b783b25e947a52bb0a598c40102c7aaa6525e477f7bf' '/usr/local/bin/clamscan' | sha256sum --check --strict
+          /usr/local/bin/clamscan --version
+
+      - name: Verify customer onboarding, offerings and reservations in isolated cloud PostgreSQL
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          BX1_PORTAL_SQL_TEST_URL: postgresql://postgres:bx1-synthetic-ci-only@127.0.0.1:5432/bx1_demo_ci
+          BX1_PORTAL_PROOF_LINEAGE: ${{ matrix.target == 'TESTNET' && 'FUNDING_LINKED' || 'STOCK' }}
+          BX1_SCANNER_CLOUD_PROOF: github-clamav-1.4.6
+          BX1_SCANNER_CLOUD_ENGINE: /usr/local/bin/clamscan
+          BX1_SCANNER_PACKAGE_SHA256: d3ee9e401974855a1edc1761b1425417d126de618d5f0c91cd51209f69f6fcc2
+        run: node apps/web/scripts/test-portal.mjs
+
+      - name: Typecheck and build hosted web with compiled artifact
+        if: ${{ !cancelled() }}
+        shell: bash
+        working-directory: apps/web
+        env:
+          CI: 'true'
+          NEXT_TELEMETRY_DISABLED: '1'
+          NODE_ENV: production
+          BLOCKXONE_AUTH_MODE: supabase
+          NEXT_PUBLIC_BLOCKXONE_AUTH_MODE: supabase
+          SUPABASE_URL: ${{ matrix.target == 'TESTNET' && 'https://fegnnnlseuejkrusbbkv.supabase.co' || 'https://oqkevkjbkpugjotihtda.supabase.co' }}
+          SUPABASE_PUBLISHABLE_KEY: sb_publishable_00000000000000000000000000000000
+          BLOCKXONE_APP_ORIGIN: ${{ matrix.target == 'TESTNET' && 'https://testnet.bx1.co.za' || 'https://bx1.co.za' }}
+          SERVER_ACTION_ALLOWED_ORIGINS: ${{ matrix.target == 'TESTNET' && 'testnet.bx1.co.za' || 'bx1.co.za' }}
+          BLOCKXONE_ENVIRONMENT: ${{ matrix.target }}
+          NEXT_PUBLIC_BLOCKXONE_RUNTIME_SCOPE: ${{ matrix.target }}
+          VERCEL_ENV: ${{ matrix.target == 'TESTNET' && 'preview' || 'production' }}
+          VERCEL_GIT_COMMIT_SHA: ${{ github.sha }}
+          BLOCKXONE_WEB_SURFACE: public
+          NEXT_PUBLIC_BLOCKXONE_WEB_SURFACE: public
+          NEXT_PUBLIC_DEMO_REQUEST_ENABLED: 'false'
+        run: |
+          set -euo pipefail
+          node node_modules/typescript/bin/tsc --noEmit --incremental false
+          npm run build
+
+      - name: Typecheck the exact Supabase Edge verification package
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --prefix "$RUNNER_TEMP/bx1-deno" --no-audit --no-fund --save-exact deno@2.9.6
+          cp apps/web/src/lib/portal/funding-claim.ts supabase/functions/bx1-funding-verifier/funding-claim.ts
+          cp apps/web/src/lib/portal/funding-verifier.ts supabase/functions/bx1-funding-verifier/funding-verifier.ts
+          cmp apps/web/src/lib/portal/funding-claim.ts supabase/functions/bx1-funding-verifier/funding-claim.ts
+          cmp apps/web/src/lib/portal/funding-verifier.ts supabase/functions/bx1-funding-verifier/funding-verifier.ts
+          cd supabase/functions/bx1-funding-verifier
+          "$RUNNER_TEMP/bx1-deno/node_modules/.bin/deno" check --config deno.json index.ts funding-verifier.ts funding-claim.ts
+          cd ../bx1-staff-invite-dispatch
+          "$RUNNER_TEMP/bx1-deno/node_modules/.bin/deno" check --config deno.json index.ts
+
+  staff-invitation-sql-acceptance:
+    if: ${{ (github.event_name != 'workflow_dispatch' && !((github.event_name == 'push' && github.repository == 'GulfBrick/BlockXOne' && github.ref == 'refs/heads/codex/investor-journey-20261016') || (github.event_name == 'pull_request' && github.repository == 'GulfBrick/BlockXOne' && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'codex/investor-journey-20261016' && github.base_ref == 'codex/stage2-sandbox-completion-20261011'))) || inputs.mode == 'acceptance' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: docker.io/library/postgres:17@sha256:2d2b8998d31037bf721cfdf764d76ba74171b4fab3431b7f72c27c56ddbdf9e3
+        env:
+          POSTGRES_DB: bx1_demo_ci
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: bx1-synthetic-ci-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d bx1_demo_ci"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Check out exact staff invitation source in an independent cloud fixture
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+          submodules: false
+          lfs: false
+      - name: Select pinned Node for staff invitation proof
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22.23.1'
+          check-latest: false
+          package-manager-cache: false
+      - name: Install locked dependencies in the disposable cloud runner
+        working-directory: apps/web
+        shell: bash
+        run: npm ci --no-audit --no-fund
+      - name: Prove scoped invite, verified-email binding and AAL1 denial on PostgreSQL 17
+        working-directory: apps/web
+        shell: bash
+        env:
+          BX1_STAFF_INVITE_CLOUD: github-postgres17
+          BX1_CI_POSTGRES_PASSWORD: bx1-synthetic-ci-only
+        run: node scripts/test-supabase-staff-invitations.mjs
+
+  funding-sql-acceptance:
+    if: ${{ (github.event_name != 'workflow_dispatch' && !((github.event_name == 'push' && github.repository == 'GulfBrick/BlockXOne' && github.ref == 'refs/heads/codex/investor-journey-20261016') || (github.event_name == 'pull_request' && github.repository == 'GulfBrick/BlockXOne' && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'codex/investor-journey-20261016' && github.base_ref == 'codex/stage2-sandbox-completion-20261011'))) || inputs.mode == 'acceptance' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    services:
+      postgres:
+        image: docker.io/library/postgres:17@sha256:2d2b8998d31037bf721cfdf764d76ba74171b4fab3431b7f72c27c56ddbdf9e3
+        env:
+          POSTGRES_DB: bx1_demo_ci
+          POSTGRES_USER: bx1_ci_bootstrap
+          POSTGRES_PASSWORD: bx1-synthetic-ci-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U bx1_ci_bootstrap -d bx1_demo_ci"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Check out exact funding source into an independent cloud fixture
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+          submodules: false
+          lfs: false
+      - name: Select pinned Node for funding SQL proof
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22.23.1'
+          check-latest: false
+          package-manager-cache: false
+      - name: Install locked dependencies for the disposable cloud SQL runner
+        working-directory: apps/web
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --global npm@10.9.8 --no-audit --no-fund
+          test "$(node --version)" = 'v22.23.1'
+          test "$(npm --version)" = '10.9.8'
+          npm ci --no-audit --no-fund
+      - name: Prepare non-bootstrap postgres for hosted-role permission proof
+        shell: bash
+        env:
+          BX1_FIXTURE_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          set -euo pipefail
+          docker exec "$BX1_FIXTURE_CONTAINER" psql -U bx1_ci_bootstrap -d bx1_demo_ci -v ON_ERROR_STOP=1 -c "CREATE ROLE postgres WITH LOGIN SUPERUSER CREATEDB CREATEROLE BYPASSRLS PASSWORD 'bx1-synthetic-ci-only'; ALTER DATABASE bx1_demo_ci OWNER TO postgres;"
+      - name: Verify canonical funding and reconciliation in fresh cloud PostgreSQL
+        shell: bash
+        env:
+          BX1_FUNDING_SQL_TEST_URL: postgresql://postgres:bx1-synthetic-ci-only@127.0.0.1:5432/bx1_demo_ci
+        run: node apps/web/scripts/test-portal-funding.mjs
+
+  entry-sql-acceptance:
+    if: ${{ (github.event_name != 'workflow_dispatch' && !((github.event_name == 'push' && github.repository == 'GulfBrick/BlockXOne' && github.ref == 'refs/heads/codex/investor-journey-20261016') || (github.event_name == 'pull_request' && github.repository == 'GulfBrick/BlockXOne' && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'codex/investor-journey-20261016' && github.base_ref == 'codex/stage2-sandbox-completion-20261011'))) || inputs.mode == 'acceptance' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: docker.io/library/postgres:17@sha256:2d2b8998d31037bf721cfdf764d76ba74171b4fab3431b7f72c27c56ddbdf9e3
+        env:
+          POSTGRES_DB: bx1_demo_ci
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: bx1-synthetic-ci-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d bx1_demo_ci"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Check out exact entry source in isolated cloud fixture
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+          submodules: false
+          lfs: false
+      - name: Select pinned Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22.23.1'
+          check-latest: false
+          package-manager-cache: false
+      - name: Install locked dependencies in cloud
+        working-directory: apps/web
+        run: npm ci --no-audit --no-fund
+      - name: Prove additive mappings and authoritative entry commands
+        env:
+          BX1_PORTAL_SQL_TEST_URL: postgresql://postgres:bx1-synthetic-ci-only@127.0.0.1:5432/bx1_demo_ci
+        run: node apps/web/scripts/test-entry.mjs
+
+  application-admission-sql-acceptance:
+    if: ${{ (github.event_name != 'workflow_dispatch' && !((github.event_name == 'push' && github.repository == 'GulfBrick/BlockXOne' && github.ref == 'refs/heads/codex/investor-journey-20261016') || (github.event_name == 'pull_request' && github.repository == 'GulfBrick/BlockXOne' && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'codex/investor-journey-20261016' && github.base_ref == 'codex/stage2-sandbox-completion-20261011'))) || inputs.mode == 'acceptance' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: docker.io/library/postgres:17@sha256:2d2b8998d31037bf721cfdf764d76ba74171b4fab3431b7f72c27c56ddbdf9e3
+        env:
+          POSTGRES_DB: bx1_demo_ci
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: bx1-synthetic-ci-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d bx1_demo_ci"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Check out exact application handoff source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+          submodules: false
+          lfs: false
+      - name: Select pinned Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22.23.1'
+          check-latest: false
+          package-manager-cache: false
+      - name: Install locked dependencies in cloud
+        working-directory: apps/web
+        run: npm ci --no-audit --no-fund
+      - name: Prove persona data, independent review and admission boundaries
+        env:
+          BX1_PORTAL_SQL_TEST_URL: postgresql://postgres:bx1-synthetic-ci-only@127.0.0.1:5432/bx1_demo_ci
+        run: node apps/web/scripts/test-application-admission.mjs
+
+  entry-mainnet-sql-acceptance:
+    if: ${{ (github.event_name != 'workflow_dispatch' && !((github.event_name == 'push' && github.repository == 'GulfBrick/BlockXOne' && github.ref == 'refs/heads/codex/investor-journey-20261016') || (github.event_name == 'pull_request' && github.repository == 'GulfBrick/BlockXOne' && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'codex/investor-journey-20261016' && github.base_ref == 'codex/stage2-sandbox-completion-20261011'))) || inputs.mode == 'acceptance' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: docker.io/library/postgres:17@sha256:2d2b8998d31037bf721cfdf764d76ba74171b4fab3431b7f72c27c56ddbdf9e3
+        env:
+          POSTGRES_DB: bx1_demo_ci
+          POSTGRES_USER: bx1_ci_bootstrap
+          POSTGRES_PASSWORD: bx1-synthetic-ci-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U bx1_ci_bootstrap -d bx1_demo_ci"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Check out exact MAIN entry baseline into an independent cloud fixture
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+          submodules: false
+          lfs: false
+      - name: Select pinned Node for MAIN baseline proof
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22.23.1'
+          check-latest: false
+          package-manager-cache: false
+      - name: Install locked dependencies in the disposable cloud runner
+        working-directory: apps/web
+        shell: bash
+        run: npm ci --no-audit --no-fund
+      - name: Prepare non-bootstrap postgres for hosted-role permission proof
+        shell: bash
+        env:
+          BX1_FIXTURE_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          set -euo pipefail
+          docker exec "$BX1_FIXTURE_CONTAINER" psql -U bx1_ci_bootstrap -d bx1_demo_ci -v ON_ERROR_STOP=1 -c "CREATE ROLE postgres WITH LOGIN SUPERUSER CREATEDB CREATEROLE BYPASSRLS PASSWORD 'bx1-synthetic-ci-only'; ALTER DATABASE bx1_demo_ci OWNER TO postgres;"
+      - name: Prove empty MAIN admission and preservation as a hosted-like non-superuser
+        env:
+          BX1_PORTAL_SQL_TEST_URL: postgresql://postgres:bx1-synthetic-ci-only@127.0.0.1:5432/bx1_demo_ci
+        run: node apps/web/scripts/test-entry-mainnet.mjs
+
+  amoy-provider-readiness:
+    if: ${{ (github.event_name != 'workflow_dispatch' && !((github.event_name == 'push' && github.repository == 'GulfBrick/BlockXOne' && github.ref == 'refs/heads/codex/investor-journey-20261016') || (github.event_name == 'pull_request' && github.repository == 'GulfBrick/BlockXOne' && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'codex/investor-journey-20261016' && github.base_ref == 'codex/stage2-sandbox-completion-20261011'))) || inputs.mode == 'acceptance' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - name: Check out exact source for read-only provider probe
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+          submodules: false
+          lfs: false
+      - name: Select pinned Node for read-only probe
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22.23.1'
+          check-latest: false
+          package-manager-cache: false
+      - name: Observe Amoy chain and finalized-tag availability without signing
+        run: node apps/web/scripts/probe-amoy-funding.mjs
+
+  registration-browser-proof:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'registration-browser-proof' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out exact proof source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+          submodules: false
+          lfs: false
+
+      - name: Select pinned Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22.23.1'
+          check-latest: false
+          package-manager-cache: false
+
+      - name: Install pinned browser tooling only in the ephemeral cloud runner
+        shell: bash
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/bx1-registration-browsers
+        run: |
+          set -euo pipefail
+          npm install --global npm@10.9.8 --no-audit --no-fund
+          test "$(node --version)" = 'v22.23.1'
+          test "$(npm --version)" = '10.9.8'
+          npm install --prefix "$RUNNER_TEMP/bx1-registration-playwright" --ignore-scripts --no-audit --no-fund --save-exact playwright@1.63.0
+          node "$RUNNER_TEMP/bx1-registration-playwright/node_modules/playwright/cli.js" install --with-deps chromium
+
+      - name: Observe native browser Origin with an empty invalid registration body
+        shell: bash
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/bx1-registration-browsers
+          BX1_REGISTRATION_BROWSER_EXPECTATION: ${{ inputs.registration_origin_expectation }}
+        run: node apps/web/scripts/test-registration-browser.mjs
+
+  fund-setup-recovery-sql:
+    name: Original setup recovery on isolated cloud PostgreSQL 17
+    if: ${{ github.repository == 'GulfBrick/BlockXOne' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'codex/investor-journey-20261016' && github.base_ref == 'codex/stage2-sandbox-completion-20261011') || (github.event_name == 'workflow_dispatch' && inputs.mode == 'investor-journey-focused' && (github.ref == 'refs/heads/codex/stage2-sandbox-completion-20261011' || github.ref == 'refs/heads/codex/investor-journey-20261016'))) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: docker.io/library/postgres:17@sha256:2d2b8998d31037bf721cfdf764d76ba74171b4fab3431b7f72c27c56ddbdf9e3
+        env:
+          POSTGRES_DB: bx1_demo_ci
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: bx1-synthetic-ci-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d bx1_demo_ci"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Check out the exact reviewed setup recovery source without write credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+          submodules: false
+          lfs: false
+      - name: Select pinned Node for the cloud-only recovery fixture
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22.23.1'
+          check-latest: false
+          package-manager-cache: false
+      - name: Install locked web dependencies in the disposable cloud runner
+        working-directory: apps/web
+        run: npm ci --no-audit --no-fund
+      - name: Prove actual retry writer, two-connection CAS, immutable history and audit rollback
+        env:
+          BX1_FUND_SETUP_RECOVERY_SQL_TEST_URL: postgresql://postgres:bx1-synthetic-ci-only@127.0.0.1:5432/bx1_demo_ci
+        run: node apps/web/scripts/test-fund-setup-recovery.mjs
+      - name: Prove actual authority handoff, exact session receipts, concurrent claim and audit rollback
+        env:
+          BX1_FUND_AUTHORITY_ALIGNMENT_SQL_TEST_URL: postgresql://postgres:bx1-synthetic-ci-only@127.0.0.1:5432/bx1_demo_ci
+        run: node apps/web/scripts/test-fund-authority-alignment.mjs
+      - name: Prove additive archive observer policy, exact body cuts and history preservation
+        env:
+          BX1_AMOY_ARCHIVE_ALCHEMY_SQL_TEST_URL: postgresql://postgres:bx1-synthetic-ci-only@127.0.0.1:5432/bx1_demo_ci
+        run: node apps/web/scripts/test-amoy-archive-alchemy-pair.mjs
+
+  fund-dashboard-focused:
+    name: Focused dashboard, theme or password-recovery acceptance
+    if: ${{ (github.event_name == 'pull_request' && github.repository == 'GulfBrick/BlockXOne' && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'codex/investor-journey-20261016' && github.base_ref == 'codex/stage2-sandbox-completion-20261011') || (github.event_name == 'workflow_dispatch' && (inputs.mode == 'fund-dashboard-focused' || inputs.mode == 'theme-focused' || inputs.mode == 'auth-recovery-focused' || inputs.mode == 'connected-session-focused' || inputs.mode == 'document-read-recovery-focused' || inputs.mode == 'fund-signer-entry-focused' || inputs.mode == 'connected-fund-providers-focused' || inputs.mode == 'offering-signatures-api-focused' || inputs.mode == 'provider-diagnostics-focused' || inputs.mode == 'document-result-recovery-focused' || inputs.mode == 'wallet-context-focused' || inputs.mode == 'appointment-commit-focused' || inputs.mode == 'publication-view-focused' || inputs.mode == 'investor-admission-roleplay-focused' || inputs.mode == 'appointment-projection-cost-focused' || inputs.mode == 'investor-journey-focused') && (github.ref == 'refs/heads/codex/stage2-sandbox-completion-20261011' || (inputs.mode == 'investor-journey-focused' && github.ref == 'refs/heads/codex/investor-journey-20261016'))) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out the reviewed dashboard correction without write credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+          submodules: false
+          lfs: false
+
+      - name: Select pinned cloud web runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22.23.1'
+          check-latest: false
+          package-manager-cache: false
+
+      - name: Install exact npm and locked web dependencies
+        shell: bash
+        working-directory: apps/web
+        run: |
+          set -euo pipefail
+          npm install --global npm@10.9.8 --no-audit --no-fund
+          test "$(node --version)" = 'v22.23.1'
+          test "$(npm --version)" = '10.9.8'
+          npm ci --no-audit --no-fund
+
+      - name: Check copy and runtime policy
+        shell: bash
+        working-directory: apps/web
+        run: npm run preflight
+
+      - name: Run only the selected fixed UI regression set
+        shell: bash
+        working-directory: apps/web
+        env:
+          BX1_FOCUSED_UI_MODE: ${{ github.event_name == 'pull_request' && 'investor-journey-focused' || inputs.mode }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { spawn } from 'node:child_process'
+          import { runHermeticVitest } from './scripts/run-hermetic-tests.mjs'
+          const files = process.env.BX1_FOCUSED_UI_MODE === 'investor-journey-focused' ? [
+            'src/middleware.test.ts',
+            'src/lib/auth-mode.test.ts',
+            'src/lib/release-policy.test.ts',
+            'src/lib/portal/fund-rpc-server.test.ts',
+            'src/components/portal/investor-journey.interaction.test.tsx',
+            'src/components/portal/offering-workflow.interaction.test.tsx',
+            'src/components/portal/portal-context.test.tsx',
+            'src/components/portal/portal.test.tsx',
+            'src/components/portal/fund-payment-claim.interaction.test.tsx',
+            'src/components/portal/fund-setup.interaction.test.tsx',
+            'src/components/portal/fund-recipient.interaction.test.tsx',
+            'src/components/portal/funding-workflows.test.tsx',
+            'src/lib/portal/fund-roleplay-investor-continuation-schema.test.ts',
+            'src/lib/portal/fund-roleplay-admission-commit-schema.test.ts',
+            'src/lib/portal/offering-document-evidence-projection-read-schema.test.ts',
+            'src/lib/portal/offering-readiness-projection-schema.test.ts',
+            'src/lib/testnet-fund/wallet-transaction.test.ts',
+            'src/lib/portal/admission-commit.test.ts',
+            'src/lib/portal/api.test.ts',
+            'src/lib/portal/documents-api.test.ts',
+            'src/lib/portal/funding-verifier.test.ts',
+            'src/lib/portal/fund-payment-receipt.test.ts',
+            'src/lib/portal/fund-payment-receipt-api.test.ts',
+            'src/lib/portal/fund-recipient-contracts.test.ts',
+            'src/lib/portal/fund-recipient-chain.test.ts',
+            'src/lib/portal/fund-recipient-server.test.ts',
+            'src/lib/portal/fund-setup-chain.test.ts',
+            'src/lib/portal/fund-chain-admission.test.ts',
+            'src/lib/portal/fund-setup-server.test.ts',
+            'src/lib/portal/fund-setup-client.test.ts',
+            'src/lib/portal/fund-setup-recovery-contracts.test.ts',
+            'src/lib/portal/fund-setup-recovery-server.test.ts',
+            'src/lib/portal/fund-setup-recovery-chain.test.ts',
+            'src/lib/portal/fund-authority-alignment-contracts.test.ts',
+            'src/lib/portal/fund-authority-alignment-chain.test.ts',
+            'src/lib/portal/fund-authority-alignment-server.test.ts',
+            'src/lib/portal/fund-authority-alignment-schema.test.ts',
+            'src/lib/portal/fund-admission-server.test.ts',
+            'src/lib/portal/fund-lifecycle-worker.test.ts',
+            'src/app/api/portal/fund-lifecycle/authority-alignment/route.test.ts',
+            'src/components/portal/fund-authority-alignment.interaction.test.tsx',
+            'src/lib/portal/amoy-archive-observers-schema.test.ts',
+            'src/lib/portal/amoy-archive-pair-v2-schema.test.ts',
+            'src/lib/portal/amoy-archive-alchemy-pair-schema.test.ts',
+          ] : process.env.BX1_FOCUSED_UI_MODE === 'appointment-projection-cost-focused' ? [
+            'src/lib/portal/fund-appointment-projection-cost-schema.test.ts',
+          ] : process.env.BX1_FOCUSED_UI_MODE === 'investor-admission-roleplay-focused' ? [
+            'src/lib/portal/fund-roleplay-investor-admission-schema.test.ts',
+            'src/lib/portal/fund-roleplay-admission.test.ts',
+            'src/lib/portal/admission.test.ts',
+            'src/components/portal/admission-workflow.interaction.test.tsx',
+            'src/lib/portal/api.test.ts',
+            'src/components/portal/portal-appointment-commit.test.tsx',
+            'src/components/portal/portal-publication-commit.test.tsx',
+          ] : process.env.BX1_FOCUSED_UI_MODE === 'publication-view-focused' ? [
+            'src/lib/portal/fund-roleplay-publication-commit-schema.test.ts',
+            'src/lib/portal/fund-publication-commit.test.ts',
+            'src/lib/portal/offering-decision-commit.test.ts',
+            'src/lib/portal/api.test.ts',
+            'src/components/portal/portal-publication-commit.test.tsx',
+            'src/components/portal/portal-offering-decision-commit.test.tsx',
+            'src/components/portal/portal-appointment-commit.test.tsx',
+            'src/lib/portal/offering-signature-roleplay-view-schema.test.ts',
+          ] : process.env.BX1_FOCUSED_UI_MODE === 'appointment-commit-focused' ? [
+            'src/lib/portal/fund-roleplay-appointment-commit-schema.test.ts',
+            'src/lib/portal/fund-roleplay-appointment-source-schema.test.ts',
+            'src/lib/portal/fund-roleplay-review-locks-schema.test.ts',
+            'src/lib/portal/fund-roleplay-projection-context-schema.test.ts',
+            'src/lib/portal/appointment-commit.test.ts',
+            'src/lib/portal/api.test.ts',
+            'src/lib/portal/synthetic-compliance-api.test.ts',
+            'src/components/portal/portal-appointment-commit.test.tsx',
+            'src/components/portal/portal-context.test.tsx',
+            'src/lib/portal/operating-context.test.ts',
+            'src/components/portal/offering-workflow.interaction.test.tsx',
+            'src/components/portal/portal.test.tsx',
+            'src/components/portal/product-service-appointments.test.tsx',
+          ] : process.env.BX1_FOCUSED_UI_MODE === 'wallet-context-focused' ? [
+            'src/lib/wallets/server.test.ts',
+            'src/lib/portal/fund-roleplay-receipt-conflict-schema.test.ts',
+          ] : process.env.BX1_FOCUSED_UI_MODE === 'document-result-recovery-focused' ? [
+            'src/lib/auth-mode.test.ts',
+            'src/lib/release-policy.test.ts',
+            'src/middleware.test.ts',
+            'src/lib/supabase/middleware.test.ts',
+            'src/lib/portal/document-result-recovery.test.ts',
+              'src/lib/wallets/server.test.ts',
+              'src/components/workspace/metamask-wallet-link.test.tsx',
+            'src/lib/portal/document-lifecycle.test.ts',
+            'src/lib/portal/document-processing.test.ts',
+            'src/lib/portal/document-processing-api.test.ts',
+            'src/lib/portal/document-scan-legacy-overlay-schema.test.ts',
+            'src/lib/portal/offering-file-roleplay-context-schema.test.ts',
+            'src/lib/portal/fund-roleplay-appointment-locks-schema.test.ts',
+              'src/lib/portal/fund-roleplay-legacy-context-schema.test.ts',
+            'src/lib/portal/offering-quarantine-read-operations-schema.test.ts',
+            'src/lib/portal/operating-context.test.ts',
+            'src/components/portal/portal.test.tsx',
+            'src/components/portal/funding-workflows.test.tsx',
+            'src/components/portal/offering-signatures.test.tsx',
+            'src/components/portal/provider-connection-check.test.tsx',
+            'src/components/portal/offering-workflow.interaction.test.tsx',
+          ] : process.env.BX1_FOCUSED_UI_MODE === 'provider-diagnostics-focused' ? [
+            'src/lib/auth-mode.test.ts',
+            'src/lib/release-policy.test.ts',
+            'src/middleware.test.ts',
+            'src/lib/supabase/middleware.test.ts',
+            'src/app/api/portal/kyc/readiness/route.test.ts',
+            'src/app/api/portal/offering-signatures/provider-status/route.test.ts',
+            'src/lib/portal/dashboard-server.test.ts',
+          ] : process.env.BX1_FOCUSED_UI_MODE === 'offering-signatures-api-focused' ? [
+            'src/lib/portal/offering-signatures-api.test.ts',
+            'src/components/portal/product-service-appointments.test.tsx',
+            'src/lib/portal/offering-signature-roleplay-continuation-schema.test.ts',
+            'src/lib/portal/fund-roleplay-eligibility.test.tsx',
+            'src/components/portal/portal.test.tsx',
+          ] : process.env.BX1_FOCUSED_UI_MODE === 'connected-fund-providers-focused' ? [
+            'src/lib/portal/offering-signature-diagnostics.test.ts',
+            'src/lib/portal/offering-disclosure-pdf.test.ts',
+            'src/components/portal/offering-file-panel.test.tsx',
+            'src/lib/portal/offering-provider-status.test.ts',
+            'src/lib/portal/docusign-offering-provider.test.ts',
+            'src/app/api/portal/offering-signatures/provider-status/route.test.ts',
+            'src/lib/portal/provider-evidence.test.ts',
+            'src/lib/portal/provider-evidence-api.test.ts',
+            'src/lib/portal/sumsub-readiness.test.ts',
+            'src/app/api/portal/kyc/readiness/route.test.ts',
+            'src/lib/portal/offering-document-processing.test.ts',
+            'src/lib/portal/offering-signatures-server.test.ts',
+            'src/lib/portal/offering-signature-wake.test.ts',
+            'src/lib/portal/offering-signatures-api.test.ts',
+            'src/app/api/portal/offering-signatures/processing/route.test.ts',
+          ] : process.env.BX1_FOCUSED_UI_MODE === 'fund-signer-entry-focused' ? [
+            'src/components/portal/offering-workflow.interaction.test.tsx',
+          ] : process.env.BX1_FOCUSED_UI_MODE === 'document-read-recovery-focused' ? [
+            'src/components/portal/offering-file-panel.test.tsx',
+          ] : process.env.BX1_FOCUSED_UI_MODE === 'connected-session-focused' ? [
+            'src/app/workspace/security/security.test.tsx',
+            'src/components/auth/mfa-form.test.tsx',
+            'src/components/workspace/metamask-wallet-link.test.tsx',
+            'src/app/auth/auth-routes.test.ts',
+            'src/app/auth/portal-auth.test.ts',
+            'src/lib/supabase/middleware.test.ts',
+            'src/lib/portal/offering-files-server.test.ts',
+            'src/lib/portal/offering-aal2-otp-attestation-schema.test.ts',
+          ] : process.env.BX1_FOCUSED_UI_MODE === 'auth-recovery-focused' ? [
+            'src/app/auth/recover/route.test.ts',
+            'src/app/forgot-password/forgot-password.test.tsx',
+            'src/app/login/login.test.tsx',
+            'src/app/auth/auth-routes.test.ts',
+            'src/app/auth/portal-auth.test.ts',
+            'src/lib/auth-mode.test.ts',
+            'src/lib/auth-referrer-policy.test.ts',
+            'src/lib/platform-release.test.ts',
+            'src/lib/release-policy.test.ts',
+            'src/middleware.test.ts',
+            'src/lib/supabase/middleware.test.ts',
+          ] : process.env.BX1_FOCUSED_UI_MODE === 'theme-focused' ? [
+            'src/app/homepage-v4.test.tsx',
+            'src/app/auth/auth-routes.test.ts',
+            'src/app/auth/portal-auth.test.ts',
+            'src/components/public/public-shell.test.tsx',
+            'src/components/public/public-navigation.test.tsx',
+            'src/components/public/shared-theme.test.ts',
+            'src/components/public/layout-density.test.ts',
+            'src/components/portal/portal-shell.test.tsx',
+            'src/components/portal/portal-page.test.tsx',
+            'src/components/portal/portal.test.tsx',
+            'src/components/portal/entry-screen.test.tsx',
+            'src/lib/platform-release.test.ts',
+            'src/lib/release-policy.test.ts',
+            'src/components/workspace/metamask-wallet-link.test.tsx',
+            'src/components/testnet-fund/testnet-fund-demo.test.tsx',
+          ] : [
+            'src/lib/portal/operating-context.test.ts',
+            'src/lib/portal/dashboard.test.ts',
+            'src/components/portal/portal.test.tsx',
+            'src/components/portal/offering-workflow.interaction.test.tsx',
+            'src/lib/testnet-fund/wallet-transaction.test.ts',
+            'src/components/portal/funding-workflows.test.tsx',
+            'src/components/portal/fund-payment-claim.interaction.test.tsx',
+            'src/components/portal/fund-payment-allocation-basis.test.tsx',
+            'src/lib/portal/fund-payment-allocation-basis.test.ts',
+            'src/lib/portal/fund-payment-receipt.test.ts',
+            'src/lib/portal/fund-payment-receipt-api.test.ts',
+            'src/lib/portal/funding-verifier.test.ts',
+            'src/lib/portal/fund-test-roleplay-schema.test.ts',
+            'src/lib/portal/fund-setup-chain.test.ts',
+            'src/lib/portal/fund-setup-client.test.ts',
+            'src/lib/portal/fund-setup-server.test.ts',
+            'src/components/portal/fund-setup.interaction.test.tsx',
+            'src/lib/portal/fund-chain-admission.test.ts',
+            'src/lib/portal/fund-recipient-chain.test.ts',
+            'src/lib/portal/fund-lifecycle-selection.test.ts',
+            'src/lib/portal/fund-recipient-contracts.test.ts',
+            'src/lib/portal/fund-recipient-server.test.ts',
+            'src/components/portal/fund-recipient.interaction.test.tsx',
+            'src/lib/portal/fund-roleplay-commands-schema.test.ts',
+            'src/lib/portal/fund-recipient-allocation-schema.test.ts',
+            'src/lib/portal/fund-roleplay-manager-bridge-schema.test.ts',
+            'src/components/portal/fund-recipient-compliance-queue.test.tsx',
+          ]
+          process.exitCode = await runHermeticVitest({
+            spawnImplementation: (executable, args, options) => spawn(executable, [...args, ...files], options),
+          })
+          NODE
+
+      - name: Check only recovery transport and protected workflow guards without an engine or secrets
+        if: ${{ inputs.mode == 'document-result-recovery-focused' }}
+        run: node --test apps/web/scripts/document-scanner-runner.node-test.mjs apps/web/scripts/document-scanner-offering-operating.node-test.mjs
+
+      - name: Typecheck the same reviewed source before requesting its release build
+        if: ${{ (github.event_name == 'pull_request' || inputs.mode == 'fund-dashboard-focused' || inputs.mode == 'auth-recovery-focused' || inputs.mode == 'connected-session-focused' || inputs.mode == 'document-read-recovery-focused' || inputs.mode == 'fund-signer-entry-focused' || inputs.mode == 'connected-fund-providers-focused' || inputs.mode == 'offering-signatures-api-focused' || inputs.mode == 'provider-diagnostics-focused' || inputs.mode == 'document-result-recovery-focused' || inputs.mode == 'wallet-context-focused' || inputs.mode == 'appointment-commit-focused' || inputs.mode == 'publication-view-focused' || inputs.mode == 'investor-admission-roleplay-focused' || inputs.mode == 'investor-journey-focused') && !cancelled() }}
+        shell: bash
+        working-directory: apps/web
+        run: npx tsc --noEmit --incremental false
+
+      - name: Typecheck the exact authenticated TEST Edge package without credentials
+        if: ${{ (github.event_name == 'pull_request' || inputs.mode == 'investor-journey-focused') && !cancelled() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --prefix "$RUNNER_TEMP/bx1-deno" --no-audit --no-fund --save-exact deno@2.9.6
+          cp apps/web/src/lib/portal/funding-claim.ts supabase/functions/bx1-funding-verifier/funding-claim.ts
+          cp apps/web/src/lib/portal/funding-verifier.ts supabase/functions/bx1-funding-verifier/funding-verifier.ts
+          cmp apps/web/src/lib/portal/funding-claim.ts supabase/functions/bx1-funding-verifier/funding-claim.ts
+          cmp apps/web/src/lib/portal/funding-verifier.ts supabase/functions/bx1-funding-verifier/funding-verifier.ts
+          cd supabase/functions/bx1-funding-verifier
+          "$RUNNER_TEMP/bx1-deno/node_modules/.bin/deno" check --config deno.json index.ts funding-verifier.ts funding-claim.ts

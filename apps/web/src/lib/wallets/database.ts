@@ -2,12 +2,9 @@ import 'server-only'
 import { Pool, type PoolConfig } from 'pg'
 import supabaseCa from './supabase-ca.json'
 import { WALLET_ORIGIN, type LinkedWallet, type WalletActor, type WalletChallenge, type WalletDatabase, type WalletErrorCode } from './contracts'
+import { walletEnvironmentProfile } from './profile'
 
 type Environment = Record<string, string | undefined>
-const PROJECT = 'oqkevkjbkpugjotihtda'
-const DIRECT_HOST = `db.${PROJECT}.supabase.co`
-// Exact project Connect-panel endpoint verified 2026-09-17. No regional wildcard.
-const POOLER_HOSTS: readonly string[] = ['aws-0-eu-central-1.pooler.supabase.com']
 
 export class WalletDatabaseError extends Error {
   constructor(public readonly code: WalletErrorCode) {
@@ -18,16 +15,18 @@ export class WalletDatabaseError extends Error {
 
 export function walletDatabaseConfig(env: Environment = process.env): PoolConfig {
   try {
+    const profile = walletEnvironmentProfile(env)
+    if (!profile) throw new Error()
     const raw = env.BLOCKXONE_WALLET_VERIFIER_DATABASE_URL
     if (!raw) throw new Error()
     const url = new URL(raw)
-    const direct = url.hostname === DIRECT_HOST
-    const pooled = POOLER_HOSTS.includes(url.hostname)
+    const direct = url.hostname === profile.directHost
+    const pooled = url.hostname === profile.poolerHost
     const user = decodeURIComponent(url.username)
     const password = decodeURIComponent(url.password)
     const port = Number(url.port || 5432)
     if (!['postgres:', 'postgresql:'].includes(url.protocol) || (!direct && !pooled)
-      || user !== (direct ? 'bx1_wallet_verifier' : `bx1_wallet_verifier.${PROJECT}`)
+      || user !== (direct ? 'bx1_wallet_verifier' : `bx1_wallet_verifier.${profile.project}`)
       || !password || url.pathname !== '/postgres' || url.hash
       || (direct ? port !== 5432 : port !== 6543)) throw new Error()
     for (const [key, value] of url.searchParams) {
@@ -38,7 +37,7 @@ export function walletDatabaseConfig(env: Environment = process.env): PoolConfig
       ssl: { ca: supabaseCa.pem, rejectUnauthorized: true, servername: url.hostname },
       max: 2, connectionTimeoutMillis: 3000, idleTimeoutMillis: 10000,
       query_timeout: 8000, statement_timeout: 7000, lock_timeout: 4000,
-      application_name: 'bx1-wallet-verifier',
+      application_name: profile.environment === 'TESTNET' ? 'bx1-wallet-verifier-testnet' : 'bx1-wallet-verifier',
     }
   } catch {
     throw new WalletDatabaseError('unavailable')
