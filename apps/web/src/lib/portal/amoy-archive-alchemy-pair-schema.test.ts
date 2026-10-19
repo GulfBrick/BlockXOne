@@ -24,6 +24,8 @@ const hash = (value: string) => createHash('sha256').update(value).digest('hex')
 const count = (source: string, value: string) => source.split(value).length - 1
 const urls = (item: PairCase): unknown => Array.isArray(item.providers) ? item.providers.map((entry: unknown) =>
   entry !== null && typeof entry === 'object' && 'url' in entry ? (entry as Record<string, unknown>).url : undefined) : item.providers
+// Ignore case enumeration order, retaining each pair's order and duplicates.
+const canonicalPairs = (pairs: unknown[]) => pairs.map(pair => JSON.stringify(pair)).sort()
 const d = 'https://polygon-amoy.drpc.org', p = 'https://polygon-amoy-bor-rpc.publicnode.com'
 const t = 'https://polygon-amoy.gateway.tenderly.co', w = 'https://80002.rpc.thirdweb.com', a = 'https://polygon-amoy.g.alchemy.com/v2'
 
@@ -94,10 +96,10 @@ describe('additive Alchemy observer pair catalog/predicate contract, not provide
 
   it('accepts exactly four historical/new pairs, without broadening current-only retry/alignment history', () => {
     expect(cases).toHaveLength(40)
-    expect(cases.filter(item => item.valid).map(urls)).toEqual([[d, p], [d, t], [p, d], [t, d], [t, w], [w, t], [w, a], [a, w]])
-    expect(cases.filter(item => item.ordered).map(urls)).toEqual([[d, p], [d, t], [w, t], [w, a]])
-    expect(cases.filter(item => item.narrow).map(urls)).toEqual([[t, w], [w, t], [w, a]])
-    expect(cases.filter(item => item.narrow_ordered).map(urls)).toEqual([[w, t], [w, a]])
+    expect(canonicalPairs(cases.filter(item => item.valid).map(urls))).toEqual(canonicalPairs([[d, p], [d, t], [p, d], [t, d], [t, w], [w, t], [w, a], [a, w]]))
+    expect(canonicalPairs(cases.filter(item => item.ordered).map(urls))).toEqual(canonicalPairs([[d, p], [d, t], [w, t], [w, a]]))
+    expect(canonicalPairs(cases.filter(item => item.narrow).map(urls))).toEqual(canonicalPairs([[t, w], [w, t], [w, a]]))
+    expect(canonicalPairs(cases.filter(item => item.narrow_ordered).map(urls))).toEqual(canonicalPairs([[w, t], [w, a]]))
     for (const pair of [[d, a], [a, d], [p, a], [a, p], [t, a], [a, t], [w, p], [p, w], [w, d], [d, w], [a, a]]) {
       expect(cases.find(item => JSON.stringify(urls(item)) === JSON.stringify(pair))?.valid, JSON.stringify(pair)).toBe(false)
     }
@@ -107,6 +109,7 @@ describe('additive Alchemy observer pair catalog/predicate contract, not provide
     expect(targets.find(item => item.oid === 38526)?.cuts[0].to).toContain('provider_index+1')
     expect(targets.find(item => item.oid === 38760)?.cuts[1].to).toContain("urls = array['" + w + "','" + a + "']")
     expect(cases.find(item => item.name === 'a+w')).toMatchObject({ valid: true, narrow: false, narrow_ordered: false })
+    expect(cases.find(item => item.name === 't+w')).toMatchObject({ valid: true, narrow: true, narrow_ordered: false })
     expect(targets.find(item => item.oid === 38760)?.cuts[1].to).not.toContain(d)
   })
 
@@ -139,6 +142,7 @@ describe('additive Alchemy observer pair catalog/predicate contract, not provide
     expect(harness).toContain('postgresql://postgres:bx1-synthetic-ci-only@127.0.0.1:5432/bx1_demo_ci')
     expect(harness).toContain('All non-catalog-specific native metadata copied exactly')
     expect(harness).toContain("replaceTag(feature, 'alchemy_pair_targets', JSON.stringify(local))")
+    expect(harness).toContain("tag(source, name) + '$' + name + '$', () => '$' + name + '$' + value")
     expect(harness).toContain('Second real CREATE OR REPLACE failure rolls back first')
     expect(harness).toContain('Idempotent repeat exact full catalog equality')
     expect(harness).toContain('Checked inverse restores seven full original pg_proc rows')

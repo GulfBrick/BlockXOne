@@ -17,7 +17,7 @@ const tag = (source, name) => {
   const parts = source.split('$' + name + '$')
   assert.equal(parts.length, 3, 'Exactly one source tag ' + name); return parts[1]
 }
-const replaceTag = (source, name, value) => source.replace('$' + name + '$' + tag(source, name) + '$' + name + '$', '$' + name + '$' + value + '$' + name + '$')
+const replaceTag = (source, name, value) => source.replace('$' + name + '$' + tag(source, name) + '$' + name + '$', () => '$' + name + '$' + value + '$' + name + '$')
 const quote = identifier => '"' + identifier.replace(/"/g, '""') + '"'
 function definition(source, name) {
   const start = source.indexOf('create function ' + name + '('), open = source.indexOf('$$', start), end = source.indexOf('$$;', open + 2)

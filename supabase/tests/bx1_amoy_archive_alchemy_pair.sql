@@ -681,7 +681,7 @@ declare
     ],
     "valid": true,
     "ordered": false,
-    "narrow": false,
+    "narrow": true,
     "narrow_ordered": false
   },
   {
@@ -871,7 +871,7 @@ declare
     ],
     "valid": true,
     "ordered": false,
-    "narrow": true,
+    "narrow": false,
     "narrow_ordered": false
   },
   {
