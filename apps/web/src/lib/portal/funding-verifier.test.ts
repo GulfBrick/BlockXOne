@@ -170,7 +170,7 @@ describe('two-provider finalized TEST funding receipt verification', () => {
 
 describe('bounded fixed-origin RPC transport', () => {
   it('uses only the exact ordered TEST pair without asserting upstream independence or retention', () => {
-    expect(FUNDING_RPC_URLS).toEqual(['https://80002.rpc.thirdweb.com', 'https://polygon-amoy.gateway.tenderly.co'])
+    expect(FUNDING_RPC_URLS).toEqual(['https://80002.rpc.thirdweb.com', 'https://polygon-amoy.g.alchemy.com/v2'])
   })
   it('never accepts arbitrary provider URLs or sends transaction/signing RPCs', async () => {
     const fetcher = vi.fn()
@@ -304,13 +304,19 @@ describe('bounded fixed-origin RPC transport', () => {
 
 describe('mandatory credential-bound funding transport', () => {
   // Public synthetic fixtures only; never loaded from environment or used on a network.
-  const clientId = '0123456789abcdef0123456789abcdef', secretKey = 'Synthetic_RPC_key-'.repeat(4)
-  it('routes only the exact logical primary through its project path and never sends credentials to the secondary', async () => {
+  const clientId = '0123456789abcdef0123456789abcdef', secretKey = 'Synthetic_RPC_key-'.repeat(4), alchemyKey = 'Synthetic_Alchemy_key-'.repeat(3)
+  it.each([undefined, null, '', 123, new String('synthetic_key_123456'), 'a'.repeat(15), 'a'.repeat(513),
+    'synthetic key with spaces', 'synthetic_key_123456\n', 'synthetic_key_123456\0', 'synthetic_key_123456é', 'synthetic:key:123456'])('requires a bounded primitive secondary key before any request %#', key => {
+    const fetcher = vi.fn()
+    expect(() => createAuthenticatedFundingRpc(clientId, secretKey, fetcher, undefined, key)).toThrowError('RPC_AUTH_NOT_CONFIGURED')
+    expect(fetcher).not.toHaveBeenCalled()
+  })
+  it('routes each exact service with only its own credentials and no secondary key in a URL', async () => {
     const fetcher = vi.fn(async (_input: unknown, init?: RequestInit) => {
       const request = JSON.parse(String(init?.body))
       return Response.json({ jsonrpc: '2.0', id: request.id, result: '0x13882' })
     })
-    const rpc = createAuthenticatedFundingRpc(clientId, secretKey, fetcher)
+    const rpc = createAuthenticatedFundingRpc(clientId, secretKey, fetcher, undefined, alchemyKey)
     expect(await rpc(FUNDING_RPC_URLS[0], 'eth_chainId', [])).toBe('0x13882')
     expect(await rpc(FUNDING_RPC_URLS[1], 'eth_chainId', [])).toBe('0x13882')
     expect(fetcher).toHaveBeenCalledTimes(2)
@@ -319,15 +325,19 @@ describe('mandatory credential-bound funding transport', () => {
     expect(String(primaryInput)).not.toContain(secretKey)
     expect(new Headers(primaryInit?.headers).get('x-client-id')).toBe(clientId)
     expect(new Headers(primaryInit?.headers).get('x-secret-key')).toBe(secretKey)
+    expect(new Headers(primaryInit?.headers).has('Authorization')).toBe(false)
     expect(secondaryInput).toBe(FUNDING_RPC_URLS[1])
     expect(new Headers(secondaryInit?.headers).has('x-client-id')).toBe(false)
     expect(new Headers(secondaryInit?.headers).has('x-secret-key')).toBe(false)
+    expect(new Headers(secondaryInit?.headers).get('Authorization')).toBe(`Bearer ${alchemyKey}`)
+    expect(String(secondaryInput)).not.toContain(alchemyKey)
     for (const [, init] of fetcher.mock.calls) {
       expect(init).toMatchObject({ method: 'POST', redirect: 'error', cache: 'no-store', signal: expect.any(AbortSignal) })
       expect(new Headers(init?.headers).get('Content-Type')).toBe('application/json')
       expect(new Headers(init?.headers).get('Accept')).toBe('application/json')
       expect(String(init?.body)).not.toContain(secretKey)
       expect(String(init?.body)).not.toContain(clientId)
+      expect(String(init?.body)).not.toContain(alchemyKey)
     }
   })
   it.each([
@@ -340,15 +350,15 @@ describe('mandatory credential-bound funding transport', () => {
     [clientId, `${secretKey}:`], [clientId, `${secretKey}?`], [clientId, `${secretKey}é`],
   ])('rejects missing or malformed credential primitives before any provider request %#', (id, key) => {
     const fetcher = vi.fn()
-    expect(() => createAuthenticatedFundingRpc(id, key, fetcher)).toThrowError(FundingVerificationError)
-    expect(() => createAuthenticatedFundingRpc(id, key, fetcher)).toThrowError('RPC_AUTH_NOT_CONFIGURED')
+    expect(() => createAuthenticatedFundingRpc(id, key, fetcher, undefined, alchemyKey)).toThrowError(FundingVerificationError)
+    expect(() => createAuthenticatedFundingRpc(id, key, fetcher, undefined, alchemyKey)).toThrowError('RPC_AUTH_NOT_CONFIGURED')
     expect(fetcher).not.toHaveBeenCalled()
   })
   it('does not coerce credential objects or retain them in a configuration error', () => {
     const coerce = vi.fn(() => { throw new Error('private coercion') }), credential = { toString: coerce }
     const fetcher = vi.fn()
     for (const [id, key] of [[credential, secretKey], [clientId, credential]]) {
-      try { createAuthenticatedFundingRpc(id, key, fetcher); throw new Error('Expected a configuration rejection.') }
+      try { createAuthenticatedFundingRpc(id, key, fetcher, undefined, alchemyKey); throw new Error('Expected a configuration rejection.') }
       catch (error) {
         if (!(error instanceof FundingVerificationError)) throw error
         expect(error).toMatchObject({ code: 'RPC_AUTH_NOT_CONFIGURED', status: 503, message: 'RPC_AUTH_NOT_CONFIGURED' })
@@ -361,27 +371,32 @@ describe('mandatory credential-bound funding transport', () => {
   })
   it.each([64, 256])('accepts the exact %i-character ASCII secret boundary', async length => {
     const fetcher = vi.fn(async (_input: unknown, _init?: RequestInit) => Response.json({ jsonrpc: '2.0', id: 1, result: '0x13882' }))
-    expect(await createAuthenticatedFundingRpc(clientId, 'a'.repeat(length), fetcher)(FUNDING_RPC_URLS[0], 'eth_chainId', [])).toBe('0x13882')
+    expect(await createAuthenticatedFundingRpc(clientId, 'a'.repeat(length), fetcher, undefined, alchemyKey)(FUNDING_RPC_URLS[0], 'eth_chainId', [])).toBe('0x13882')
     expect(new Headers(fetcher.mock.calls[0]?.[1]?.headers).get('x-secret-key')).toBe('a'.repeat(length))
   })
   it('captures the validated primitive credentials once instead of following later caller assignment', async () => {
-    let id = clientId, key = secretKey
+    let id = clientId, key = secretKey, secondaryKey = alchemyKey
     const fetcher = vi.fn(async (_input: unknown, init?: RequestInit) => {
       const request = JSON.parse(String(init?.body))
       return Response.json({ jsonrpc: '2.0', id: request.id, result: '0x13882' })
     })
-    const rpc = createAuthenticatedFundingRpc(id, key, fetcher)
-    id = 'f'.repeat(32); key = 'Changed_synthetic_key-'.repeat(4)
+    const rpc = createAuthenticatedFundingRpc(id, key, fetcher, undefined, secondaryKey)
+    id = 'f'.repeat(32); key = 'Changed_synthetic_key-'.repeat(4); secondaryKey = 'Changed_Alchemy_key-'.repeat(3)
     await rpc(FUNDING_RPC_URLS[0], 'eth_chainId', [])
     expect(fetcher.mock.calls[0][0]).toBe(`${FUNDING_RPC_URLS[0]}/${clientId}`)
     expect(new Headers(fetcher.mock.calls[0][1]?.headers).get('x-secret-key')).toBe(secretKey)
     expect(String(fetcher.mock.calls[0][0])).not.toContain(id)
     expect(new Headers(fetcher.mock.calls[0][1]?.headers).get('x-secret-key')).not.toBe(key)
+    await rpc(FUNDING_RPC_URLS[1], 'eth_chainId', [])
+    expect(new Headers(fetcher.mock.calls[1][1]?.headers).get('Authorization')).toBe(`Bearer ${alchemyKey}`)
+    expect(new Headers(fetcher.mock.calls[1][1]?.headers).get('Authorization')).not.toBe(`Bearer ${secondaryKey}`)
   })
   it('keeps the core endpoint, write-method and parameter denials ahead of authenticated fetch', async () => {
-    const fetcher = vi.fn(), rpc = createAuthenticatedFundingRpc(clientId, secretKey, fetcher)
+    const fetcher = vi.fn(), rpc = createAuthenticatedFundingRpc(clientId, secretKey, fetcher, undefined, alchemyKey)
     for (const url of ['https://untrusted.example', `${FUNDING_RPC_URLS[0]}/${clientId}`, `${FUNDING_RPC_URLS[0]}?key=synthetic`,
-      'https://name:synthetic@80002.rpc.thirdweb.com', 'https://80002.rpc.thirdweb.com.example', 'https://polygon-amoy.drpc.org']) {
+      'https://name:synthetic@80002.rpc.thirdweb.com', 'https://80002.rpc.thirdweb.com.example', 'https://polygon-amoy.drpc.org',
+      `${FUNDING_RPC_URLS[1]}/${alchemyKey}`, `${FUNDING_RPC_URLS[1]}?apiKey=synthetic`,
+      'https://name:synthetic@polygon-amoy.g.alchemy.com/v2', 'https://polygon-amoy.g.alchemy.com.evil/v2', 'https://polygon-amoy.gateway.tenderly.co']) {
       await expect(rpc(url, 'eth_chainId', [])).rejects.toMatchObject({ code: 'RPC_ENDPOINT_NOT_ALLOWED' })
     }
     for (const method of ['eth_sendRawTransaction', 'eth_sendTransaction', 'eth_sign', 'personal_sign']) {
@@ -395,7 +410,7 @@ describe('mandatory credential-bound funding transport', () => {
     ['RPC_ERROR', 200, -32000, () => Response.json({ jsonrpc: '2.0', id: 1, error: { code: -32000, message: secretKey, data: { key: secretKey } } })],
     ['ENVELOPE', 200, null, () => Response.json({ jsonrpc: '2.0', id: 999, error: { code: -32000, message: secretKey } })],
   ] as const)('preserves closed %s diagnostics while redacting echoed credentials', async (stage, httpStatus, rpcCode, response) => {
-    const error = await createAuthenticatedFundingRpc(clientId, secretKey, vi.fn(async () => response()))(FUNDING_RPC_URLS[0], 'eth_chainId', []).catch(error => error)
+    const error = await createAuthenticatedFundingRpc(clientId, secretKey, vi.fn(async () => response()), undefined, alchemyKey)(FUNDING_RPC_URLS[0], 'eth_chainId', []).catch(error => error)
     if (!(error instanceof FundingVerificationError)) throw new Error('Expected bounded funding verification failure.')
     expect(error).toMatchObject({ code: stage === 'HTTP' ? 'RPC_RESPONSE_UNAVAILABLE' : 'RPC_RESULT_UNAVAILABLE', status: 503,
       diagnostic: { stage, httpStatus, rpcCode, requestId: 1 } })
@@ -410,7 +425,7 @@ describe('mandatory credential-bound funding transport', () => {
       expect(init?.signal?.aborted).toBe(true)
       throw new Error(`provider echoed ${secretKey}`)
     })
-    const error = await createAuthenticatedFundingRpc(clientId, secretKey, fetcher, abort.signal)(FUNDING_RPC_URLS[0], 'eth_chainId', []).catch(error => error)
+    const error = await createAuthenticatedFundingRpc(clientId, secretKey, fetcher, abort.signal, alchemyKey)(FUNDING_RPC_URLS[0], 'eth_chainId', []).catch(error => error)
     if (!(error instanceof FundingVerificationError)) throw new Error('Expected bounded funding verification failure.')
     expect(error).toMatchObject({ code: 'RPC_RESPONSE_UNAVAILABLE', status: 503,
       diagnostic: { stage: 'FETCH', httpStatus: null, rpcCode: null, requestId: 1 } })
@@ -425,11 +440,78 @@ describe('mandatory credential-bound funding transport', () => {
       const request = JSON.parse(String(init?.body))
       return Response.json({ jsonrpc: '2.0', id: request.id, result: await f.rpc(logicalUrl, request.method, request.params) })
     })
-    const result = await verifyFundingExpectation(f.expectation, { rpc: createAuthenticatedFundingRpc(clientId, secretKey, fetcher), now })
+    const result = await verifyFundingExpectation(f.expectation, { rpc: createAuthenticatedFundingRpc(clientId, secretKey, fetcher, undefined, alchemyKey), now })
     expect(result.status).toBe('VERIFIED')
     expect(result.providers.map(provider => provider.url)).toEqual(FUNDING_RPC_URLS)
     expect(JSON.stringify(result)).not.toContain(secretKey)
     expect(JSON.stringify(result)).not.toContain(clientId)
     expect(new Set(fetcher.mock.calls.map(([input]) => input))).toEqual(new Set([`${FUNDING_RPC_URLS[0]}/${clientId}`, FUNDING_RPC_URLS[1]]))
+  })
+})
+
+describe('fixed Alchemy per-operation read pacing - synthetic clocks only', () => {
+  it('starts no more than one secondary request per100ms and does not serialize the primary', async () => {
+    vi.useFakeTimers()
+    try {
+      const starts: number[] = [], fetcher = vi.fn(async (input: unknown, init?: RequestInit) => {
+        if (input === FUNDING_RPC_URLS[1]) starts.push(Date.now())
+        const request = JSON.parse(String(init?.body)) as { id: number }
+        return Response.json({ jsonrpc: '2.0', id: request.id, result: '0x13882' })
+      })
+      const rpc = createFundingRpc(fetcher), work = Array.from({ length: 12 }, () => rpc(FUNDING_RPC_URLS[1], 'eth_chainId', []))
+      const finished = Promise.all(work)
+      await expect(rpc(FUNDING_RPC_URLS[0], 'eth_chainId', [])).resolves.toBe('0x13882')
+      await vi.advanceTimersByTimeAsync(1200); await finished
+      expect(starts).toHaveLength(12)
+      expect(starts.slice(1).every((time, index) => time - starts[index] >= 100)).toBe(true)
+    } finally { vi.useRealTimers() }
+  })
+  it('holds four slots through response-body consumption, not merely response headers', async () => {
+    vi.useFakeTimers()
+    try {
+      const bodies: { stream: ReadableStreamDefaultController<Uint8Array>; id: number }[] = []
+      const fetcher = vi.fn(async (_input: unknown, init?: RequestInit) => {
+        const request = JSON.parse(String(init?.body)) as { id: number }
+        return new Response(new ReadableStream<Uint8Array>({ start(stream) { bodies.push({ stream, id: request.id }) } }), { headers: { 'content-type': 'application/json' } })
+      })
+      const rpc = createFundingRpc(fetcher), finished = Promise.all(Array.from({ length: 5 }, () => rpc(FUNDING_RPC_URLS[1], 'eth_chainId', [])))
+      await vi.advanceTimersByTimeAsync(500)
+      expect(fetcher).toHaveBeenCalledTimes(4)
+      const close = (body: typeof bodies[number]) => { body.stream.enqueue(new TextEncoder().encode(JSON.stringify({ jsonrpc: '2.0', id: body.id, result: '0x13882' }))); body.stream.close() }
+      close(bodies[0]); await vi.advanceTimersByTimeAsync(0)
+      expect(fetcher).toHaveBeenCalledTimes(5)
+      bodies.slice(1).forEach(close); await finished
+    } finally { vi.useRealTimers() }
+  })
+  it('cancels queued and in-flight work without a later fetch or retry', async () => {
+    vi.useFakeTimers()
+    try {
+      const caller = new AbortController(), fetcher = vi.fn(async () => new Response(new ReadableStream<Uint8Array>({}), { headers: { 'content-type': 'application/json' } }))
+      const rpc = createFundingRpc(fetcher, caller.signal), finished = Promise.allSettled(Array.from({ length: 8 }, () => rpc(FUNDING_RPC_URLS[1], 'eth_chainId', [])))
+      await vi.advanceTimersByTimeAsync(500)
+      expect(fetcher).toHaveBeenCalledTimes(4)
+      caller.abort(); await vi.advanceTimersByTimeAsync(1000)
+      expect((await finished).every(result => result.status === 'rejected')).toBe(true)
+      expect(fetcher).toHaveBeenCalledTimes(4)
+    } finally { vi.useRealTimers() }
+  })
+  it('includes queue time in the unchanged8s deadline and never starts an expired queued call', async () => {
+    vi.useFakeTimers()
+    const timeout = vi.spyOn(AbortSignal, 'timeout').mockImplementation(milliseconds => {
+      const abort = new AbortController(); setTimeout(() => abort.abort(), milliseconds); return abort.signal
+    })
+    try {
+      const fetcher = vi.fn(async () => new Response(new ReadableStream<Uint8Array>({}), { headers: { 'content-type': 'application/json' } }))
+      const rpc = createFundingRpc(fetcher), finished = Promise.allSettled(Array.from({ length: 8 }, () => rpc(FUNDING_RPC_URLS[1], 'eth_chainId', [])))
+      await vi.advanceTimersByTimeAsync(8000)
+      expect((await finished).every(result => result.status === 'rejected')).toBe(true)
+      expect(fetcher).toHaveBeenCalledTimes(4)
+      expect(timeout.mock.calls.every(([milliseconds]) => milliseconds === 8000)).toBe(true)
+    } finally { timeout.mockRestore(); vi.useRealTimers() }
+  })
+  it('keeps HTTP429 as one failed request rather than retrying', async () => {
+    const fetcher = vi.fn(async () => Response.json({ error: 'private' }, { status: 429 }))
+    await expect(createFundingRpc(fetcher)(FUNDING_RPC_URLS[1], 'eth_chainId', [])).rejects.toMatchObject({ code: 'RPC_RESPONSE_UNAVAILABLE', diagnostic: { stage: 'HTTP', httpStatus: 429 } })
+    expect(fetcher).toHaveBeenCalledOnce()
   })
 })

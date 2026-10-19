@@ -30,7 +30,7 @@ const owners = [testAddress(1), testAddress(9)].sort(), future = '2100-01-01T00:
 const zero = '0x0000000000000000000000000000000000000000' as const
 const snapshot = { block: { number: '100', hash: testHash(100), timestamp: now }, providers: [
   { url: 'https://80002.rpc.thirdweb.com' as const, finalized_block_number: '101', finalized_block_hash: testHash(101) },
-  { url: 'https://polygon-amoy.gateway.tenderly.co' as const, finalized_block_number: '102', finalized_block_hash: testHash(102) },
+  { url: 'https://polygon-amoy.g.alchemy.com/v2' as const, finalized_block_number: '102', finalized_block_hash: testHash(102) },
 ] }
 const intent = {
   version: 1 as const, chain_id: 80002 as const, admission_request_id: requestId,

@@ -48,7 +48,7 @@ beforeEach(() => {
   proof = { version: 1, chain_id: 80002, checked_at: new Date().toISOString(), status: 'RETRY_AVAILABLE', reason_code: null,
     sender: read.sender, nonce: '12', intent_hash: read.intent_hash, anchor: read.anchor,
     finalized_nonce: { ...read.anchor, nonce: '12' },
-    providers: ['https://80002.rpc.thirdweb.com', 'https://polygon-amoy.gateway.tenderly.co'].map(url => ({ url: url as FundSetupRecoveryProof['providers'][number]['url'],
+    providers: ['https://80002.rpc.thirdweb.com', 'https://polygon-amoy.g.alchemy.com/v2'].map(url => ({ url: url as FundSetupRecoveryProof['providers'][number]['url'],
       finalized_block_number: '100', finalized_block_hash: read.anchor.block_hash, latest_nonce: '12', pending_nonce: '12' })),
     transaction_hash: null, retry_checks: { runtime_hash: intent.expected_runtime_hash, owner: read.sender, before_version: '0.0.0', simulation_succeeded: true }, winner: null }
   mocks.read.mockImplementation(async () => fixture)

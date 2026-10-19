@@ -1,6 +1,8 @@
 import { Interface } from 'ethers'
 import { describe, expect, it, vi } from 'vitest'
 vi.mock('server-only', () => ({}))
+vi.mock('./fund-rpc-server', () => ({ createFundServerRpc: vi.fn() }))
+import { createFundServerRpc } from './fund-rpc-server'
 import { buildFundAdmissionCandidate, FundAdmissionChainError, fundAdmissionInputSchema, fundAdmissionRpc, readFundAdmissionSnapshot } from './fund-chain-admission'
 import { fundChainExpectationSchema } from './fund-lifecycle-chain'
 import { createFundingRpc, FUNDING_RPC_URLS, FundingVerificationError } from './funding-verifier'
@@ -87,6 +89,16 @@ describe('canonical setup to truthful release candidate', () => {
 })
 
 describe('internal admission transport diagnostics', () => {
+  it('forwards one caller signal to the lazily captured default transport', async () => {
+    const abort = new AbortController(), source = vi.fn(async () => '0x13882')
+    vi.mocked(createFundServerRpc).mockReturnValueOnce(source)
+    const rpc = fundAdmissionRpc({}, abort.signal)
+    expect(source).not.toHaveBeenCalled()
+    expect(await rpc(FUNDING_RPC_URLS[0], 'eth_chainId', [])).toBe('0x13882')
+    expect(await rpc(FUNDING_RPC_URLS[1], 'eth_chainId', [])).toBe('0x13882')
+    expect(createFundServerRpc).toHaveBeenCalledExactlyOnceWith(fetch, abort.signal)
+    expect(source).toHaveBeenCalledTimes(2)
+  })
   it('copies only a genuine transport diagnostic without retaining its upstream cause', async () => {
     const transport = createFundingRpc(vi.fn(async () => Response.json({ error: 'private upstream body' }, { status: 429 })))
     const original: unknown = await transport(FUNDING_RPC_URLS[0], 'eth_chainId', []).catch(error => error)

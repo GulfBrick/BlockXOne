@@ -251,6 +251,21 @@ describe('one preadmission Safe authority alignment - synthetic RPC/signature fi
     const rejected = expect(task).rejects.toMatchObject({ code: 'ALIGNMENT_DEADLINE_EXCEEDED', status: 503 })
     await vi.advanceTimersByTimeAsync(90000); await rejected
   })
+  it('propagates the actual combined operation/caller abort to its default transport', async () => {
+    const f = fixture(), caller = new AbortController(), captured: AbortSignal[] = []
+    vi.mocked(createFundServerRpc).mockImplementationOnce((_fetcher, signal) => {
+      if (!signal) throw new Error('The bounded operation signal is required.')
+      captured.push(signal)
+      return async () => new Promise<never>(() => {})
+    })
+    const task = prepareFundAuthorityAlignment(f.read, { signal: caller.signal })
+    const rejected = expect(task).rejects.toMatchObject({ code: 'ALIGNMENT_DEADLINE_EXCEEDED', status: 503 })
+    expect(captured).toHaveLength(1)
+    expect(captured[0]).not.toBe(caller.signal)
+    caller.abort()
+    await rejected
+    expect(captured[0].aborted).toBe(true)
+  })
 })
 
 describe('closed alignment failure diagnostics', () => {

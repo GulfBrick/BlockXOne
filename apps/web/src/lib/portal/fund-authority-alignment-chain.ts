@@ -99,7 +99,7 @@ function logCheckFailure(error: unknown): void {
 async function bounded<T>(options: FundAuthorityAlignmentOptions, task: (rpc: Rpc, now: () => number) => Promise<T>): Promise<T> {
   const now = options.now ?? Date.now, started = now(), abort = new AbortController()
   const signal = options.signal ? AbortSignal.any([options.signal, abort.signal]) : abort.signal
-  const timer = setTimeout(() => abort.abort(), 90_000), source = fundAdmissionRpc(options)
+  const timer = setTimeout(() => abort.abort(), 90_000), source = fundAdmissionRpc(options, signal)
   let calls = 0, transportLogged = false
   const rpc: Rpc = async (url, method, params) => {
     if (!FUNDING_RPC_URLS.includes(url as typeof FUNDING_RPC_URLS[number])

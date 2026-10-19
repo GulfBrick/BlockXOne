@@ -27,8 +27,14 @@ export const fundSetupRetryReadSchema = fundSetupPreparationSchema.extend({
 export type FundSetupRetryRead = z.infer<typeof fundSetupRetryReadSchema>
 export type FundSetupRetryLease = z.infer<typeof fundSetupRetryLeaseSchema>
 
+const recoveryObserverPairs = [
+  ['https://polygon-amoy.drpc.org', 'https://polygon-amoy-bor-rpc.publicnode.com'],
+  ['https://polygon-amoy.drpc.org', 'https://polygon-amoy.gateway.tenderly.co'],
+  ['https://80002.rpc.thirdweb.com', 'https://polygon-amoy.gateway.tenderly.co'],
+  ['https://80002.rpc.thirdweb.com', 'https://polygon-amoy.g.alchemy.com/v2'],
+] as const
 const provider = z.object({
-  url: z.enum(['https://80002.rpc.thirdweb.com', 'https://polygon-amoy.gateway.tenderly.co']),
+  url: z.enum(['https://polygon-amoy.drpc.org', 'https://polygon-amoy-bor-rpc.publicnode.com', 'https://80002.rpc.thirdweb.com', 'https://polygon-amoy.gateway.tenderly.co', 'https://polygon-amoy.g.alchemy.com/v2']),
   finalized_block_number: amount, finalized_block_hash: hash, latest_nonce: amount, pending_nonce: amount,
 }).strict()
 export const fundSetupRecoveryProofSchema = z.object({
@@ -36,7 +42,9 @@ export const fundSetupRecoveryProofSchema = z.object({
   status: z.enum(['RETRY_AVAILABLE', 'WAITING', 'WINNER', 'HOLD']), reason_code: z.string().max(160).nullable(),
   sender: address, nonce: amount, intent_hash: digest, anchor: fundSetupRetryAnchorSchema,
   finalized_nonce: fundSetupRetryAnchorSchema.extend({ nonce: amount }).strict().nullable(),
-  providers: z.array(provider).length(2).refine(value => value.length === 2 && value[0].url !== value[1].url),
+  // Historical views remain readable. The native writer separately gates fresh proofs to the ordered active pair.
+  providers: z.array(provider).length(2).refine(value => recoveryObserverPairs.some(([first, second]) =>
+    value[0]?.url === first && value[1]?.url === second || value[0]?.url === second && value[1]?.url === first)),
   transaction_hash: hash.nullable(),
   retry_checks: z.object({ runtime_hash: hash, owner: address, before_version: z.string().min(1).max(32), simulation_succeeded: z.literal(true) }).strict().nullable(),
   winner: z.object({ block_number: amount, block_hash: hash, transaction_hash: hash,

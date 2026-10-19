@@ -53,12 +53,12 @@ function block(value: unknown): FundAdmissionHead {
   if (typeof b.hash !== 'string' || !/^0x[0-9a-f]{64}$/i.test(b.hash) || /^0x0{64}$/i.test(b.hash) || BigInt(seconds) > 8640000000000n) return fail('ADMISSION_BLOCK_INVALID')
   return { number, hash: b.hash.toLowerCase(), timestamp: new Date(Number(seconds) * 1000).toISOString() }
 }
-export function fundAdmissionRpc(options: FundSetupObservers = {}): FundAdmissionRpc {
+export function fundAdmissionRpc(options: FundSetupObservers = {}, signal?: AbortSignal): FundAdmissionRpc {
   let fallback: FundAdmissionRpc | undefined
   return async (url, method, params) => {
     const index = FUNDING_RPC_URLS.indexOf(url as typeof FUNDING_RPC_URLS[number])
     if (index < 0) return fail('ADMISSION_OBSERVER_NOT_APPROVED')
-    const source = (index === 0 ? options.primary : options.secondary) ?? options.rpc ?? (fallback ??= createFundServerRpc())
+    const source = (index === 0 ? options.primary : options.secondary) ?? options.rpc ?? (fallback ??= createFundServerRpc(fetch, signal))
     try { return await source(url, method, params) } catch (error) {
       if (error instanceof FundAdmissionChainError) throw error
       let diagnostic: FundingRpcDiagnostic | undefined
